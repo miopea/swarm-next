@@ -859,6 +859,16 @@ export const SURFACES: Surface[] = [
       onDraftDescription={async () => "Fixture description"} onReorder={asyncNoop} />,
   },
   {
+    id: "worker-start-blocker",
+    title: "Worker setup blocker",
+    why: "A real runtime reason stays readable without obscuring Edit or the worker identity.",
+    render: () => <WorkerSettings workers={[{ ...demoWorkers[1], running: false,
+      attention_state: "blocked", runtime_error: "Workspace /projects/fictional-orchard cannot be written: permission denied. Check this repository's permissions before waking the worker." }]}
+      workspaces={[]} busy={false} providers={{ claude_code: true, codex: false }}
+      onCreate={asyncNoop} onUpdate={asyncNoop} onChooseMark={asyncNoop} onRemove={asyncNoop}
+      onDraftDescription={async () => "Fixture description"} onReorder={asyncNoop} />,
+  },
+  {
     id: "experimental-admission",
     title: "Experimental provider admission",
     why: "Explicit opt-in with available and unavailable engine choices; failed saves retain the operator's selection.",

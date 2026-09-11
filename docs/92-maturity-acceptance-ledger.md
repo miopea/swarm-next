@@ -1,5 +1,27 @@
 # Current maturity acceptance ledger
 
+## September 11 — False workspace blocker cause established
+
+WSL API reports Architecture running but Blocked with EROFS. Actual mountinfo:
+API PID48532 has root read-only and no writable home mount; engine45338 has
+/home rw. The API's access(W_OK) therefore cannot establish engine writability.
+Correction excludes API-side EROFS from worker-blocking evidence, preserving
+missing-folder checks, ordinary access refusals and runtime-reported failures.
+This is not a declaration that every engine workspace is writable: proactive
+read-only-mount detection requires bounded engine-owned evidence and remains
+open. Do not close that operational gate based on removal of this false positive.
+Local correction passed all3 focused backend tests in exec session93830:
+API EROFS exclusion, real permission refusal, and writable/missing directories.
+Activation remains pending; no test remains running.
+The same package adds a collapsed runtime-error explanation beside the worker
+in Settings, retaining Edit and removing the explanation automatically when the
+error clears. All30 WorkerSettings tests and TypeScript check pass. Edge fixture
+verified collapsed/expanded explanation and available Edit; visual review caught
+and corrected metadata running into the name after changing its wrapper. No new
+deployment or engine restart has been performed for this pending package.
+Prior no-preference CI34602058173 has passed web, rust-audit and linux-package;
+the Rust job is still running, not failed or complete.
+
 ## September 11 — Live WSL worker setup acceptance
 
 On deployed5439a9f8 through Edge, missing-folder creation returned422 with the

@@ -472,7 +472,9 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
         </form>
       ) : (
         <>
-          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}</span>
+          <div className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}
+            {worker.runtime_error && <details className="worker-runtime-explanation"><summary>Why this worker needs attention</summary><p>{worker.runtime_error}</p></details>}
+          </div>
           <button ref={editButton} type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
           {!managed && !orderingDisabled && <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>

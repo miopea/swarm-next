@@ -3144,8 +3144,8 @@ impl Default for WorkerViewFacts {
 /// WHAT IT DOES NOT PROVE. A successful check is not a guarantee a write will
 /// land — a full disk, an immutable attribute, or a policy layer can still
 /// refuse one, and the filesystem can turn read-only a second later. It answers
-/// "can this worker write here right now", which is the question that was not
-/// being asked at all.
+/// "does this API observe a permission refusal", not a proof of engine access.
+/// EROFS is excluded below because the API and engine have separate mount views.
 fn workspace_fault(workspace: &str) -> Option<String> {
     let path = std::path::Path::new(workspace);
     if !path.is_dir() {
@@ -3160,11 +3160,20 @@ fn workspace_fault(workspace: &str) -> Option<String> {
     // looking in the wrong place.
     nix::unistd::access(path, nix::unistd::AccessFlags::W_OK)
         .err()
+        // The packaged API deliberately mounts home read-only; the engine does
+        // not. EROFS here cannot distinguish that sandbox from a genuinely
+        // read-only worker mount. Only engine-owned evidence may assert that.
+        // Do not weaken the API sandbox or mark every external repository blocked.
+        .filter(|error| api_permission_fault_is_worker_evidence(*error))
         .map(|error| {
             format!(
                 "Workspace {workspace} cannot be written ({error}), so this worker would fail on its first change. The directory is there; the filesystem or its permissions are refusing writes."
             )
         })
+}
+
+fn api_permission_fault_is_worker_evidence(error: nix::errno::Errno) -> bool {
+    error != nix::errno::Errno::EROFS
 }
 
 fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
@@ -18978,6 +18987,19 @@ mod tests {
 
         // Restored so the temp directory can be cleaned up.
         std::fs::set_permissions(&unwritable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[test]
+    fn api_read_only_mount_is_not_evidence_of_an_engine_write_failure() {
+        assert!(!api_permission_fault_is_worker_evidence(
+            nix::errno::Errno::EROFS
+        ));
+        assert!(api_permission_fault_is_worker_evidence(
+            nix::errno::Errno::EACCES
+        ));
+        assert!(api_permission_fault_is_worker_evidence(
+            nix::errno::Errno::EPERM
+        ));
     }
 
     #[test]

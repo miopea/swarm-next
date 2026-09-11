@@ -10,6 +10,21 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 afterEach(cleanup);
 
+test("explains a runtime blocker without hiding Edit and clears it on recovery", () => {
+  const props = { workspaces: [], busy: false, providers: { claude_code: true, codex: true },
+    onCreate: vi.fn(), onUpdate: vi.fn(), onChooseMark: vi.fn(), onRemove: vi.fn(),
+    onDraftDescription: vi.fn(), onReorder: vi.fn() };
+  const error = "Workspace /projects/budgetbug does not exist. Fix the path in settings.";
+  const view = render(<WorkerSettings {...props} workers={[{ ...budget, attention_state: "blocked", runtime_error: error }]} />);
+  const reason = screen.getByText(error);
+  expect(reason.closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("Why this worker needs attention")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeEnabled();
+  view.rerender(<WorkerSettings {...props} workers={[budget]} />);
+  expect(screen.queryByText(error)).not.toBeInTheDocument();
+  expect(screen.queryByText("Why this worker needs attention")).not.toBeInTheDocument();
+});
+
 test("repository picker browses on focus and preserves choices through a failed creation", async () => {
   const onCreate = vi.fn().mockRejectedValueOnce(new Error("Folder temporarily unavailable")).mockResolvedValue(undefined);
   render(<WorkerSettings workers={[]} workspaces={[
