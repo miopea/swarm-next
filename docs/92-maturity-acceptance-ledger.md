@@ -1,5 +1,40 @@
 # Current maturity acceptance ledger
 
+## September 10 — Live browser and WSL in-place upgrade evidence
+
+Edge reconnected. Production and WSL now serve healthy
+1.7.1-dev-4e46e680f55e-20260911034045-1048086. Production reload was initiated by
+the operator; its host PID944143/start21:29:38 remained unchanged. WSL used the
+same checksum-verified development bundle through `swarm-package update` with
+worker-preserving development mode; exited0. WSL host PID6458/start17:18:49
+was preserved. WSL UI explicitly reports the newer engine installed but pending.
+No public release was needed or published (operator now permits one if needed).
+
+Browser acceptance: Manage Apiary scrolled628px on desktop; at measured390x844,
+body width remained390 and management scrolled680px. Settled screenshot inspected;
+no horizontal overflow. Temporary viewport override reset. Scroll command receipt
+timed out but subsequent DOM reads confirmed both actual movements.
+
+WSL remained BGS WSL Hive in Grand Garden across upgrade and browser reload.
+Its signed directory shows Lead Hive, Honeysuckle Hive/Vicky and BGS WSL Hive.
+Sync reports Up to date, one of two Jira projects ready; lack of IT setup is
+correctly optional rather than a membership blocker. This confirms existing WSL
+membership survived, not the fresh three-step enrollment or rename round trip.
+
+OPEN live defect: WSL Member overview still displays a partial-status warning
+despite healthy synchronization. Investigate the failing overview read; do not
+hide the warning without understanding its cause. Edge tabs are held for this
+workflow. Bundle archive checksum:
+6a4b620e415770fd995cac70f7cc79d7287d2e9e385bce8db022192feea816e5.
+WSL test bundle: /tmp/swarm-wsl-validation-4e46e680. Existing membership was not
+removed/recreated. CI for enrollment merge f6765198 passed all jobs; later Jira
+commit4e46e680 requires its own final CI receipt.
+
+Network evidence: on explicit Try again, `/api/v1/apiary/shared-work` returned403;
+the other 13 overview reads succeeded with200. Trace `apiary_shared_work` and its
+application claim/catalog reads for member scope. Do not globally swallow403 or
+grant Keeper privileges to members. This is the next concrete live defect.
+
 ## September 10 — Enrollment timestamp correction verified in isolation
 
 Operator approved the corrected-module transfer to the existing isolated Linux
