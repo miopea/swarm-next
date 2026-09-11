@@ -35,7 +35,7 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   expect(onInvite).toHaveBeenCalledOnce();
   expect(onManage).not.toHaveBeenCalled();
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
-  expect(await screen.findByLabelText("Apiary summary")).toHaveTextContent("Registered Hives3Promoted Jira projects1Active Jira claims1Work handoffs1Swarm tasks1Steward scopes1");
+  expect(await screen.findByLabelText("Apiary summary")).toHaveTextContent("Registered Hives3Promoted Jira projects1Active Jira claims1Work handoffs1Open Swarm tasks1Steward scopes1");
   expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveFern HiveFayeHive");
   expect(screen.getByRole("list", { name: "Keeper shared work ownership" })).toHaveTextContent("WWD-101WWD · OwnedClover HiveCora");
   expect(screen.getByRole("list", { name: "Keeper Swarm tasks" })).toHaveTextContent("Coordinate releaseSwarm · readyFern HiveRouted by Steward Cora · revision 1");

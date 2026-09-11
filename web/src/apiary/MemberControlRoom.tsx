@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
 
 import {
   acceptApiaryClaimHandoff,
@@ -207,7 +208,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <div><dt>Catalog</dt><dd>{catalogReadinessLabel(snapshot.catalog)}</dd></div>
         <div><dt>Projects ready</dt><dd>{projectCount ? `${readyProjects}/${projectCount}` : "0"}</dd></div>
         <div><dt>My Jira claims</dt><dd>{localClaims.length}</dd></div>
-        <div><dt>Keeper tasks</dt><dd>{snapshot.tasks.length}</dd></div>
+        <div><dt>Open Keeper tasks</dt><dd>{snapshot.tasks.filter((task) => !isClosedSharedTask(task)).length}</dd></div>
         <div><dt>Pending changes</dt><dd>{snapshot.outboxStatus?.queued_count ?? 0}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
@@ -307,7 +308,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel member-task-panel">
           <header><div><p className="eyebrow">Shared work pulse</p><h4>Swarm tasks polled from Keeper</h4></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Manage in Tasks</button></header>
           {(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) > 0 ? <p className="member-command-attention" role="status">{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0)} change{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) === 1 ? "" : "s"} need review after Keeper reconciliation.</p> : null}
-          {snapshot.tasks.length ? <ul className="keeper-work-list member-task-list" aria-label="Member Keeper tasks">{snapshot.tasks.map((task) => {
+          <SharedTaskGroups tasks={snapshot.tasks} emptyMessage="No open Swarm-generated Apiary tasks are waiting." renderTasks={(tasks) => <ul className="keeper-work-list member-task-list" aria-label="Member Keeper tasks">{tasks.map((task) => {
             const mine = task.home_hive_id === identity.hive.id;
             return <li key={task.id}>
               <span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span>
@@ -316,7 +317,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
                 <small>{mine ? "Worker assignment stays private to this Hive" : "View only from Apiary"}</small>
               </span>
             </li>;
-          })}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks have been received.</p>}
+          })}</ul>} />
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Shared catalog</p><h4>Projects available to this Hive</h4></div><small>Access is verified with your Jira identity</small></header>

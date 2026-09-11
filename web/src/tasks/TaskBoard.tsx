@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import SharedTaskGroups, { isClosedSharedTask } from "../apiary/SharedTaskGroups";
 
 import {
   claimApiaryTask,
@@ -638,10 +639,10 @@ export default function TaskBoard({
       </section>
 
       {inApiary && apiaryTasks.length > 0 ? <section className="task-section apiary-task-section" aria-labelledby="apiary-work-heading">
-        <div className="section-heading"><div><p className="eyebrow">Shared across Hives</p><h3 id="apiary-work-heading">Apiary work</h3><small>Managed here; summarized in Apiary.</small></div><span className="count-badge">{apiaryTasks.length}</span></div>
+        <div className="section-heading"><div><p className="eyebrow">Shared across Hives</p><h3 id="apiary-work-heading">Apiary work</h3><small>Managed here; summarized in Apiary.</small></div><span className="count-badge" aria-label="Open shared tasks">{apiaryTasks.filter((task) => !isClosedSharedTask(task)).length}</span></div>
         {createError && !composeOpen ? <p className="form-error apiary-task-error" role="alert">{createError}</p> : null}
-        <div className="apiary-task-board-list">
-          {apiaryTasks.map((task) => {
+        <SharedTaskGroups tasks={apiaryTasks} emptyMessage="No open shared work. Closed tasks remain available below." renderTasks={(tasks) => <div className="apiary-task-board-list">
+          {tasks.map((task) => {
             const home = task.home_hive_id ? apiaryMembers.find((member) => member.hive_id === task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Available to claim";
             const localHiveId = hiveIdentity?.hive.id;
             const mine = Boolean(localHiveId && task.home_hive_id === localHiveId);
@@ -663,7 +664,7 @@ export default function TaskBoard({
               </span>
             </article>;
           })}
-        </div>
+        </div>} />
       </section> : null}
 
       {/* Held above Completed work and outside its fold. Finished-but-unverified

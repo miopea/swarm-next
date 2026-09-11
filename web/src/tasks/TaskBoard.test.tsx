@@ -423,6 +423,10 @@ test.each(["ready", "blocked", "completed", "abandoned"])("owned %s Apiary task 
   });
   vi.stubGlobal("fetch", fetchMock);
   renderBoard({ tasks: [], workers: [{ ...worker, role: "queen" }], hiveIdentity: memberIdentity() });
+  if (state === "completed" || state === "abandoned") {
+    fireEvent.click(await screen.findByRole("button", { name: "Show closed shared work · 1" }));
+    expect(screen.getByLabelText("Open shared tasks")).toHaveTextContent("0");
+  }
   await screen.findByText("Prepare shared brief");
   expect(screen.queryByRole("button", { name: "Send to worker" })).not.toBeInTheDocument();
   if (state === "ready") {
@@ -454,6 +458,7 @@ test("refreshes shared work on invalidation and ignores an older in-flight respo
   rerender(<TaskBoard {...props} sharedWorkRefreshKey="1" />);
   await waitFor(() => expect(reads).toBe(2));
   rerender(<TaskBoard {...props} sharedWorkRefreshKey="2" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Show closed shared work · 1" }));
   await screen.findByText("Closed · retained in shared history.");
   await act(async () => { resolveOld(ok([apiaryTask()])); });
   expect(screen.queryByRole("button", { name: "Claim for this Hive" })).not.toBeInTheDocument();

@@ -48,7 +48,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   expect(screen.getByText("Swarm shared work")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Jira work owned by this Hive" })).toBeInTheDocument();
   expect(screen.queryByText("Jira-backed")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("KeeperMeadow HiveCatalogVerifiedProjects ready1/1My Jira claims1Keeper tasks1");
+  expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("KeeperMeadow HiveCatalogVerifiedProjects ready1/1My Jira claims1Open Keeper tasks1");
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getByText("Bea · bea@example.test")).toBeInTheDocument();
   expect(screen.getByRole("list", { name: "Member promoted Jira projects" })).toHaveTextContent("WWDWebsite DevelopmentReady");
