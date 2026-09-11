@@ -1,5 +1,21 @@
 # Current maturity acceptance ledger
 
+## September 11, 03:57 Eastern — Existing-Hive shared identity review
+
+Confirmed the remaining default Operator labels reflect unsaved public profiles,
+not missing connected-account identity or failed directory synchronization.
+9003c3c1 provides the direct review entry on Keeper and Member overviews without
+automatic publication.134 tests include account conflicts, manual edits, failures,
+cancel, focus and both workspace routes; full web/package/audit CI passes with
+Rust still running. Both live Hives and engines are recorded in45.
+
+Edge verified the two different integration sources prefill the proper name and
+email, preserve each custom Hive name, and focus the review. WSL rendered fields
+were inspected by screenshot. Backing out preserved exact original profile
+revisions1/4 and values, independently checked through the public-profile API.
+Actual identity publication remains the operator's explicit Save action; this
+receipt must not imply that the displayed default names have been changed.
+
 ## September 11, 03:43 Eastern — Open shared work and closed history separated
 
 All three shared-work surfaces (Keeper overview, Member overview, Tasks) now

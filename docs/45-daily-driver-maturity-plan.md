@@ -2,6 +2,27 @@
 
 ## Authoritative next gates — September 11, overnight
 
+03:57 CLOSED existing-Hive profile discovery/review UX: live public profiles
+retain the old Operator/null-contact values (Keeper revision1, WSL revision4),
+while Microsoft on Keeper and Jira on WSL provide usable account identity.
+This is missing explicit profile review, not failed directory propagation.
+9003c3c1 adds a quiet default-name prompt on both overviews that opens/focuses
+the existing prefilled shared-profile editor in one click; custom saved names
+do not prompt and optional email remains optional. No automatic publication.
+134 targeted/App/profile/feedback tests pass. CI34576264359 web/package/audit
+pass; Rust remains running. Both Hives healthy on
+1.7.1-dev-9003c3c1a984-20260911075024-1199768, engines944143/6458 unchanged.
+Archive SHA256 d8c94d300a36d3844dfbf0183b165362079ee85c53b9691381be4fbc58efda0c.
+Edge verified direct review, focused group, source-prefilled name/email and custom
+Hive names. WSL screenshot confirms rendered email (DOM snapshot omits its value).
+Back to overview leaves exact revisions1/4 and original profiles unchanged.
+No profile saved, grant changed, provider input sent, worker restart or release.
+Do not auto-save the operator's real identity to manufacture directory closure.
+NEXT: continue the remaining original-scope acceptance gates in93/96, with
+Queen-owned Awaiting Release/worker-first escalation still unproven. Inspect
+the existing isolated demo evidence before selecting a new bounded journey;
+do not repeat already-passed local deployment settlement or contact BFG Admin.
+
 03:43 CLOSED shared-work presentation: Keeper and Member overviews and Tasks
 now count unfinished work separately from completed/abandoned history. History
 is opt-in and not mounted while collapsed; blocked/review/awaiting_release stay

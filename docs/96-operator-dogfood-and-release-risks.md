@@ -2,14 +2,14 @@
 
 Updated September 11, 2026. This is a handoff over the approved scope in45, not a
 new definition of completion. No release was cut. Detailed receipts remain in
-45,92,94 and95. Production and WSL now serve032bff1d with engines944143/6458
+45,92,94 and95. Production and WSL now serve9003c3c1 with engines944143/6458
 preserved. Use the newest45 receipt for exact build identity and current CI.
 
 ## Current user-facing milestone map
 
 | Package | Delivered and verified | Still outside that evidence |
 | --- | --- | --- |
-| Apiary onboarding and shared work | Guided enrollment implementation; existing-member upgrade and profile preservation; optional/project-scoped Jira readiness; workspace discovery UX; paired task arrival/restart/retirement and automatic board refresh; open-work versus optional closed history | Final fresh-join browser approval remains gated; complete no-Jira independent-Hive acceptance; existing default Operator identity investigation; broader Keeper management details |
+| Apiary onboarding and shared work | Guided enrollment implementation; existing-member upgrade and profile preservation; optional/project-scoped Jira readiness; workspace discovery UX; paired task arrival/restart/retirement and automatic board refresh; open-work versus optional closed history; direct prefilled profile review for old default-name Hives | Final fresh-join browser approval remains gated; complete no-Jira independent-Hive acceptance; existing public identities require explicit Save; broader Keeper management details |
 | Needs You and linked work | Compact choices/custom answer; clarification round trip; exact Queue-to-decision and prerequisite-to-task navigation | Direct terminal answers reconciling the original request; native clarification use |
 | Terminal controls | Draft retention, explicit ownership/reconnect notices, bounded controls and retry fixtures; operator accepted Android AskUser questions2/3 | Real camera/gallery, suspension/handoff, aged performance and reload geometry |
 | Settings and runtime | Search/navigation; saved-vs-draft Night Watch; quiet safeguards; distinct diagnostic evidence; saved preview/copy refusal; update confirmation/cancel; fictional support retry | Physical scheduled presence; engine automatic admission; paired central support acceptance |
