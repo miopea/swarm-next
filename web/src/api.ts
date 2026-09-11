@@ -1851,6 +1851,23 @@ export async function reconcileDecisionClarification(
   return response.json() as Promise<DecisionClarification>;
 }
 
+export type ApiaryEnrollment = {
+  consent: { link_id: string; apiary_id: string; policy_revision: number; expires_at: number };
+  phase: "awaiting_approval" | "joining" | "complete" | "cancelled" | "attention";
+};
+
+export async function fetchApiaryEnrollments(operatorToken: string): Promise<ApiaryEnrollment[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/enrollments");
+  return response.json() as Promise<ApiaryEnrollment[]>;
+}
+
+export async function submitApiaryEnrollment(operatorToken: string, offer: ApiaryEnrollmentOffer, secret: string): Promise<ApiaryEnrollment> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/enrollments", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ offer, secret }),
+  });
+  return response.json() as Promise<ApiaryEnrollment>;
+}
+
 export async function fetchDecisionClarifications(
   operatorToken: string,
   decisionId: string,

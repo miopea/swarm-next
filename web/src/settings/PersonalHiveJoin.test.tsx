@@ -2,6 +2,44 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, test, vi } from "vitest";
 
 import PersonalHiveJoin from "./PersonalHiveJoin";
+import { createApiaryHandoffLink } from "./apiaryHandoff";
+
+test("signed link shows terms before one submission and no second acceptance", async () => {
+  const offer = { payload: { schema_version: 1, link_id: "link-1", apiary_id: "garden-1",
+    apiary_name: "Fictional Garden", keeper_endpoint: "https://keeper.example.test",
+    keeper: { payload: { operator_display_name: "Bea", hive_name: "Keeper Hive" } },
+    policy_revision: 4, management_terms_version: 1, issued_at: 10, expires_at: 3600 }, signature: "fictional" };
+  const record = { consent: { link_id: "link-1", apiary_id: "garden-1", policy_revision: 4, expires_at: 3600 }, phase: "awaiting_approval" };
+  const actions: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/enrollments") && init?.method === "POST") {
+      actions.push("submit");
+      expect(JSON.parse(String(init.body))).toEqual({ offer, secret: "fictional-secret" });
+      return new Response(JSON.stringify(record), { status: 202 });
+    }
+    return new Response("[]");
+  }));
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Keeper invitation link"), { target: { value:
+    createApiaryHandoffLink("keeper", { link_id: "link-1", keeper_endpoint: "https://keeper.example.test",
+      secret: "fictional-secret", enrollment_offer: offer }, "https://keeper.example.test") } });
+  expect(screen.getByText(/Submitting accepts policy revision 4/)).toBeInTheDocument();
+  expect(screen.queryByText("Review before joining")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Request to join" }));
+  await waitFor(() => expect(screen.getByRole("heading", { name: "Waiting for Keeper approval" })).toBeInTheDocument());
+  expect(actions).toEqual(["submit"]);
+  expect(screen.queryByRole("button", { name: /Accept policy|Join Apiary/ })).not.toBeInTheDocument();
+});
+
+test("saved completed enrollment opens Apiary without another member action", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
+    String(input).endsWith("/enrollments") ? JSON.stringify([{ consent: { link_id: "link-1" }, phase: "complete" }]) : "[]")));
+  const joined = vi.fn().mockResolvedValue(undefined);
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={joined} />);
+  await waitFor(() => expect(joined).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: /Accept policy|Join Apiary/ })).not.toBeInTheDocument();
+});
 
 // Profile persistence is covered independently; these tests isolate join policy
 // and membership failure/recovery rather than mocking its HTTP contract twice.

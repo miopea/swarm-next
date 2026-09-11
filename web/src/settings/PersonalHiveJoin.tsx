@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicProfile";
 
 import {
+  fetchApiaryEnrollments, submitApiaryEnrollment, type ApiaryEnrollment,
   acceptFederationJoinPolicy,
   fetchApiaryKeeperLinks,
   fetchFederationJoinInvitations,
@@ -44,6 +45,35 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
   const [savedStateUnavailable, setSavedStateUnavailable] = useState(false);
   const [keeperPollingUnavailable, setKeeperPollingUnavailable] = useState(false);
+  const [enrollments, setEnrollments] = useState<ApiaryEnrollment[]>([]);
+  const joinedNotified = useRef(false);
+  const enrollmentEpoch = useRef(0);
+  let proposed: ApiaryKeeperJoinCapability | undefined;
+  try { proposed = readApiaryHandoffLink<ApiaryKeeperJoinCapability>(keeperLink, "keeper"); } catch { /* Incomplete pasted link. */ }
+
+  useEffect(() => {
+    let cancelled = false;
+    let running = false;
+    const refresh = async () => {
+      if (running) return;
+      running = true;
+      const epoch = enrollmentEpoch.current;
+      try {
+        const records = await fetchApiaryEnrollments(operatorToken);
+        if (cancelled || epoch !== enrollmentEpoch.current) return;
+        setEnrollments(records);
+        if (records.some((record) => record.phase === "complete") && !joinedNotified.current) {
+          joinedNotified.current = true;
+          onMessage("Welcome to the Apiary. Your Hive has joined; Jira setup is optional.");
+          await onJoined();
+        }
+      } catch { /* Older runtimes retain their explicit invitation flow. */ }
+      finally { running = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [operatorToken, onJoined, onMessage]);
 
   const refreshSavedState = useCallback(async () => {
     const [links, invitations] = await Promise.allSettled([
@@ -75,7 +105,8 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     const poll = async () => {
       let refreshed = false;
       let unavailable = false;
-      for (const link of keeperLinks.filter((candidate) => !isResolvedKeeperLink(candidate.state))) {
+      for (const link of keeperLinks.filter((candidate) => !isResolvedKeeperLink(candidate.state)
+        && !enrollments.some((record) => record.consent.link_id === candidate.link_id))) {
         try {
           const result = await pollApiaryKeeperLink(operatorToken, link.link_id);
           if (cancelled) return;
@@ -99,7 +130,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     };
     const timer = window.setInterval(() => void poll(), 5_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [keeperLinks, onMessage, operatorToken]);
+  }, [keeperLinks, enrollments, onMessage, operatorToken]);
 
   function clearFeedback() {
     onError("");
@@ -116,6 +147,15 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       }
       if (!profileRef.current) throw new Error("Your profile is not ready yet.");
       await profileRef.current.save();
+      if (capability.enrollment_offer) {
+        const record = await submitApiaryEnrollment(operatorToken, capability.enrollment_offer, capability.secret);
+        enrollmentEpoch.current += 1;
+        setEnrollments([record]);
+        clearStagedApiaryHandoff("keeper");
+        setKeeperLink("");
+        onMessage("Request submitted. Keeper approval will finish joining automatically, even if you close this page.");
+        return;
+      }
       const result = await saveApiaryKeeperLink(operatorToken, capability);
       clearStagedApiaryHandoff("keeper");
       setKeeperLink("");
@@ -245,6 +285,21 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     return <section className="personal-hive-join" aria-label="Joined Apiary"><strong>Joined {joinedApiary}</strong><p>Your membership is saved. Refresh the page if the Apiary view has not opened. You do not need to join again.</p></section>;
   }
 
+  if (enrollments.length > 0) {
+    const record = enrollments[0];
+    return <section className="personal-hive-join" aria-label="Apiary joining progress">
+      <h3>{record.phase === "complete" ? "Welcome to your Apiary" : record.phase === "joining" ? "Joining your Apiary…" : record.phase === "attention" ? "Joining needs attention" : "Waiting for Keeper approval"}</h3>
+      <p>{record.phase === "attention" ? "The saved request could not finish. Review the invitation with your Keeper; your local work is unchanged." : "You have submitted your request. There is nothing else to approve here; Swarm finishes the connection in the background."}</p>
+      <p>Your local tasks, workers, repositories and credentials stay on this Hive. Jira is optional.</p>
+      {record.phase === "awaiting_approval" || record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {
+        setWorking(true);
+        void removeApiaryKeeperLink(operatorToken, record.consent.link_id).then(() => { enrollmentEpoch.current += 1; setEnrollments([]); })
+          .catch(() => onError("The request may already be joining. Refresh its status before trying again."))
+          .finally(() => setWorking(false));
+      }}>Cancel request</button> : null}
+    </section>;
+  }
+
   return (
     <div className="personal-hive-join">
       <JoinPublicProfile ref={profileRef} operatorToken={operatorToken} disabled={busy || working} />
@@ -252,10 +307,17 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive. Opening it now guides you here without joining through the Keeper&apos;s browser.</small></span>
         <ol className="apiary-exchange-guide" aria-label="How this Hive joins an Apiary">
           <ApiaryExchangeStep number="1" title="Hand the link to this Hive" detail="Open the private link and choose this personal Hive, or paste the complete link below." />
-          <ApiaryExchangeStep number="2" title="Wait for her approval" detail="This Hive introduces only its signed identity and keeps polling outward." />
-          <ApiaryExchangeStep number="3" title="Review and join" detail="Accept the Apiary policy, then continue on the Apiary page. Jira is optional." />
+          <ApiaryExchangeStep number="2" title="Review and submit" detail="See what joining means and send your request once." />
+          <ApiaryExchangeStep number="3" title="Keeper approves · you're in" detail="Swarm finishes joining automatically. Jira is optional." />
         </ol>
-        <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Connecting…" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
+        {proposed?.enrollment_offer ? <div className="apiary-policy-acknowledgement">
+          <div><strong>Join {proposed.enrollment_offer.payload.apiary_name}</strong>
+            <p>Keeper: {proposed.enrollment_offer.payload.keeper.payload.operator_display_name} · {proposed.enrollment_offer.payload.keeper.payload.hive_name}</p>
+            <p>Submitting accepts policy revision {proposed.enrollment_offer.payload.policy_revision}: Keeper manages shared work and Apiary-wide settings. Your local task system, workers, repositories and credentials remain yours. Joining does not grant unrestricted terminal or machine access.</p>
+            <small>No Jira connection is required. Keeper approval completes your membership automatically.</small>
+          </div>
+        </div> : null}
+        <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Submitting…" : proposed?.enrollment_offer ? "Request to join" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
         <div className="apiary-transport-boundary" role="note">
           <span><strong>Optional Jira work</strong><small>If connected, this Hive reads Jira directly as you.</small></span>
           <span><strong>Swarm work</strong><small>This Hive polls the Keeper for shared Apiary tasks and coordination.</small></span>
@@ -276,7 +338,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           </li>)}
         </ul>
       ) : null}
-      <div className="apiary-join-card">
+      {!proposed?.enrollment_offer ? <div className="apiary-join-card">
         <div>
           <strong>Review before joining</strong>
           <small>After Keeper approval, the invitation appears here automatically. Review and accept the shared policy to join; configure optional integrations afterward.</small>
@@ -298,7 +360,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
             ))}
           </ul>
         ) : <p className="empty-copy">No Apiary invitation is saved on this Hive.</p>}
-      </div>
+      </div> : null}
     </div>
   );
 }

@@ -10,6 +10,29 @@ approval completes membership automatically. No post-approval member click.
 ADR0097 now records this exact acceptance requirement. The deployed flow still
 requires post-approval acceptance and is NOT complete.
 
+LATEST VERTICAL SLICE: authenticated /api/v1/apiary/enrollments submit/list,
+application-owned pending selection/receipt recovery, and existing federation
+background service now complete a consented join without browser actions.
+One runner performs at most4 attempts per15-second federation pass. The member
+UI shows signed joining terms before Request to join, then progress rather
+than another acceptance button. Existing legacy links retain explicit joining.
+
+Two HTTP tests PASS: submit -> introduction -> Keeper approval -> reopen member
+database -> automatic membership without browser/Jira; and receipt application
+before interruption -> completion with Keeper offline. Strict API/all-targets
+Clippy passes.9 member UI tests (including new submit-once and completion tests),
+TypeScript and production web build pass. Earlier10 Keeper UI tests pass.
+These are isolated fictional Hives, not live acceptance.
+
+NEXT BEFORE DEPLOYMENT: durable bounded transport retry/error visibility,
+permanent refusal handling (changed policy/revoked/expired), cancellation races
+and existing-member/legacy HTTP regressions; verify completed history does not
+block later joining after departure. Then full coherent build/engine migration
+compatibility and live fresh-Hive + existing-WSL acceptance. Do not deploy as
+an app-only schema update. Browser visual gate remains OPEN: fresh Chrome-skill
+connection attempt failed before browser startup with kernel-assets os error3.
+No unlock request or browser restart is warranted by that failure.
+
 LATEST ENROLLMENT WIRING: Keeper link creation now returns a signed, versioned
 pre-submission disclosure (Keeper card, Apiary/link/endpoint, exact policy,
 management-terms version and expiry). Keeper UI retains that offer in the link.

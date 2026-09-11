@@ -24,6 +24,64 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
 }
 
 impl TaskStore {
+    /// Closes the journal only after the existing signed-receipt path consumed
+    /// this exact invitation. Also recovers a crash after receipt application.
+    ///
+    /// # Errors
+    /// Returns persistence failures or corrupt enrollment records.
+    pub fn finish_consented_apiary_join(
+        &self,
+        link_id: ApiaryJoinLinkId,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let stored: Option<String> = tx
+            .query_row(
+                "SELECT record_json FROM apiary_enrollments WHERE link_id = ?1",
+                [link_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(stored) = stored else {
+            return Ok(false);
+        };
+        let mut record = decode(&stored)?;
+        if record.phase == ApiaryEnrollmentPhase::Complete {
+            return Ok(true);
+        }
+        if record.phase != ApiaryEnrollmentPhase::Joining {
+            return Ok(false);
+        }
+        let consumed: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM apiary_join_invitations i
+             JOIN local_apiary_keeper_links l ON l.link_id = ?1
+             WHERE i.one_time_secret = l.one_time_secret AND i.keeper_endpoint = l.keeper_endpoint
+               AND i.state = 'consumed' AND i.apiary_id = ?2 AND i.invited_node_id = ?3
+               AND i.invited_hive_id = ?4 AND i.invited_operator_id = ?5
+               AND i.required_policy_revision = ?6 AND i.keeper_node_id = ?7)",
+            params![
+                link_id.to_string(),
+                record.consent.apiary_id.to_string(),
+                record.consent.member_node_id.to_string(),
+                record.consent.member_hive_id.to_string(),
+                record.consent.member_operator_id.to_string(),
+                record.consent.policy_revision,
+                record.consent.keeper_node_id.to_string()
+            ],
+            |r| r.get(0),
+        )?;
+        if !consumed {
+            return Ok(false);
+        }
+        record.phase = ApiaryEnrollmentPhase::Complete;
+        tx.execute(
+            "UPDATE apiary_enrollments SET record_json = ?2 WHERE link_id = ?1",
+            params![link_id.to_string(), encode(&record)?],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Reuses consent only for the verified invitation delivered by this link.
     /// Policy acceptance and journal advancement commit together; cancellation
     /// and a stale reconciliation attempt cannot both win.

@@ -1547,6 +1547,64 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Lists the bounded member enrollment journal.
+    /// # Errors
+    /// Returns storage or integrity errors.
+    pub fn enrollments(&self) -> Result<Vec<swarm_domain::ApiaryEnrollment>, ApplicationError> {
+        self.store.apiary_enrollments().map_err(Into::into)
+    }
+
+    /// Returns at most four unfinished enrollments for one transport pass.
+    /// Receipt recovery precedes expiry so a saved membership is never lost.
+    /// # Errors
+    /// Returns storage or integrity errors without inferring membership.
+    pub fn pending_enrollments(
+        &self,
+        now: i64,
+    ) -> Result<Vec<swarm_domain::ApiaryEnrollment>, ApplicationError> {
+        use swarm_domain::ApiaryEnrollmentPhase::{Attention, AwaitingApproval, Joining};
+        let mut pending = Vec::new();
+        for record in self.enrollments()? {
+            if !matches!(record.phase, AwaitingApproval | Joining)
+                || self.finish_consented_join(record.consent.link_id)?
+            {
+                continue;
+            }
+            if record.consent.expires_at <= now {
+                self.advance_enrollment(record.consent.link_id, record.phase, Attention)?;
+            } else if pending.len() < 4 {
+                pending.push(record);
+            }
+        }
+        Ok(pending)
+    }
+
+    /// Advances a phase without inferring any new authority.
+    /// # Errors
+    /// Rejects stale or invalid phase changes.
+    pub fn advance_enrollment(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        expected: swarm_domain::ApiaryEnrollmentPhase,
+        next: swarm_domain::ApiaryEnrollmentPhase,
+    ) -> Result<swarm_domain::ApiaryEnrollment, ApplicationError> {
+        self.store
+            .advance_apiary_enrollment(link_id, expected, next)
+            .map_err(Into::into)
+    }
+
+    /// Finishes only after the verified membership receipt has been applied.
+    /// # Errors
+    /// Returns storage or integrity errors.
+    pub fn finish_consented_join(
+        &self,
+        link_id: ApiaryJoinLinkId,
+    ) -> Result<bool, ApplicationError> {
+        self.store
+            .finish_consented_apiary_join(link_id)
+            .map_err(Into::into)
+    }
+
     /// Lists pending outbound Keeper connections without exposing secrets.
     ///
     /// # Errors

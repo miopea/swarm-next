@@ -1281,7 +1281,9 @@ impl TaskStore {
     ) -> Result<(), TaskStoreError> {
         let connection = self.connection()?;
         if connection.execute(
-            "DELETE FROM local_apiary_keeper_links WHERE link_id = ?1",
+            "DELETE FROM local_apiary_keeper_links WHERE link_id = ?1
+             AND NOT EXISTS (SELECT 1 FROM apiary_enrollments e
+                 WHERE e.link_id = ?1 AND json_extract(e.record_json, '$.phase') = 'joining')",
             [link_id.to_string()],
         )? != 1
         {

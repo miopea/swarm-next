@@ -18,6 +18,7 @@ mod database_integrity;
 mod decision_clarification;
 mod decisions;
 pub use database_integrity::monitor_database_integrity;
+mod apiary_enrollment;
 mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
@@ -248,6 +249,7 @@ pub struct AppState {
     coordination_wakeup: Arc<Notify>,
     jira_delivery: Arc<Mutex<()>>,
     email_delivery: Arc<Mutex<()>>,
+    enrollment_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     /// The tool surface each connected agent session was actually handed.
     ///
@@ -386,6 +388,7 @@ impl AppState {
             coordination_wakeup: Arc::new(Notify::new()),
             jira_delivery: Arc::new(Mutex::new(())),
             email_delivery: Arc::new(Mutex::new(())),
+            enrollment_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             agent_tool_surfaces: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
@@ -936,6 +939,7 @@ impl AppState {
     /// synchronize canonical Jira work directly with Jira.
     #[allow(clippy::too_many_lines)]
     pub async fn reconcile_federation(&self) {
+        self.reconcile_apiary_enrollments().await;
         let Some(store) = self.task_store.as_ref() else {
             return;
         };
@@ -3618,6 +3622,10 @@ fn api_router(state: AppState) -> Router {
             get(apiary_keeper_links).post(save_apiary_keeper_link),
         )
         .route(
+            "/api/v1/apiary/enrollments",
+            get(apiary_enrollment::list).post(apiary_enrollment::submit),
+        )
+        .route(
             "/api/v1/apiary/keeper-links/{link_id}",
             delete(remove_apiary_keeper_link),
         )
@@ -4966,9 +4974,16 @@ async fn poll_saved_apiary_keeper_link(
     let invitation_received = if let Some(invitation) = poll.invitation.as_ref() {
         match service.import_invitation(invitation, now) {
             Ok(_) | Err(ApplicationError::Store(TaskStoreError::FederationInvitationConflict)) => {
-                service
-                    .remove_keeper_link(link_id)
-                    .map_err(application_error)?;
+                if !service
+                    .enrollments()
+                    .map_err(application_error)?
+                    .iter()
+                    .any(|record| record.consent.link_id == link_id)
+                {
+                    service
+                        .remove_keeper_link(link_id)
+                        .map_err(application_error)?;
+                }
                 true
             }
             Err(error) => return Err(application_error(error)),
