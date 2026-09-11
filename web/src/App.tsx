@@ -3,6 +3,8 @@ import { projectTaskQueues } from "./queues/taskQueueProjection";
 import type { RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "./api";
 import DatabaseRecoveryCard from "./runtime/DatabaseRecoveryCard";
 import BroadcastToWorkers from "./workers/BroadcastToWorkers";
+import ConversationRetry from "./workers/ConversationRetry";
+import { conversationGap } from "./workers/conversationGap";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
 import StaleBundleNotice, { reloadBrowser } from "./StaleBundleNotice";
@@ -1609,6 +1611,23 @@ export function App() {
   const actionableConversationChecks = workerConversations.filter(
     (worker) => worker.freshness.state === "unknown" && worker.freshness.cause?.fault === true,
   );
+  // ⚠️ NOT EVERY UNKNOWN IS WORTH A LINE. NeverRun and NoTranscripts are
+  // explicitly not faults: a worker that has never run has no transcript to
+  // check, which is the ordinary state of every sleeping worker rather than
+  // something wrong. Listing them by name put four sleeping workers above the
+  // one real signal on the operator's own Hive on 2026-09-11, each saying
+  // "this workspace has no Claude conversations yet".
+  //
+  // They are still counted, because silently dropping them would make the
+  // panel disagree with the diagnostics page for no stated reason.
+  // EXPLICITLY not-a-fault is hidden; unclassified is NOT. An absent cause
+  // means this build could not say, and silently dropping those would hide a
+  // real problem to tidy the panel. Only a server that positively reported
+  // "nothing to check yet" is collapsed into the count.
+  const unconfirmedWorthListing = uncheckedConversations.filter(
+    (worker) => worker.freshness.state !== "unknown" || worker.freshness.cause?.fault !== false,
+  );
+  const nothingToCheckYet = uncheckedConversations.length - unconfirmedWorthListing.length;
   // One card, one badge count. The card reads the same actionable collection;
   // do not count unknowns that only appear in runtime diagnostics.
   const conversationDriftAttentionCount =
@@ -2074,7 +2093,7 @@ export function App() {
             <div className="runtime-update-card" role="status">
               <p className="runtime-update-label">Conversation checks unavailable</p>
               <p className="runtime-update-detail">Conversation status is unconfirmed. Existing results may be out of date.</p>
-              <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
+              <ConversationRetry onRetry={retryConversationChecks} />
             </div>
           ) : null}
           {operatorToken && newerConversationHistories.length > 0 ? (
@@ -2085,24 +2104,27 @@ export function App() {
                 {newerConversationHistories.map((worker) => <li key={worker.worker_id}>
                   <button type="button" className="runtime-update-run" onClick={() => openWorkerProfile(worker.worker_id)}>{worker.name}</button>
                   {worker.freshness.state === "stale" ? <small>
-                    {" · Saved conversation last entry: "}{worker.freshness.pinned_last_entry ?? "no recorded entry"}
-                    {" · Newest history: "}{worker.freshness.newest_last_entry}
+                    {" · a newer transcript appeared "}
+                    {conversationGap(worker.freshness.pinned_last_entry, worker.freshness.newest_last_entry)}
                   </small> : null}
                 </li>)}
               </ul>
-              <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
+              <ConversationRetry onRetry={retryConversationChecks} />
             </details>
           ) : null}
-          {operatorToken && uncheckedConversations.length > 0 ? (
+          {operatorToken && unconfirmedWorthListing.length > 0 ? (
             <details className="runtime-update-card">
-              <summary>Conversation history unconfirmed · {uncheckedConversations.length}</summary>
+              <summary>Conversation history unconfirmed · {unconfirmedWorthListing.length}</summary>
               <p className="runtime-update-detail">Swarm could not verify these histories. This does not prove context was lost or require a conversation change.</p>
               <ul>
-                {uncheckedConversations.map((worker) => <li key={worker.worker_id}>
+                {unconfirmedWorthListing.map((worker) => <li key={worker.worker_id}>
                   <strong>{worker.name}</strong>: {worker.freshness.state === "unknown" ? worker.freshness.reason : ""}
                 </li>)}
               </ul>
-              <button type="button" className="runtime-update-run" onClick={() => void retryConversationChecks()}>Retry conversation checks</button>
+              {nothingToCheckYet > 0 ? (
+                <p className="runtime-update-detail">{nothingToCheckYet} other {nothingToCheckYet === 1 ? "worker has" : "workers have"} no transcript to check yet, which is normal for one that has not run.</p>
+              ) : null}
+              <ConversationRetry onRetry={retryConversationChecks} />
             </details>
           ) : null}
           {/* One per subsystem rather than only the most severe: they are

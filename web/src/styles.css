@@ -1998,8 +1998,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    legible on every state: measured 4.76:1 light and 5.90:1 dark on buzzing. */
 .worker-silence { color: inherit; opacity: .85; font-weight: 400; font-variant-numeric: tabular-nums; }
 .brand-lockup { position: relative; }
-.runtime-diagnostics { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px; color: var(--text); background: transparent; border-color: var(--line); font-size: .78rem; }
-.runtime-diagnostics svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+/* Sized as the secondary control it is. It sat at a 44px touch target with
+   full-size text, which made a rarely-used diagnostics entry the largest thing
+   in a column of actual notices and pushed them down the page. The touch
+   target is kept at 44px on coarse pointers only, where it is a real
+   requirement rather than a default. */
+.runtime-diagnostics { display: inline-flex; align-items: center; gap: 6px; min-height: 0; padding: 5px 9px; color: var(--muted); background: transparent; border-color: var(--line); font-size: .72rem; }
+.runtime-diagnostics svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+@media (pointer: coarse) { .runtime-diagnostics { min-height: 44px; padding: 8px 10px; font-size: .78rem; } }
+.conversation-retry { display: grid; gap: 6px; justify-items: start; }
+.conversation-retry small { color: var(--muted); font-size: .72rem; line-height: 1.4; }
 .runtime-diagnostics:hover:not(:disabled) { background: var(--panel-raised); border-color: var(--quiet); }
 /* Takes the worker back for this screen. Beside the badge naming the device
    that holds it, because that badge is where the operator asks the question. */

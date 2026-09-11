@@ -1520,6 +1520,36 @@ test.each(["busy", "malformed"])("conversation scan %s stays in runtime status a
   expect(reads).toBe(2);
 });
 
+test("workers with nothing to check are counted, not listed one by one", async () => {
+  // THE REPORTED SYMPTOM, 2026-09-11: four sleeping workers each got a line
+  // saying "this workspace has no Claude conversations yet", pushing the one
+  // real signal down the panel. NeverRun and NoTranscripts are explicitly not
+  // faults — a worker that has never run has no transcript to check.
+  const baseFetch = bootFetch();
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith("/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    if (url.endsWith("/workers/conversations")) return Promise.resolve(ok({ workers: [
+      { worker_id: "a", name: "ShotCraft", freshness: { state: "unknown", reason: "this workspace has no Claude conversations yet", cause: { kind: "no_transcripts", fault: false } } },
+      { worker_id: "b", name: "Aria", freshness: { state: "unknown", reason: "this workspace has no Claude conversations yet", cause: { kind: "never_run", fault: false } } },
+      { worker_id: "c", name: "Nexus", freshness: { state: "unknown", reason: "the transcript directory could not be read", cause: { kind: "transcripts_unreadable", fault: true } } },
+    ] }));
+    return baseFetch(input);
+  }));
+  render(<App />);
+
+  const summary = await screen.findByText("Conversation history unconfirmed · 1");
+  const details = summary.closest("details")!;
+  fireEvent.click(summary);
+  // The real problem is named...
+  expect(within(details).getByText("Nexus")).toBeInTheDocument();
+  // ...the two that have nothing to check are not, but are still accounted for,
+  // so the panel does not quietly disagree with the diagnostics page.
+  expect(within(details).queryByText("ShotCraft")).not.toBeInTheDocument();
+  expect(within(details).queryByText("Aria")).not.toBeInTheDocument();
+  expect(within(details).getByText(/2 other workers have no transcript to check yet/)).toBeInTheDocument();
+});
+
 test("unknown conversation history stays in runtime details and clears without acknowledgement", async () => {
   const baseFetch = bootFetch();
   let recovered = false;
