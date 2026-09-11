@@ -53,7 +53,6 @@ pub use task_outcomes::{
     CompletionEvidence, CompletionExemptionRecord, ReviewedSettlementPage, TaskEvidenceRecord,
 };
 mod apiary_enrollment;
-mod workspace_settings;
 mod decisions;
 mod email;
 mod events;
@@ -65,6 +64,7 @@ mod federation_steward_assists;
 mod federation_steward_takeovers;
 mod federation_steward_tasks;
 mod federation_stewardships;
+mod workspace_settings;
 pub use federation_steward_assists::MAX_FEDERATION_STEWARD_ASSIST_BATCH;
 pub use federation_steward_takeovers::{
     MAX_FEDERATION_STEWARD_TAKEOVER_BATCH, STEWARD_TAKEOVER_RELAY_PROTOCOL_VERSION,
@@ -9583,7 +9583,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("hive.db");
         let store = TaskStore::open(&path).unwrap();
-        let task = store.create_task("Keep this task", "/projects/demo").unwrap();
+        let task = store
+            .create_task("Keep this task", "/projects/demo")
+            .unwrap();
         store.connection().unwrap().execute_batch("DROP TABLE apiary_enrollments; DROP TABLE workspace_search_settings; PRAGMA user_version=164;").unwrap();
         drop(store);
         let store = TaskStore::open(path).unwrap();

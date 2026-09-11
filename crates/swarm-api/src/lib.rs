@@ -4211,7 +4211,10 @@ fn api_router(state: AppState) -> Router {
             post(workers::improve_worker_description),
         )
         .route("/api/v1/workspaces", get(workers::list_workspaces))
-        .route("/api/v1/workspace-search-settings", get(workers::workspace_search_settings).put(workers::save_workspace_search_settings))
+        .route(
+            "/api/v1/workspace-search-settings",
+            get(workers::workspace_search_settings).put(workers::save_workspace_search_settings),
+        )
         .route(
             "/api/v1/workers/{worker_id}/start",
             post(workers::start_worker),
