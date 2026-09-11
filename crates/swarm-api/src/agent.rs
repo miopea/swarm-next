@@ -2428,6 +2428,16 @@ impl AgentMcp {
         }
         let task_id = TaskId::from_str(value)
             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
+        // A DRAFT THIS WORKER FILED IS ALSO ITS OWN, and it was the one case
+        // neither branch above covered: not visible, because a draft is nobody's
+        // assignment; not finished, because it never started. So the author of a
+        // ticket was the only party who could not correct it.
+        if let Ok(task) = self
+            .tasks
+            .unrouted_draft_this_worker_filed(self.principal, task_id)
+        {
+            return Ok(task.id);
+        }
         Ok(self
             .tasks
             .task_this_worker_finished(self.principal, task_id)?
@@ -3367,7 +3377,7 @@ fn finish_automation_run_tool() -> Tool {
 fn create_task_tool() -> Tool {
     tool(
         "swarm_create_task",
-        "Create one durable draft task, for work that should survive this session. Any worker may record work it has found, in its own repository or another; the task lands as an unassigned draft, so this records work rather than routing it. Queen assigns. Do not use for casual operator steering.",
+        "Create one durable draft task, for work that should survive this session. Any worker may record work it has found, in its own repository or another; the task lands as an unassigned draft, so this records work rather than routing it. Queen assigns. While it is still an unrouted draft it stays yours to fix: swarm_retitle_task, swarm_amend_task_facts and swarm_record_task_note all work on a draft you filed. The moment Queen routes it that stops, and a correction goes to her instead. Do not use for casual operator steering.",
         &json!({
             "type": "object",
             "properties": {
@@ -6386,6 +6396,95 @@ mod tests {
         assert_eq!(
             response["result"]["structuredContent"]["review_request"]["status"],
             expected
+        );
+    }
+
+    /// A worker can fix the ticket it filed, over the real MCP surface, for as
+    /// long as the ticket is still an unrouted draft.
+    ///
+    /// Filing is the only way a worker records work it noticed, and until now
+    /// the filer was the one party that could not correct its own words: a
+    /// draft is nobody's assignment, so it failed the visibility check, and it
+    /// never started, so it failed the finished-work check too. Queen had to be
+    /// asked to fix a typo in a ticket she did not write.
+    ///
+    /// The three edit tools are checked through `handle`, not through the
+    /// service, because the gate lives in `task_evidence_may_reach` and a
+    /// service-level pass would not prove the tools reach it.
+    #[tokio::test]
+    async fn a_worker_can_correct_the_draft_it_filed_and_stops_when_it_is_routed() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let filed = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_create_task",
+            json!({
+                "title": "Rotate the singing key",
+                "workspace": "/workspace/petal",
+                "description": "Noticed while packaging the release.",
+            }),
+        )
+        .await;
+        assert_eq!(filed["result"]["isError"], false, "{filed}");
+        let task_id = filed["result"]["structuredContent"]["id"]
+            .as_str()
+            .expect("the filed draft reports its id")
+            .to_string();
+
+        for (name, arguments) in [
+            (
+                "swarm_retitle_task",
+                json!({"task_id": task_id, "title": "Rotate the signing key"}),
+            ),
+            (
+                "swarm_amend_task_facts",
+                json!({"task_id": task_id, "correction": "The key is in BFG, not WS Dev Secrets."}),
+            ),
+            (
+                "swarm_record_task_note",
+                json!({"task_id": task_id, "note": "Filed from the packaging run."}),
+            ),
+        ] {
+            let response = call_review_test_tool(bridge.clone(), &token, name, arguments).await;
+            assert_eq!(
+                response["result"]["isError"], false,
+                "the filer must be able to call {name} on its own draft: {response}"
+            );
+        }
+        assert_eq!(
+            store
+                .get_task(TaskId::from_str(&task_id).unwrap())
+                .unwrap()
+                .title,
+            "Rotate the signing key",
+            "and the correction actually landed, rather than being accepted and dropped"
+        );
+
+        // THE BOUNDARY. Routing hands the ticket to whoever holds it next, and
+        // authorship stops being authority over it.
+        store
+            .transition_task(TaskId::from_str(&task_id).unwrap(), TaskState::Ready)
+            .unwrap();
+        let refused = call_review_test_tool(
+            bridge,
+            &token,
+            "swarm_retitle_task",
+            json!({"task_id": task_id, "title": "Reaching into routed work"}),
+        )
+        .await;
+        assert_eq!(
+            refused["result"]["isError"], true,
+            "a routed ticket is governed by assignment again: {refused}"
+        );
+        assert_eq!(
+            store
+                .get_task(TaskId::from_str(&task_id).unwrap())
+                .unwrap()
+                .title,
+            "Rotate the signing key",
+            "and the refusal left the title alone"
         );
     }
 
