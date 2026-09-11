@@ -13,7 +13,30 @@ Isolated HTTP/IPC tests verify private access, unavailable host without capabili
 claims, and recovery when an actual isolated HostServer appears at the same socket
 without API recreation. Both passed, as did the full API library suite and66
 related runtime-update/worker-settings web tests. Strict all-target API lint also
-passed. Activation remains a separate gate; production/WSL currently remain94b36066.
+passed. Built and activated revision3dfc019e on both production and WSL as
+`1.7.1-dev-3dfc019e2d5e-20260911103315-1290809`. Bundle checksums and unchanged
+engine fingerprint were verified. Production engine PID944143 and all ten sorted
+worker/session pairs were preserved; before/after receipts in
+`/tmp/swarm-provider-outage-continuity.Fi3xME` both hash to
+`bf0bd5558207e97bce4e675438d22500ab3749484f85573acefc6cc2b40cf3b6`.
+WSL initially preserved PID6458. Both healthy APIs and authenticated Edge Apiary
+pages show the exact new revision. No production engine restart or release.
+
+Then explicitly applied the separately pending WSL test-engine update through its
+browser confirmation. PID changed6458 to43236, the one loaded worker returned
+(1/1), and the update notice cleared. Membership, three-Hive directory, shared
+task cursor4/two applied tasks and zero synchronization retries remain intact.
+This verifies loaded-worker return, not exact provider conversation continuity.
+CI34589715128 has successful web, Linux package and Rust audit jobs; full Rust
+tests remain in progress at this receipt.
+
+Jira clarification: membership requires ZERO Jira accounts or projects. The
+existing `no_jira_member_joins_and_reconciles_swarm_tasks_over_http` test creates
+an unconfigured member, submits membership, asserts federated membership and
+successful shared-task/directory reconciliation. It passed in the full API suite.
+The observed1/2 project readiness below is optional integration status, not a
+membership gate. Fresh invitation-link browser approval remains a separate open
+acceptance gate; existing-member verification does not replace it.
 
 During that validation, Edge verified Keeper/WSL Apiary navigation and the same
 three registered Hives. WSL shows1/2 Jira projects ready, optional remaining setup,
