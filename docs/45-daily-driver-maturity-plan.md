@@ -2,6 +2,18 @@
 
 ## Authoritative next gates — September 11, overnight
 
+05:07 continuation checkpoint: previous turn made verified code progress; this
+turn confirmed live sampler30572 still running. UI fix47e45a08 is pushed to main;
+CI34581960262 web/security/package jobs pass, Rust still running. Build session
+68602 is LIVE and waits for sampler PID1236669 to exit, then requires its final
+successful summary with ten original sessions and unchanged app/engine PIDs.
+Only then does it build clean exact47e45a08 in the isolated Linux checkout.
+It does NOT deploy. Local owned launcher: dist/build-provider-observation-after-baseline.sh.
+Output root:/tmp/swarm-provider-observation-47e45a08. Do not start another build
+or replace the sampler because a tool observation times out. Next: collect final
+baseline and build, verify CI, supported worker-preserving update and browser check.
+Account23% remaining at05:01; preserve10%/5% handoff discipline. Full scope remains.
+
 04:59 provider-update observation failure/recovery fix prepared. A failed provider
 check no longer becomes an empty successful update list when other runtime reads
 succeed. Keep one explicit unavailable-status notice, suppress stale restart
