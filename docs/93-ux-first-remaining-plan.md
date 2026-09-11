@@ -1,5 +1,17 @@
 # Remaining maturity work — UX/UI first
 
+## Current checkpoint — September 11, 02:55 Eastern
+
+The shared-task arrival/restart/retirement and live board freshness gates are
+closed in production and WSL; see the newest92/45 receipts for e49d44cf/c8f74a85.
+Both full CI runs are green and both worker engines were preserved. Do not repeat
+those journeys as unfinished work. The other worker's Jira commit1df01d76 is now
+incorporated; its clean combined build and CI are in progress before activation.
+Keep the exact-answer provenance work, native-device gates and Daisy approval
+separate and open. Native file-picker acceptance was not performed: only the
+idle demo terminal was inspected, no input or attachment was sent, and the test
+tab was returned to Tasks to avoid retaining terminal engagement.
+
 ## Authoritative checkpoint — September 11, 00:50 Eastern
 
 Use the newest entries in docs/92-maturity-acceptance-ledger.md and docs/45 for

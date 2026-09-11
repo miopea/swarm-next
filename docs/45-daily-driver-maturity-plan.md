@@ -2,6 +2,21 @@
 
 ## Authoritative next gates — September 11, overnight
 
+03:12 CURRENT NEXT ACTION: combined main1df01d76 (other worker's committed Jira
+token UI plus our shared-task fixes) is built, NOT deployed. Wait for existing
+CI34572128235; web/package/audit passed and Rust is still running. Do not rebuild
+or restart tests merely to wait. Prepared verified-build output:
+/tmp/swarm-combined-bundle-1df01d76/swarm-1.7.1-dev-1df01d768b09-20260911070807-1180013-linux-x86_64
+Build checkout /tmp/swarm-shared-view-c8f74a85 is now detached1df01d76, sharing
+the completed target cache with /tmp/swarm-lifecycle-release-e49d44cf. Build
+session29446 finished successfully. Once CI passes, supported app-only update
+and transfer the identical bundle to WSL; verify health and engines944143/6458.
+The shared Linux checkout was clean at1df01d76 on last read; recheck before use.
+c8f74a85 full CI34571291430 is GREEN. Both current test tabs are back on Tasks,
+not holding a demo terminal. No attachment/picker/provider input was sent during
+the native-picker investigation; keep that acceptance open rather than claiming
+an upload from code inspection. The fifteen-minute continuation remains ACTIVE.
+
 02:55 CLOSED live shared-task freshness gate: c8f74a85 deployed on production/WSL
 as1.7.1-dev-c8f74a85b76d-20260911064536-1160756, engines944143/6458 retained.
 New fictional task01a08f3c-cdb9-7bf1-aeec-8a31675ef61f appeared automatically

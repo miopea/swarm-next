@@ -1,5 +1,35 @@
 # Current maturity acceptance ledger
 
+## September 11, 02:55 Eastern — Shared-task lifecycle and live board freshness closed
+
+`e49d44cf` repairs schema167 constraints for canonical task state, member command
+targets and local lifecycle intents. Retirement and awaiting-release now traverse
+the existing durable protocol; migration preserves rows/receipts and rolls back
+atomically on failure. Full CI34569820313 passed. Production and WSL retained
+verified schema166 pre-update backups and engine PIDs944143/6458.
+
+`c8f74a85` emits existing TasksChanged events for real canonical/projection/outbox
+changes, not exact retries. The board follows those events and explicit refresh,
+aborts superseded reads, retains last-known data on failure and removes closed
+task claim/setup prompts.104 web tests, typecheck,8 persistence tests and strict
+lint passed; full CI34571291430 is green. Live on both Hives:
+`1.7.1-dev-c8f74a85b76d-20260911064536-1160756`.
+
+Fictional task `01a08f3c-cdb9-7bf1-aeec-8a31675ef61f` was created in the real Keeper
+form, assigned only to BGS WSL Hive, and appeared in its already-open board without
+refresh. Supported retirement command `01a08f3e-bda9-7753-85f7-5d099db32e71` showed
+queued, then Abandoned in both already-open boards automatically, one applied
+attempt. Rendered labels/controls were also inspected visually. No providers or
+workers started, no repository writes or customer communications were requested.
+The earlier task `01a08f02-fc6b-7953-bf57-4c73e79cf3d8` is also Abandoned/revision2,
+not Ready as its historical checkpoint below says. Both remain auditable.
+
+This proves ordinary arrival and retirement plus the earlier restart continuity;
+it does not prove disconnected-Jira enrollment, every execution/approval path,
+native attachment pickers, or the pending Daisy production membership approval.
+The later Jira-token commit1df01d76 is incorporated locally; combined CI/build
+are pending and it is not yet deployed by this task. No release was cut.
+
 ## September 11, 01:54 Eastern — Existing-member shared-task receipt and recovery
 
 Through the actual Keeper Tasks form, created fictional low-priority shared task
