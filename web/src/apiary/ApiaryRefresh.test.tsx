@@ -33,7 +33,7 @@ test.each(["keeper", "member"] as const)("%s refreshes renamed Hives on return w
   const identity: HiveIdentity = { operator: { id: "local", display_name: "Cora" }, hive: { id: "local", name: "Local", operator_id: "local", apiary_id: "apiary" }, apiary_context: { mode: "federated", local_role: role, apiary: { id: "apiary", name: "Garden", keeper_operator_id: "other", shared_work_backend: "jira" } } };
   const View = role === "keeper" ? KeeperControlRoom : MemberControlRoom;
   let view!: ReturnType<typeof render>;
-  await act(async () => { view = render(<View identity={identity} operatorToken="fictional" onManage={vi.fn()} onOpenTasks={vi.fn()} />); });
+  await act(async () => { view = render(<View identity={identity} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />); });
   expect(screen.getAllByText("Before rename").length).toBeGreaterThan(0);
   expect(intervals).not.toHaveBeenCalled();
   visibility = "hidden";

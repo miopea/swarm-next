@@ -1,5 +1,21 @@
 # Current maturity acceptance ledger
 
+## September 11, 01:09 Eastern — Member rename round trip accepted
+
+Using the existing WSL member's Edit names form, temporarily changed BGS WSL Hive
+to BGS WSL Hive · rename check. Production Keeper's rendered roster received the
+new name through normal directory synchronization. Restored BGS WSL Hive through
+the same form and verified its restoration in both local management and the
+production Keeper roster. No membership reset, key change or worker action.
+This is actual existing-member/ Keeper convergence, not a third member-device
+acceptance or proof of immediate live presence.
+
+The next UI correction adds an Invite a Hive action to Keeper overview, opens and
+focuses the existing invitation controls, and puts invitations before advanced
+delegation settings. Navigation creates no link. All64 affected tests, TypeScript
+and production web build pass. Browser desktop/narrow layout acceptance is next.
+
+
 ## September 11, 00:57 Eastern — Optional Jira presentation corrected
 
 The newly created, no-Jira garden displayed Jira-backed because its historical
@@ -9,8 +25,10 @@ Jira, without changing the federation contract. Catalog copy no longer promises
 project access to every member; it explains per-operator permissions.
 
 Revision78a212de is pushed. All99 affected tests, TypeScript and the production
-web build pass. Supported production development deployment is in progress;
-do not count that as a served-revision receipt yet. This correction adds no new
+web build pass. Production and WSL now serve healthy
+`1.7.1-dev-78a212debd9a-20260911045500-1098496`, retaining engine PIDs944143 and6458.
+Production Edge shows Swarm shared work, Optional Jira work and per-operator
+project-access copy. CI34563963150 is still running. This correction adds no new
 permissions, Jira connection, member mutation or background work.
 
 Creation-profile revisionb4322b19 CI34563096043 completed successfully. The

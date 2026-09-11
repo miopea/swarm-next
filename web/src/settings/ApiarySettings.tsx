@@ -41,9 +41,10 @@ type Props = {
   hiveIdentity: HiveIdentity | undefined;
   operatorToken: string;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
+  initialFocus?: "invitations";
 };
 
-export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHiveIdentityChange }: Props) {
+export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHiveIdentityChange, initialFocus }: Props) {
   const context = hiveIdentity?.apiary_context;
   const personal = !context || context.mode === "personal";
   const [name, setName] = useState("");
@@ -51,6 +52,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [editingIdentity, setEditingIdentity] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const profileRef = useRef<JoinPublicProfileHandle>(null);
+  const invitationsRef = useRef<HTMLDivElement>(null);
   const [hiveName, setHiveName] = useState(hiveIdentity?.hive.name ?? "");
   const [apiaryName, setApiaryName] = useState(context?.mode === "federated" ? context.apiary.name : "");
   const [confirmCollapse, setConfirmCollapse] = useState(false);
@@ -77,6 +79,12 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [error, setError] = useState("");
   const keeper = context?.mode === "federated" && context.local_role === "keeper";
   const member = context?.mode === "federated" && context.local_role === "member";
+
+  useEffect(() => {
+    if (initialFocus !== "invitations" || !keeper) return;
+    invitationsRef.current?.focus({ preventScroll: true });
+    invitationsRef.current?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [initialFocus, keeper]);
 
   useEffect(() => {
     if (editingIdentity) return;
@@ -479,6 +487,13 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       ) : (
         <>
           <p>Workers, repositories, provider sessions, credentials, and private tasks remain owned by this Hive.</p>
+          {keeper ? <div ref={invitationsRef} tabIndex={-1} role="region" aria-label="Invite Hives">
+            <KeeperInvitationManager
+              busy={busy || working}
+              operatorToken={operatorToken}
+              onInvitationCreated={async () => setReadiness(await fetchApiaryCollapseReadiness(operatorToken))}
+            />
+          </div> : null}
           {member ? (
             <div className="apiary-member-sync" aria-label="Keeper synchronization status">
               <div>
@@ -621,11 +636,6 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 </div>
               ) : null}
             </div>
-            <KeeperInvitationManager
-              busy={busy || working}
-              operatorToken={operatorToken}
-              onInvitationCreated={async () => setReadiness(await fetchApiaryCollapseReadiness(operatorToken))}
-            />
             <div className="apiary-projects">
               <div><strong>Apiary Jira projects</strong><small>Promote projects into the authoritative Apiary catalog. Each Hive must still receive the catalog entry and prove its own access and workflow mapping.</small></div>
               {promotedProjects.length > 0 ? (

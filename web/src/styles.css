@@ -641,6 +641,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .keeper-hero-mark { display: grid; width: 62px; height: 62px; place-items: center; overflow: hidden; border-radius: 50%; background: var(--accent-soft); }
 .keeper-hero-mark .bee-mascot { width: 68px; height: 68px; transform: translateY(7px); }
 .keeper-hero h3 { margin: 0 0 4px; font-size: 1.35rem; }
+.keeper-hero-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .keeper-hero p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
 .keeper-summary { display: grid; max-width: 1500px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 0 auto 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .keeper-summary > div { display: grid; gap: 4px; padding: 15px 17px; border-right: 1px solid var(--line); }
@@ -2244,6 +2245,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .keeper-hero-mark .bee-mascot { width: 53px; height: 53px; }
   .keeper-hero .apiary-backend-badge { grid-column: 1; justify-self: start; white-space: nowrap; }
   .keeper-hero button { grid-column: 2; width: 100%; }
+  .keeper-hero-actions { grid-column: 2; }
   .keeper-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .keeper-summary > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .keeper-summary > div:nth-child(2) { border-right: 0; }

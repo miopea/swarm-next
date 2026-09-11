@@ -5,6 +5,28 @@ import type { HiveIdentity } from "../api";
 import ApiarySettings from "./ApiarySettings";
 import { clearStagedApiaryHandoff, createApiaryHandoffLink, stageApiaryHandoff } from "./apiaryHandoff";
 
+test("invitation entry focuses the existing controls without creating a link", async () => {
+  const scroll = vi.fn();
+  const originalScroll = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = scroll;
+  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => ok([]));
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const props = { busy: false, hiveIdentity: keeperIdentity(), operatorToken: "fictional", onHiveIdentityChange: vi.fn(), initialFocus: "invitations" as const };
+    const view = render(<ApiarySettings {...props} />);
+    const invitations = screen.getByRole("region", { name: "Invite Hives" });
+    expect(invitations).toHaveFocus();
+    expect(scroll).toHaveBeenCalledWith({ block: "start", behavior: "instant" });
+    expect(invitations.compareDocumentPosition(screen.getByText("Stewards")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByRole("button", { name: "Create invitation link" });
+    view.rerender(<ApiarySettings {...props} busy />);
+    expect(scroll).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  } finally {
+    Element.prototype.scrollIntoView = originalScroll;
+  }
+});
+
 test.each([false, true])("joined Hive saves profile in place; refresh fails=%s", async (refreshFails) => {
   const writes: string[] = [];
   const onHiveIdentityChange = vi.fn();

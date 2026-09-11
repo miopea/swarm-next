@@ -6,7 +6,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 test("an empty Apiary does not imply Jira is required or grants project access", async () => {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(ok([]))));
-  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onOpenTasks={vi.fn()} />);
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
   expect(await screen.findByText("No Jira projects have been promoted to this Apiary.")).toBeInTheDocument();
   expect(screen.getByText("Swarm shared work")).toBeInTheDocument();
   expect(screen.getByText("Optional Jira work")).toBeInTheDocument();
@@ -28,8 +28,12 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
     throw new Error(`Unexpected request: ${url}`);
   }));
   const onManage = vi.fn();
+  const onInvite = vi.fn();
   const onOpenTasks = vi.fn();
-  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={onManage} onOpenTasks={onOpenTasks} />);
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={onManage} onInvite={onInvite} onOpenTasks={onOpenTasks} />);
+  fireEvent.click(screen.getByRole("button", { name: "Invite a Hive" }));
+  expect(onInvite).toHaveBeenCalledOnce();
+  expect(onManage).not.toHaveBeenCalled();
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(await screen.findByLabelText("Apiary summary")).toHaveTextContent("Registered Hives3Promoted Jira projects1Active Jira claims1Work handoffs1Swarm tasks1Steward scopes1");
   expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveFern HiveFayeHive");
@@ -55,7 +59,7 @@ test("keeps task creation out of the supervisory Apiary view", async () => {
     throw new Error(`Unexpected request: ${url}`);
   }));
   const onOpenTasks = vi.fn();
-  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} onOpenTasks={onOpenTasks} />);
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={onOpenTasks} />);
   await screen.findByRole("heading", { name: "Grand Garden" });
   expect(screen.queryByRole("button", { name: /create shared task/i })).not.toBeInTheDocument();
   expect(screen.getByText(/Create, route, and manage all work from Tasks/)).toBeInTheDocument();
