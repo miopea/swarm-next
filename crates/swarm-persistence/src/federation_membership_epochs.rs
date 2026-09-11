@@ -30,5 +30,9 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
             ON apiary_federation_memberships
             BEGIN SELECT RAISE(ABORT, 'Federation membership identity is immutable'); END;"
     )?;
-    tx.pragma_update(None, "user_version", super::FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION)
+    tx.pragma_update(
+        None,
+        "user_version",
+        super::FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION,
+    )
 }
