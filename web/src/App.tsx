@@ -143,6 +143,7 @@ import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
 import { visibleSettingsSections, clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
+import { useSettingsDeepLinks } from "./settings/useSettingsDeepLinks";
 import { isSurface, readSavedSurface, saveSurface, surfaceWasRequested, type Surface } from "./navigation/startSurface";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
@@ -443,6 +444,11 @@ export function App() {
     setSurfaceState(next);
   }, []);
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
+  useSettingsDeepLinks(useCallback((section: SettingsSection) => {
+    setSettingsQuery("");
+    setSettingsSection(section);
+    setSurface("settings");
+  }, [setSurface]));
   const readTaskActivity = useCallback(async (taskId: string, signal?: AbortSignal, before?: number) => {
     if (!operatorToken) throw new Error("Unlock the Hive to read task history.");
     return fetchTaskActivity(operatorToken, taskId, 30, signal, before);
