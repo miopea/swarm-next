@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 11 — Apiary refresh activated and live regression closed
+
+Production and WSL now serve
+`1.7.1-dev-82eac78a8c34-20260911134316-1393101`. The production engine PID1364561
+and all eight running worker/session pairs are unchanged; exact snapshots in
+`/tmp/swarm-apiary-refresh-continuity.cLhr6f` both hash to
+`6f5196dda450ba7055d488e5ad8522c3fce006b1ecf8d203bf243fa64f100ca9`.
+WSL engine PID45338 is also unchanged. No worker-engine update or release was cut.
+
+Edge live acceptance: WSL Manage membership / Edit names retained the unsaved
+`BGS WSL Hive — refresh check` through Refresh control room. Saved that temporary
+name, requested Apiary synchronization, then clicked Refresh control room on the
+already-open production Keeper page. Its directory showed the new name without
+a page reload. Restored BGS WSL Hive and verified both directories after the
+same synchronization/refresh path. All three memberships remained intact and no
+operator profile, task or worker was changed. This closes the reproduced stale
+global-refresh regression; explicit retry was used, so automatic propagation
+latency is not established by this check. CI34605803223 is separately pending.
+
 ## September 11 — Apiary explicit refresh regression fixed locally
 
 App refresh and runtime/task event invalidation now reach Keeper, member and
