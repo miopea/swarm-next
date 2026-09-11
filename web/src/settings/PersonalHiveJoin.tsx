@@ -291,6 +291,15 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       <h3>{record.phase === "complete" ? "Welcome to your Apiary" : record.phase === "joining" ? "Joining your Apiary…" : record.phase === "attention" ? "Joining needs attention" : "Waiting for Keeper approval"}</h3>
       <p>{record.phase === "attention" ? "The saved request could not finish. Review the invitation with your Keeper; your local work is unchanged." : "You have submitted your request. There is nothing else to approve here; Swarm finishes the connection in the background."}</p>
       <p>Your local tasks, workers, repositories and credentials stay on this Hive. Jira is optional.</p>
+      {record.problem ? <p role="status">{record.problem === "keeper_unavailable"
+        ? "Keeper is temporarily unreachable. Your request is saved and Swarm will retry automatically."
+        : record.problem === "invitation_unavailable"
+          ? "This invitation expired or was cancelled. Ask your Keeper for a current invitation."
+          : record.problem === "runtime_incompatible"
+            ? "The Hives could not agree on the joining protocol. Check that both are updated; your local work is safe."
+            : "The approved invitation no longer matches your submitted terms. Review the current invitation with your Keeper; Swarm has not accepted new permissions."}
+        {record.next_attempt_at ? <> Next check: {new Date(record.next_attempt_at * 1000).toLocaleTimeString()}.</> : null}
+      </p> : null}
       {record.phase === "awaiting_approval" || record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {
         setWorking(true);
         void removeApiaryKeeperLink(operatorToken, record.consent.link_id).then(() => { enrollmentEpoch.current += 1; setEnrollments([]); })

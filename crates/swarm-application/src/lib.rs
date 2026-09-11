@@ -1551,7 +1551,31 @@ impl ApiaryService {
     /// # Errors
     /// Returns storage or integrity errors.
     pub fn enrollments(&self) -> Result<Vec<swarm_domain::ApiaryEnrollment>, ApplicationError> {
-        self.store.apiary_enrollments().map_err(Into::into)
+        let identity = self.store.local_hive_identity()?;
+        Ok(self
+            .store
+            .apiary_enrollments()?
+            .into_iter()
+            .filter(|record| {
+                record.phase != swarm_domain::ApiaryEnrollmentPhase::Cancelled
+                    && (record.phase != swarm_domain::ApiaryEnrollmentPhase::Complete
+                        || identity.hive.apiary_id == Some(record.consent.apiary_id))
+            })
+            .collect())
+    }
+
+    /// Records a classified transport outcome without exposing remote text.
+    /// # Errors
+    /// Returns storage or integrity errors.
+    pub fn record_enrollment_attempt(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        problem: Option<swarm_domain::ApiaryEnrollmentProblem>,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .record_apiary_enrollment_attempt(link_id, problem, now)
+            .map_err(Into::into)
     }
 
     /// Returns at most four unfinished enrollments for one transport pass.
@@ -1562,7 +1586,7 @@ impl ApiaryService {
         &self,
         now: i64,
     ) -> Result<Vec<swarm_domain::ApiaryEnrollment>, ApplicationError> {
-        use swarm_domain::ApiaryEnrollmentPhase::{Attention, AwaitingApproval, Joining};
+        use swarm_domain::ApiaryEnrollmentPhase::{AwaitingApproval, Joining};
         let mut pending = Vec::new();
         for record in self.enrollments()? {
             if !matches!(record.phase, AwaitingApproval | Joining)
@@ -1571,8 +1595,12 @@ impl ApiaryService {
                 continue;
             }
             if record.consent.expires_at <= now {
-                self.advance_enrollment(record.consent.link_id, record.phase, Attention)?;
-            } else if pending.len() < 4 {
+                self.record_enrollment_attempt(
+                    record.consent.link_id,
+                    Some(swarm_domain::ApiaryEnrollmentProblem::InvitationUnavailable),
+                    now,
+                )?;
+            } else if pending.len() < 4 && record.next_attempt_at.is_none_or(|next| next <= now) {
                 pending.push(record);
             }
         }

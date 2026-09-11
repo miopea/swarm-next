@@ -74,6 +74,9 @@ impl TaskStore {
             return Ok(false);
         }
         record.phase = ApiaryEnrollmentPhase::Complete;
+        record.problem = None;
+        record.next_attempt_at = None;
+        record.consecutive_failures = 0;
         tx.execute(
             "UPDATE apiary_enrollments SET record_json = ?2 WHERE link_id = ?1",
             params![link_id.to_string(), encode(&record)?],
@@ -204,6 +207,9 @@ impl TaskStore {
         let record = ApiaryEnrollment {
             consent: consent.clone(),
             phase: ApiaryEnrollmentPhase::AwaitingApproval,
+            consecutive_failures: 0,
+            next_attempt_at: None,
+            problem: None,
         };
         let changed = tx.execute(
             "INSERT INTO apiary_enrollments (link_id, record_json)
@@ -235,6 +241,38 @@ impl TaskStore {
             .query_map([MAX_ENROLLMENTS], |row| row.get::<_, String>(0))?
             .map(|row| decode(&row?))
             .collect()
+    }
+
+    /// Persists bounded retry state without reviving terminal phases.
+    /// # Errors
+    /// Rejects missing records, invalid time, and storage failure.
+    pub fn record_apiary_enrollment_attempt(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        problem: Option<swarm_domain::ApiaryEnrollmentProblem>,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidApiaryJoinLink);
+        }
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let stored: String = tx
+            .query_row(
+                "SELECT record_json FROM apiary_enrollments WHERE link_id = ?1",
+                [link_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)?;
+        let mut record = decode(&stored)?;
+        record.record_attempt(problem, now);
+        tx.execute(
+            "UPDATE apiary_enrollments SET record_json = ?2 WHERE link_id = ?1",
+            params![link_id.to_string(), encode(&record)?],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Compare-and-swap progress so stale workers cannot undo cancellation.

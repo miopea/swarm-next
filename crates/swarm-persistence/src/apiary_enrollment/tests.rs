@@ -3,6 +3,55 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use swarm_domain::{ApiaryId, FederationNodeId};
 
 #[test]
+fn outage_backoff_is_durable_and_clears_after_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("retry.sqlite");
+    let store = TaskStore::open(&path).unwrap();
+    let consent = consent(&store);
+    store.save_apiary_enrollment(&consent, 10).unwrap();
+    store
+        .record_apiary_enrollment_attempt(
+            consent.link_id,
+            Some(swarm_domain::ApiaryEnrollmentProblem::KeeperUnavailable),
+            11,
+        )
+        .unwrap();
+    drop(store);
+    let store = TaskStore::open(&path).unwrap();
+    let first = store.apiary_enrollments().unwrap().remove(0);
+    assert_eq!(first.next_attempt_at, Some(16));
+    assert_eq!(first.consecutive_failures, 1);
+    store
+        .record_apiary_enrollment_attempt(consent.link_id, None, 16)
+        .unwrap();
+    let recovered = store.apiary_enrollments().unwrap().remove(0);
+    assert_eq!(recovered.next_attempt_at, None);
+    assert_eq!(recovered.problem, None);
+    assert_eq!(recovered.consecutive_failures, 0);
+}
+
+#[test]
+fn permanent_refusal_stops_retry_without_reviving_cancelled_work() {
+    let store = TaskStore::in_memory().unwrap();
+    let consent = consent(&store);
+    store.save_apiary_enrollment(&consent, 10).unwrap();
+    store
+        .record_apiary_enrollment_attempt(
+            consent.link_id,
+            Some(swarm_domain::ApiaryEnrollmentProblem::ApprovalChanged),
+            11,
+        )
+        .unwrap();
+    let refused = store.apiary_enrollments().unwrap().remove(0);
+    assert_eq!(refused.phase, ApiaryEnrollmentPhase::Attention);
+    assert_eq!(refused.next_attempt_at, None);
+    store
+        .record_apiary_enrollment_attempt(consent.link_id, None, 12)
+        .unwrap();
+    assert_eq!(store.apiary_enrollments().unwrap(), vec![refused]);
+}
+
+#[test]
 fn keeper_link_disclosure_is_signed_before_submission_and_rejects_tampering() {
     let keeper = TaskStore::in_memory().unwrap();
     keeper

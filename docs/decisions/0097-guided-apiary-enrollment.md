@@ -40,6 +40,15 @@ Legacy saved links are migrated without invented consent. Removing a saved
 link also removes its enrollment record; completed signed membership receipts
 remain owned by the existing federation receipt store.
 
+Temporary transport failures retain the same consent and signed submission,
+with durable retry delays of 5, 15, 30, 60, 120 and at most300 seconds. Retries
+never extend the consent expiry and stop after at most1000 consecutive failures.
+An ordinary successful observation clears the problem. Rejected invitations,
+changed approval and incompatible responses stop for explicit review instead
+of continually retrying a permission decision. UI receives typed reasons,
+never arbitrary remote error text or credentials. Completed history remains
+durable but is hidden from joining after leaving the corresponding Apiary.
+
 Acceptance requires independent-Hive tests of the exact three-step flow,
 browser-closed completion, restart and response-loss recovery, policy/identity
 substitution, cancellation, expiry, and existing-member upgrade without rejoin.

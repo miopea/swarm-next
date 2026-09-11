@@ -83,6 +83,54 @@ impl ApiaryEnrollmentPhase {
 pub struct ApiaryEnrollment {
     pub consent: ApiaryEnrollmentConsent,
     pub phase: ApiaryEnrollmentPhase,
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub next_attempt_at: Option<i64>,
+    #[serde(default)]
+    pub problem: Option<ApiaryEnrollmentProblem>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryEnrollmentProblem {
+    KeeperUnavailable,
+    InvitationUnavailable,
+    ApprovalChanged,
+    RuntimeIncompatible,
+}
+
+impl ApiaryEnrollment {
+    /// Keeps retry authority bounded by the original consent lifetime.
+    /// Permanent refusals require review; successful observations clear trouble.
+    pub fn record_attempt(&mut self, problem: Option<ApiaryEnrollmentProblem>, now: i64) {
+        if !matches!(
+            self.phase,
+            ApiaryEnrollmentPhase::AwaitingApproval | ApiaryEnrollmentPhase::Joining
+        ) {
+            return;
+        }
+        self.problem = problem;
+        self.next_attempt_at = None;
+        if problem.is_none() {
+            self.consecutive_failures = 0;
+        } else {
+            self.consecutive_failures = self.consecutive_failures.saturating_add(1).min(1000);
+            if problem == Some(ApiaryEnrollmentProblem::KeeperUnavailable)
+                && now < self.consent.expires_at
+                && self.consecutive_failures < 1000
+            {
+                self.next_attempt_at = Some(
+                    now.saturating_add(super::federation_retry_delay_seconds(
+                        self.consecutive_failures,
+                    ))
+                    .min(self.consent.expires_at),
+                );
+            } else {
+                self.phase = ApiaryEnrollmentPhase::Attention;
+            }
+        }
+    }
 }
 
 impl ApiaryEnrollmentConsent {
@@ -129,6 +177,25 @@ impl ApiaryEnrollmentConsent {
 mod tests {
     use super::*;
     use crate::{ApiaryInvitationId, SharedWorkBackend};
+
+    #[test]
+    fn retries_never_extend_consent_and_failure_count_is_bounded() {
+        let (consent, _) = fixture();
+        let mut record = ApiaryEnrollment {
+            consent,
+            phase: ApiaryEnrollmentPhase::AwaitingApproval,
+            consecutive_failures: 0,
+            next_attempt_at: None,
+            problem: None,
+        };
+        for _ in 0..1100 {
+            record.record_attempt(Some(ApiaryEnrollmentProblem::KeeperUnavailable), 99);
+            assert!(record.next_attempt_at.is_none_or(|next| next <= 100));
+        }
+        assert_eq!(record.consecutive_failures, 1000);
+        assert_eq!(record.phase, ApiaryEnrollmentPhase::Attention);
+        assert_eq!(record.next_attempt_at, None);
+    }
 
     #[test]
     fn enrollment_cannot_skip_approval_or_revive_terminal_phases() {

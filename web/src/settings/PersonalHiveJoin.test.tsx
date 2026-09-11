@@ -41,6 +41,19 @@ test("saved completed enrollment opens Apiary without another member action", as
   expect(screen.queryByRole("button", { name: /Accept policy|Join Apiary/ })).not.toBeInTheDocument();
 });
 
+test.each([
+  ["keeper_unavailable", "awaiting_approval", /Keeper is temporarily unreachable/],
+  ["invitation_unavailable", "attention", /This invitation expired or was cancelled/],
+  ["approval_changed", "attention", /no longer matches your submitted terms/],
+  ["runtime_incompatible", "attention", /could not agree on the joining protocol/],
+] as const)("saved %s explains the next step without another approval", async (problem, phase, message) => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
+    String(input).endsWith("/enrollments") ? JSON.stringify([{ consent: { link_id: "link-1" }, phase, problem }]) : "[]")));
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+  await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(message));
+  expect(screen.queryByRole("button", { name: /Accept policy|Join Apiary/ })).not.toBeInTheDocument();
+});
+
 // Profile persistence is covered independently; these tests isolate join policy
 // and membership failure/recovery rather than mocking its HTTP contract twice.
 vi.mock("./JoinPublicProfile", async () => {

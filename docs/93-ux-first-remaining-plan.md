@@ -10,6 +10,26 @@ approval completes membership automatically. No post-approval member click.
 ADR0097 now records this exact acceptance requirement. The deployed flow still
 requires post-approval acceptance and is NOT complete.
 
+LATEST FAILURE/RECOVERY PASS: journal now saves typed failure reasons, failure
+count and next-attempt time; transient transport/429/5xx backs off to300 seconds
+without extending consent. Rejected/changed/incompatible material stops for
+review; successful observations clear temporary trouble. UI explains each
+reason with the next check time. Completed enrollment history is hidden after
+leaving that Apiary so it cannot redirect a new join. Cancellation cannot delete
+a link whose join was submitted and whose remote outcome is still uncertain.
+
+Verification PASS:5 domain enrollment tests,11 enrollment persistence tests,
+3 application tests,3 HTTP background/recovery/outage tests,1 legacy invitation
+HTTP regression, all39 federation regressions,23 invitation UI tests, TypeScript
+and strict API all-target/all-feature Clippy. No live deployment yet. Next is
+main integration, final build/update compatibility and live acceptance. Keep
+browser visual and real-device checks open; tests do not substitute for them.
+
+Main advanced concurrently:04b83c7b adds integration-auth documentation;
+694c2c2d moves Apiary setup into Your Hive and renames Connections to Integrations.
+Preserve both when integrating; their intent does not conflict with Apiary being
+the management home after joining. No BFG Admin communication occurred.
+
 LATEST VERTICAL SLICE: authenticated /api/v1/apiary/enrollments submit/list,
 application-owned pending selection/receipt recovery, and existing federation
 background service now complete a consented join without browser actions.

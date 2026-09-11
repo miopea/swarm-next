@@ -1854,6 +1854,9 @@ export async function reconcileDecisionClarification(
 export type ApiaryEnrollment = {
   consent: { link_id: string; apiary_id: string; policy_revision: number; expires_at: number };
   phase: "awaiting_approval" | "joining" | "complete" | "cancelled" | "attention";
+  consecutive_failures?: number;
+  next_attempt_at?: number | null;
+  problem?: "keeper_unavailable" | "invitation_unavailable" | "approval_changed" | "runtime_incompatible" | null;
 };
 
 export async function fetchApiaryEnrollments(operatorToken: string): Promise<ApiaryEnrollment[]> {

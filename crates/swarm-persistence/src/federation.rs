@@ -1283,7 +1283,11 @@ impl TaskStore {
         if connection.execute(
             "DELETE FROM local_apiary_keeper_links WHERE link_id = ?1
              AND NOT EXISTS (SELECT 1 FROM apiary_enrollments e
-                 WHERE e.link_id = ?1 AND json_extract(e.record_json, '$.phase') = 'joining')",
+                 WHERE e.link_id = ?1 AND json_extract(e.record_json, '$.phase') = 'joining')
+             AND NOT EXISTS (SELECT 1 FROM apiary_join_invitations i
+                 WHERE i.one_time_secret = local_apiary_keeper_links.one_time_secret
+                   AND i.keeper_endpoint = local_apiary_keeper_links.keeper_endpoint
+                   AND i.state = 'submitted')",
             [link_id.to_string()],
         )? != 1
         {

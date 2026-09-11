@@ -56,10 +56,27 @@ impl AppState {
             return;
         };
         for record in records {
-            if let Err(error) = reconcile_one(&service, &record, unix_timestamp()).await {
-                // Transport errors contain only bounded classifications, never
-                // bearer material. The durable record remains retryable.
-                tracing::warn!(link_id = %record.consent.link_id, ?error, "Apiary enrollment will retry");
+            let problem = match reconcile_one(&service, &record, unix_timestamp()).await {
+                Ok(()) => None,
+                Err(error) => {
+                    use swarm_domain::ApiaryEnrollmentProblem;
+                    Some(match error.code {
+                        "keeper_unavailable" => ApiaryEnrollmentProblem::KeeperUnavailable,
+                        "apiary_invitation_rejected" => {
+                            ApiaryEnrollmentProblem::InvitationUnavailable
+                        }
+                        "keeper_response_invalid" => ApiaryEnrollmentProblem::RuntimeIncompatible,
+                        _ if error.status.is_server_error() => {
+                            ApiaryEnrollmentProblem::KeeperUnavailable
+                        }
+                        _ => ApiaryEnrollmentProblem::ApprovalChanged,
+                    })
+                }
+            };
+            if let Err(error) =
+                service.record_enrollment_attempt(record.consent.link_id, problem, unix_timestamp())
+            {
+                tracing::warn!(%error, "Apiary enrollment outcome could not be saved");
             }
         }
     }
@@ -75,23 +92,33 @@ async fn reconcile_one(
         .keeper_link_credential(link_id)
         .map_err(application_error)?;
     let client =
-        federation_http::FederationHttpClient::new(&endpoint).map_err(federation_http_error)?;
+        federation_http::FederationHttpClient::new(&endpoint).map_err(enrollment_http_error)?;
     // Observe first: a lost introduction response may already have been
     // approved remotely. Re-presenting then would wrongly fail as resolved.
     let mut poll = client
         .bootstrap(link_id, &secret, None)
         .await
-        .map_err(federation_http_error)?;
+        .map_err(enrollment_http_error)?;
     if poll.link.state == swarm_domain::ApiaryJoinLinkState::Open {
         let card = service.connection_card(now).map_err(application_error)?;
         poll = client
             .bootstrap(link_id, &secret, Some(&card))
             .await
-            .map_err(federation_http_error)?;
+            .map_err(enrollment_http_error)?;
     }
     service
         .record_keeper_link_poll(&poll.link, now)
         .map_err(application_error)?;
+    if matches!(
+        poll.link.state,
+        swarm_domain::ApiaryJoinLinkState::Revoked | swarm_domain::ApiaryJoinLinkState::Expired
+    ) {
+        return Err(ApiError::new(
+            StatusCode::GONE,
+            "apiary_invitation_rejected",
+            "Invitation is no longer available",
+        ));
+    }
     let Some(invitation) = poll.invitation else {
         return Ok(());
     };
@@ -113,7 +140,7 @@ async fn reconcile_one(
     let acceptance = client
         .join(&submission)
         .await
-        .map_err(federation_http_error)?;
+        .map_err(enrollment_http_error)?;
     service
         .apply_remote_join_acceptance(invitation_id, &acceptance, now)
         .map_err(application_error)?;
@@ -121,6 +148,21 @@ async fn reconcile_one(
         .finish_consented_join(link_id)
         .map_err(application_error)?;
     Ok(())
+}
+
+fn enrollment_http_error(error: federation_http::FederationHttpError) -> ApiError {
+    match error {
+        federation_http::FederationHttpError::RemoteRejected(status)
+            if status == 429 || status >= 500 =>
+        {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "keeper_unavailable",
+                "Keeper is temporarily unavailable",
+            )
+        }
+        other => federation_http_error(other),
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +173,46 @@ mod tests {
     use axum::http::Request;
     use swarm_domain::ApiaryEnrollmentPhase;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn unavailable_keeper_persists_backoff_and_does_not_retry_early() {
+        let now = unix_timestamp();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Fictional garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        let bundle = keeper.issue_apiary_join_link(&endpoint, now, 3600).unwrap();
+        let member = TaskStore::in_memory().unwrap();
+        ApiaryService::new(member.clone())
+            .begin_consented_enrollment(
+                &bundle.enrollment_offer.unwrap(),
+                &bundle.one_time_secret,
+                now,
+            )
+            .unwrap();
+        let state = AppState::default().with_task_store(member.clone());
+        state.reconcile_apiary_enrollments().await;
+        let failed = member.apiary_enrollments().unwrap().remove(0);
+        assert_eq!(
+            failed.problem,
+            Some(swarm_domain::ApiaryEnrollmentProblem::KeeperUnavailable)
+        );
+        assert_eq!(failed.consecutive_failures, 1);
+        assert!(failed.next_attempt_at.unwrap() > unix_timestamp());
+        state.reconcile_apiary_enrollments().await;
+        assert_eq!(member.apiary_enrollments().unwrap()[0], failed);
+        assert!(
+            member
+                .local_hive_identity()
+                .unwrap()
+                .hive
+                .apiary_id
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn submitted_hive_joins_after_restart_without_browser_or_jira() {
