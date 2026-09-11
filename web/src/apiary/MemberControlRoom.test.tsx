@@ -130,6 +130,8 @@ test("keeps a Jira handoff actionable and explains when acceptance fails", async
   const accept = await screen.findByRole("button", { name: "Accept work" });
   fireEvent.click(accept);
   expect(await screen.findByText("This handoff could not be accepted. Jira ownership and both Hives are unchanged.")).toHaveAttribute("role", "alert");
+  expect(screen.getByText("This handoff could not be accepted. Jira ownership and both Hives are unchanged.").closest("article"))
+    .toBe(accept.closest("article"));
   expect(accept).toBeEnabled();
   expect(screen.getByRole("list", { name: "Active Jira work handoffs" })).toHaveTextContent("WWD-101");
 });
