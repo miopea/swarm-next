@@ -71,6 +71,51 @@ test("joining status pauses while hidden and cancels its read when leaving", asy
   } finally { cleanup(); visibilitySpy.mockRestore(); }
 });
 
+test("failed enrollment read is visible and retry recovers without another submission", async () => {
+  let unavailable = true;
+  const requests = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    if (!String(input).endsWith("/enrollments")) return new Response("[]");
+    return unavailable ? new Response("unavailable", { status: 503 })
+      : new Response(JSON.stringify([{ consent: { link_id: "link-1" }, phase: "awaiting_approval" }]));
+  });
+  vi.stubGlobal("fetch", requests);
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+  const retry = await screen.findByRole("button", { name: "Retry joining status" });
+  expect(screen.getByRole("alert")).toHaveTextContent("you do not need to submit it again");
+  unavailable = false;
+  fireEvent.click(retry);
+  await screen.findByRole("heading", { name: "Waiting for Keeper approval" });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(requests.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
+test("older runtime without enrollment endpoint retains its explicit invitation flow", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/enrollments")
+    ? new Response("not found", { status: 404 }) : new Response("[]")));
+  await act(async () => { render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />); });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Keeper invitation link")).toBeInTheDocument();
+});
+
+test("failed status refresh preserves the saved request and clears after recovery", async () => {
+  let unavailable = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (!String(input).endsWith("/enrollments")) return new Response("[]");
+    if (unavailable) throw new TypeError("Network unavailable");
+    return new Response(JSON.stringify([{ consent: { link_id: "link-1" }, phase: "awaiting_approval" }]));
+  }));
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+  await screen.findByRole("heading", { name: "Waiting for Keeper approval" });
+  unavailable = true;
+  await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+  const retry = await screen.findByRole("button", { name: "Retry joining status" });
+  expect(screen.getByRole("heading", { name: "Waiting for Keeper approval" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Keeper invitation link")).not.toBeInTheDocument();
+  unavailable = false;
+  fireEvent.click(retry);
+  await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+});
+
 test("saved completed enrollment opens Apiary without another member action", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
     String(input).endsWith("/enrollments") ? JSON.stringify([{ consent: { link_id: "link-1" }, phase: "complete" }]) : "[]")));

@@ -4,6 +4,18 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September 10, 23:08 Eastern: enrollment status-read failures now show an inline
+warning and read-only retry instead of silently masquerading as legacy-server
+compatibility. Last-known enrollment remains visible; recovery clears the warning
+without another submission. Only HTTP 404 retains the older endpoint fallback;
+hidden/unmounted cancellation does not report a false failure. All 18 joining
+component tests, 6 polling-owner tests, TypeScript and production build pass.
+This is local verification, not live/browser acceptance. Previous hidden-page
+observation fix is pushed through 9e04bfa5 but activation is not yet verified.
+The unverified Rust timestamp correction remains separate and uncommitted.
+Next critical gates remain that correction's Linux tests and actual fresh-Hive
+onboarding in Edge/WSL; do not mistake these UI checks for full completion.
+
 September10,22:56 Eastern: browser completion recovery is committed in7f2251cb,
 merged with concurrent email UI9fab0f40 asbfae43f8. A failed onJoined view refresh
 now retains completed membership and can retry Open Apiary without another join

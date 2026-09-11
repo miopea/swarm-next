@@ -3,6 +3,7 @@ import JoinPublicProfile, { type JoinPublicProfileHandle } from "./JoinPublicPro
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import {
+  RuntimeRequestError,
   fetchApiaryEnrollments, submitApiaryEnrollment, type ApiaryEnrollment,
   acceptFederationJoinPolicy,
   fetchApiaryKeeperLinks,
@@ -49,6 +50,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [enrollments, setEnrollments] = useState<ApiaryEnrollment[]>([]);
   const joinedNotified = useRef(false);
   const [openingFailed, setOpeningFailed] = useState(false);
+  const [enrollmentUnavailable, setEnrollmentUnavailable] = useState(false);
   const enrollmentEpoch = useRef(0);
   const openJoinedApiary = useCallback(async () => {
     if (joinedNotified.current) return;
@@ -70,13 +72,23 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     try {
       const records = await fetchApiaryEnrollments(operatorToken, signal);
       if (signal.aborted || epoch !== enrollmentEpoch.current) return;
+      setEnrollmentUnavailable(false);
       setEnrollments(records);
       if (records.some((record) => record.phase === "complete") && !joinedNotified.current) {
         await openJoinedApiary();
       }
-    } catch { /* Older runtimes retain their explicit invitation flow. */ }
+    } catch (cause) {
+      if (epoch !== enrollmentEpoch.current) return;
+      if (signal.aborted && signal.reason?.name !== "TimeoutError") return;
+      // ADR 0097: only a missing endpoint uses the older explicit invitation flow.
+      setEnrollmentUnavailable(!(cause instanceof RuntimeRequestError && cause.status === 404));
+    }
   }, [operatorToken, openJoinedApiary]);
-  useVisiblePolling(refreshEnrollments, Boolean(operatorToken), 5000);
+  const retryEnrollments = useVisiblePolling(refreshEnrollments, Boolean(operatorToken), 5000);
+  const enrollmentWarning = enrollmentUnavailable ? <div className="form-error apiary-refresh-error" role="alert">
+    <span>Joining status could not be refreshed. Any saved request is unchanged; you do not need to submit it again.</span>
+    <button className="secondary-button" type="button" onClick={() => void retryEnrollments()}>Retry joining status</button>
+  </div> : null;
 
   const refreshSavedState = useCallback(async () => {
     const [links, invitations] = await Promise.allSettled([
@@ -291,6 +303,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   if (enrollments.length > 0) {
     const record = enrollments[0];
     return <section className="personal-hive-join" aria-label="Apiary joining progress">
+      {enrollmentWarning}
       <h3>{record.phase === "complete" ? "Welcome to your Apiary" : record.phase === "joining" ? "Joining your Apiary…" : record.phase === "attention" ? "Joining needs attention" : "Waiting for Keeper approval"}</h3>
       {record.phase === "complete" && openingFailed ? <div role="alert"><p>Your membership is saved, but the Apiary view could not open. You do not need to join again.</p><button className="secondary-button" onClick={() => void openJoinedApiary()}>Open Apiary</button></div> : null}
       <p>{record.phase === "attention" ? "The saved request could not finish. Review the invitation with your Keeper; your local work is unchanged." : "You have submitted your request. There is nothing else to approve here; Swarm finishes the connection in the background."}</p>
@@ -315,6 +328,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
 
   return (
     <div className="personal-hive-join">
+      {enrollmentWarning}
       <JoinPublicProfile ref={profileRef} operatorToken={operatorToken} disabled={busy || working} />
       {joinInvitations.length === 0 ? <div className="apiary-exchange-intro">
         <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive. Opening it now guides you here without joining through the Keeper&apos;s browser.</small></span>
