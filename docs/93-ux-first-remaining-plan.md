@@ -2,6 +2,10 @@
 
 ## Current checkpoint — September 11, 03:21 Eastern
 
+03:25 follow-up: new dedicated Edge tabs recovered browser access without user
+action. Both exact updated runtimes render; Keeper Tasks and WSL shared closed
+history load correctly. The temporary no-tabs limitation below is resolved.
+
 Combined build1df01d76 is CI-green and deployed to production and WSL with both
 engines preserved; see45 for exact health/version/checksum evidence. This closes
 the activation gate below. Post-update browser checks remain unverified because

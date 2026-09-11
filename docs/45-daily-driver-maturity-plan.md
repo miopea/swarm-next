@@ -2,6 +2,14 @@
 
 ## Authoritative next gates — September 11, overnight
 
+03:25 browser recovery succeeded by opening new dedicated tabs through the
+existing Edge connection (no restart, authentication prompt or user action).
+Both rendered the exact1df01d76 runtime. WSL retained its membership and both
+fictional Abandoned shared cards with correct closed-history wording. Keeper
+task board loaded; returned it from the remembered demo terminal to Tasks so
+the test tab does not hold terminal engagement. This supersedes the temporary
+no-tabs limitation below. No new provider input or real task mutation occurred.
+
 03:21 CLOSED combined-build activation: CI34572128235 completed SUCCESS.
 Production and WSL now serve1.7.1-dev-1df01d768b09-20260911070807-1180013,
 both health responses ok with no degraded components or database recovery.
