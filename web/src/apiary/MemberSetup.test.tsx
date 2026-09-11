@@ -50,3 +50,29 @@ test("connection and policy actions preserve the distinction between refresh and
   fireEvent.click(screen.getByRole("button", { name: "Review policy" }));
   expect(onManage).toHaveBeenCalledOnce();
 });
+
+test("adding an inaccessible department preserves ready projects and removes guidance after recovery", () => {
+  const ready = {
+    project: { project_id: "dev", project_key: "DEV", project_name: "Development" },
+    binding_id: "dev-binding", access_verified: true, workflow_mapped: true,
+  };
+  const department = {
+    project: { project_id: "it", project_key: "IT", project_name: "IT" },
+    binding_id: null, access_verified: false, workflow_mapped: false,
+  };
+  const onManage = vi.fn();
+  const onRefresh = vi.fn();
+  const view = render(<MemberSetup catalog={{ ...catalog, jira_connection: "ready", projects: [ready] }} sync={sync} onManage={onManage} onRefresh={onRefresh} />);
+  expect(screen.getByText("1 Jira project ready")).toBeInTheDocument();
+  view.rerender(<MemberSetup catalog={{ ...catalog, jira_connection: "ready", projects: [ready, department], blockers: ["project_access_not_ready"] }} sync={sync} onManage={onManage} onRefresh={onRefresh} />);
+  expect(screen.getByText("1 Jira project ready")).toBeInTheDocument();
+  expect(screen.getByText(/Only configure the projects you use/)).toBeInTheDocument();
+  expect(screen.getByText(/Your Hive is a member/)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Review Jira projects" })).toHaveAttribute("href", "#settings-integrations");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  view.rerender(<MemberSetup catalog={{ ...catalog, jira_connection: "ready", projects: [ready, { ...department, binding_id: "it-binding", access_verified: true, workflow_mapped: true }] }} sync={sync} onManage={onManage} onRefresh={onRefresh} />);
+  expect(screen.getByText("2 Jira projects ready")).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Review Jira projects" })).not.toBeInTheDocument();
+  expect(onManage).not.toHaveBeenCalled();
+  expect(onRefresh).not.toHaveBeenCalled();
+});

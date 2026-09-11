@@ -125,3 +125,15 @@ fictional second conversation `e38c03b3-c21b-437a-9e6a-2794d1887604` remains on
 disk; freshness now labels the intentionally restored older demo conversation
 stale. Do not treat that timestamp comparison as proof the chosen identity was
 lost, and do not delete provider history just to make the diagnostic green.
+
+### Departmental setup regression
+
+Added a focused MemberSetup regression for the operator's IT-project example:
+one ready project remains ready after an inaccessible department is added;
+membership remains intact in the presentation, configuration is optional, and
+the setup action disappears when the second project becomes ready. No implicit
+management or refresh callback is invoked. All26 tests across MemberSetup,
+SharedCatalogStatus and MemberControlRoom passed, as did TypeScript checking.
+This is presentation-level failure/recovery evidence, not new proof of live Jira
+permissions, assignment enforcement or cross-Hive propagation. No runtime code,
+deployment or release was needed.
