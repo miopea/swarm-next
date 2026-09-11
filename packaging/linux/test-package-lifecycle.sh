@@ -153,27 +153,35 @@ done
 
 # THE TWO SERVICES THAT DEAL IN WORKSPACES MUST AGREE ABOUT THE BOUNDARY.
 #
-# ProtectHome=read-only makes the whole home read-only inside each namespace,
-# so a workspace is only writable where ReadWritePaths says so. The terminal
-# host ENFORCES that boundary and the API REPORTS on it, and a report made from
-# a namespace where nothing under home is writable says EROFS for every
-# workspace — marking every worker Blocked while the workers themselves run
-# perfectly well.
+# NEITHER UNIT MAY SANDBOX HOME. This guard replaces one that required
+# ReadWritePaths=@WORKSPACE_ROOT@ in both units, which enforced the WORKAROUND
+# rather than the property.
 #
-# It shipped that way, and it hid on the machine it was written on because
-# ~/projects there is a separate filesystem that ProtectHome does not cover. On
-# the ordinary layout, where the workspace is a directory inside the same
-# filesystem as home, every install was affected. Found on a fresh WSL install
-# on 2026-08-26 after the EROFS was read as a failing disk and chased through
-# dumpe2fs, dmesg and Windows free space. The disk was healthy throughout.
+# The API reports on what workers can do and the terminal host does it. When
+# only the reporter had ProtectHome=read-only it answered from a namespace
+# nothing else lived in, found every workspace unwritable, and marked every
+# worker Blocked while they ran perfectly. Adding one writable root narrowed
+# that to workspaces outside it, so on 2026-09-11 a freshly built machine showed
+# all eight workers Blocked while they answered broadcasts and told jokes.
 #
-# Checked rather than remembered, for the same reason as the block above: a
-# missing ReadWritePaths entry does not fail a unit, it produces one that starts
-# and then cannot write, which reads as anything except a permission problem.
+# Originally found on a fresh WSL install on 2026-08-26, after the EROFS was
+# read as a failing disk and chased through dumpe2fs, dmesg and Windows free
+# space. The disk was healthy throughout. It hid on the machine it was written
+# on, because there ~/projects is a separate filesystem ProtectHome does not
+# cover -- so the developer layout was the one layout where it could not be seen.
+#
+# Checked here as well as in the Rust test, because these fail differently: the
+# Rust test fails a build, this fails a package, and the unit that ships is what
+# the operator actually gets.
 for unit in swarm-api swarm-terminal-host; do
-  grep -q 'ReadWritePaths=@WORKSPACE_ROOT@' \
+  if grep -qE '^[[:space:]]*ProtectHome=' \
+    "$repo_root/packaging/systemd-user/$unit.service.in"; then
+    printf '%s.service must not restrict home; the API and the terminal host have to agree about it\n' "$unit" >&2
+    exit 1
+  fi
+  grep -q '^ProtectSystem=strict' \
     "$repo_root/packaging/systemd-user/$unit.service.in" || {
-    printf 'unit %s.service must be able to write @WORKSPACE_ROOT@\n' "$unit" >&2
+    printf '%s.service must still protect the system tree\n' "$unit" >&2
     exit 1
   }
 done
@@ -200,13 +208,11 @@ grep -q '^ProtectHome=' "$repo_root/packaging/systemd-user/swarm-terminal-host.s
   exit 1
 }
 
-# And the API, which does NOT run agents, keeps its read-only home plus the one
-# directory it genuinely writes into.
-grep -q '^ProtectHome=read-only$' \
-  "$repo_root/packaging/systemd-user/swarm-api.service.in" || {
-  printf 'swarm-api.service should keep ProtectHome=read-only; it runs no agent code\n' >&2
-  exit 1
-}
+# The API used to keep a read-only home here, on the reasoning that it runs no
+# agent code. True, and irrelevant: it REPORTS on workspaces the terminal host
+# writes to, and a report from a namespace where those are unwritable is a
+# report about the reporter. Both units are now checked above for having no
+# ProtectHome at all.
 grep -q 'ReadWritePaths=-%h/.claude$' \
   "$repo_root/packaging/systemd-user/swarm-api.service.in" || {
   printf 'swarm-api.service needs ~/.claude for resume history, tolerated when absent\n' >&2

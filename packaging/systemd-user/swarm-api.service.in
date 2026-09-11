@@ -25,27 +25,30 @@ RestartSec=2s
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=read-only
+# NOT ProtectHome=read-only, and this is deliberate rather than an omission.
+#
+# This service REPORTS on what workers can do; the terminal host DOES it, and
+# that unit has never had a read-only home. Sandboxing only the reporter meant
+# it answered from a namespace nothing else lived in, found every workspace
+# unwritable, and marked every worker Blocked while the workers ran perfectly.
+#
+# It was patched twice without being removed. First by adding
+# ReadWritePaths=@WORKSPACE_ROOT@ so the one configured root was writable again,
+# then in code by filtering EROFS out of the fault check. Both narrowed the
+# symptom to workspaces outside that single root, and on 2026-09-11 a freshly
+# built machine showed all eight workers Blocked while answering broadcasts.
+# Operator: "Swarm should not be limited in where it can write, we are
+# overthinking it. This is a dev tool."
+#
+# Originally found on a fresh WSL install on 2026-08-26, after the EROFS was
+# read as a failing disk and chased through dumpe2fs, dmesg and Windows free
+# space. The disk was healthy the whole time. It hid on the machine it was
+# written on, because there ~/projects is a separate filesystem that
+# ProtectHome does not cover.
+#
+# ProtectSystem=strict still protects the system tree. Home is what both
+# services exist to work in, and they must agree about it.
 ReadWritePaths=@STATE_ROOT@
-# THE WORKSPACE, EVEN THOUGH THIS SERVICE DOES NOT WRITE THERE.
-#
-# ProtectHome=read-only makes the whole home read-only inside this namespace,
-# and the API probes each worker's workspace for writability to report whether
-# that worker can actually work. Without this the probe answers from a namespace
-# where nothing under home is writable, returns EROFS for every workspace, and
-# marks every worker Blocked while the workers themselves run perfectly — the
-# terminal host has always had this line and does the actual writing.
-#
-# It hid on the developer machine it was written on, because there ~/projects is
-# a separate filesystem that ProtectHome does not cover. On the ordinary layout,
-# where the workspace is a directory inside the same filesystem as home, every
-# install was affected. Found on a fresh WSL install on 2026-08-26, after the
-# EROFS was read as a failing disk and chased through dumpe2fs, dmesg and
-# Windows free space. The disk was healthy the whole time.
-#
-# The two services must agree about this boundary. The terminal host ENFORCES it
-# and this service REPORTS on it, and a report from a different namespace than
-# the one being enforced is a report about the wrong thing.
 ReadWritePaths=@WORKSPACE_ROOT@
 # The operator rotates their token in Settings, which rewrites this file so the
 # new value is also what systemd loads on the next start.

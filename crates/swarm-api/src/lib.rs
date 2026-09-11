@@ -3158,22 +3158,25 @@ fn workspace_fault(workspace: &str) -> Option<String> {
     // path to correct in settings, the other is a filesystem to repair, and
     // telling someone to create a directory that is already there sends them
     // looking in the wrong place.
+    // EROFS IS REPORTED AGAIN, and that is the point of this change.
+    //
+    // It used to be filtered out, because the packaged API mounted home
+    // read-only while the engine did not, so EROFS could not be told apart from
+    // the API's own sandbox. That sandbox is gone (see swarm-api.service.in):
+    // this service now sees home exactly as the terminal host does, so a refused
+    // write is evidence about the workspace rather than about the reporter.
+    //
+    // Filtering it was the second patch around a sandbox that should have been
+    // removed instead. It narrowed a wrong answer instead of correcting it, and
+    // the cost was silence on a genuinely read-only workspace -- a worker that
+    // really cannot write, reported as fine.
     nix::unistd::access(path, nix::unistd::AccessFlags::W_OK)
         .err()
-        // The packaged API deliberately mounts home read-only; the engine does
-        // not. EROFS here cannot distinguish that sandbox from a genuinely
-        // read-only worker mount. Only engine-owned evidence may assert that.
-        // Do not weaken the API sandbox or mark every external repository blocked.
-        .filter(|error| api_permission_fault_is_worker_evidence(*error))
         .map(|error| {
             format!(
                 "Workspace {workspace} cannot be written ({error}), so this worker would fail on its first change. The directory is there; the filesystem or its permissions are refusing writes."
             )
         })
-}
-
-fn api_permission_fault_is_worker_evidence(error: nix::errno::Errno) -> bool {
-    error != nix::errno::Errno::EROFS
 }
 
 fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
@@ -18989,17 +18992,37 @@ mod tests {
         std::fs::set_permissions(&unwritable, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
+    /// THE REPORTER MUST SEE HOME THE WAY THE DOER DOES.
+    ///
+    /// This replaces a test that asserted EROFS was NOT worker evidence. That
+    /// was true only while the packaged API mounted home read-only and the
+    /// terminal host did not, which is the asymmetry that marked working
+    /// workers Blocked on 2026-08-26 and again on a fresh box on 2026-09-11.
+    ///
+    /// The sandbox is gone rather than worked around, so the property worth
+    /// pinning is no longer "which errno do we ignore" but "do the two units
+    /// agree about home at all". A `ProtectHome` line returning to swarm-api
+    /// would silently recreate the bug; nothing else in the tree would notice.
     #[test]
-    fn api_read_only_mount_is_not_evidence_of_an_engine_write_failure() {
-        assert!(!api_permission_fault_is_worker_evidence(
-            nix::errno::Errno::EROFS
-        ));
-        assert!(api_permission_fault_is_worker_evidence(
-            nix::errno::Errno::EACCES
-        ));
-        assert!(api_permission_fault_is_worker_evidence(
-            nix::errno::Errno::EPERM
-        ));
+    fn the_api_does_not_sandbox_home_differently_from_the_terminal_host() {
+        let api = include_str!("../../../packaging/systemd-user/swarm-api.service.in");
+        let host = include_str!("../../../packaging/systemd-user/swarm-terminal-host.service.in");
+        for (name, unit) in [("swarm-api", api), ("swarm-terminal-host", host)] {
+            assert!(
+                !unit
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("ProtectHome=")),
+                "{name}.service.in sets ProtectHome. The API reports on what the terminal host \
+                 does, so a home either unit cannot see is a report about the reporter: every \
+                 worker reads Blocked while running perfectly. Remove it, or fix workspace_fault \
+                 to stop speaking about paths this process cannot honestly assess."
+            );
+            assert!(
+                unit.lines()
+                    .any(|line| line.trim() == "ProtectSystem=strict"),
+                "{name}.service.in must still protect the system tree"
+            );
+        }
     }
 
     #[test]
