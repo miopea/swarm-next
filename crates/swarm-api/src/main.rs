@@ -360,13 +360,21 @@ fn degrade<T>(
 
 fn start_background_services(state: &AppState) -> BackgroundServices {
     let mut services = BackgroundServices::new();
-    // Hourly, but a check only happens when the operator asked for daily ones
-    // and the last is a day old. Nothing is contacted otherwise.
+    // Hourly ticks; the check itself decides whether anything is due, and an
+    // operator who chose `off` is never contacted.
+    //
+    // IMMEDIATE ON START, which is the point of the `true`. A Hive restarted
+    // minutes after a release used to wait for the next tick AND the full
+    // interval before noticing, so the machine most likely to be mid-upgrade
+    // was the slowest to learn there was one. The startup pass has its own
+    // shorter floor so a restart loop cannot turn it into a request per boot.
     let release_poller = std::sync::Arc::new(state.clone());
-    services.periodic(std::time::Duration::from_secs(60 * 60), false, move || {
+    let mut first_pass = true;
+    services.periodic(std::time::Duration::from_secs(60 * 60), true, move || {
         let state = release_poller.clone();
+        let startup = std::mem::take(&mut first_pass);
         async move {
-            swarm_api::poll_for_release(state).await;
+            swarm_api::poll_for_release(state, startup).await;
         }
     });
     let supervisor = state.clone();

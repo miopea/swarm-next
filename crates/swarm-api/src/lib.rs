@@ -4344,8 +4344,8 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
 ///
 /// Public so the binary's background services can drive it; the decision
 /// about whether anything happens lives with the check itself.
-pub async fn poll_for_release(state: Arc<AppState>) {
-    release::poll(&state).await;
+pub async fn poll_for_release(state: Arc<AppState>, startup: bool) {
+    release::poll(&state, startup).await;
 }
 
 impl AppState {

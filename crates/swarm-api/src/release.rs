@@ -486,31 +486,70 @@ fn build_status(
 }
 
 /// How stale the last check has to be before the daily poll repeats it.
-const CHECK_INTERVAL_SECONDS: i64 = 24 * 60 * 60;
+/// Four hours, not a day.
+///
+/// A day was chosen when releases were rare. They are not: 1.7.1 and 1.8.0 went
+/// out within a day of each other, so a daily check could tell an operator they
+/// were current while being two releases behind. The manifest is a few hundred
+/// bytes from a CDN, so the cost of asking is nil; the cost of not asking is
+/// somebody running a build with a fix they already paid for.
+///
+/// Not shorter than this on purpose. The published manifest takes up to about
+/// twenty minutes to reach every edge, so checking every few minutes would
+/// mostly re-read a cached answer.
+const CHECK_INTERVAL_SECONDS: i64 = 4 * 60 * 60;
+
+/// How soon after a restart a Hive may check again.
+///
+/// The startup pass exists so a Hive restarted just after a release notices it
+/// now rather than hours later. This floor is what stops a restart LOOP from
+/// turning that into a request per boot.
+const STARTUP_RECHECK_FLOOR_SECONDS: i64 = 15 * 60;
 
 /// Runs a check if the operator asked for one and the last is a day old.
 ///
 /// Due-time is anchored to the last check rather than to a fixed schedule, so
 /// a machine that was asleep overnight checks when it wakes rather than at a
 /// moment every machine shares.
-pub(super) async fn poll(state: &Arc<AppState>) {
+pub(super) async fn poll(state: &Arc<AppState>, startup: bool) {
     let Ok(store) = crate::task_store(state) else {
         return;
     };
     let Ok(stored) = store.release_check_state() else {
         return;
     };
-    if stored.mode != "daily" {
-        return;
-    }
-    let now = chrono::Utc::now().timestamp();
-    if stored
-        .last_checked_at
-        .is_some_and(|last| now.saturating_sub(last) < CHECK_INTERVAL_SECONDS)
-    {
+    if !check_is_due(
+        &stored.mode,
+        stored.last_checked_at,
+        chrono::Utc::now().timestamp(),
+        startup,
+    ) {
         return;
     }
     check(state).await;
+}
+
+/// Whether to ask the manifest anything right now. Pure so the policy is
+/// testable without a network or a clock.
+///
+/// ⚠️ UNSET MEANS YES. It used to mean no, which made "I have not chosen"
+/// indistinguishable from "do not tell me" -- a freshly built Hive never
+/// checked, and sat on whatever release it was installed with until somebody
+/// found the setting. Only an explicit `off` is silence.
+fn check_is_due(mode: &str, last_checked_at: Option<i64>, now: i64, startup: bool) -> bool {
+    if mode == "off" {
+        return false;
+    }
+    let floor = if startup {
+        STARTUP_RECHECK_FLOOR_SECONDS
+    } else {
+        CHECK_INTERVAL_SECONDS
+    };
+    // A stamp in the FUTURE reads as due, not as just-checked. i64 saturating_sub
+    // saturates at i64::MIN, not at zero, so a clock that moved backwards -- or a
+    // database copied from a machine ahead of this one -- would otherwise produce
+    // a negative age that never reaches the floor and wedges checking forever.
+    last_checked_at.is_none_or(|last| last > now || now.saturating_sub(last) >= floor)
 }
 
 /// One check: fetch, verify, compare, record. Never throws away what was
@@ -805,6 +844,52 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Hive nobody configured still learns there is an update.
+    ///
+    /// This is the whole behaviour change. `unset` is what every fresh install
+    /// has, and it used to be treated as `off` -- so a new machine checked
+    /// never, and the only way to find out was to open Settings and opt in.
+    /// Reported 2026-09-11 on a box built from scratch that morning.
+    #[test]
+    fn an_unconfigured_hive_checks_and_only_an_explicit_off_is_silence() {
+        assert!(check_is_due("unset", None, 1_000_000, false));
+        assert!(check_is_due("daily", None, 1_000_000, false));
+        assert!(
+            !check_is_due("off", None, 1_000_000, false),
+            "someone who said off must never be contacted, including on startup"
+        );
+        assert!(!check_is_due("off", None, 1_000_000, true));
+    }
+
+    /// Four hours, and the startup pass has its own shorter floor.
+    ///
+    /// The floor is what stops a restart LOOP becoming one request per boot,
+    /// which is the obvious way an eager startup check turns into a problem.
+    #[test]
+    fn the_interval_is_four_hours_and_a_restart_may_recheck_sooner() {
+        const HOUR: i64 = 3_600;
+        let now = 1_000_000;
+
+        assert!(!check_is_due("unset", Some(now - 3 * HOUR), now, false));
+        assert!(check_is_due("unset", Some(now - 4 * HOUR), now, false));
+
+        // A restart 20 minutes after the last check may ask again; 10 may not.
+        assert!(check_is_due("unset", Some(now - 20 * 60), now, true));
+        assert!(!check_is_due("unset", Some(now - 10 * 60), now, true));
+        // ...and that shorter floor applies ONLY to the startup pass.
+        assert!(!check_is_due("unset", Some(now - 20 * 60), now, false));
+    }
+
+    /// A clock that moved backwards must not wedge checking forever.
+    #[test]
+    fn a_backwards_clock_does_not_stop_checks() {
+        let now = 1_000_000;
+        assert!(
+            check_is_due("unset", Some(now + 99_999), now, false),
+            "saturating_sub yields 0 for a future stamp, which must not read as recently checked"
+        );
+    }
 
     fn offer() -> ReleaseOffer {
         ReleaseOffer {
