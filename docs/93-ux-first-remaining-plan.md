@@ -1,5 +1,23 @@
 # Remaining maturity work — UX/UI first
 
+## Current checkpoint — September 11, 05:36 Eastern
+
+Use the newest45/92 evidence, not the historical pending notes below. Production
+and WSL serve47e45a08 with all original engines/sessions preserved; full CI and
+1671 UI tests pass. The30-minute ten-session baseline is complete and retained,
+but matched fresh/aged/browser-load performance remains open. The positive
+worker-first corrective assignment is now also complete: Queen assigned the
+same worker, a single-file verified correction landed, and Queen settled it
+without another operator decision. Do not repeat that fixture.
+
+Remaining original45 gates: protected/unknown/failed recovery; native answer
+provenance and remaining device journeys; safe automatic engine admission and
+conversation recovery; matched-load performance and meaningful metrics; linked
+support completion/attachments; final Apiary onboarding approval and broader
+Keeper management; ordinary-workday acceptance. The new external-wait queue
+presentation question is pending in09; keep current rules until answered.
+No BFG Admin worker contact or release. Account22% remaining; retain10%/5% handoff.
+
 ## Current checkpoint — September 11, 04:41 Eastern
 
 Compact coordinator optimization f05b2f0f is live on production/WSL with both

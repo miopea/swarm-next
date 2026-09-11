@@ -2,6 +2,18 @@
 
 ## Authoritative next gates — September 11, overnight
 
+05:36 CLOSED the explicitly authorized positive corrective-routing acceptance.
+Queen created/assigned child01a08fcc-75cd-7b82-815b-f1c08e1bf9af (10986–10988),
+the same worker picked it up47 seconds after Ready (10989), submitted its
+single-file fix (10990), and Queen completed it93 seconds later (10991).
+No additional operator decision or manual nudge/transition. Independently verified
+commitc9e4bfd36a4472c5c93c521b08c36a96545e62e4 changes only the fixture test;
+12/12 tests pass and the original delivered hash/tree are preserved. Same worker
+session01a08e16-5be5-72e2-b808-43ffb8261975 is still running. Do not repeat this
+fixture as unfinished work. Full QUEEN recovery still needs protected-input,
+background/unknown and failed-recovery acceptance; see92 for timing and limits.
+Account22% remaining. The baseline/build/update command handles have all finished.
+
 05:27 CLOSED47e45a08 activation: production and WSL serve
 1.7.1-dev-47e45a086279-20260911091605-1250714, healthok, enginePIDs944143/6458
 preserved. All10 production worker/session pairs match before/after; full

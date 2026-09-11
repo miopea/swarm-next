@@ -1,5 +1,45 @@
 # Current maturity acceptance ledger
 
+## September 11, 05:36 Eastern — Same-worker corrective handoff completed
+
+The new explicit authorization removed the earlier two-stage fixture scope
+ambiguity. Queen created and assigned corrective task01a08fcc-75cd-7b82-815b-f1c08e1bf9af,
+then made it Ready: events10986/10987/10988, actor019ff136-7a90-7631-bbc0-f95efd1df576
+(Queen). Its description explicitly links investigation01a08fc6-90ca-74f1-bf42-b57aba18233d.
+The same Swarm Dogfood worker took it Active at10989; no controller input or
+transition was needed after the original investigation admission.
+
+Timing from durable events: investigation pickup19 seconds after Ready; Queen
+created correction294 seconds after the investigation report; corrective pickup
+47 seconds after Ready; correction submitted138 seconds later; Queen accepted
+and completed93 seconds after Review (10991). Total original admission to final
+completion674 seconds. These are observed latencies, not correctness timers.
+
+Independent verification after the worker commit:
+
+- Exactc9e4bfd36a4472c5c93c521b08c36a96545e62e4, single modified file
+  queen-release-assignment-20260911/deliver.test.mjs (+39/-4), clean tree.
+- Read the patch and delivery boundary; ran the12-test fixture with concurrency2
+  and a60-second outer deadline.12 pass,0 fail/skip/cancel. The new assertion
+  imports a sandbox copy rather than assuming real delivery has never happened.
+- Existing delivered artifact SHA256 remains9540c83bf8c3ece4bcc0f6b8d4e6daafb74d30bea682fb0d6d801fe3fd51bf8e
+  before/after the independent test. Delivery implementation and source artifact
+  were not changed. No re-delivery was run by this verifier.
+- Worker-reported63/63 full-repository and scratch mutation results are separate
+  evidence; this verifier independently reran the12 relevant tests, not all63.
+- Queen's completion receipt explicitly accepts the no-deployment test-only
+  correction and says she did not independently rerun it. Do not rewrite that
+  into a machine-verified Queen test run.
+- Original worker session01a08e16-5be5-72e2-b808-43ffb8261975 remains running.
+- Fresh Edge Queues on the exact live47e45a08 build contains neither demo task;
+  existing groups remain17 Queen/5 holds/3 shipping/15 scheduled. This was a
+  fresh rendered read, not a claim to have watched an already-open row disappear.
+
+This closes the authorized investigation -> Queen assignment -> same-worker
+correction -> completion positive path. It does not establish every negative
+recovery case, resolve the unrelated17-item Queen backlog, or prove direct
+terminal-answer provenance. Do not keep replaying this completed fixture.
+
 ## September 11, 05:27 Eastern — Update-feedback fix live; corrective routing active
 
 47e45a08 is fully CI-green (34581960262, all four jobs). Production and WSL now
