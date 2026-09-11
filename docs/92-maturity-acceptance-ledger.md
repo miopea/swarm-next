@@ -1,5 +1,29 @@
 # Current maturity acceptance ledger
 
+## September 11 — Live WSL worker setup acceptance
+
+On deployed5439a9f8 through Edge, missing-folder creation returned422 with the
+name/path retained and readable full-width error. Correcting to the existing
+~/swarm-worker-setup-20260911.h2Cli6/override and explicitly consenting to a path
+outside discovery created Setup Acceptance Aster as sleeping (2 active/3 total,
+Tasks0, Queues0). No provider session was started for the test worker.
+Added /home/bschleifer/swarm-worker-setup-20260911.h2Cli6/search alongside the
+existing /home/bschleifer/projects/rcg root. Saving refreshed discovery; searching
+aster offered the exact search/aster repository and selecting it populated its
+full path. Restored the original root and removed only Setup Acceptance Aster
+through its scoped confirmation. Roster returned to Queen plus Architecture.
+Disposable repositories remain on disk; no user repository was modified/deleted.
+
+Initial /tmp fixture was invisible to swarm-api.service because PrivateTmp=yes,
+not evidence that the override ignored a visible directory. The home-directory
+case verifies the actual override and tilde expansion. A presentation defect
+remains: Settings labelled the new unassigned sleeping worker Blocked. Investigate
+workerAttention before declaring worker-setup presentation fully accepted.
+
+WSL Apiary live check also confirms joined with1/2 Jira projects and explicit
+optional-project guidance. Review shared profile discovered and prefilled Jira
+name/email, without saving or rewriting the existing operator identity.
+
 ## September 11 — No-preference implementation and worker-setup checks
 
 Activated production and WSL as1.7.1-dev-5439a9f8914f-20260911125454-1370054.
