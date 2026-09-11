@@ -2,6 +2,12 @@
 
 ## Authoritative next gates — September 11, morning
 
+Current UI work: Keeper overview now separates loading/unavailable/last-known
+sources from real empty counts. Full web regression and isolated Edge failure/
+recovery checks pass. Apply the same evidence distinction to MemberControlRoom,
+then validate/deploy the coherent UI package. Do not call the member case fixed
+or silently promote this follow-on into the pinned3dfc019e release candidate.
+
 Native-capture follow-on: fixed changed callback retries resetting the same
 invocation's input evidence. All20 focused tests,171 full terminal tests (one
 opt-in profiler ignored), and strict terminal Clippy pass. Hooks remain disabled;

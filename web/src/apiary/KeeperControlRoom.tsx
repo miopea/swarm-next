@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
   fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks,
@@ -12,10 +12,13 @@ import { useVisiblePolling } from "../runtime/useVisiblePolling";
 type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
 type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[] };
 const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [] };
+const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs"] as const;
 
 export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState(emptySnapshot);
+  const [observed, setObserved] = useState<Set<keyof KeeperSnapshot>>(() => new Set());
+  const [failed, setFailed] = useState<Set<keyof KeeperSnapshot>>(() => new Set());
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
@@ -26,10 +29,15 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         fetchApiaryClaimHandoffs(operatorToken, signal),
       ]);
       if (signal.aborted) {
-        if (signal.reason?.name === "TimeoutError") setState("error");
+        if (signal.reason?.name === "TimeoutError") {
+          setFailed(new Set(snapshotKeys));
+          setState("error");
+        }
         return;
       }
       const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs] = results;
+      setObserved((current) => new Set([...current, ...snapshotKeys.filter((_, index) => results[index].status === "fulfilled")]));
+      setFailed(new Set(snapshotKeys.filter((_, index) => results[index].status === "rejected")));
       setSnapshot((current) => ({
         members: members.status === "fulfilled" ? members.value : current.members,
         projects: projects.status === "fulfilled" ? projects.value : current.projects,
@@ -48,6 +56,12 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const memberByHive = useMemo(() => new Map(members.map((member) => [member.hive_id, member])), [members]);
   const stewardAuditByTask = useMemo(() => new Map(snapshot.stewardAudit.flatMap((entry) => entry.task_id ? [[entry.task_id, entry] as const] : [])), [snapshot.stewardAudit]);
   const activeHandoffs = useMemo(() => snapshot.handoffs.filter((handoff) => handoff.state === "offered" || handoff.state === "accepted"), [snapshot.handoffs]);
+  const count = (key: keyof KeeperSnapshot, value: number) => observed.has(key)
+    ? failed.has(key) ? `${value} (last known)` : value
+    : failed.has(key) ? "Unavailable" : "Loading…";
+  const section = (key: keyof KeeperSnapshot, label: string, content: ReactNode) => !observed.has(key)
+    ? <p className="keeper-empty">{failed.has(key) ? `${label} unavailable.` : `Loading ${label.toLowerCase()}…`}</p>
+    : <>{failed.has(key) ? <p className="keeper-empty" role="status">{label}: showing last-known information.</p> : null}{content}</>;
   if (context?.mode !== "federated" || context.local_role !== "keeper") return null;
 
   return (
@@ -64,30 +78,40 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
       <SharedProfileHint name={identity.operator.display_name} onReview={onReviewProfile ?? onManage} />
       {state === "error" ? <div className="keeper-load-state" role="alert"><span>Some Apiary status could not be refreshed. Last-known information is kept where available.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
       <dl className="keeper-summary" aria-label="Apiary summary">
-        <div><dt>Registered Hives</dt><dd>{members.length}</dd></div><div><dt>Promoted Jira projects</dt><dd>{snapshot.projects.length}</dd></div>
-        <div><dt>Active Jira claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Work handoffs</dt><dd>{activeHandoffs.length}</dd></div><div><dt>Open Swarm tasks</dt><dd>{snapshot.tasks.filter((task) => !isClosedSharedTask(task)).length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>
+        <div><dt>Registered Hives</dt><dd>{count("members", members.length)}</dd></div><div><dt>Promoted Jira projects</dt><dd>{count("projects", snapshot.projects.length)}</dd></div>
+        <div><dt>Active Jira claims</dt><dd>{count("sharedWork", snapshot.sharedWork.length)}</dd></div><div><dt>Work handoffs</dt><dd>{count("handoffs", activeHandoffs.length)}</dd></div><div><dt>Open Swarm tasks</dt><dd>{count("tasks", snapshot.tasks.filter((task) => !isClosedSharedTask(task)).length)}</dd></div><div><dt>Steward scopes</dt><dd>{count("stewardships", snapshot.stewardships.length)}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">People and Hives</p><h4>Apiary Hives</h4></div><small>Registration, not live presence</small></header>
+          {section("members", "Hive roster", <>
 {state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span></li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+          </>)}
         </article>
         <article className="keeper-panel keeper-shared-work-panel">
           <header className="keeper-task-header"><div><p className="eyebrow">Shared work</p><h4>Keeper-canonical Swarm tasks</h4><small>Members retrieve these by polling Keeper</small></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Open Tasks</button></header>
           <p className="keeper-work-boundary">Create, route, and manage all work from Tasks. Apiary keeps this supervisory rollup focused on ownership across Hives.</p>
+          {section("tasks", "Swarm tasks", <>
           <SharedTaskGroups tasks={snapshot.tasks} emptyMessage="No Swarm-generated Apiary tasks are waiting." renderTasks={(tasks) => <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{tasks.map((task) => { const stewardAction = stewardAuditByTask.get(task.id); const steward = stewardAction ? memberByOperator.get(stewardAction.member_operator_id) : undefined; return <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small></span><span><strong>{task.home_hive_id ? memberByHive.get(task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Unassigned"}</strong><small>{steward ? `Routed by Steward ${steward.operator_display_name}` : task.home_hive_id ? "Routed by Keeper" : "Available to claim"} · revision {task.revision}</small></span></li>; })}</ul>} />
+          </>)}
           <header><div><p className="eyebrow">Jira ownership</p><h4>Current claims</h4></div><small>Issue data stays in Jira</small></header>
+          {section("sharedWork", "Jira claims", <>
           {snapshot.sharedWork.length ? <ul className="keeper-work-list" aria-label="Keeper shared work ownership">{snapshot.sharedWork.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_key} · {claim.state === "confirmed" ? "Owned" : "Reserved"}</small></span><span><strong>{claim.home_hive_name}</strong><small>{claim.home_operator_display_name}</small></span></li>)}</ul> : <p className="keeper-empty">No shared Jira work is currently claimed by an Apiary Hive.</p>}
-          {activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}
+          </>)}
+          {section("handoffs", "Work handoffs", <>{activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}</>)}
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Optional Jira work</p><h4>Promoted Jira projects</h4></div><small>Each Hive uses only projects its operator can access</small></header>
+          {section("projects", "Jira projects", <>
           {snapshot.projects.length ? <ul className="keeper-project-list" aria-label="Keeper promoted Jira projects">{snapshot.projects.map((project) => <li key={project.project_id}><strong>{project.project_key}</strong><span>{project.project_name}</span></li>)}</ul> : <p className="keeper-empty">No Jira projects have been promoted to this Apiary.</p>}
+          </>)}
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Delegation</p><h4>Stewards</h4></div><small>Durable scopes, not routine noise</small></header>
+          {section("stewardships", "Steward scopes", <>
           {snapshot.stewardships.length ? <ul className="keeper-steward-list" aria-label="Keeper Steward scopes">{snapshot.stewardships.map((scope) => { const steward = memberByOperator.get(scope.steward_operator_id); const hives = scope.managed_hive_ids.map((id) => memberByHive.get(id)?.hive_name ?? "Unknown Hive"); return <li key={scope.id}><span><strong>{steward?.operator_display_name ?? "Steward"}</strong><small>{steward?.hive_name ?? "Registered operator"}</small></span><span>{hives.join(", ") || "No Hives assigned"}</span></li>; })}</ul> : <p className="keeper-empty">No Stewards are delegated. Member Hives escalate directly to you.</p>}
-          {snapshot.stewardAudit.length ? <><header className="keeper-steward-audit-heading"><div><p className="eyebrow">Guarded actions</p><h4>Recent Steward routing</h4></div><small>Keeper rechecked every action</small></header><ul className="keeper-steward-audit-list" aria-label="Keeper Steward task audit">{snapshot.stewardAudit.slice(0, 8).map((entry) => { const steward = memberByOperator.get(entry.member_operator_id); const target = memberByHive.get(entry.target_hive_id); return <li key={entry.command_id}><span><strong>{entry.title}</strong><small>{steward?.operator_display_name ?? "Steward"} → {target?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${entry.outcome === "rejected" ? "keeper" : "member"}`}>{entry.outcome === "applied" ? "Accepted" : "Declined"}</span></li>; })}</ul></> : null}
+          </>)}
+          {section("stewardAudit", "Steward routing", <>{snapshot.stewardAudit.length ? <><header className="keeper-steward-audit-heading"><div><p className="eyebrow">Guarded actions</p><h4>Recent Steward routing</h4></div><small>Keeper rechecked every action</small></header><ul className="keeper-steward-audit-list" aria-label="Keeper Steward task audit">{snapshot.stewardAudit.slice(0, 8).map((entry) => { const steward = memberByOperator.get(entry.member_operator_id); const target = memberByHive.get(entry.target_hive_id); return <li key={entry.command_id}><span><strong>{entry.title}</strong><small>{steward?.operator_display_name ?? "Steward"} → {target?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${entry.outcome === "rejected" ? "keeper" : "member"}`}>{entry.outcome === "applied" ? "Accepted" : "Declined"}</span></li>; })}</ul></> : null}</>)}
         </article>
       </div>
     </section>

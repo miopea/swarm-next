@@ -1,8 +1,62 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import KeeperControlRoom from "./KeeperControlRoom";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+test("loading and failed first reads never invent zero counts or empty work", async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let failing = true;
+  vi.stubGlobal("fetch", vi.fn(async () => {
+    await pending;
+    if (failing) throw new Error("fictional outage");
+    return ok([]);
+  }));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  const summary = screen.getByLabelText("Apiary summary");
+  expect(summary.querySelectorAll("dd")).toHaveLength(6);
+  expect([...summary.querySelectorAll("dd")].map((node) => node.textContent)).toEqual(Array(6).fill("Loading…"));
+  expect(screen.queryByText("No Swarm-generated Apiary tasks are waiting.")).not.toBeInTheDocument();
+  expect(screen.queryByText("No Jira projects have been promoted to this Apiary.")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Open Tasks" })).toBeEnabled();
+  await act(async () => { release(); });
+  await screen.findByRole("alert");
+  expect([...summary.querySelectorAll("dd")].map((node) => node.textContent)).toEqual(Array(6).fill("Unavailable"));
+  expect(screen.getByText("Swarm tasks unavailable.")).toBeInTheDocument();
+  expect(screen.queryByText("No registered Hives are visible yet.")).not.toBeInTheDocument();
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByText("No Swarm-generated Apiary tasks are waiting.");
+  expect([...summary.querySelectorAll("dd")].map((node) => node.textContent)).toEqual(Array(6).fill("0"));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("one failed source keeps other sections useful and labels retained data until recovery", async () => {
+  let failure: "members" | "projects" = "projects";
+  let recovered = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!recovered && (failure === "members" ? url.endsWith("/members") : url.endsWith("/jira-projects"))) throw new Error("fictional source failure");
+    if (url.endsWith("/members")) return ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }]);
+    return ok([]);
+  }));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  await screen.findByRole("alert");
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow Hive");
+  expect(screen.getByLabelText("Apiary summary")).toHaveTextContent("Registered Hives1Promoted Jira projectsUnavailable");
+  expect(screen.getByText("No Swarm-generated Apiary tasks are waiting.")).toBeInTheDocument();
+  failure = "members";
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await screen.findByText("Hive roster: showing last-known information.");
+  expect(screen.getByLabelText("Apiary summary")).toHaveTextContent("Registered Hives1 (last known)Promoted Jira projects0");
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow Hive");
+  recovered = true;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  expect(screen.queryByText("Hive roster: showing last-known information.")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Apiary summary")).toHaveTextContent("Registered Hives1Promoted Jira projects0");
+});
 
 test("an empty Apiary does not imply Jira is required or grants project access", async () => {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(ok([]))));

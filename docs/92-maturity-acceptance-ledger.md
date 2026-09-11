@@ -1,5 +1,24 @@
 # Current maturity acceptance ledger
 
+## September 11 — Keeper observation states
+
+Live enrollment verification exposed initial Keeper counts of0 and empty-work
+claims before reads completed. Keeper now tracks which of its seven bounded
+sources has actually succeeded and which failed in the current refresh. Unknown
+counts show Loading/Unavailable, not0; empty claims require a successful read.
+Previously observed sections remain readable with explicit last-known labels
+when their own refresh fails. Successful siblings remain usable. Existing refresh
+ownership, deadlines, APIs and action permissions are unchanged.
+
+Tests cover delayed initial reads, complete initial failure, partial failure,
+retained roster/counts, recovery and unchanged navigation. Nine focused tests,
+the full web suite, TypeScript and production Vite build passed. Added a no-proxy
+fictional Keeper fixture and checked it in Edge: initial unavailable, recovery to
+one Hive/zero work, failure retaining the roster and1(last known), then recovery.
+Screenshot inspection showed intact layout and bee identity. No real Hive reads
+or mutations are used by this fixture. This is Keeper-side only; matching member
+overview treatment and normal deployment remain the next coherent UI gate.
+
 ## September 11 — Native question retry preserves refusal evidence
 
 Source inspection found that a changed Requested callback for the same native
