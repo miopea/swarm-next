@@ -2,6 +2,21 @@
 
 ## Authoritative next gates — September 11, overnight
 
+02:55 CLOSED live shared-task freshness gate: c8f74a85 deployed on production/WSL
+as1.7.1-dev-c8f74a85b76d-20260911064536-1160756, engines944143/6458 retained.
+New fictional task01a08f3c-cdb9-7bf1-aeec-8a31675ef61f appeared automatically
+in the already-open WSL board. Supported retirement command
+01a08f3e-bda9-7753-85f7-5d099db32e71 showed queued, then Abandoned on both
+already-open Keeper/Member boards without refresh/reload, one applied attempt.
+Closed cards correctly say retained in shared history with no claim/setup prompt.
+Both fictional tasks remain auditable and closed; no worker/provider was started.
+104 web tests/typecheck,8 persistence tests and strict lint passed before deploy;
+CI34571291430 remains pending. Shared Linux checkout has active unrelated edits
+in jira.rs, web/src/api/jira.ts and JiraSettings.tsx: excluded and preserved.
+No release cut. This closes arrival/restart/retirement and live task-state
+presentation, not all Apiary orchestration or the broad45 goal. The separately
+blocked Daisy membership grant still requires explicit approval and is not retried.
+
 02:45 next fix validated locally: shared-task persistence now emits existing
 TasksChanged events for canonical writes, new member projections, queued commands
 and first receipts (not exact replays). TaskBoard listens to the existing event
