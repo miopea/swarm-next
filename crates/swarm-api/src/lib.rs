@@ -15213,8 +15213,48 @@ mod tests {
     #[tokio::test]
     async fn compact_coordinator_keeps_status_and_skips_optional_review_details() {
         let store = TaskStore::in_memory().unwrap();
-        store
+        let task = store
             .create_task("Review detail fixture", "/fixture")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task_with_note(
+                task.id,
+                swarm_domain::TaskState::Blocked,
+                "Fixture maintenance",
+            )
+            .unwrap();
+        let queen = store.ensure_queen("/fixture/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let now = unix_timestamp();
+        store.request_queen_automation_run(now).unwrap();
+        let run = store.claim_queen_automation(now).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, now)
+            .unwrap();
+        store
+            .record_queen_review_disposition(
+                &swarm_domain::QueenReviewDispositionInput {
+                    task_id: task.id,
+                    run_id: run.run_id,
+                    expected_revision: store
+                        .queen_task_review_evidence(task.id)
+                        .unwrap()
+                        .evidence_revision,
+                    kind: swarm_domain::QueenReviewDispositionKind::ExternalCondition,
+                    condition: "Fixture maintenance".into(),
+                    evidence: "Read fictional endpoint".into(),
+                    source: "Fixture endpoint".into(),
+                    operator_activity_sequence: None,
+                    operator_decision_id: None,
+                },
+                &swarm_domain::TaskActivityActor::operator(),
+                now,
+            )
             .unwrap();
         let app = router(
             AppState::default()
