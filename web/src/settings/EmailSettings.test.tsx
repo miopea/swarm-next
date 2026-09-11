@@ -52,19 +52,16 @@ test("shows the connected account without exposing implementation settings", () 
   expect(screen.queryByText(/client secret|tenant id/i)).not.toBeInTheDocument();
 });
 
-test("configures the host registration without returning its client secret", async () => {
+test("registers a public client from one field, sending no secret at all", async () => {
+  let sent: unknown;
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/configuration") && !init?.method) {
       return ok({ configured: false, managed_by: null, tenant_id: null, client_id: null, callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
     }
     if (url.endsWith("/configuration") && init?.method === "PUT") {
-      expect(JSON.parse(String(init.body))).toEqual({
-        tenant_id: "organizations",
-        client_id: "11112222-bbbb-3333-cccc-4444dddd5555",
-        client_secret: "private-value",
-      });
-      return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "11112222-bbbb-3333-cccc-4444dddd5555", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true });
+      sent = JSON.parse(String(init.body));
+      return ok({ configured: true, managed_by: "operator", tenant_id: "consumers", client_id: "11112222-bbbb-3333-cccc-4444dddd5555", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
     }
     throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
   });
@@ -78,15 +75,83 @@ test("configures the host registration without returning its client secret", asy
     />,
   );
 
-  expect(await screen.findByRole("form", { name: "Microsoft app setup" })).toHaveTextContent("User.Read, Mail.Read, Mail.Send");
+  const form = await screen.findByRole("form", { name: "Microsoft app setup" });
+  expect(form).toHaveTextContent("User.Read, Mail.Read, Mail.Send");
   expect(screen.getByDisplayValue("https://swarm.test/auth/email/callback")).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Directory (tenant) ID"), { target: { value: "organizations" } });
+
+  // ONE required field. The tenant and the secret are behind Advanced, so a
+  // person setting this up is not asked for either.
+  expect(screen.queryByLabelText("Directory (tenant) ID")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(/Client secret/)).not.toBeInTheDocument();
+
   fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "11112222-bbbb-3333-cccc-4444dddd5555" } });
-  fireEvent.change(screen.getByLabelText("Client secret value"), { target: { value: "private-value" } });
   fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
 
   expect(await screen.findByText(/registration saved privately/)).toBeInTheDocument();
+  // NOT `client_secret: ""`. Microsoft refuses an empty secret as an invalid
+  // client rather than reading it as absent, so the key must not be there.
+  expect(sent).toEqual({ tenant_id: "consumers", client_id: "11112222-bbbb-3333-cccc-4444dddd5555" });
   expect(screen.getByRole("button", { name: "Connect Outlook" })).toBeEnabled();
+});
+
+test("defaults to a personal account and switches the authority for work or school", async () => {
+  let sent: unknown;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/configuration") && !init?.method) {
+      return ok({ configured: false, managed_by: null, tenant_id: null, client_id: null, callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
+    }
+    sent = JSON.parse(String(init?.body));
+    return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
+  }));
+
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{ configured: false, connection: "not_connected", account_name: null, account_address: null }}
+      unavailable={false}
+    />,
+  );
+
+  // The default has to be `consumers`, not `organizations`. An organizations
+  // authority refuses every outlook.com address with a sign-in page that does
+  // not say why, which is the failure this selector exists to prevent.
+  const personal = await screen.findByRole("radio", { name: /Personal Microsoft account/ });
+  expect(personal).toBeChecked();
+
+  fireEvent.click(screen.getByRole("radio", { name: /Work or school/ }));
+  fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "client-id" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
+
+  await waitFor(() => expect(sent).toEqual({ tenant_id: "organizations", client_id: "client-id" }));
+});
+
+test("keeps a Hive that already has a confidential registration working", async () => {
+  let sent: unknown;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/configuration") && !init?.method) {
+      return ok({ configured: false, managed_by: null, tenant_id: null, client_id: null, callback_url: "https://swarm.test/auth/email/callback", secret_stored: false });
+    }
+    sent = JSON.parse(String(init?.body));
+    return ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true });
+  }));
+
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{ configured: false, connection: "not_connected", account_name: null, account_address: null }}
+      unavailable={false}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Advanced settings" }));
+  fireEvent.change(screen.getByLabelText("Directory (tenant) ID"), { target: { value: "organizations" } });
+  fireEvent.change(screen.getByLabelText("Application (client) ID"), { target: { value: "client-id" } });
+  fireEvent.change(screen.getByLabelText(/Client secret/), { target: { value: "private-value" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save app registration" }));
+
+  await waitFor(() => expect(sent).toEqual({ tenant_id: "organizations", client_id: "client-id", client_secret: "private-value" }));
   expect(screen.queryByDisplayValue("private-value")).not.toBeInTheDocument();
 });
 

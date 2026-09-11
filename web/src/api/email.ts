@@ -91,11 +91,15 @@ export async function fetchEmailConfiguration(operatorToken: string): Promise<Em
   return response.json() as Promise<EmailOAuthConfiguration>;
 }
 
+// The secret is OPTIONAL, and omitted rather than sent empty. Swarm is a public
+// client: PKCE proves possession, and Microsoft refuses a `client_secret=` with
+// no value as an invalid client rather than treating it as absent.
 export async function updateEmailConfiguration(operatorToken: string, tenantId: string, clientId: string, clientSecret: string): Promise<EmailOAuthConfiguration> {
+  const secret = clientSecret.trim();
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tenant_id: tenantId, client_id: clientId, client_secret: clientSecret }),
+    body: JSON.stringify(secret ? { tenant_id: tenantId, client_id: clientId, client_secret: secret } : { tenant_id: tenantId, client_id: clientId }),
   });
   return response.json() as Promise<EmailOAuthConfiguration>;
 }

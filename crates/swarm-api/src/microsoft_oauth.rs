@@ -26,7 +26,19 @@ pub(crate) struct MicrosoftOAuthClient {
 struct Inner {
     client: Client,
     client_id: Arc<str>,
-    client_secret: Arc<str>,
+    /// Absent for a PUBLIC client, which is what a self-hosted Hive should be.
+    ///
+    /// A confidential-client secret assumes the application can keep it. A Hive
+    /// cannot: the secret is configured into, or shipped with, every install,
+    /// so it is not meaningfully secret. PKCE proves possession of a one-time
+    /// verifier instead, and Microsoft's protocol reference is explicit that
+    /// public clients "must not use secrets or certificates when redeeming an
+    /// authorization code".
+    ///
+    /// Still an Option rather than gone, because a Hive that already registered
+    /// a confidential web application keeps working -- dropping it would strand
+    /// every configured install to simplify a form.
+    client_secret: Option<Arc<str>>,
     redirect_uri: Url,
     authorize_url: Url,
     token_url: Url,
@@ -73,7 +85,11 @@ struct PendingState {
 pub(crate) struct MicrosoftOAuthConfiguration {
     pub tenant_id: String,
     pub client_id: String,
-    pub client_secret: String,
+    /// Absent for a public client. `default` is what lets a registration saved
+    /// before public clients existed, and one saved after, read from the same
+    /// file without a migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,7 +125,7 @@ impl MicrosoftOAuthClient {
         client: Client,
         tenant_id: &str,
         client_id: impl Into<Arc<str>>,
-        client_secret: impl Into<Arc<str>>,
+        client_secret: Option<&str>,
         public_base_url: &str,
         token_path: PathBuf,
     ) -> Result<Self, String> {
@@ -120,10 +136,12 @@ impl MicrosoftOAuthClient {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         {
-            return Err("SWARM_EMAIL_TENANT_ID must be a tenant UUID or organizations".into());
+            return Err(
+                "SWARM_EMAIL_TENANT_ID must be a tenant UUID, or common, consumers or organizations"
+                    .into(),
+            );
         }
         let client_id = client_id.into();
-        let client_secret = client_secret.into();
         if client_id.is_empty()
             || client_id.len() > 128
             || !client_id
@@ -132,8 +150,17 @@ impl MicrosoftOAuthClient {
         {
             return Err("Microsoft email client ID must be an application UUID".into());
         }
-        if client_secret.is_empty() || client_secret.len() > 4_096 {
-            return Err("Microsoft email client secret must be between 1 and 4096 bytes".into());
+        // An ABSENT secret is the good case now, so the only thing left to
+        // reject is one that is present and unusable. An empty string is not a
+        // public client, it is a typo, and letting it through would produce a
+        // token request with `client_secret=` and a refusal Microsoft words as
+        // an invalid client.
+        if client_secret.is_some_and(|value| value.is_empty() || value.len() > 4_096) {
+            return Err(
+                "Microsoft email client secret must be between 1 and 4096 bytes, or left out \
+                 entirely for a public client"
+                    .into(),
+            );
         }
         let authority = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/");
         Self::new_with_endpoints(
@@ -152,7 +179,7 @@ impl MicrosoftOAuthClient {
     pub(crate) fn new_with_endpoints(
         client: Client,
         client_id: impl Into<Arc<str>>,
-        client_secret: impl Into<Arc<str>>,
+        client_secret: Option<&str>,
         public_base_url: &str,
         token_path: PathBuf,
         authorize_url: &str,
@@ -190,7 +217,7 @@ impl MicrosoftOAuthClient {
             inner: Arc::new(Inner {
                 client,
                 client_id: client_id.into(),
-                client_secret: client_secret.into(),
+                client_secret: client_secret.map(Arc::from),
                 redirect_uri,
                 authorize_url: Url::parse(authorize_url)
                     .map_err(|_| "invalid Microsoft authorize URL")?,
@@ -261,15 +288,17 @@ impl MicrosoftOAuthClient {
                 reqwest::header::CONTENT_TYPE,
                 "application/x-www-form-urlencoded",
             )
-            .body(form_body(&[
-                ("client_id", self.inner.client_id.as_ref()),
-                ("client_secret", self.inner.client_secret.as_ref()),
-                ("grant_type", "authorization_code"),
-                ("code", code),
-                ("redirect_uri", self.inner.redirect_uri.as_str()),
-                ("scope", SCOPES),
-                ("code_verifier", &verifier),
-            ]))
+            .body(form_body(&with_client_secret(
+                &[
+                    ("client_id", self.inner.client_id.as_ref()),
+                    ("grant_type", "authorization_code"),
+                    ("code", code),
+                    ("redirect_uri", self.inner.redirect_uri.as_str()),
+                    ("scope", SCOPES),
+                    ("code_verifier", &verifier),
+                ],
+                self.inner.client_secret.as_deref(),
+            )))
             .send()
             .await
             .map_err(|_| OAuthError::NetworkUnavailable)?;
@@ -394,13 +423,15 @@ async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthErr
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
         )
-        .body(form_body(&[
-            ("client_id", inner.client_id.as_ref()),
-            ("client_secret", inner.client_secret.as_ref()),
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token.as_str()),
-            ("scope", SCOPES),
-        ]))
+        .body(form_body(&with_client_secret(
+            &[
+                ("client_id", inner.client_id.as_ref()),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token.as_str()),
+                ("scope", SCOPES),
+            ],
+            inner.client_secret.as_deref(),
+        )))
         .send()
         .await
         .map_err(|_| OAuthError::NetworkUnavailable)?;
@@ -515,6 +546,25 @@ fn unix_seconds() -> u64 {
         .as_secs()
 }
 
+/// The token-request fields, with `client_secret` appended ONLY when this
+/// install has one.
+///
+/// A public client must not send the parameter at all -- not empty, not absent
+/// from the struct but present on the wire. Building the list in one place is
+/// what stops the two token requests drifting apart: the refresh path is the
+/// one nobody exercises during setup, so a secret leaking back into it would
+/// surface as a mailbox that works for an hour and then stops.
+fn with_client_secret<'a>(
+    fields: &[(&'a str, &'a str)],
+    client_secret: Option<&'a str>,
+) -> Vec<(&'a str, &'a str)> {
+    let mut fields = fields.to_vec();
+    if let Some(secret) = client_secret {
+        fields.push(("client_secret", secret));
+    }
+    fields
+}
+
 fn form_body(fields: &[(&str, &str)]) -> String {
     let mut url = Url::parse("https://form.invalid/").expect("static form URL is valid");
     {
@@ -545,15 +595,20 @@ mod tests {
     async fn authorization_uses_pkce_and_rotating_private_tokens() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorder = Arc::clone(&bodies);
         let app = Router::new()
             .route(
                 "/token",
-                post(|body: String| async move {
-                    if body.contains("grant_type=refresh_token") {
-                        Json(json!({"access_token":"access-2","refresh_token":"refresh-2","expires_in":3600}))
-                    } else {
-                        assert!(body.contains("code_verifier="));
-                        Json(json!({"access_token":"access-1","refresh_token":"refresh-1","expires_in":0}))
+                post(move |body: String| {
+                    let recorder = Arc::clone(&recorder);
+                    async move {
+                        recorder.lock().await.push(body.clone());
+                        if body.contains("grant_type=refresh_token") {
+                            Json(json!({"access_token":"access-2","refresh_token":"refresh-2","expires_in":3600}))
+                        } else {
+                            Json(json!({"access_token":"access-1","refresh_token":"refresh-1","expires_in":0}))
+                        }
                     }
                 }),
             )
@@ -574,7 +629,7 @@ mod tests {
         let client = MicrosoftOAuthClient::new_with_endpoints(
             Client::new(),
             "client-id",
-            "client-secret",
+            None,
             "https://swarm.example.test/",
             token_path.clone(),
             "https://login.microsoft.test/authorize",
@@ -609,6 +664,128 @@ mod tests {
         assert!(token_path.exists());
         client.disconnect().await.unwrap();
         assert!(!token_path.exists());
+
+        // TWO REQUESTS, AND BOTH MATTER. Redemption is the one setup exercises;
+        // refresh is the one nobody watches, so a secret leaking back into it
+        // would look like a mailbox that worked for an hour.
+        let bodies = bodies.lock().await.clone();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "one redemption and one refresh: {bodies:?}"
+        );
+        assert!(
+            bodies[0].contains("code_verifier="),
+            "PKCE proves possession in place of the secret: {}",
+            bodies[0]
+        );
+        assert!(
+            bodies[1].contains("grant_type=refresh_token"),
+            "the second request is the refresh: {}",
+            bodies[1]
+        );
+        for body in &bodies {
+            assert!(
+                !body.contains("client_secret"),
+                "A PUBLIC CLIENT MUST NOT SEND THE PARAMETER AT ALL -- not empty, \
+                 not blank. Microsoft: public clients \"must not use secrets or \
+                 certificates when redeeming an authorization code\". If you are \
+                 here after adding it back, the Hive cannot keep a secret that \
+                 ships with every install; the fix is not to send one. Body: {body}"
+            );
+        }
+    }
+
+    /// A Hive that registered a confidential web application before Swarm became
+    /// a public client keeps working, and still sends its secret.
+    ///
+    /// This is the other half of the test above, and it exists so the public
+    /// path cannot be made to pass by dropping the parameter unconditionally --
+    /// which would silently break every install that already has a secret.
+    #[tokio::test]
+    async fn a_configured_confidential_client_still_authenticates_with_its_secret() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::default();
+        let recorder = Arc::clone(&bodies);
+        let app = Router::new()
+            .route(
+                "/token",
+                post(move |body: String| {
+                    let recorder = Arc::clone(&recorder);
+                    async move {
+                        recorder.lock().await.push(body);
+                        Json(json!({"access_token":"access-1","refresh_token":"refresh-1","expires_in":3600}))
+                    }
+                }),
+            )
+            .route(
+                "/me",
+                get(|| async {
+                    Json(json!({
+                        "id":"account-1",
+                        "displayName":"Operator",
+                        "mail":"operator@example.test",
+                        "userPrincipalName":"operator@example.test"
+                    }))
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let client = MicrosoftOAuthClient::new_with_endpoints(
+            Client::new(),
+            "client-id",
+            Some("client-secret"),
+            "https://swarm.example.test/",
+            directory.path().join("secrets/email-oauth.json"),
+            "https://login.microsoft.test/authorize",
+            &format!("http://{address}/token"),
+            &format!("http://{address}/"),
+        )
+        .unwrap();
+        let authorization = client.authorization_url().await.unwrap();
+        let state = authorization
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .expect("the authorization URL carries state")
+            .1
+            .to_string();
+        client.exchange_code(&state, "one-time-code").await.unwrap();
+        let bodies = bodies.lock().await.clone();
+        assert!(
+            bodies[0].contains("client_secret=client-secret"),
+            "an install that has a secret must keep sending it: {}",
+            bodies[0]
+        );
+    }
+
+    /// `common` and `consumers` are accepted, because personal accounts are the
+    /// larger half of "make this work for more than our team".
+    ///
+    /// ⚠️ `organizations` EXCLUDES EVERY PERSONAL ACCOUNT, silently -- the sign
+    /// -in page simply refuses the address. `common` serves "any organizational
+    /// directory and personal Microsoft accounts", which is the one to ship.
+    ///
+    /// The old message named only "a tenant UUID or organizations", so the
+    /// values that make personal accounts work read as unsupported even though
+    /// the check has always allowed them.
+    #[test]
+    fn every_authority_that_serves_personal_accounts_is_accepted() {
+        for tenant in ["common", "consumers", "organizations"] {
+            let result = MicrosoftOAuthClient::new(
+                Client::new(),
+                tenant,
+                "client-id",
+                None,
+                "https://swarm.example.test",
+                PathBuf::from("tokens.json"),
+            );
+            assert!(
+                result.is_ok(),
+                "{tenant} must be a usable authority: {:?}",
+                result.err()
+            );
+        }
     }
 
     #[test]
@@ -628,14 +805,17 @@ mod tests {
                     Client::new(),
                     tenant,
                     "id",
-                    "secret",
+                    Some("secret"),
                     public_url,
                     PathBuf::from("tokens.json"),
                 )
                 .is_err()
             );
         }
-        for (client_id, client_secret) in [("client/id", "secret"), ("client-id", "")] {
+        // An EMPTY secret is still refused. `None` is a public client; `Some("")`
+        // is a field somebody left blank, and sending `client_secret=` gets a
+        // refusal Microsoft words as an invalid client.
+        for (client_id, client_secret) in [("client/id", Some("secret")), ("client-id", Some(""))] {
             assert!(
                 MicrosoftOAuthClient::new(
                     Client::new(),

@@ -499,12 +499,11 @@ impl AppState {
         mut self,
         tenant_id: &str,
         client_id: impl Into<Arc<str>>,
-        client_secret: impl Into<Arc<str>>,
+        client_secret: Option<&str>,
         public_base_url: &str,
         token_path: PathBuf,
     ) -> Result<Self, String> {
         let client_id = client_id.into();
-        let client_secret = client_secret.into();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
@@ -566,7 +565,7 @@ impl AppState {
             client,
             &configuration.tenant_id,
             configuration.client_id.clone(),
-            configuration.client_secret,
+            configuration.client_secret.as_deref(),
             &public_base_url,
             token_path.clone(),
         )?;
@@ -6614,7 +6613,12 @@ struct EmailOAuthConfigurationView {
 struct UpdateEmailOAuthConfiguration {
     tenant_id: String,
     client_id: String,
-    client_secret: String,
+    /// Absent, or an empty string from a form field nobody filled in, both mean
+    /// a PUBLIC client. The browser cannot easily send "absent" from an empty
+    /// input, so both have to arrive at the same place or the simple path would
+    /// depend on which one the client happened to emit.
+    #[serde(default)]
+    client_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -6760,7 +6764,9 @@ async fn update_email_configuration(
     }
     let tenant_id = request.tenant_id.trim().to_owned();
     let client_id = request.client_id.trim().to_owned();
-    let client_secret = request.client_secret;
+    let client_secret = request
+        .client_secret
+        .filter(|secret| !secret.trim().is_empty());
     // A Hive nobody has published still has an address, and Microsoft accepts
     // http://localhost as a redirect. Refusing the registration outright left a
     // developer holding a tenant, a client id and a secret with nowhere to put
@@ -6800,7 +6806,7 @@ async fn update_email_configuration(
         client,
         &tenant_id,
         client_id.clone(),
-        client_secret.clone(),
+        client_secret.as_deref(),
         &public_base_url,
         token_path.clone(),
     )

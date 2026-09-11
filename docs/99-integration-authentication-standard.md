@@ -100,10 +100,16 @@ makes it a confidential client.
 Microsoft accounts**". `/organizations` is organizations only and silently
 excludes every personal account — an easy and invisible mistake.
 
-⚠️ **`common` is currently rejected by a string check.** The tenant validation
-accepts only alphanumerics and hyphens, with the message *"must be a tenant UUID
-or organizations"*. Personal accounts are actively blocked, not merely
-unsupported.
+⚠️ **CORRECTION, 2026-09-11.** An earlier version of this file said `common` was
+*"rejected by a string check"*. That was wrong, and the mistake is worth keeping
+because of its shape: the validation allows any ASCII alphanumeric-or-hyphen
+string, so `common` and `consumers` have always passed — only the **error
+message** named "a tenant UUID or organizations", and the message was read as
+though it were the rule. The values that make personal accounts work looked
+unsupported while being accepted the whole time.
+
+Now pinned by `every_authority_that_serves_personal_accounts_is_accepted`, and
+the message names all four forms.
 
 **Register the redirect as `native`, not `spa`.** Refresh tokens for native apps
 have no specified lifetime; for an `spa` redirect they expire after 24 hours and

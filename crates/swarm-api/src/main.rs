@@ -709,19 +709,24 @@ fn jira_token_path(database_path: &std::path::Path) -> PathBuf {
 /// serve a request; it never belonged in the set of things that can refuse to
 /// start.
 fn configure_email(state: AppState, database_path: &std::path::Path) -> AppState {
+    // THE SECRET IS NO LONGER PART OF THE SET THAT MUST BE COMPLETE. Swarm is
+    // a public client: a tenant and a client id are a whole configuration, and
+    // an install that still sets a secret keeps its confidential registration.
     let settings = (
         env::var("SWARM_EMAIL_TENANT_ID").ok(),
         env::var("SWARM_EMAIL_OAUTH_CLIENT_ID").ok(),
-        env::var("SWARM_EMAIL_OAUTH_CLIENT_SECRET").ok(),
+        env::var("SWARM_EMAIL_OAUTH_CLIENT_SECRET")
+            .ok()
+            .filter(|secret| !secret.trim().is_empty()),
     );
     match settings {
-        (None, None, None) => degrade(
+        (None, None, _) => degrade(
             state,
             "Microsoft email",
             |state, ()| state.with_saved_outlook_oauth(),
             (),
         ),
-        (Some(tenant_id), Some(client_id), Some(client_secret)) => {
+        (Some(tenant_id), Some(client_id), client_secret) => {
             let Ok(public_url) = env::var("SWARM_PUBLIC_BASE_URL") else {
                 return state.with_degraded_subsystem(
                     "Microsoft email",
@@ -735,7 +740,7 @@ fn configure_email(state: AppState, database_path: &std::path::Path) -> AppState
                     state.with_outlook_oauth(
                         &tenant_id,
                         client_id,
-                        client_secret,
+                        client_secret.as_deref(),
                         &public_url,
                         email_token_path(database_path),
                     )

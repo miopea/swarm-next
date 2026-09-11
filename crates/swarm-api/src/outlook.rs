@@ -681,7 +681,7 @@ mod tests {
         let oauth = MicrosoftOAuthClient::new_with_endpoints(
             Client::new(),
             "client-id",
-            "client-secret",
+            Some("client-secret"),
             "https://swarm.example.test/",
             directory.path().join("email-oauth.json"),
             "https://login.microsoft.test/authorize",
