@@ -190,7 +190,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
     <section className="keeper-control-room member-control-room" aria-labelledby="member-control-heading">
       <header className="keeper-hero">
         <div className="keeper-hero-mark"><BeeMascot role="worker" expression="focused" /></div>
-        <div><p className="eyebrow">Member Hive</p><h3 id="member-control-heading">{context.apiary.name}</h3><p>Your Hive reads Jira directly and polls Keeper for Swarm-generated Apiary work.</p></div>
+        <div><p className="eyebrow">Member Hive</p><h3 id="member-control-heading">{context.apiary.name}</h3><p>Your Hive receives shared Swarm tasks from Keeper. Connect Jira only if you use it.</p></div>
         <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
         <button className="secondary-button" type="button" onClick={onManage}>Manage membership</button>
       </header>
@@ -295,7 +295,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
             <div><dt>Keeper task cursor</dt><dd>{snapshot.taskSync?.cursor ?? 0}</dd></div>
             <div><dt>Tasks applied</dt><dd>{snapshot.taskSync?.task_count ?? 0}</dd></div>
           </dl>
-          {snapshot.catalog?.blockers.length ? <ul className="member-blocker-list" aria-label="Shared work blockers">{snapshot.catalog.blockers.map((blocker) => <li key={blocker}>{catalogBlockerLabel(blocker)}</li>)}</ul> : <p className="member-ready-copy">Shared catalog prerequisites are ready.</p>}
+          {snapshot.catalog?.blockers.length ? <ul className="member-blocker-list" aria-label="Shared work blockers">{snapshot.catalog.blockers.map((blocker) => <li key={blocker}>{catalogBlockerLabel(blocker)}</li>)}</ul> : <p className="member-ready-copy">{snapshot.catalog ? "Shared catalog prerequisites are ready." : "Waiting for shared catalog status."}</p>}
         </article>
         <article className="keeper-panel member-task-panel">
           <header><div><p className="eyebrow">Shared work pulse</p><h4>Swarm tasks polled from Keeper</h4></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Manage in Tasks</button></header>

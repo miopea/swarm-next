@@ -4,6 +4,15 @@
 
 ### Latest priority: guided enrollment, then workspace setup
 
+September10 21:17 Eastern follow-up: CI's formatting-only failure was corrected
+in cd579e7a; cargo fmt --all --check passes. Member setup now distinguishes
+optional first-time Jira connection from network outage, invalid credentials
+and denied access, while preserving membership. Missing catalog observations
+no longer claim readiness.12 affected tests, TypeScript and production build
+pass. This UI follow-up is not yet deployed or browser-accepted. Next: combined
+CI, worker-preserving activation when live source is clean, then real onboarding
+and member recovery in Edge once its connection is restored. No release.
+
 LIVE VERIFIED September10 21:08 Eastern:0dc1b248 is active as
 1.7.1-dev-0dc1b248641a-20260911010527-922539. Healthok/no degradation;
 updater terminal ready/exit0. Host PID835651 and19:10:11 start unchanged,

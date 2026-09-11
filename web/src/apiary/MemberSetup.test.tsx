@@ -4,6 +4,23 @@ import type { FederationCatalogReadiness, FederationSyncHealth } from "../api";
 import MemberSetup from "./MemberSetup";
 
 afterEach(cleanup);
+
+test.each([
+  ["network_unavailable", "Jira is temporarily unreachable", "Check Jira connection"],
+  ["credentials_invalid", "Jira sign-in needs attention", "Review Jira sign-in"],
+  ["permission_denied", "Jira access needs review", "Review Jira access"],
+] as const)("distinguishes %s from first-time setup", (connection, heading, action) => {
+  const onRefresh = vi.fn();
+  const view = render(<MemberSetup catalog={{ ...catalog, jira_connection: connection }} sync={sync} onManage={vi.fn()} onRefresh={onRefresh} />);
+  expect(screen.getByText(heading)).toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Connect Jira" })).not.toBeInTheDocument();
+  if (connection === "network_unavailable") {
+    fireEvent.click(screen.getByRole("button", { name: action }));
+    expect(onRefresh).toHaveBeenCalledOnce();
+  } else expect(screen.getByRole("link", { name: action })).toHaveAttribute("href", "#settings-integrations");
+  view.rerender(<MemberSetup catalog={{ ...catalog, jira_connection: "ready" }} sync={sync} onManage={vi.fn()} onRefresh={onRefresh} />);
+  expect(screen.queryByText(heading)).not.toBeInTheDocument();
+});
 const catalog: FederationCatalogReadiness = { acknowledgement: null, jira_connection: "not_connected", projects: [], blockers: [] };
 const sync: FederationSyncHealth = { condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null };
 

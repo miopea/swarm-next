@@ -73,7 +73,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   expect(onOpenTasks).toHaveBeenCalledOnce();
 });
 
-test("keeps local work usable when part of the Member rollup is unavailable", async () => {
+test.each([false, true])("keeps local work usable when Member status is unavailable (catalog missing: %s)", async (missingCatalog) => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/members")) return Promise.resolve(ok([]));
@@ -89,12 +89,15 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
     if (url.endsWith("/local-executions")) return Promise.resolve(ok([]));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
-    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
+    if (url.endsWith("/catalog-readiness")) return missingCatalog ? Promise.reject(new Error("offline")) : Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
     throw new Error(`Unexpected request: ${url}`);
   }));
   render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} onOpenTasks={() => undefined} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Local workers and owned work are unchanged");
-  expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
+  if (missingCatalog) {
+    expect(screen.getByText("Waiting for shared catalog status.")).toBeInTheDocument();
+    expect(screen.queryByText("Shared catalog prerequisites are ready.")).not.toBeInTheDocument();
+  } else expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
 });
 
 test("keeps a Jira handoff actionable and explains when acceptance fails", async () => {
