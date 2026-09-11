@@ -181,6 +181,19 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
             </button>
             {canManageConfiguration && configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(true)}>{bundled ? "Use your own Microsoft app" : "Replace app registration"}</button> : null}
           </div>
+          {bundled ? (
+            // THE CALLBACK STAYS VISIBLE EVEN WHEN THERE IS NOTHING TO FILL IN.
+            // Hiding the setup form hid this with it, and it is the one value
+            // whoever maintains the shared registration needs: Microsoft
+            // matches redirect URIs exactly, so a Hive published at its own
+            // address is refused with AADSTS50011 until this exact string is
+            // on the registration. A Hive left on localhost is already covered
+            // -- the port is ignored for loopback matching.
+            <label className="email-callback-field">
+              This Hive's redirect URI
+              <input readOnly value={configuration?.callback_url ?? "This Hive does not know its own address yet"} onFocus={(event) => event.currentTarget.select()} />
+            </label>
+          ) : null}
           <small className="privacy-note">
             {bundled ? "Personal and work accounts both work — sign in with the address you want Swarm to read, and Microsoft routes it. Nothing to register and no secret to store. " : null}
             A Microsoft consent page opens, then returns here. Mail tokens remain private on this host and never enter Queen, workers, or browser storage.
