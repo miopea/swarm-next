@@ -13,22 +13,21 @@ blocked the production Approve Hive action; explicit operator approval requested
 Do not retry that grant or bypass it. Continue unaffected work. Final browser-closed
 membership completion remains open. Disposable test services stop after two hours.
 
-The live isolated creation test found that entering a shared profile and creating
-an Apiary discarded the profile. Finish that correction and live retest next.
+The creation-profile correction is now live at b4322b193f6a on both instances.
+Isolated browser creation retains Bea Keeper, bea@example.test and Bea's Hive.
 47 focused UI tests, TypeScript and the full1630-test/169-file UI suite pass.
-No unrelated work or BFG Admin messaging while these named gates remain.
+Next: finish CI receipt, then unaffected UI-1 through UI-4 gates from document93.
+Keep the pending fresh-join approval separate; no unrelated BFG Admin messaging.
 
-The browser extension is restored. Production and WSL now serve development
+Historical deployment checkpoint: production and WSL served development
 revision 4e46e680; both engine processes were preserved. Enrollment timing and
 workspace recovery are deployed. Desktop and actual 390px Manage Apiary scrolling
 passed. Existing WSL membership and the three-Hive directory survived update.
 
-The immediate blocker is reproduced: member shared-work returns 403 because it
-uses a Keeper-only local read. Finish scoped outbound member claims, isolation
-and HTTP recovery tests, then verify the WSL warning clears after deployment.
-Next prove fresh submit-once enrollment without removing existing membership,
-then workspace selection/override/error acceptance and remaining UI-1 through
-UI-4. Do not replace these gates with unrelated polishing.
+Resolved blocker (8f320a9b): member shared-work returned 403 because it
+used a Keeper-only local read. Scoped outbound member claims, isolation and HTTP
+recovery tests now pass; WSL warning cleared after deployment. Workspace acceptance
+also passed. These completed checks must not be repeated as unfinished work.
 
 The operator has authorized overnight commits, deployment, WSL modifications
 and a release if needed for testing. Do not release merely to bypass validation.

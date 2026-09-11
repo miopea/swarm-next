@@ -1,5 +1,17 @@
 # Remaining maturity work — UX/UI first
 
+## Authoritative checkpoint — September 11, 00:50 Eastern
+
+Use the newest entries in docs/92-maturity-acceptance-ledger.md and docs/45 for
+current acceptance. The historical next steps below have been superseded:
+member claim overview repair and creation-profile preservation are committed,
+pushed and live on production/WSL at b4322b193f6a. Workspace desktop/mobile
+acceptance and isolated live creation-profile acceptance pass. Existing members
+were preserved. Final fresh-join approval is awaiting explicit operator approval
+after auto-review rejected the production test membership; do not retry it.
+Continue unrelated UI gates rather than waiting on that approval. No release cut.
+
+
 ## Current execution checkpoint — September 10, after 1.7.1 deployment
 
 ### Latest priority: guided enrollment, then workspace setup

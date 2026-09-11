@@ -1,5 +1,22 @@
 # Current maturity acceptance ledger
 
+## September 11, 00:50 Eastern — Creation profile accepted live
+
+Revision `b4322b193f6a` is healthy on production and WSL through their supported
+worker-preserving updates. Both report no degraded services or database recovery.
+Production retains host PID944143; WSL retains PID6458. The WSL process start
+receipt is September10 17:29:31 (the earlier 17:18:49 note below was inaccurate).
+Full UI suite passes: 1630 tests across 169 files, plus TypeScript and 47 focused
+profile/Apiary tests. CI34563096043 is still running at this checkpoint.
+
+On isolated WSL port8871, returned the empty fictional garden to personal mode,
+entered Bea Keeper and bea@example.test, and created Moonflower Test Garden.
+The resulting Keeper overview and member roster show Bea's Hive, Bea Keeper,
+and the email. This closes the live creation-profile gate below. No Jira was
+connected, no real member was modified, and no worker was started by this test.
+The separate Daisy join approval remains explicitly pending; do not bypass it.
+
+
 ## September 11 — Claim overview repaired live; fresh-join gate narrowed
 
 Production and existing WSL member both serve healthy
