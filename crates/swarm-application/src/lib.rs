@@ -36,7 +36,7 @@ pub use workspace_settings::WorkspaceSettingsService;
 #[cfg(test)]
 mod enrollment_tests;
 mod native_operator_sources;
-pub use native_operator_sources::{NativeSourceAdmission, NativeSourceReceipt};
+pub use native_operator_sources::{NativeAnswerLink, NativeSourceAdmission, NativeSourceReceipt};
 mod ops_tickets;
 mod queen_review;
 mod queue_snapshot;

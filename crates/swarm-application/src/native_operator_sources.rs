@@ -177,6 +177,82 @@ mod tests {
         );
     }
 
+    /// TWO PENDING DECISIONS WITH THE SAME QUESTIONS RESOLVE NEITHER.
+    ///
+    /// ADR 0065: "Ambiguous applicability remains open." The same question
+    /// template asked twice is an ordinary shape, and the capture carries
+    /// nothing saying which was answered — so picking one would be a coin toss
+    /// recorded as the operator's word.
+    #[test]
+    fn two_identical_pending_decisions_resolve_neither() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        let service = TaskService::new(store.clone());
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+
+        let first = pending_decision(&store, &source);
+        let second = pending_decision(&store, &source);
+        assert_ne!(first, second);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Ambiguous
+        );
+        for decision in [first, second] {
+            assert_eq!(
+                store.get_decision_request(decision).unwrap().state,
+                swarm_domain::DecisionRequestState::Pending,
+                "neither may be resolved on a guess"
+            );
+        }
+    }
+
+    /// With exactly one candidate, the retain pass can find it without being
+    /// told which decision the answer belongs to.
+    #[test]
+    fn the_one_matching_pending_decision_is_found_from_the_source_alone() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        let service = TaskService::new(store.clone());
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+        let decision = pending_decision(&store, &source);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Resolved
+        );
+        assert_eq!(
+            store.get_decision_request(decision).unwrap().state,
+            swarm_domain::DecisionRequestState::Resolved
+        );
+        // A REPLAY RESOLVES NOTHING, which is the property that matters.
+        //
+        // It reports NoLongerApplicable rather than AlreadyLinked because this
+        // entry point searches PENDING decisions and there is no longer one --
+        // AlreadyLinked belongs to link_native_answer, which is told which
+        // decision to look at. Both refuse; only the wording differs, and the
+        // retain pass offers each source once in any case.
+        let replay = service
+            .resolve_decision_from_native_answer(source.id, 102)
+            .unwrap();
+        assert_ne!(
+            replay,
+            NativeAnswerLink::Resolved,
+            "a replay must not resolve again"
+        );
+        assert_eq!(
+            store.get_decision_request(decision).unwrap().state,
+            swarm_domain::DecisionRequestState::Resolved,
+            "and the first resolution stands"
+        );
+    }
+
     /// THE NEGATIVES, each failing for its own reason rather than a shared one.
     ///
     /// These are the whole safety argument. An automatic trigger is only
@@ -314,6 +390,12 @@ pub enum NativeAnswerLink {
     NoLongerApplicable,
     /// Bound to a different decision already, or contradicts stored evidence.
     Conflicting,
+    /// More than one pending decision for this worker carries exactly these
+    /// questions, so which one was answered cannot be established.
+    ///
+    /// ADR 0065: "Ambiguous applicability remains open." Picking one would be a
+    /// guess wearing a resolution's clothing.
+    Ambiguous,
 }
 
 impl TaskService {
@@ -338,6 +420,56 @@ impl TaskService {
     /// achieves what a single cross-module transaction would without reaching
     /// through three modules to get it.
     ///
+    /// # Errors
+    /// Propagates persistence failures. A refusal is an `Ok` variant, because
+    /// "this answer cannot be used" is an outcome to report, not a fault.
+    /// Finds the one pending decision a retained source answers, and links it.
+    ///
+    /// The retain pass knows a source, not a decision — a captured interview
+    /// carries no decision id until bind writes one. So the candidate set is
+    /// this worker's PENDING decisions, narrowed to those whose questions equal
+    /// the captured snapshot exactly.
+    ///
+    /// ⚠️ EXACTLY ONE, OR NOTHING. Two pending decisions for one worker with
+    /// identical questions is a real shape — the same template asked twice —
+    /// and there is no evidence in the capture saying which was answered.
+    /// Resolving either would be a coin toss recorded as the operator's word.
+    ///
+    /// # Errors
+    /// Propagates persistence failures. Refusals are `Ok` variants.
+    pub fn resolve_decision_from_native_answer(
+        &self,
+        source_id: OperatorSubmissionId,
+        now: i64,
+    ) -> Result<NativeAnswerLink, swarm_persistence::TaskStoreError> {
+        let Some(stored) = self.store.native_interview(source_id)? else {
+            return Ok(NativeAnswerLink::NoLongerApplicable);
+        };
+        // Checked here as well as in link_native_answer so an unverified source
+        // never even causes a decision lookup.
+        if stored.source.final_result != Some(swarm_domain::NativeInterviewFinalResult::ExactBatch)
+        {
+            return Ok(NativeAnswerLink::Unverified);
+        }
+        let pending = self.store.list_worker_decision_requests(stored.worker_id)?;
+        let mut candidates = pending.into_iter().filter(|request| {
+            request.state == swarm_domain::DecisionRequestState::Pending
+                && request
+                    .questions
+                    .iter()
+                    .map(swarm_domain::NativeInterviewQuestion::from_decision)
+                    .collect::<Option<Vec<_>>>()
+                    .is_some_and(|converted| converted == stored.source.questions)
+        });
+        let Some(decision) = candidates.next() else {
+            return Ok(NativeAnswerLink::NoLongerApplicable);
+        };
+        if candidates.next().is_some() {
+            return Ok(NativeAnswerLink::Ambiguous);
+        }
+        self.link_native_answer(source_id, decision.id, now)
+    }
+
     /// # Errors
     /// Propagates persistence failures. A refusal is an `Ok` variant, because
     /// "this answer cannot be used" is an outcome to report, not a fault.

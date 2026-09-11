@@ -87,11 +87,42 @@ async fn collect_once(
         // Keep the sole admission permit inside the blocking job and return it
         // with its result. Cancellation cannot create another database job while
         // the previous save is still finishing; a late commit remains retry-safe.
-        let (saved, _permit) = tokio::task::spawn_blocking(move || {
-            (service.retain_native_sources(&entries, now), permit)
+        // DORMANT UNLESS EXPLICITLY ENABLED. The linkage is built and tested but
+        // has not been proven end to end against a real native answer on a real
+        // Hive, and the standing constraint is that capture stays OFF until it
+        // has been. The operator's chosen default of ON applies AFTER that
+        // proof, not instead of it.
+        //
+        // Read per pass rather than cached, so the live proof can be run by
+        // setting the variable and restarting, with nothing to rebuild.
+        let resolve_answers = std::env::var("SWARM_NATIVE_ANSWER_RESOLUTION")
+            .is_ok_and(|value| value.trim().eq_ignore_ascii_case("on"));
+        let (saved, linked, _permit) = tokio::task::spawn_blocking(move || {
+            let saved = service.retain_native_sources(&entries, now);
+            // Only sources stored by THIS pass are offered. A source already on
+            // file was already offered, and re-offering every retained source
+            // on every pass would turn one refusal into a permanent loop.
+            let linked = if resolve_answers {
+                saved
+                    .receipts
+                    .iter()
+                    .filter_map(|receipt| {
+                        service
+                            .resolve_decision_from_native_answer(receipt.id(), now)
+                            .ok()
+                    })
+                    .filter(|outcome| *outcome == swarm_application::NativeAnswerLink::Resolved)
+                    .count()
+            } else {
+                0
+            };
+            (saved, linked, permit)
         })
         .await
         .map_err(|_| IntakeError::Unavailable)?;
+        if linked > 0 {
+            tracing::info!(linked, "native answers resolved pending decisions");
+        }
         let mut report = IntakeReport {
             stored: saved.newly_stored,
             refused: saved.refused,
