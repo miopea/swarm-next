@@ -64,11 +64,33 @@ local work its own.
 The same source interval includes another worker's changes to Microsoft sign-in
 and Jira authentication: bundled Microsoft registration, removal of per-Hive
 registration, removal of Atlassian OAuth in favor of user API tokens, and Jira
-token-age warnings. They are included in the candidate and CI, but this pass did
-not independently repeat real-account consent or existing-OAuth migration.
-The release verifier must check that worker's migration/sign-in receipts and
-clearly disclose any required reconnect. Do not market these as independently
-verified here or omit the compatibility change from release notes.
+token-age warnings. Source and test inspection confirmed these are intentional
+breaking changes, not seamless credential migrations:
+
+- Email commit fbe07bcb removes loading of per-Hive app registration and its write
+  route. Bundled registration is used unless host environment pins one. The
+  existing UI test supplies credentials_invalid and verifies a Reconnect
+  Microsoft account action; it does NOT redeem an old real token or prove consent
+  in a customer tenant. The removed registration route is covered by a405 test.
+- Jira commit4e46e680 removes OAuth configuration/start/callback and bearer-token
+  support. Startup loads existing saved API-token credentials, or complete
+  host-provided site/email/API-token settings. Old OAuth-only configuration is
+  ignored; it does not convert OAuth tokens into API tokens. The UI test verifies
+  the required API-token form and its request, not a real-account migration.
+- Both commits record their author's explanation that breaking/reconnecting
+  existing configuration was discussed with the operator. That record is not a
+  substitute for independent real-account acceptance.
+
+These tests are included in successful candidate CI. No new external sign-in,
+credential change, mail send or other-worker communication occurred in this
+inspection. Real-account consent/reconnect remains a release-verifier check.
+
+**Required upgrade notice:** If Outlook used your Hive's own Microsoft app,
+reconnect your Microsoft account in Settings → Integrations after updating.
+If Jira used Atlassian OAuth, connect it with your site address, account email
+and a personal API token instead. Existing API-token Jira connections retain
+that supported path. Jira remains optional for Apiary membership. An unavailable
+integration does not require leaving and rejoining the Apiary.
 
 ## Closed live Apiary release gates
 
