@@ -69,6 +69,26 @@ fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
     // batch matches exactly, which is what makes final_result ExactBatch mean
     // anything. Install one without the other and it silently captures nothing.
     let command = format!("'{}' provider-interview", executable.replace('\'', "'\\''"));
+    // ⚠️ THREE EVENTS, AND THE THIRD IS THE ONE THAT MAKES ANY OF IT COUNT.
+    //
+    // PreToolUse and PostToolUse only ever produce a PROVISIONAL observation.
+    // Nothing is ever captured until a PostToolBatch arrives: finalize() is the
+    // only thing that stamps NativeInterviewFinalResult::ExactBatch, and the
+    // application layer treats absence of that stamp as UNCHECKED and refuses
+    // to resolve anything with it. matches_final_batch rejects any payload whose
+    // hook_event_name is not exactly "PostToolBatch", and observe_native_interview
+    // will not even enter its finalizing branch without one.
+    //
+    // I shipped bbfda46c with only the first two. The result was not a partial
+    // feature: it was zero captures, for every worker, with the host logging a
+    // broken pipe per question and Claude showing the operator
+    // "PostToolUse:AskUserQuestion hook error ... provider startup evidence
+    // unavailable". They reported that screen on 2026-09-12 and it is what
+    // pointed here.
+    //
+    // PostToolBatch carries a batch of tool calls rather than one tool, so it
+    // takes no tool matcher — matching on "AskUserQuestion" would silently
+    // never fire, which is the same failure again in a new costume.
     for event in ["PreToolUse", "PostToolUse"] {
         let entry = json!({
             "matcher": "AskUserQuestion",
@@ -84,6 +104,17 @@ fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
         if !slot.contains(&entry) {
             slot.push(entry);
         }
+    }
+    let batch = json!({"hooks": [{"type": "command", "command": command}]});
+    let slot = hooks
+        .as_object_mut()
+        .ok_or("hooks are not an object")?
+        .entry("PostToolBatch")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or("hook event is not an array")?;
+    if !slot.contains(&batch) {
+        slot.push(batch);
     }
     Ok(())
 }
@@ -182,6 +213,25 @@ mod tests {
                 "{event} must call the interview subcommand"
             );
         }
+
+        // ⚠️ THE ONE THAT MAKES ANY OF IT COUNT. Without PostToolBatch nothing
+        // is ever finalised, so nothing is ever captured — which is exactly
+        // what bbfda46c shipped, and the test above passed the whole time
+        // because it only asked about the two provisional events.
+        let batch = document["hooks"]["PostToolBatch"]
+            .as_array()
+            .expect("PostToolBatch is missing: nothing will ever be finalised");
+        assert_eq!(batch.len(), 1);
+        assert_eq!(
+            batch[0]["hooks"][0]["command"],
+            "'/opt/hive/host' provider-interview"
+        );
+        // No tool matcher: a batch is not one tool, and matching it on
+        // "AskUserQuestion" would silently never fire.
+        assert!(
+            batch[0].get("matcher").is_none(),
+            "PostToolBatch must not carry a tool matcher"
+        );
     }
 
     /// Installed twice is installed once. A worker restart re-runs this.
@@ -200,6 +250,10 @@ mod tests {
                 .count();
             assert_eq!(count, 1, "{event} gained a duplicate");
         }
+        assert_eq!(
+            document["hooks"]["PostToolBatch"].as_array().unwrap().len(),
+            1
+        );
     }
 
     /// An operator's own `PreToolUse` hooks survive, because this file merges.
