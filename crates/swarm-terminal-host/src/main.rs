@@ -27,9 +27,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::args().nth(1).as_deref() == Some("mcp-proxy") {
         return mcp_proxy::run().await.map_err(Into::into);
     }
+    // ⚠️ THE LIBRARY IS WHERE THE DECISIONS ARE MADE, so it has to be in the
+    // filter. The default named only `swarm_terminal_host`, the BINARY crate,
+    // while every session, capture and provider-gate decision happens in
+    // `swarm_terminal`, the library. So a warning added there ran correctly and
+    // was silently discarded before reaching the journal.
+    //
+    // Found 2026-09-12 after adding twelve refusal warnings to explain why
+    // native interview capture was failing, restarting the host to pick them
+    // up, and reading a journal with 43 WARN lines and none of mine. The
+    // instrumentation was never the problem; the filter was, and it made a
+    // working diagnostic indistinguishable from a branch that never fired.
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| "swarm_terminal_host=info".into()),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "swarm_terminal_host=info,swarm_terminal=info".into()),
         )
         .init();
 
