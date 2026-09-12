@@ -2845,6 +2845,21 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   line-height: 1.45;
 }
 
+/* An answer Swarm saw in a terminal and could not use.
+   LOUDER THAN THE SUMMARY IT SITS UNDER, because the operator arrives at this
+   card believing the question is already answered — that belief is the thing to
+   interrupt, and a quiet line would read as the same silence they already met. */
+.decision-refused-answer {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-strong);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
 /* What the last engine update did. HISTORY, NOT AN ALARM, so it is quieter than
    the notice above it: nothing here needs doing. It earns its place because the
    one thing it reports — an update that started and never said how it ended —

@@ -306,7 +306,8 @@ const FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION: i64 = 167;
 const FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION: i64 = 168;
 const WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION: i64 = 169;
 const UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION: i64 = 170;
-const CURRENT_SCHEMA_VERSION: i64 = UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION;
+const REFUSED_NATIVE_ANSWER_SCHEMA_VERSION: i64 = 171;
+const CURRENT_SCHEMA_VERSION: i64 = REFUSED_NATIVE_ANSWER_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4185,6 +4186,10 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION {
         worker_engine_updates::migrate_unprompted_updates(transaction)?;
+    }
+    // LAST, because it stamps the ceiling.
+    if schema_version < REFUSED_NATIVE_ANSWER_SCHEMA_VERSION {
+        decisions::migrate_refused_native_answers(transaction)?;
     }
     Ok(())
 }
@@ -9641,6 +9646,15 @@ mod tests {
                 )",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
                 AND name = 'worker_engine_update_attempts' AND sql LIKE '%automatic%'",
+        },
+        // LAST, and it has to stay last: the ceiling test rewinds only the final
+        // entry here and expects it to describe CURRENT_SCHEMA_VERSION.
+        SchemaStep {
+            table: "decision_native_answer_refusals",
+            artifact: "refused_reason",
+            undo_sql: "DROP TABLE decision_native_answer_refusals",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
+                AND name = 'decision_native_answer_refusals' AND sql LIKE '%ambiguous%'",
         },
     ];
 

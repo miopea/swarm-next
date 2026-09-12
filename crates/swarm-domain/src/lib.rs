@@ -696,6 +696,19 @@ pub enum DecisionDischarge {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DecisionRequest {
     pub id: DecisionRequestId,
+    /// An answer typed in a terminal that Swarm saw and could not use.
+    ///
+    /// ⚠️ THE DIFFERENCE BETWEEN FIXING THE BUG AND APPEARING TO. The whole
+    /// complaint is "you answer in the terminal and the alarm stays up". If the
+    /// bridge refuses an answer and says nothing, the operator's experience is
+    /// unchanged — they answered, nothing happened, nothing explained it — and
+    /// the feature looks broken in exactly the way it looked broken before.
+    ///
+    /// `None` means no answer has been refused for this decision, NOT that one
+    /// was accepted. An accepted answer resolves the decision and it leaves the
+    /// inbox entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_native_answer: Option<RefusedNativeAnswer>,
     pub hive_id: HiveId,
     pub requesting_worker_id: WorkerId,
     pub task_id: Option<TaskId>,
@@ -1560,4 +1573,84 @@ mod commit_settlement_tests {
             CommitSettlement::Unestablished
         );
     }
+}
+
+/// Why an answer typed in a worker's terminal could not resolve this decision.
+///
+/// Each variant is a DIFFERENT thing for the operator to do, which is the reason
+/// this is an enum rather than a flag. Answer again where it can be verified;
+/// answer here because Swarm cannot tell two questions apart; nothing, because
+/// the question has moved on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeAnswerRefusal {
+    /// The engine never confirmed the answer as an exact final batch, so nothing
+    /// captured is known to be what the operator submitted.
+    ///
+    /// ⚠️ ABSENCE OF CONFIRMATION IS NOT FAILURE OF THE ANSWER. Older captures
+    /// carry no confirmation at all. This says Swarm could not tell, never that
+    /// the operator got it wrong.
+    Unverified,
+    /// Two or more pending decisions for this worker carry exactly these
+    /// questions, so which one was answered cannot be established.
+    Ambiguous,
+    /// The decision, its questions, or the session moved between the answer and
+    /// the attempt to use it.
+    NoLongerApplicable,
+    /// The evidence is already bound elsewhere, or contradicts what is stored.
+    Conflicting,
+}
+
+impl NativeAnswerRefusal {
+    /// What the operator should read, and what to do about it.
+    #[must_use]
+    pub const fn explanation(self) -> &'static str {
+        match self {
+            Self::Unverified => {
+                "An answer was typed in this worker's terminal, but the engine did not confirm it as a completed answer, so Swarm cannot treat it as yours. Answer here, or answer in the terminal again."
+            }
+            Self::Ambiguous => {
+                "An answer was typed in this worker's terminal, and more than one open question has exactly these options — so Swarm cannot tell which one you answered. Answer here to settle it."
+            }
+            Self::NoLongerApplicable => {
+                "An answer was typed in this worker's terminal, but this question or the worker's session changed before Swarm could use it. Answer here."
+            }
+            Self::Conflicting => {
+                "An answer was typed in this worker's terminal, but it is already recorded against a different question. Answer here."
+            }
+        }
+    }
+
+    /// The stored spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unverified => "unverified",
+            Self::Ambiguous => "ambiguous",
+            Self::NoLongerApplicable => "no_longer_applicable",
+            Self::Conflicting => "conflicting",
+        }
+    }
+
+    /// Reads a stored spelling back.
+    ///
+    /// Not `FromStr`: an unreadable value is dropped by the caller rather than
+    /// raised, because a notice naming the wrong remedy is worse than none.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unverified" => Some(Self::Unverified),
+            "ambiguous" => Some(Self::Ambiguous),
+            "no_longer_applicable" => Some(Self::NoLongerApplicable),
+            "conflicting" => Some(Self::Conflicting),
+            _ => None,
+        }
+    }
+}
+
+/// One refused answer, with when Swarm saw it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RefusedNativeAnswer {
+    pub reason: NativeAnswerRefusal,
+    pub seen_at: i64,
 }

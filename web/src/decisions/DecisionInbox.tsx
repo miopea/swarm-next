@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { refusedNativeAnswerNotice } from "./refusedNativeAnswer";
 
 import type { DecisionClarification, DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import DecisionClarificationPanel from "./DecisionClarificationPanel";
@@ -290,6 +291,16 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <div className="decision-summary"><LongText text={decision.summary} label="the summary" foldAbove={300} /></div> : null}
+                {/* ⚠️ ABOVE THE RECOMMENDATION AND BELOW THE SUMMARY. The
+                    operator already believes they answered this; the first thing
+                    to establish is that Swarm saw it and why it could not be
+                    used. Buried under the risk fold it would be indistinguishable
+                    from the silence this exists to end. */}
+                {decision.state === "pending" && decision.refused_native_answer
+                  ? <p className="decision-refused-answer" role="status">
+                      {refusedNativeAnswerNotice(decision.refused_native_answer.reason)}
+                    </p>
+                  : null}
                 {decision.suggested_action && recommendedAction === undefined && <div className="decision-ask"><span>{requester} {decision.state === "pending" ? "recommends" : "recommended"}</span><LongText text={humanize(decision.suggested_action)} label="the recommendation" foldAbove={300} /></div>}
                 {decision.suggested_action === "" && <div className="decision-ask"><span>{requester}'s view</span><p>No preference</p></div>}
                 {decision.risk && <dl className="decision-context">

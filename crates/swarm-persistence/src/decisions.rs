@@ -1251,7 +1251,14 @@ const DECISION_COLUMNS: &str =
                          'reason', reason, 'created_at', created_at))
                       FROM (SELECT task_id, decision_id, reason, created_at
                             FROM task_decision_links WHERE decision_id=d.id
-                            ORDER BY task_id LIMIT 33))";
+                            ORDER BY task_id LIMIT 33)),
+                     -- An answer Swarm saw in a terminal and could not use.
+                     -- Read here rather than fetched per card, so the notice
+                     -- cannot be missing on a surface that forgot to ask.
+                     (SELECT reason FROM decision_native_answer_refusals
+                       WHERE decision_id = d.id),
+                     (SELECT seen_at FROM decision_native_answer_refusals
+                       WHERE decision_id = d.id)";
 
 pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let linked_tasks: Vec<swarm_domain::TaskDecisionLink> =
@@ -1270,6 +1277,14 @@ pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dec
         })?;
     Ok(DecisionRequest {
         linked_tasks,
+        // An unreadable reason is dropped rather than guessed: a notice that
+        // names the wrong remedy is worse than no notice.
+        refused_native_answer: row
+            .get::<_, Option<String>>(31)?
+            .as_deref()
+            .and_then(swarm_domain::NativeAnswerRefusal::parse)
+            .zip(row.get::<_, Option<i64>>(32)?)
+            .map(|(reason, seen_at)| swarm_domain::RefusedNativeAnswer { reason, seen_at }),
         id: parse_id(&row.get::<_, String>(0)?)?,
         hive_id: parse_id(&row.get::<_, String>(1)?)?,
         requesting_worker_id: parse_id(&row.get::<_, String>(2)?)?,
@@ -3138,5 +3153,64 @@ mod the_decision_projection_stays_singular {
              apart once already; whether an authorised act happened must not \
              depend on which query asked."
         );
+    }
+}
+
+/// An answer typed in a terminal that Swarm saw and could not use.
+///
+/// ⚠️ WITHOUT THIS, A REFUSAL IS INDISTINGUISHABLE FROM THE BUG. The complaint
+/// being fixed is "you answer in the terminal and Needs You stays lit". A bridge
+/// that refuses an answer silently reproduces that exactly — the operator
+/// answered, nothing happened, nothing explained it — while the code believes it
+/// is working correctly.
+///
+/// ONE ROW PER DECISION, LATEST WINS. This is a notice about the open question,
+/// not an audit trail of attempts: a second refusal replaces the first because
+/// what the operator needs is the current reason to act, and a list of four
+/// would bury it.
+pub(super) fn migrate_refused_native_answers(
+    tx: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS decision_native_answer_refusals (
+             decision_id TEXT PRIMARY KEY
+                 REFERENCES decision_requests(id) ON DELETE CASCADE,
+             reason TEXT NOT NULL CHECK (reason IN
+                 ('unverified','ambiguous','no_longer_applicable','conflicting')),
+             seen_at INTEGER NOT NULL CHECK (seen_at >= 0)
+         );",
+    )?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::REFUSED_NATIVE_ANSWER_SCHEMA_VERSION,
+    )
+}
+
+impl TaskStore {
+    /// Records that an answer was seen for this decision and could not be used.
+    ///
+    /// SILENT ON A DECISION THAT IS NOT PENDING. A resolved question has nothing
+    /// to tell the operator to do, and a notice on one would be an alarm about
+    /// work already finished.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn record_refused_native_answer(
+        &self,
+        decision_id: swarm_domain::DecisionRequestId,
+        reason: swarm_domain::NativeAnswerRefusal,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "INSERT INTO decision_native_answer_refusals (decision_id, reason, seen_at)
+             SELECT ?1, ?2, ?3 FROM decision_requests d
+              WHERE d.id = ?1 AND d.state = 'pending'
+             ON CONFLICT(decision_id) DO UPDATE
+                 SET reason = excluded.reason, seen_at = excluded.seen_at",
+            params![decision_id.to_string(), reason.as_str(), now],
+        )?;
+        Ok(changed > 0)
     }
 }

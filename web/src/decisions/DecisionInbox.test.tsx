@@ -911,3 +911,51 @@ test("panels that are not asking anything render below the requests", () => {
   expect(urgent.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(list.compareDocumentPosition(benign) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
+
+/**
+ * A refused terminal answer says so on the card the operator is looking at.
+ *
+ * ⚠️ THE WHOLE COMPLAINT IS "I ANSWERED AND NOTHING HAPPENED". Someone reaching
+ * this card believes the question is already settled; if the refusal is not on
+ * it, their experience is identical to the bug — and worse, the code now
+ * believes it is working.
+ */
+test("tells the operator when an answer typed in a terminal could not be used", () => {
+  render(<DecisionInbox decisions={[{
+    ...pending,
+    refused_native_answer: { reason: "ambiguous", seen_at: 100 },
+  }]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText(/An answer was typed in this worker's terminal/)).toBeInTheDocument();
+  expect(screen.getByText(/cannot tell which one you answered/)).toBeInTheDocument();
+});
+
+test("says nothing about refused answers when none was refused", () => {
+  render(<DecisionInbox decisions={[pending]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.queryByText(/An answer was typed in this worker's terminal/)).not.toBeInTheDocument();
+});
+
+/**
+ * A resolved question keeps its notice to itself.
+ *
+ * The notice is an instruction to act. On a question that is already settled it
+ * would be an alarm about finished work, which is the failure mode on the other
+ * side of this feature.
+ */
+test("does not carry a refusal notice onto a question that is already resolved", () => {
+  // A refusal can be recorded while the question is pending and outlive it:
+  // the operator answers here instead, and the row stays. On the Activity tab
+  // that notice would tell them to act on something already settled.
+  render(<DecisionInbox decisions={[{
+    ...resolved,
+    refused_native_answer: { reason: "unverified", seen_at: 100 },
+  }]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  // Resolved work is behind "Show history", so the card has to be ON SCREEN for
+  // this to be asserting anything at all. Without this the test passed against a
+  // component that renders the notice unconditionally.
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
+  expect(screen.getByText("Approve release")).toBeInTheDocument();
+
+  expect(screen.queryByText(/An answer was typed in this worker's terminal/)).not.toBeInTheDocument();
+});

@@ -1108,7 +1108,21 @@ export type DecisionQuestion = {
   multi_select?: boolean;
 };
 
+/** Why an answer typed in a worker's terminal could not settle this question. */
+export type NativeAnswerRefusal =
+  | "unverified"
+  | "ambiguous"
+  | "no_longer_applicable"
+  | "conflicting";
+
 export type DecisionRequest = {
+  /**
+   * An answer Swarm saw in a terminal and could not use.
+   *
+   * Absent means no answer has been refused — NOT that one was accepted. An
+   * accepted answer resolves the question and it leaves this inbox.
+   */
+  refused_native_answer?: { reason: NativeAnswerRefusal; seen_at: number } | null;
   /** Compact server-owned facts; history text is fetched only on demand. */
   clarification?: {
     round_count: number;

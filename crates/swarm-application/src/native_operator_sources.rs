@@ -253,6 +253,104 @@ mod tests {
         );
     }
 
+    /// A refused answer says so on the question it was about.
+    ///
+    /// ⚠️ THE DIFFERENCE BETWEEN FIXING THE BUG AND APPEARING TO. The complaint
+    /// is "you answer in the terminal and Needs You stays lit". A bridge that
+    /// refuses silently reproduces that exactly, while the code believes it is
+    /// working — so every refusal has to reach the open question.
+    #[test]
+    fn a_refused_answer_is_announced_on_the_question_it_was_about() {
+        let store = TaskStore::in_memory().unwrap();
+        let service = TaskService::new(store.clone());
+
+        // Unverified: the engine never confirmed an exact final batch, which is
+        // what every older stored source looks like.
+        let unchecked = fixture(&store);
+        let _ = service.retain_native_sources(std::slice::from_ref(&unchecked), 100);
+        let decision = pending_decision(&store, &unchecked);
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(unchecked.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Unverified
+        );
+
+        let refused = store
+            .get_decision_request(decision)
+            .unwrap()
+            .refused_native_answer
+            .expect("the refusal reached the question");
+        assert_eq!(
+            refused.reason,
+            swarm_domain::NativeAnswerRefusal::Unverified
+        );
+        assert_eq!(refused.seen_at, 101);
+        // And it explains itself rather than only naming a state.
+        assert!(refused.reason.explanation().contains("Answer here"));
+    }
+
+    /// An ambiguous answer tells BOTH questions, because it cannot tell them apart.
+    ///
+    /// Announcing on one of two would be the same guess this refuses to make,
+    /// wearing a quieter costume — the operator would read it as "this is the
+    /// one you answered".
+    #[test]
+    fn an_ambiguous_answer_is_announced_on_every_question_it_could_have_meant() {
+        let store = TaskStore::in_memory().unwrap();
+        let service = TaskService::new(store.clone());
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+        let first = pending_decision(&store, &source);
+        let second = pending_decision(&store, &source);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Ambiguous
+        );
+
+        for decision in [first, second] {
+            let refused = store
+                .get_decision_request(decision)
+                .unwrap()
+                .refused_native_answer
+                .expect("both candidates were told");
+            assert_eq!(refused.reason, swarm_domain::NativeAnswerRefusal::Ambiguous);
+        }
+    }
+
+    /// A successful answer leaves no refusal behind.
+    ///
+    /// The notice is an instruction to act. On a question that resolved there is
+    /// nothing to do, and one would be an alarm about finished work.
+    #[test]
+    fn an_accepted_answer_announces_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let service = TaskService::new(store.clone());
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+        let decision = pending_decision(&store, &source);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Resolved
+        );
+
+        assert_eq!(
+            store
+                .get_decision_request(decision)
+                .unwrap()
+                .refused_native_answer,
+            None
+        );
+    }
+
     /// THE NEGATIVES, each failing for its own reason rather than a shared one.
     ///
     /// These are the whole safety argument. An automatic trigger is only
@@ -398,6 +496,27 @@ pub enum NativeAnswerLink {
     Ambiguous,
 }
 
+/// Which refusals the operator needs told about, and which are silence.
+///
+/// `Resolved` and `AlreadyLinked` are successes — the second is a replay of the
+/// first, and the question is already gone from the inbox. `Incomplete` is a
+/// partial answer still being held, which is working as designed: the set
+/// resolves when the last answer lands, and a notice there would report normal
+/// progress as a problem.
+fn refusal_for(outcome: NativeAnswerLink) -> Option<swarm_domain::NativeAnswerRefusal> {
+    match outcome {
+        NativeAnswerLink::Resolved
+        | NativeAnswerLink::AlreadyLinked
+        | NativeAnswerLink::Incomplete => None,
+        NativeAnswerLink::Unverified => Some(swarm_domain::NativeAnswerRefusal::Unverified),
+        NativeAnswerLink::Ambiguous => Some(swarm_domain::NativeAnswerRefusal::Ambiguous),
+        NativeAnswerLink::Conflicting => Some(swarm_domain::NativeAnswerRefusal::Conflicting),
+        NativeAnswerLink::NoLongerApplicable => {
+            Some(swarm_domain::NativeAnswerRefusal::NoLongerApplicable)
+        }
+    }
+}
+
 impl TaskService {
     /// Turns an authenticated native interview into a resolved decision.
     ///
@@ -445,29 +564,85 @@ impl TaskService {
         let Some(stored) = self.store.native_interview(source_id)? else {
             return Ok(NativeAnswerLink::NoLongerApplicable);
         };
-        // Checked here as well as in link_native_answer so an unverified source
-        // never even causes a decision lookup.
+        // ⚠️ THE CANDIDATE LOOKUP NOW HAPPENS BEFORE THE VERIFICATION CHECK, and
+        // it used to be the other way round so that "an unverified source never
+        // even causes a decision lookup".
+        //
+        // Reversed deliberately, for decision 3 of the spec: a refusal has to be
+        // VISIBLE on the question it was about, and an unverified answer is one
+        // of the named refusals. Naming the question means finding it.
+        //
+        // The caution that ordering expressed is untouched. This lookup is
+        // read-only and selects by worker; what it must never do is let
+        // unconfirmed evidence resolve anything, and the gate that does the
+        // resolving still refuses below — and again inside link_native_answer.
+        // Being unable to SAY an answer was refused was the larger risk: silence
+        // is indistinguishable from the bug this whole feature exists to fix.
+        let matching = self.decisions_matching_native_answer(&stored)?;
         if stored.source.final_result != Some(swarm_domain::NativeInterviewFinalResult::ExactBatch)
         {
+            self.announce_refusal(
+                &matching,
+                swarm_domain::NativeAnswerRefusal::Unverified,
+                now,
+            )?;
             return Ok(NativeAnswerLink::Unverified);
         }
-        let pending = self.store.list_worker_decision_requests(stored.worker_id)?;
-        let mut candidates = pending.into_iter().filter(|request| {
-            request.state == swarm_domain::DecisionRequestState::Pending
-                && request
-                    .questions
-                    .iter()
-                    .map(swarm_domain::NativeInterviewQuestion::from_decision)
-                    .collect::<Option<Vec<_>>>()
-                    .is_some_and(|converted| converted == stored.source.questions)
-        });
-        let Some(decision) = candidates.next() else {
+        let Some(decision) = matching.first().copied() else {
+            // Nothing to announce on: the question this answered is gone, so
+            // there is no open item left to put a notice against.
             return Ok(NativeAnswerLink::NoLongerApplicable);
         };
-        if candidates.next().is_some() {
+        if matching.len() > 1 {
+            self.announce_refusal(&matching, swarm_domain::NativeAnswerRefusal::Ambiguous, now)?;
             return Ok(NativeAnswerLink::Ambiguous);
         }
-        self.link_native_answer(source_id, decision.id, now)
+        let outcome = self.link_native_answer(source_id, decision, now)?;
+        if let Some(reason) = refusal_for(outcome) {
+            self.announce_refusal(&matching, reason, now)?;
+        }
+        Ok(outcome)
+    }
+
+    /// This worker's pending decisions whose questions equal the captured
+    /// snapshot exactly, in the order the store returned them.
+    fn decisions_matching_native_answer(
+        &self,
+        stored: &swarm_persistence::StoredNativeInterview,
+    ) -> Result<Vec<swarm_domain::DecisionRequestId>, swarm_persistence::TaskStoreError> {
+        Ok(self
+            .store
+            .list_worker_decision_requests(stored.worker_id)?
+            .into_iter()
+            .filter(|request| {
+                request.state == swarm_domain::DecisionRequestState::Pending
+                    && request
+                        .questions
+                        .iter()
+                        .map(swarm_domain::NativeInterviewQuestion::from_decision)
+                        .collect::<Option<Vec<_>>>()
+                        .is_some_and(|converted| converted == stored.source.questions)
+            })
+            .map(|request| request.id)
+            .collect())
+    }
+
+    /// Puts the refusal where the operator is already looking.
+    ///
+    /// EVERY MATCHING QUESTION, not just one. For an ambiguous answer the whole
+    /// point is that Swarm cannot tell which question was meant, so telling one
+    /// of them and not the other would be the same guess in a quieter costume.
+    fn announce_refusal(
+        &self,
+        decisions: &[swarm_domain::DecisionRequestId],
+        reason: swarm_domain::NativeAnswerRefusal,
+        now: i64,
+    ) -> Result<(), swarm_persistence::TaskStoreError> {
+        for decision in decisions {
+            self.store
+                .record_refused_native_answer(*decision, reason, now)?;
+        }
+        Ok(())
     }
 
     /// # Errors
