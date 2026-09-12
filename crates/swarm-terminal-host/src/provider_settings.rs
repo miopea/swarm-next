@@ -49,6 +49,42 @@ fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
     if !ends.contains(&entry) {
         ends.push(entry);
     }
+    // ⚠️ WITHOUT THESE TWO, ANSWERING IN A TERMINAL REACHES SWARM THROUGH NO
+    // PATH AT ALL, and that is not a theory — it was measured on the operator's
+    // own Hive on 2026-09-12. They answered a question in a worker's terminal
+    // three times; native_operator_interviews stayed at 0 for six minutes and
+    // the decision stayed pending. Their words: "It is either not working or is
+    // so slow it is useless for the ux."
+    //
+    // The whole bridge downstream of this — capture, retain, bind, record,
+    // resolve — was built, tested and released believing step one was wired.
+    // The capture code SHIPS in the engine binary; nothing ever fed it. The
+    // host does not watch the PTY: it has to be TOLD, by this hook, and
+    // `add_hook` only ever installed SessionStart and SessionEnd.
+    //
+    // BOTH EVENTS ARE REQUIRED and they are not redundant. read_claude_interview
+    // treats PreToolUse as the provisional Requested phase and PostToolUse as
+    // Completed, and only the second carries tool_response — the answers. The
+    // capture holds the provisional one and releases it solely when the final
+    // batch matches exactly, which is what makes final_result ExactBatch mean
+    // anything. Install one without the other and it silently captures nothing.
+    let command = format!("'{}' provider-interview", executable.replace('\'', "'\\''"));
+    for event in ["PreToolUse", "PostToolUse"] {
+        let entry = json!({
+            "matcher": "AskUserQuestion",
+            "hooks": [{"type": "command", "command": command}],
+        });
+        let slot = hooks
+            .as_object_mut()
+            .ok_or("hooks are not an object")?
+            .entry(event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or("hook event is not an array")?;
+        if !slot.contains(&entry) {
+            slot.push(entry);
+        }
+    }
     Ok(())
 }
 
@@ -109,6 +145,74 @@ pub(super) fn startup_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The interview hooks are installed, and BOTH of them.
+    ///
+    /// ⚠️ THE WHOLE NATIVE-ANSWER BRIDGE WAS DEAD WITHOUT THESE AND EVERY TEST
+    /// PASSED. Capture, retain, bind, record and resolve were built, released
+    /// and believed wired; the engine binary contains the capture code. Nothing
+    /// fed it. The host does not watch the PTY — it has to be TOLD by this
+    /// hook, and `add_hook` installed only `SessionStart` and `SessionEnd`.
+    ///
+    /// Measured on the operator's Hive 2026-09-12: three answers typed in a
+    /// worker's terminal, `native_operator_interviews` stayed at 0 for six
+    /// minutes, decision stayed pending. "It is either not working or is so slow
+    /// it is useless for the ux."
+    ///
+    /// BOTH EVENTS, because `read_claude_interview` reads `PreToolUse` as the
+    /// provisional phase and `PostToolUse` as completed, and only the second
+    /// carries the answers. One without the other captures nothing, silently —
+    /// so asserting on one would leave exactly the hole this came from.
+    #[test]
+    fn the_overlay_installs_both_interview_hooks_or_the_bridge_is_fed_nothing() {
+        let mut document = json!({});
+        let executable = Path::new("/opt/hive/host");
+        add_hook(&mut document, executable).unwrap();
+
+        for event in ["PreToolUse", "PostToolUse"] {
+            let entries = document["hooks"][event]
+                .as_array()
+                .unwrap_or_else(|| panic!("{event} is missing entirely"));
+            let interview = entries
+                .iter()
+                .find(|entry| entry["matcher"] == "AskUserQuestion")
+                .unwrap_or_else(|| panic!("{event} has no AskUserQuestion hook"));
+            assert_eq!(
+                interview["hooks"][0]["command"], "'/opt/hive/host' provider-interview",
+                "{event} must call the interview subcommand"
+            );
+        }
+    }
+
+    /// Installed twice is installed once. A worker restart re-runs this.
+    #[test]
+    fn installing_the_interview_hooks_twice_does_not_duplicate_them() {
+        let mut document = json!({});
+        let executable = Path::new("/opt/hive/host");
+        add_hook(&mut document, executable).unwrap();
+        add_hook(&mut document, executable).unwrap();
+        for event in ["PreToolUse", "PostToolUse"] {
+            let count = document["hooks"][event]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["matcher"] == "AskUserQuestion")
+                .count();
+            assert_eq!(count, 1, "{event} gained a duplicate");
+        }
+    }
+
+    /// An operator's own `PreToolUse` hooks survive, because this file merges.
+    #[test]
+    fn the_operator_s_own_pre_tool_use_hooks_are_kept() {
+        let mut document = json!({"hooks":{"PreToolUse":[
+            {"matcher":"Bash","hooks":[{"type":"command","command":"echo mine"}]}]}});
+        add_hook(&mut document, Path::new("/opt/hive/host")).unwrap();
+        let entries = document["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["matcher"], "Bash");
+        assert_eq!(entries[0]["hooks"][0]["command"], "echo mine");
+    }
 
     #[test]
     fn overlay_keeps_operator_hooks_and_permissions_and_is_idempotent() {
