@@ -2532,7 +2532,20 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-dpad button:nth-child(3) { grid-area: down; }
   .terminal-dpad button:nth-child(4) { grid-area: right; }
   .interrupt-button { color: var(--danger) !important; }
-  .terminal-key-actions { display: flex; flex: 1 1 160px; min-width: 0; flex-wrap: wrap; justify-content: end; gap: 5px; }
+  /* ⚠️ TWO ROWS, NOT THREE, AND THE DIFFERENCE IS 44px OF TERMINAL. Measured
+     at 390x844: these five keys total 334px of button width and get about
+     220px beside the d-pad, so free wrapping laid them out three rows deep and
+     the key block stood 142px tall against a 92px d-pad. A 3+2 grid is exactly
+     as tall as the d-pad beside it, so the block costs what the d-pad already
+     cost and nothing more.
+     Operator, emailed 2026-09-08 from a phone: "With the tools open and the
+     navigation, there's very little view of the terminal." The terminal had
+     329px and this block plus the composer had 312px.
+     A grid rather than nowrap+scroll on purpose: scrolling would have saved
+     another 54px and put Cycle mode off-screen, and a key you cannot see is
+     one you will not use. */
+  .terminal-key-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1 1 160px; min-width: 0; gap: 5px; }
+  .terminal-key-actions > button { width: 100%; }
   .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
 }
 
