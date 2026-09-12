@@ -1594,6 +1594,22 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
         None => global,
     };
     let Some(mcp_config) = mcp_config else {
+        // ⚠️ SAYS SO, BECAUSE THE SILENCE HERE IS INDISTINGUISHABLE FROM THE BUG
+        // IT CAUSES. This is the function whose job is installing the interview
+        // capture hooks, and returning base skips them: the worker then runs
+        // with no path from an operator answering in its terminal back to
+        // Swarm. That exact failure cost three operator attempts on 2026-09-12
+        // before anyone thought to ask what fed the capture, and nothing in the
+        // run said why. The branch three lines below already prints when it
+        // falls back; this one did not.
+        //
+        // Unreached on the real path today — every worker is launched with
+        // --mcp-config, checked against all 15 live provider processes — so this
+        // buys nothing now and everything on the day it fires.
+        eprintln!(
+            "swarm-terminal-host: no MCP configuration for this worker, so provider startup hooks \
+             were not installed; preserving base settings and capturing no terminal interviews"
+        );
         return base;
     };
     let result = std::env::current_exe()
