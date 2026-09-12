@@ -118,13 +118,21 @@ Named so you do not go looking:
   improves decisions without creating policy nobody can see.
 - **Speculative task preparation.** Deferred until wrong-recipient and
   cancellation cases are proven.
-- **Fleet broadcast.** Removed, as above.
+- **Worker-to-worker broadcast.** Removed, as above. Note that **you** can say
+  one thing to every running worker — the workers header has a broadcast icon —
+  and it is a message rather than a stop: delivery waits while a worker is
+  mid-turn, and it tells you who it did not reach, because a worker with no live
+  session is excluded rather than queued. What Swarm removed is workers
+  addressing each other, not you addressing them.
 
 ## What is genuinely better
 
 - **The terminal engine is independent.** Updating the app does not touch your
-  workers. Updating the engine does, and Swarm defers it while sessions are
-  running rather than doing it under you.
+  workers. Updating the engine does, and Swarm defers it while any worker is
+  mid-turn — then applies it on its own, and says afterwards what it did. That
+  is a real difference from Legacy and it is not "never under you": read
+  [using-swarm.md](using-swarm.md#keeping-it-running) for what an engine swap
+  costs before you rely on it.
 - **Sleeping workers cost nothing** and wake when work arrives.
 - **One database file**, which you can copy.
 - **It runs as you**, under systemd user services, on localhost, with one token.

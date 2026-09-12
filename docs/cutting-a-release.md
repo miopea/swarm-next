@@ -173,5 +173,5 @@ curl -fsSL https://raw.githubusercontent.com/miopea/swarm-next/main/releases.jso
 ```
 
 and confirm a Hive with checking on reports the new version under
-**Settings → System** after **Check now**. A manifest nobody verified is a
+**Settings → Updates** after **Check now**. A manifest nobody verified is a
 manifest nobody has tested.

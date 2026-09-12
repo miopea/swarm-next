@@ -245,7 +245,7 @@ one by hand. Both are below.
 ### Letting Swarm check
 
 Swarm looks for a new release about every four hours, and shortly after it
-starts. It is on unless you turn it off, in **Settings → System**, and turning
+starts. It is on unless you turn it off, in **Settings → Updates**, and turning
 it off means this Hive contacts nothing at all.
 
 Checking is not installing. A check tells you a release exists; every install
@@ -367,7 +367,7 @@ button in the control room instead. Point Swarm at your checkout once:
 sh ~/.local/lib/swarm/current/swarm-package enable-development ~/swarm
 ```
 
-From then on **Settings → System** carries an *App and API* card that rebuilds
+From then on **Settings → Updates** carries an *App and API* card that rebuilds
 that checkout and activates it, and the runtime area says this Hive builds from
 a working copy. Without this step there is no App and API update control in the
 interface at all, which is correct — there is nothing local for it to build.

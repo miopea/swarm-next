@@ -54,7 +54,7 @@ Worth knowing before you install it, because two of these happen unasked.
 **It checks for releases about every four hours**, and shortly after it starts.
 A check fetches one small signed file and compares it locally; **nothing is
 sent** — not your version, not your Hive's identity, not how many workers you
-run. Checking is on unless you turn it off in Settings → System, and turning it
+run. Checking is on unless you turn it off in Settings → Updates, and turning it
 off means this Hive contacts nothing at all.
 
 **Installing a release always waits for you.** Downloading and installing are

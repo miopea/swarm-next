@@ -8,9 +8,10 @@ The idea it is built around: an agent that needs you should ask **in a queue you
 choose to read**, not by interrupting whatever terminal you happen to be looking
 at.
 
-## The five screens
+## The screens
 
-The rail on the left is the whole product.
+The rail on the left is the whole product. You will see four of these; the fifth
+appears only once you federate.
 
 **Needs you** — the one queue. Everything waiting on your judgment: a worker's
 question, an email nobody has answered, a Queen review that stopped. Routine
@@ -37,10 +38,11 @@ them, deliberately. A terminal is an xterm canvas, so unlike the rest of a
 screenshot its contents cannot be redacted; see
 [docs/38](38-looking-at-the-interface.md).
 
-**Apiary** — other Hives, when you federate. Ignore it if you run one machine.
+**Apiary** — other Hives. It is not in the rail at all until this Hive
+federates, so on one machine there is nothing here to ignore.
 
-**Settings** — crew, presence, Queen, alerts, system, integrations, backup,
-diagnostics.
+**Settings** — Your Hive, Workers, Access, Integrations, Updates,
+Maintenance.
 
 ## Workers
 
@@ -131,9 +133,10 @@ The runtime area at the bottom of the rail shows the version and anything
 waiting. A worker engine update and a provider restart are always offered; an
 App and API rebuild appears only if this Hive was pointed at a working copy.
 
-Swarm asks you once whether to check for new releases, and contacts nothing
-until you answer. A check sends no version, no identity and no counts — it
-fetches one signed file and compares it here.
+Swarm looks for a new release about every four hours, and shortly after it
+starts. It is on unless you turn it off in Settings → Updates, and turning it off
+means this Hive contacts nothing at all. A check sends no version, no identity
+and no counts — it fetches one signed file and compares it here.
 
 When a release is offered, downloading and installing are separate acts, because
 one is reversible and the other is not. Installing runs on its own and **the
@@ -142,14 +145,23 @@ throughout.
 
 Most releases change only the app, and then the worker engine simply moves with
 it and nothing restarts — Swarm decides that by fingerprinting the engine's own
-source rather than the release number. A release that genuinely changes the
-engine restarts loaded workers, so it waits until they are idle and tells you
-before anything happens. `docs/install.md` covers all of it, including
-installing a release by hand.
+source rather than the release number.
 
-Every update asks first, and the warning is proportional: an App and API release
-keeps your workers online and says so, while a worker engine or provider restart
-names exactly what stops before offering the button.
+A release that genuinely changes the engine restarts loaded workers, and **this
+one happens without being asked**. Swarm applies it once no worker reports being
+mid-turn, which is not the same as none being loaded: a worker waiting on its
+provider, or holding input you have not sent, reads as resting. Swarm records
+which workers it unloaded and returns them to their saved conversations, but an
+interrupted command is not resumed and unsent input can be lost. What it did is
+on the App and API card afterwards — which release it moved between, when, and
+that nobody asked for it. You can also take the moment yourself from the worker
+engine card rather than waiting for it to choose one.
+
+`docs/install.md` covers all of it, including installing a release by hand.
+
+Every update you START asks first, and the warning is proportional: an App and
+API release keeps your workers online and says so, while a worker engine or
+provider restart names exactly what stops before offering the button.
 
 **Settings → Diagnostics** answers one question: which layer needs attention. It
 leads with a verdict, shows only what is not normal, and puts everything else
