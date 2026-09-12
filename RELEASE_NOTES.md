@@ -12,6 +12,72 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.9.0
+
+The release where Swarm stops quietly doing things and starts saying what it
+did. Three of the changes below are about work that was already happening
+without anybody being told.
+
+**Before upgrading: copy your database.** This release migrates schema 168 to
+172 — four migrations. The installer takes a verified backup before migrating
+and checks it can still be opened by the release it would roll back to, so an
+ordinary install is protected. That guard does not cover a hand-installed
+tarball: if you are installing one of those, copy
+`~/.local/state/swarm/swarm.sqlite3` first.
+
+**Workers are not stopped.** The worker-engine protocol is unchanged at 17, so
+this installs as an ordinary update and running terminals keep their sessions.
+
+### New features
+- **Answering in a worker's own terminal now clears the matching question in
+  What needs you.** You answer where the worker asked, and the alarm goes down.
+  Swarm only does this when the engine confirms the answer was completed and
+  exactly one open question matches it — and when it cannot, the item stays open
+  and says which of those was the problem, rather than leaving you wondering
+  whether it was seen at all.
+- **You can turn that off, and only you can.** Settings → Your Hive → Terminal
+  answers. It is on to begin with. Changing it needs your operator credential
+  rather than just a request from this machine, because every worker runs on
+  this machine too, and turning off the resolution of your own decisions is not
+  something a worker should be able to do.
+- **The App and API card now says what the last worker-engine update did** —
+  which release it moved between, when, how many workers it stopped, and whether
+  anybody asked for it. Most engine replacements are automatic; until now the
+  only record of one was in the system journal.
+- **Your Hive tells you when it replaced the engine on its own.** It compares
+  the engine that is running against the one it saw last time rather than
+  waiting to be told, so a swap made by the update timer, or by hand at a shell,
+  is reported the same way. An attempt that started and never reported back —
+  which is what a Swarm replacing itself mid-update looks like — says exactly
+  that, and is never shown as a success.
+
+### Fixes
+- **Tickets waiting on a release now close themselves when it ships.** Work
+  parked in Awaiting Release sat there after the release that carried it,
+  sometimes for a day, because recording the deployment was a step someone had
+  to remember. Swarm now checks whether a pushed tag carries every commit a
+  parked ticket recorded, and closes the ones it does.
+- **Swarm no longer says a conversation was "restored" when it was not
+  checked.** If the conversation you chose was unavailable and the provider's
+  own continuation picked one instead, the terminal now says so rather than
+  reporting the same confident success it gives an exact match. The provider
+  chose; nothing compared its answer to yours.
+- **The Updates card stopped promising silence it was not keeping.** It said
+  "until you choose, this Hive contacts nothing" while checking was already on.
+  It now says what actually happens: about every four hours, on unless you turn
+  it off, and turning it off means contacting nothing at all. A check still
+  sends no version, no identity and no counts, and nothing installs without you.
+- **A failed engine update now leaves a record instead of a silence.** If the
+  swap could not be carried out after your workers were already stopped, that is
+  written down with the reason — previously the short roster was the only sign.
+- **The release build refuses to start without enough disk to finish**, naming
+  what is safe to delete, rather than dying part way through and leaving a
+  half-written build.
+- **The README, the install guide and the day-to-day guide were rewritten and
+  corrected.** Several of them described a product two weeks behind this one,
+  including install commands for a version that no longer exists and a promise
+  that you would be told before an engine update — which is not what happens.
+
 ## 1.8.1
 
 Fixes for things that were reported, and one that had been quietly wrong since
