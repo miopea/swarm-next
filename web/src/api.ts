@@ -589,6 +589,33 @@ export async function setReleaseCheckMode(operatorToken: string, mode: "off" | "
   return response.json() as Promise<ReleaseStatus>;
 }
 
+/** Whether answering in a worker's terminal may settle a Needs You item. */
+export type NativeAnswerResolution = { enabled: boolean };
+
+export async function fetchNativeAnswerResolution(operatorToken: string): Promise<NativeAnswerResolution> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/settings/native-answer-resolution");
+  return response.json() as Promise<NativeAnswerResolution>;
+}
+
+/**
+ * ⚠️ THIS WRITE NEEDS AN OPERATOR CREDENTIAL, not merely a local request.
+ *
+ * Workers run on this same machine, and the ordinary authorisation path trusts
+ * a loopback request with no credential — so the server checks the credential
+ * explicitly here. A 401 from this call is that rule working, not a bug.
+ */
+export async function setNativeAnswerResolution(
+  operatorToken: string,
+  enabled: boolean,
+): Promise<NativeAnswerResolution> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/settings/native-answer-resolution", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<NativeAnswerResolution>;
+}
+
 export async function checkForRelease(operatorToken: string): Promise<ReleaseStatus> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release/check", { method: "POST" });
   return response.json() as Promise<ReleaseStatus>;

@@ -518,6 +518,21 @@ fn refusal_for(outcome: NativeAnswerLink) -> Option<swarm_domain::NativeAnswerRe
 }
 
 impl TaskService {
+    /// Whether answering in a terminal may settle a Needs You item.
+    ///
+    /// ⚠️ UNREADABLE MEANS NO. Everywhere else in this file a storage failure is
+    /// reported and skipped; here it must refuse, because the alternative is
+    /// resolving the operator's own decisions while unable to tell whether they
+    /// allow it. The cost of refusing is an item that stays open and explains
+    /// itself; the cost of guessing is a decision recorded as the operator's
+    /// word on a Hive where they switched this off.
+    #[must_use]
+    pub fn native_answer_resolution_enabled(&self) -> bool {
+        self.store
+            .native_answer_resolution_enabled()
+            .unwrap_or(false)
+    }
+
     /// Turns an authenticated native interview into a resolved decision.
     ///
     /// ⚠️ THE APPLICATION OWNS EXACTLY ONE CHECK HERE, and it is the first one.

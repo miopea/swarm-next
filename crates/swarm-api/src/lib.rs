@@ -3831,6 +3831,11 @@ fn api_router(state: AppState) -> Router {
             get(presence::operator_presence).put(presence::set_operator_presence),
         )
         .route(
+            "/api/v1/settings/native-answer-resolution",
+            get(native_operator_sources::resolution_switch)
+                .put(native_operator_sources::set_resolution_switch),
+        )
+        .route(
             "/api/v1/presence/night-watch",
             get(presence::night_watch_configuration).put(presence::set_night_watch_configuration),
         )
@@ -15181,6 +15186,77 @@ mod tests {
             response_json(authorized_get(app, "/api/v1/presence").await).await["source"],
             "manual"
         );
+    }
+
+    /// The one Settings switch a worker on this machine must not be able to flip.
+    ///
+    /// ⚠️ `authorize` SHORT-CIRCUITS ON A LOOPBACK HOST HEADER WITH NO
+    /// CREDENTIAL, and every worker runs on this same host. An ordinary Settings
+    /// endpoint here would therefore let any agent on the box turn off the
+    /// resolution of the OPERATOR'S OWN decisions — which is exactly the
+    /// authority this switch holds, so it takes an operator credential instead.
+    ///
+    /// The loopback request in this test is the attack, spelled the way a worker
+    /// would spell it: same machine, no credential.
+    #[tokio::test]
+    async fn a_worker_on_this_machine_cannot_flip_the_native_answer_switch() {
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        // Default ON, settled by the operator and recorded as an override.
+        assert!(store.native_answer_resolution_enabled().unwrap());
+
+        // A worker's request: loopback, no credential. Reading is allowed —
+        // knowing the setting is harmless — and writing is not.
+        let loopback = || {
+            Request::builder()
+                .header("host", "127.0.0.1:8766")
+                .uri("/api/v1/settings/native-answer-resolution")
+        };
+        let read = app
+            .clone()
+            .oneshot(loopback().body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+
+        let refused = app
+            .clone()
+            .oneshot(
+                loopback()
+                    .method("PUT")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            store.native_answer_resolution_enabled().unwrap(),
+            "a refused request must not have changed the switch"
+        );
+
+        // And the operator, holding the credential, can.
+        let allowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/settings/native-answer-resolution")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert!(!store.native_answer_resolution_enabled().unwrap());
     }
 
     #[tokio::test]

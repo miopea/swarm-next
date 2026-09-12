@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import NativeAnswerResolution from "./NativeAnswerResolution";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 import { SETTINGS_CARDS, filterSettingsCards, type SettingsSection } from "./settingsNavigation";
@@ -316,6 +317,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           {mobile && <p className="mobile-presence-note">Your workstation reports when it is locked. This phone follows that presence and carries notifications when you are away.</p>}
         </section>
       )}
+      {shows("settings-answers") && operatorToken && <NativeAnswerResolution operatorToken={operatorToken} />}
       {shows("settings-queen") && (
     <section id="settings-queen" className="settings-card queen-policy-settings" aria-labelledby="queen-policy-heading">
           <div><p className="eyebrow">Queen autonomy</p><h3 id="queen-policy-heading">Choose how far she may carry work</h3></div>

@@ -769,3 +769,124 @@ mod tests {
         assert!(store.native_interview(source.id).unwrap().is_none());
     }
 }
+
+/// The operator's switch for resolving Needs You from terminal answers.
+///
+/// ⚠️ A ROW MEANS A CHOICE WAS MADE. Absent means nobody has chosen, which reads
+/// as the product default rather than as off — the operator settled that default
+/// as ON. Storing the default eagerly would make "never touched" and "turned on"
+/// indistinguishable, and the first is the state a future default change should
+/// be free to move.
+pub(crate) fn migrate_native_answer_switch(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS native_answer_resolution_switch (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+         );",
+    )?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::NATIVE_ANSWER_SWITCH_SCHEMA_VERSION,
+    )
+}
+
+/// The product default, settled by the operator against this author's
+/// recommendation of ship-dark, and recorded as an override in the spec.
+pub const NATIVE_ANSWER_RESOLUTION_DEFAULT: bool = true;
+
+impl TaskStore {
+    /// Whether answering in a terminal may settle a Needs You item.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn native_answer_resolution_enabled(&self) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT enabled FROM native_answer_resolution_switch WHERE singleton = 1",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .unwrap_or(NATIVE_ANSWER_RESOLUTION_DEFAULT))
+    }
+
+    /// Records the operator's choice.
+    ///
+    /// ⚠️ THE CALLER MUST HAVE CHECKED AN OPERATOR CREDENTIAL, not merely that
+    /// the request came from this machine. `authorize` short-circuits on a
+    /// loopback Host header with no credential and every worker runs on that
+    /// same host, so an ordinary Settings endpoint here would let an agent turn
+    /// off the resolution of the operator's own decisions.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn set_native_answer_resolution(
+        &self,
+        enabled: bool,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO native_answer_resolution_switch (singleton, enabled, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton) DO UPDATE
+                 SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+            params![enabled, now],
+        )?;
+        Ok(enabled)
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use crate::TaskStore;
+
+    /// The default is the operator's choice, and a missing row is not "off".
+    ///
+    /// A row means somebody chose. Writing the default eagerly would make "never
+    /// touched" and "deliberately turned on" indistinguishable, and the first is
+    /// the state a future default change must stay free to move.
+    #[test]
+    fn an_untouched_switch_reports_the_product_default() {
+        let store = TaskStore::in_memory().unwrap();
+        // Asserted through the STORE rather than against the constant: a
+        // const-vs-const assertion is a tautology, and what matters is that an
+        // untouched Hive reads as on.
+        assert!(store.native_answer_resolution_enabled().unwrap());
+    }
+
+    #[test]
+    fn the_operator_s_choice_survives_and_can_be_changed_back() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(!store.set_native_answer_resolution(false, 100).unwrap());
+        assert!(!store.native_answer_resolution_enabled().unwrap());
+        assert!(store.set_native_answer_resolution(true, 200).unwrap());
+        assert!(store.native_answer_resolution_enabled().unwrap());
+    }
+
+    /// A store that cannot answer says so, rather than answering "enabled".
+    ///
+    /// ⚠️ THE DIRECTION THAT MATTERS. The caller treats a failure as OFF, and it
+    /// can only do that if the failure ARRIVES — a getter that swallowed its own
+    /// error into the default would resolve the operator's decisions on a Hive
+    /// where they had switched this off, and record it as their word.
+    ///
+    /// Driven by removing the table, so it is the real query failing.
+    #[test]
+    fn a_switch_that_cannot_be_read_is_an_error_and_not_the_default() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TABLE native_answer_resolution_switch")
+            .unwrap();
+
+        assert!(
+            store.native_answer_resolution_enabled().is_err(),
+            "an unreadable switch must not report itself as on"
+        );
+    }
+}

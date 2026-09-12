@@ -22,6 +22,57 @@ enum IntakeError {
     Deadline,
 }
 
+/// What the operator's switch is set to, and what it governs.
+#[derive(serde::Serialize)]
+pub(super) struct NativeAnswerResolutionResponse {
+    enabled: bool,
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct NativeAnswerResolutionRequest {
+    enabled: bool,
+}
+
+pub(super) async fn resolution_switch(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, crate::ApiError> {
+    crate::auth::authorize(&state, &headers)?;
+    let enabled = crate::task_store(&state)?
+        .native_answer_resolution_enabled()
+        .map_err(|error| crate::task_store_error(&error))?;
+    Ok(read_response(enabled))
+}
+
+/// ⚠️ OPERATOR CREDENTIAL, NOT `authorize`. `authorize` short-circuits on a
+/// loopback `Host` header with no credential, and every worker runs on this same
+/// host — so an ordinary Settings endpoint here would let any agent on the box
+/// turn off the resolution of the operator's own decisions, which is precisely
+/// the authority this switch exists to hold.
+pub(super) async fn set_resolution_switch(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(request): axum::Json<NativeAnswerResolutionRequest>,
+) -> Result<axum::response::Response, crate::ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    let enabled = crate::task_store(&state)?
+        .set_native_answer_resolution(request.enabled, crate::unix_timestamp())
+        .map_err(|error| crate::task_store_error(&error))?;
+    Ok(read_response(enabled))
+}
+
+fn read_response(enabled: bool) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    (
+        [(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        )],
+        axum::Json(NativeAnswerResolutionResponse { enabled }),
+    )
+        .into_response()
+}
+
 pub(super) async fn collect(state: &crate::AppState) {
     let (Some(client), Ok(service)) = (&state.terminal_host, crate::task_service(state)) else {
         return;
@@ -87,16 +138,15 @@ async fn collect_once(
         // Keep the sole admission permit inside the blocking job and return it
         // with its result. Cancellation cannot create another database job while
         // the previous save is still finishing; a late commit remains retry-safe.
-        // DORMANT UNLESS EXPLICITLY ENABLED. The linkage is built and tested but
-        // has not been proven end to end against a real native answer on a real
-        // Hive, and the standing constraint is that capture stays OFF until it
-        // has been. The operator's chosen default of ON applies AFTER that
-        // proof, not instead of it.
+        // THE OPERATOR'S SWITCH, read per pass rather than cached, so turning it
+        // off takes effect on the next collection rather than on the next
+        // restart. A kill switch you have to restart to use is not one.
         //
-        // Read per pass rather than cached, so the live proof can be run by
-        // setting the variable and restarting, with nothing to rebuild.
-        let resolve_answers = std::env::var("SWARM_NATIVE_ANSWER_RESOLUTION")
-            .is_ok_and(|value| value.trim().eq_ignore_ascii_case("on"));
+        // ⚠️ A STORE THAT CANNOT BE READ MEANS OFF. Every other error path here
+        // reports and continues; this one must not, because the failure mode is
+        // resolving the operator's decisions while unable to tell whether they
+        // allowed it. Refusing costs an unresolved item that says so.
+        let resolve_answers = service.native_answer_resolution_enabled();
         let (saved, linked, _permit) = tokio::task::spawn_blocking(move || {
             let saved = service.retain_native_sources(&entries, now);
             // Only sources stored by THIS pass are offered. A source already on

@@ -55,6 +55,8 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["worker", "crew", "add worker", "repository", "workspace", "provider", "claude", "codex", "description", "order", "remove worker"] },
   { id: "settings-queen", section: "settings-workers", title: "Queen",
     keywords: ["queen", "autonomy", "ceiling", "coordinate", "night watch", "review", "automation"] },
+  { id: "settings-answers", section: "settings-hive", title: "Terminal answers",
+    keywords: ["terminal answers", "needs you", "native", "answer", "resolve", "decision", "terminal", "kill switch", "off"] },
   { id: "settings-presence", section: "settings-hive", title: "Presence",
     keywords: ["presence", "away", "reachable", "automatic", "at hive", "night watch", "schedule", "daily", "time zone", "starts", "ends", "opening screen", "lock", "screen lock", "asleep"] },
   { id: "settings-appearance", section: "settings-hive", title: "Appearance",
