@@ -214,13 +214,20 @@ impl NativeInterviewCapture {
         selection_revision: u64,
         observation: &NativeInterviewObservation,
     ) -> bool {
+        // ⚠️ NAMES ITS REFUSAL, for the same reason every layer above it now
+        // does. These are the PROVENANCE conditions — the evidence that a
+        // person, on a real device, typed and submitted this answer — so a
+        // silent false here is indistinguishable from the feature being
+        // unwired, which is precisely how 2026-09-12 was spent.
         let Some(pending) = self.pending.get(&session_id) else {
+            tracing::warn!(%session_id, "interview completion refused: no pending request for this session");
             return false;
         };
         // An old invocation's result must not consume a newer question.
         if pending.observation.tool_use_id != observation.tool_use_id
             || pending.observation.conversation != observation.conversation
         {
+            tracing::warn!(%session_id, "interview completion refused: answers a different invocation than the pending request");
             return false;
         }
         let pending = self
@@ -230,15 +237,34 @@ impl NativeInterviewCapture {
         let (Some(first_write_sequence), Some(submit_sequence)) =
             (pending.first_write_sequence, pending.submit_sequence)
         else {
+            tracing::warn!(
+                %session_id,
+                first_write = ?pending.first_write_sequence,
+                submit = ?pending.submit_sequence,
+                devices = pending.devices.len(),
+                "interview completion refused: no recorded typing — a device must have written to the terminal and submitted"
+            );
             return false;
         };
-        if pending.selection_revision != selection_revision
-            || pending.tainted
-            || pending.devices.is_empty()
-            || pending.last_write_sequence != Some(submit_sequence)
-            || !observation.completes(&pending.observation)
-            || self.ready.len() == MAX_READY
-        {
+        let refusal = if pending.selection_revision != selection_revision {
+            Some("the terminal selection moved between request and answer")
+        } else if pending.tainted {
+            Some("the pending request was tainted by a changed question")
+        } else if pending.devices.is_empty() {
+            Some("no device is recorded as having written the answer")
+        } else if pending.last_write_sequence != Some(submit_sequence) {
+            Some(
+                "something was written after the submit, so the answer is not the last thing typed",
+            )
+        } else if !observation.completes(&pending.observation) {
+            Some("the answer does not match the question that was asked")
+        } else if self.ready.len() == MAX_READY {
+            Some("the retained evidence queue is full")
+        } else {
+            None
+        };
+        if let Some(reason) = refusal {
+            tracing::warn!(%session_id, reason, "interview completion refused");
             return false;
         }
         let source = NativeInterviewEvidence {
