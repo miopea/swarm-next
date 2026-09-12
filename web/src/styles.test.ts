@@ -599,3 +599,28 @@ test("tucks the phone navigation only where a terminal is on screen", () => {
   expect(stylesheet.lastIndexOf(".header-actions .nav-menu-button { display: inline-flex; }"))
     .toBeGreaterThan(stylesheet.indexOf(".header-actions .nav-menu-button { display: none; }"));
 });
+
+/**
+ * Hiding the rail must also collapse the track it occupied.
+ *
+ * ⚠️ THIS SHIPPED BROKEN TO THE OPERATOR'S PHONE AND I MEASURED IT AFTERWARDS.
+ * The phone shell is `grid-template-rows: auto minmax(0, 1fr)` — the rail in
+ * row 1, the surface in row 2. `display: none` takes the rail out of the grid
+ * FLOW, so the surface auto-placed into row 1 and was sized to its content
+ * while the 1fr row below it stayed empty. Measured at 432x950: rows became
+ * "18px 932px" and the surface got 18px, leaving 932px of blank page under the
+ * composer. The operator's words were "this looks bad", and they were right.
+ *
+ * The test that passed while this was broken asserted the display rule and
+ * nothing about the track, which is the whole lesson: a stylesheet assertion
+ * cannot see layout, so the invariant has to be stated as a PAIR. Hide the
+ * rail, collapse the row.
+ */
+test("collapses the shell to one row wherever the rail is hidden", () => {
+  const hide = ".control-rail.terminal-focus.nav-tucked { display: none; }";
+  const collapse = ".app-shell:has(> .control-rail.terminal-focus.nav-tucked) { grid-template-rows: minmax(0, 1fr); }";
+  expect(stylesheet).toContain(hide);
+  expect(stylesheet).toContain(collapse);
+  // Same selector on both, so one cannot be narrowed without the other.
+  expect(stylesheet.indexOf(collapse)).toBeGreaterThan(stylesheet.indexOf(hide));
+});

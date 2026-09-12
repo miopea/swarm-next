@@ -2188,6 +2188,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      already exists on this screen — a hamburger in the navigation's own place
      would have swapped a 44px row for a 44px button and saved seven pixels. */
   .control-rail.terminal-focus.nav-tucked { display: none; }
+  /* ⚠️ AND THE SHELL BECOMES ONE ROW, WITHOUT WHICH HIDING THE RAIL LEAVES A
+     HOLE THE SIZE OF THE ROW IT VACATED. `display: none` takes the rail out of
+     the grid FLOW, so the surface auto-placed into row 1 — `auto`, sized to its
+     content — and the `minmax(0, 1fr)` row below it stayed empty. On the
+     operator's phone that was a blank band under the composer taller than the
+     terminal itself, and it is what they were looking at when they said "this
+     looks bad". Hiding a grid item is not the same as removing its track. */
+  .app-shell:has(> .control-rail.terminal-focus.nav-tucked) { grid-template-rows: minmax(0, 1fr); }
   .header-actions .nav-menu-button { display: inline-flex; }
   /* A detached window on a phone goes back to being the whole width. The rail
      gives it nothing here — its context is hidden at this width — so it stood
