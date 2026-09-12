@@ -10,6 +10,27 @@ state_root=${SWARM_STATE_ROOT:-"$home_dir/.local/state/swarm"}
 unit_root=${SWARM_SYSTEMD_USER_ROOT:-"$home_dir/.config/systemd/user"}
 bin_root=${SWARM_BIN_ROOT:-"$home_dir/.local/bin"}
 systemctl_bin=${SWARM_SYSTEMCTL_BIN:-systemctl}
+
+# ⚠️ ONE MINIMUM, BECAUSE THREE DISAGREED AND IT BRICKED AN INSTALL.
+#
+# Reported 2026-09-12 by an operator installing 1.9.0 off localhost. The prompt
+# asked for "at least 12 characters", validate_config refused anything under
+# 32, and write_initial_config had already SAVED the accepted-then-rejected
+# token -- so the re-run skipped the prompt, re-read the same token, and failed
+# identically. Forever, from the one command the docs give you.
+#
+# 16 rather than 32, and that is the API's number rather than a compromise:
+# auth.rs accepts 16..200 for a token rotated in Settings. The installer
+# demanding 32 meant a perfectly legal rotation to a 20-character token would
+# have failed every later `update`, `prepare-protocol` and `migrate-protocol`,
+# because all three call validate_config. Aligning on the API's rule makes the
+# two directions agree: anything the installer takes, the API takes, and
+# anything the API lets you rotate to keeps updating.
+#
+# Change this and you change the prompt, the validator and the failure message
+# together. That was the whole defect.
+min_operator_token=16
+max_operator_token=200
 curl_bin=${SWARM_CURL_BIN:-curl}
 health_url=${SWARM_HEALTH_URL:-http://127.0.0.1:8766/health}
 # The page a person opens, as opposed to the endpoint the installer polls.
@@ -895,7 +916,11 @@ validate_config() {
   [ "$(sed -n 's/^SWARM_API_BIND=//p' "$config_file")" = "127.0.0.1:8766" ] || die "packaged API bind must remain 127.0.0.1:8766"
   [ "$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_file")" = "$workspace_root" ] || die "configured workspace root differs from the service write boundary"
   token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_file")
-  [ "${#token}" -ge 32 ] || die "operator token must contain at least 32 characters"
+  # NAMES THE FILE AND THE WAY OUT. This refusal used to be the last thing an
+  # operator saw before an install they could not repeat, and it told them
+  # neither what held the bad value nor that deleting it would let them retry.
+  [ "${#token}" -ge "$min_operator_token" ] || die "the saved operator token in $config_file is shorter than $min_operator_token characters. Run the installer again to be asked for a new one, or delete that file to start its configuration over"
+  [ "${#token}" -le "$max_operator_token" ] || die "the saved operator token in $config_file is longer than $max_operator_token characters, which this Hive's API will not accept"
   chmod 0600 "$config_file"
 }
 
@@ -934,7 +959,8 @@ render_unit() {
 read_chosen_token() {
   [ -t 0 ] && [ -t 2 ] || return 1
   printf '\nChoose a token to sign in to Swarm with.\n' >&2
-  printf 'At least 12 characters. Press Enter on its own to have one generated.\n' >&2
+  printf 'Press Enter on its own to have a strong one generated for you.\n' >&2
+  printf 'Or type your own: at least %s characters, no spaces.\n' "$min_operator_token" >&2
   attempts=0
   while [ "$attempts" -lt 3 ]; do
     attempts=$((attempts + 1))
@@ -957,8 +983,12 @@ read_chosen_token() {
     fi
     # Anyone holding this can drive every worker on the machine, so a token
     # short enough to guess is worse than the generated one it replaces.
-    if [ "${#chosen}" -lt 12 ]; then
-      printf 'Too short - at least 12 characters.\n' >&2
+    if [ "${#chosen}" -lt "$min_operator_token" ]; then
+      printf 'Too short - at least %s characters.\n' "$min_operator_token" >&2
+      continue
+    fi
+    if [ "${#chosen}" -gt "$max_operator_token" ]; then
+      printf 'Too long - at most %s characters.\n' "$max_operator_token" >&2
       continue
     fi
     case "$chosen" in
@@ -970,9 +1000,49 @@ read_chosen_token() {
   return 1
 }
 
+# Replaces ONLY the token line, leaving the rest of the file alone.
+#
+# The bind address and workspace root in here are validated against what the
+# units were rendered with, so rewriting the whole file to fix one line would
+# turn a recoverable typo into a mismatch somewhere else.
+repair_operator_token() {
+  config_file="$config_root/swarm.env"
+  chosen=
+  if read_chosen_token; then
+    token=$chosen
+  else
+    token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+  fi
+  chosen=
+  umask 077
+  # sed rather than grep -v: grep exits 1 when it matches nothing, and `set -e`
+  # would take that as a failure on a file that simply had no token line.
+  sed '/^SWARM_OPERATOR_TOKEN=/d' "$config_file" > "$config_file.repair"
+  printf 'SWARM_OPERATOR_TOKEN=%s\n' "$token" >> "$config_file.repair"
+  mv -f "$config_file.repair" "$config_file"
+  chmod 0600 "$config_file"
+  token=
+}
+
 write_initial_config() {
   config_file="$config_root/swarm.env"
-  [ -e "$config_file" ] && return
+  if [ -e "$config_file" ]; then
+    # ⚠️ EXISTENCE IS NOT USABILITY, and reading it that way made one typo
+    # permanent. A first install that got past the prompt and then failed
+    # validation left a token here that every later run re-read and re-rejected,
+    # skipping the prompt because the file was present. The operator's install
+    # could not be repeated from the command the docs give them.
+    saved=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_file")
+    if [ "${#saved}" -ge "$min_operator_token" ] && [ "${#saved}" -le "$max_operator_token" ]; then
+      saved=
+      return
+    fi
+    saved=
+    printf '\nThe sign-in token saved from an earlier attempt cannot be used.\n' >&2
+    printf 'Choosing a new one now; nothing else in your configuration changes.\n' >&2
+    repair_operator_token
+    return
+  fi
   chosen=
   if read_chosen_token; then
     token=$chosen

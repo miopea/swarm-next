@@ -47,9 +47,14 @@ sh ./swarm-X.Y.Z-linux-x86_64/swarm-package install ./swarm-X.Y.Z-linux-x86_64
 The path appears twice on the last line because `swarm-package` lives inside the
 release: once to run it, once to tell it what to install.
 
-It asks you to choose a token to sign in with — at least 12 characters, typed
-twice and never shown on screen. Press Enter on its own and one is generated
-instead.
+It asks you to choose a token to sign in with, typed twice and never shown on
+screen. **Press Enter on its own and a strong one is generated for you** — that
+is the easier path and the one to take unless you have a reason not to. If you
+type your own it must be at least 16 characters with no spaces, which is the
+same rule the Hive applies if you later change it in Settings.
+
+If an earlier attempt saved a token that cannot be used, running the installer
+again asks you for a new one rather than failing on the old one.
 
 Then it verifies the bundle's checksums, installs it, writes the systemd units,
 starts the services, and **waits for the API to answer before saying it
