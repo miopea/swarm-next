@@ -448,7 +448,21 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer key={session.session_id} sessionId={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} onGeometryHold={(held) => controller.holdGeometryForMobileComposer(held)} />
+      <MobileTerminalComposer key={session.session_id} sessionId={session.session_id} connectionState={connectionState} inputAvailable={control === "owned"} onInput={(text) => { const accepted = controller.sendInput(text); if (accepted && text.includes("\r")) dismissAttachmentNotice(); return accepted; }} onRecordSubmission={(text, signal) => recordOperatorSubmission(operatorToken, session.session_id, text, signal)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={(visible) => {
+        onMobileKeysVisibleChange?.(visible);
+        /* ⚠️ THE REBUILD IS WHY TOGGLING THE KEYS APPEARS TO FIX ANYTHING.
+           Operator, 2026-09-12: "Doesn't work with show keys. If I hide keys
+           and refresh it renders properly." The refresh was doing the work.
+           Showing or hiding the keys changes the terminal's height, and the
+           provider is told — resize_unchecked resizes the PTY and their journal
+           records checkpoints at 23, 26, 29, 32 and 35 rows. But nothing asks
+           it to REDRAW, and the view only restores from canonical state when
+           the server sends a snapshot. So a multi-part interview stays drawn
+           for the old height inside a viewport that is now a different shape,
+           and its option descriptions run into the next question.
+           This is the refresh they were doing by hand, done for them. */
+        onRefresh?.();
+      }} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} onGeometryHold={(held) => controller.holdGeometryForMobileComposer(held)} />
     </div>
   );
 }
