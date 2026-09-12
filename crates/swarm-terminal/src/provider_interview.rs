@@ -222,21 +222,53 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
     if input.len() > crate::MAX_PROVIDER_LIFECYCLE_BYTES {
         return None;
     }
-    let hook: InterviewHook = serde_json::from_slice(input).ok()?;
-    if hook.tool_name != "AskUserQuestion"
-        || hook.agent_id.is_some()
-        || hook.session_id.len() != 36
-        || hook.session_id == "00000000-0000-0000-0000-000000000000"
-        || hook.tool_use_id.is_empty()
-        || hook.tool_use_id.len() > MAX_TOOL_USE_ID_BYTES
-        || !hook
-            .tool_use_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        || !hook.tool_input.answers.is_empty()
-        || !hook.tool_input.annotations.is_empty()
-        || !valid_native_interview_questions(&hook.tool_input.questions)
+    let hook: InterviewHook = match serde_json::from_slice::<InterviewHook>(input) {
+        Ok(hook) => hook,
+        Err(error) => {
+            tracing::warn!(%error, "interview payload rejected: not parseable as a hook envelope");
+            return None;
+        }
+    };
+    // ⚠️ NAMES THE FIELD, because "not a readable Claude interview" is nine
+    // different bugs wearing one message. This rejects a payload the provider
+    // just sent, so the interesting case is always DRIFT — a field the provider
+    // changed shape on between versions — and a reader who cannot see which
+    // field has to diff the whole envelope against a fixture to guess.
+    let rejection = if hook.tool_name != "AskUserQuestion" {
+        Some("tool_name is not AskUserQuestion")
+    } else if hook.agent_id.is_some() {
+        Some("agent_id present, so this is a subagent rather than the main session")
+    } else if hook.session_id.len() != 36 {
+        Some("session_id is not 36 characters")
+    } else if hook.session_id == "00000000-0000-0000-0000-000000000000" {
+        Some("session_id is the nil uuid")
+    } else if hook.tool_use_id.is_empty() {
+        Some("tool_use_id is empty")
+    } else if hook.tool_use_id.len() > MAX_TOOL_USE_ID_BYTES {
+        Some("tool_use_id is too long")
+    } else if !hook
+        .tool_use_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
+        Some("tool_use_id contains characters outside [A-Za-z0-9_]")
+    } else if !hook.tool_input.answers.is_empty() {
+        Some("tool_input.answers is not empty")
+    } else if !hook.tool_input.annotations.is_empty() {
+        Some("tool_input.annotations is not empty")
+    } else if !valid_native_interview_questions(&hook.tool_input.questions) {
+        Some("tool_input.questions failed validation")
+    } else {
+        None
+    };
+    if let Some(reason) = rejection {
+        tracing::warn!(
+            reason,
+            event = %hook.hook_event_name,
+            tool = %hook.tool_name,
+            questions = hook.tool_input.questions.len(),
+            "interview payload rejected"
+        );
         return None;
     }
     let (phase, answers) = match hook.hook_event_name.as_str() {
