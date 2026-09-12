@@ -12,6 +12,36 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.9.1
+
+One install-breaking bug, reported within an hour of 1.9.0 going out, and one
+thing the phone terminal owed you.
+
+**Before upgrading: nothing.** No schema change — this release stays at 172.
+
+**Workers are not stopped.** The worker-engine protocol is unchanged at 17.
+
+### Fixes
+- **Getting the sign-in token wrong during install no longer makes the install
+  impossible to repeat.** The prompt asked for at least 12 characters while the
+  installer refused anything under 32, and the rejected token had already been
+  saved — so running the documented command again skipped the prompt, re-read
+  the same token and failed the same way, with nothing on screen naming the file
+  that held it. The length rule is now written once, the prompt states it, and a
+  saved token that cannot be used gets you asked for a new one instead of a dead
+  end. If you type your own it needs 16 characters, which is the same rule the
+  Hive applies when you change it later in Settings; pressing Enter to have one
+  generated is still the easier path and now says so first.
+- **A token you changed in Settings can no longer break your next update.** The
+  installer demanded more characters than the Hive itself does, and updates,
+  protocol preparation and protocol migration all ran that check — so rotating
+  to a short-but-legal token would have failed every later update. The installer
+  and the Hive now agree in both directions. Nobody had hit this yet.
+- **More of the terminal on a phone.** With the terminal tools open, the five
+  action keys wrapped three rows deep beside the d-pad and took 142px; they now
+  sit in a grid exactly as tall as the d-pad, which gives the terminal back
+  41px. The top navigation is still to come.
+
 ## 1.9.0
 
 The release where Swarm stops quietly doing things and starts saying what it
