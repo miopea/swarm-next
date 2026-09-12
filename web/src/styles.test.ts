@@ -572,3 +572,30 @@ test("each palette declares its color-scheme, so unstyled controls follow the th
   expect(dark, ':root[data-theme="dark"] must exist').toBeDefined();
   expect(dark).toMatch(/color-scheme:\s*dark/);
 });
+
+/**
+ * The phone tucks its navigation on the terminal screen, and nowhere else.
+ *
+ * ⚠️ THE SAVING IS THE WHOLE RAIL, NOT A SWAPPED ROW. On a phone the brand is
+ * already hidden, so the rail on a terminal screen IS the navigation row — 44px
+ * of buttons plus its padding and border, 61px measured at 390x844 against a
+ * terminal that had 329px. Putting a hamburger where the navigation sat would
+ * have traded a 44px row for a 44px button and saved seven pixels, so the
+ * control lives in header-actions, a row that already exists on that screen.
+ *
+ * Operator, emailed 2026-09-08 from a phone: "With the tools open and the
+ * navigation, there's very little view of the terminal." Asked where it should
+ * hide, they chose the terminal screen alone over every phone screen.
+ */
+test("tucks the phone navigation only where a terminal is on screen", () => {
+  // BOTH classes required. terminal-focus alone would hide the rail on every
+  // worker screen; nav-tucked alone would hide it on Tasks and Settings too,
+  // where nothing gave the operator a way back.
+  expect(stylesheet).toContain(".control-rail.terminal-focus.nav-tucked { display: none; }");
+  // And the way back is only offered where the rail can actually be hidden.
+  expect(stylesheet).toContain(".header-actions .nav-menu-button { display: inline-flex; }");
+  expect(stylesheet).toContain(".header-actions .nav-menu-button { display: none; }");
+  // The phone rule must come after the default that hides it.
+  expect(stylesheet.lastIndexOf(".header-actions .nav-menu-button { display: inline-flex; }"))
+    .toBeGreaterThan(stylesheet.indexOf(".header-actions .nav-menu-button { display: none; }"));
+});

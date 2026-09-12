@@ -576,6 +576,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    a rigid 252px at every phone width, so the worker selector took the whole
    shortfall — 84px at 360px, with both the worker name and its task clipped. */
 .header-actions { display: flex; align-items: center; gap: 8px; }
+/* Phone-only, and only on the terminal screen. A desktop shows the navigation
+   permanently, so a control to reveal it would reveal something already there. */
+.header-actions .nav-menu-button { display: none; }
 /* Nothing here shrinks. Letting the row squeeze took the icon buttons from
    44px to 15px wide — untappable, and a worse defect than the crowding it was
    meant to relieve. Room comes from carrying less, not from crushing what is
@@ -2173,6 +2176,19 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      was the wrong answer to the right observation — it put five controls in the
      navigation row that do nothing a phone can use. */
   .surface-nav .surface-nav-popout { display: none; }
+  /* ⚠️ THE NAVIGATION ROW IS THE WHOLE RAIL ON A PHONE'S TERMINAL SCREEN, so
+     tucking it gives back its padding and border too — 61px measured at
+     390x844, against a terminal that had 329px.
+     Operator, emailed 2026-09-08 from a phone: "With the tools open and the
+     navigation, there's very little view of the terminal." They chose the
+     terminal screen alone rather than every phone screen, and that is what
+     `.terminal-focus` carries: the rail only vanishes where a worker's
+     terminal is on screen and nothing here is being navigated.
+     The control that brings it back lives in header-actions, a row that
+     already exists on this screen — a hamburger in the navigation's own place
+     would have swapped a 44px row for a 44px button and saved seven pixels. */
+  .control-rail.terminal-focus.nav-tucked { display: none; }
+  .header-actions .nav-menu-button { display: inline-flex; }
   /* A detached window on a phone goes back to being the whole width. The rail
      gives it nothing here — its context is hidden at this width — so it stood
      as an empty column taking half the screen, which is what the operator was

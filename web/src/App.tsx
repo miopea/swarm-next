@@ -1141,6 +1141,9 @@ export function App() {
   function showSurface(next: Surface) {
     if (next !== "settings" && focusDetachedSurface(next)) return;
     setSurface(next);
+    // TUCKS ITSELF AGAIN ONCE IT HAS BEEN USED. Leaving it open would cost the
+    // terminal its row on the way back, which is the thing being fixed.
+    setNavTucked(true);
   }
 
   async function resumeQueenReview() {
@@ -1570,6 +1573,15 @@ export function App() {
   }
 
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
+  /* ⚠️ THE NAVIGATION IS TUCKED ONLY ON A PHONE'S TERMINAL SCREEN, and only
+     because that is the one screen where the room is genuinely gone. Operator,
+     emailed 2026-09-08 from a phone: "With the tools open and the navigation,
+     there's very little view of the terminal." Asked where it should hide, they
+     chose the terminal screen alone over every phone screen — you reach a
+     terminal by tapping a worker, so you are not navigating at that moment.
+     Default tucked, because arriving at a terminal is the moment you want the
+     terminal. */
+  const [navTucked, setNavTucked] = useState(true);
   const activeWorker = terminalSelection.workerId
     ? workers.find((worker) => worker.id === terminalSelection.workerId)
     : activeSessionId ? workers.find((worker) => worker.active_session_id === activeSessionId) : undefined;
@@ -1872,7 +1884,7 @@ export function App() {
           drops the navigation between surfaces, which is what it was detached
           from. Without this a popped-out worker panel could only ever show the
           one worker it opened with. */}
-      <aside className={`control-rail surface-${surface}${detached ? " detached-rail" : ""}`} aria-label={detached ? `${surfaceLabel(surface)} controls` : "Swarm navigation"}>
+      <aside className={`control-rail surface-${surface}${detached ? " detached-rail" : ""}${surface === "workers" && activeWorker && !detached ? " terminal-focus" : ""}${navTucked ? " nav-tucked" : ""}`} aria-label={detached ? `${surfaceLabel(surface)} controls` : "Swarm navigation"}>
         {detached ? null : <div className="brand-lockup">
           {/* The Hive's own mark is the QUEEN. It defaulted to role="worker", so the
               control room was headed by one of the workers rather than by the Hive
@@ -1884,7 +1896,7 @@ export function App() {
 
         {operatorToken ? (
           <>
-            {detached ? null : <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
+            {detached ? null : <nav id="surface-navigation" className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
               <span className="surface-nav-item"><button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} data-detached={surfaceIsDetached("decisions") || undefined} onClick={() => showSurface("decisions")}>
                 {/* data-waiting is what makes a queue holding work look
                     different from an empty one. The operator: "I sometimes
@@ -2238,6 +2250,22 @@ export function App() {
             {popoutBlocked && <span className="saving-state" role="alert">Your browser blocked the new window</span>}
             {operatorToken && <button className="icon-button broadcast-button" aria-label="Tell every worker" title="Say one thing to every running worker" onClick={() => setShowBroadcast(true)}><BroadcastIcon /></button>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
+            {/* IN header-actions RATHER THAN A ROW OF ITS OWN, which is the
+                whole point. A hamburger in the navigation's place would have
+                traded a 44px nav row for a 44px button row and saved seven
+                pixels. This row already exists on the terminal screen, so
+                tucking the navigation gives back all of it. */}
+            {operatorToken && surface === "workers" && activeWorker && !detached && (
+              <button
+                type="button"
+                className="icon-button nav-menu-button"
+                aria-expanded={!navTucked}
+                aria-controls="surface-navigation"
+                aria-label={navTucked ? "Show navigation" : "Hide navigation"}
+                title={navTucked ? "Show navigation" : "Hide navigation"}
+                onClick={() => setNavTucked((tucked) => !tucked)}
+              ><NavMenuIcon /></button>
+            )}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button theme-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
@@ -2660,6 +2688,7 @@ function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><pa
 function FeedbackIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M12 8v4M12 14h.01"/></svg>; }
 function BroadcastIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l6 4V5L8 9H4Z"/><path d="M17.5 8.5a5 5 0 0 1 0 7"/></svg>; }
 function CommandIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4M8 11h6M11 8v6"/></svg>; }
+function NavMenuIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>; }
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
