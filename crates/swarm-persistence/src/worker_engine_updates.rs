@@ -55,6 +55,57 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     )
 }
 
+/// Makes room for updates NOBODY ASKED FOR, which are most of them.
+///
+/// ⚠️ SCHEMA 169 RECORDED ONLY THE PATH THAT ASKS PERMISSION. The endpoint an
+/// operator clicks was its only writer — and a systemd timer replaces the engine
+/// every two minutes whenever no session reports mid-turn, through the package
+/// layer, touching none of this. The path that actually stops workers unprompted
+/// was the one leaving no trace.
+///
+/// Two columns change to let an OBSERVED swap be recorded honestly:
+///
+/// - `initiated` says whether anyone asked. Existing rows are 'operator',
+///   which is true: nothing else could write one.
+/// - `stopped_sessions` becomes NULLABLE, because an observer learns the engine
+///   moved and cannot know what it cost. Recording 0 would read as "it stopped
+///   no workers", which is a claim, and the wrong one.
+pub(crate) fn migrate_unprompted_updates(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE worker_engine_update_attempts_v170 (
+             id TEXT PRIMARY KEY,
+             started_at INTEGER NOT NULL CHECK (started_at >= 0),
+             from_version TEXT NOT NULL,
+             to_version TEXT NOT NULL,
+             to_protocol INTEGER,
+             -- NULL means nobody counted, which is what an observation knows.
+             stopped_sessions INTEGER CHECK (stopped_sessions >= 0),
+             outcome TEXT CHECK (outcome IN ('succeeded','timed_out','failed')),
+             detail TEXT NOT NULL DEFAULT '',
+             finished_at INTEGER CHECK (finished_at >= started_at),
+             initiated TEXT NOT NULL DEFAULT 'operator'
+                 CHECK (initiated IN ('operator','automatic'))
+         );
+         INSERT INTO worker_engine_update_attempts_v170 (
+             id, started_at, from_version, to_version, to_protocol,
+             stopped_sessions, outcome, detail, finished_at, initiated
+         )
+         SELECT id, started_at, from_version, to_version, to_protocol,
+                stopped_sessions, outcome, detail, finished_at, 'operator'
+           FROM worker_engine_update_attempts;
+         DROP TABLE worker_engine_update_attempts;
+         ALTER TABLE worker_engine_update_attempts_v170
+             RENAME TO worker_engine_update_attempts;
+         CREATE INDEX IF NOT EXISTS worker_engine_update_attempts_by_start
+             ON worker_engine_update_attempts(started_at DESC, id DESC);",
+    )?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        super::UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION,
+    )
+}
+
 /// How an engine update ended, or that nobody ever found out.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,6 +128,32 @@ impl WorkerEngineUpdateOutcome {
     }
 }
 
+/// Whether anybody asked for this update.
+///
+/// ⚠️ THE DISTINCTION THE OPERATOR RULED ON. Most engine replacements on a Hive
+/// are `Automatic`: a systemd timer swaps the engine whenever no session reports
+/// mid-turn, stopping loaded workers without anyone deciding to. Operator
+/// decision 01a092cd, 2026-09-11: keep that automatic, but say so when it
+/// happens. A record that cannot tell the two apart cannot say it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerEngineUpdateInitiator {
+    /// Somebody clicked the maintenance action and was told what it would cost.
+    Operator,
+    /// Swarm replaced the engine on its own. Nobody was asked and nobody chose
+    /// the moment.
+    Automatic,
+}
+
+impl WorkerEngineUpdateInitiator {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Operator => "operator",
+            Self::Automatic => "automatic",
+        }
+    }
+}
+
 /// One attempt, as recorded.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct WorkerEngineUpdateAttempt {
@@ -85,7 +162,10 @@ pub struct WorkerEngineUpdateAttempt {
     pub from_version: String,
     pub to_version: String,
     pub to_protocol: Option<u16>,
-    pub stopped_sessions: i64,
+    /// `None` means nobody counted. An observed swap learns that the engine
+    /// moved and cannot know what it cost; 0 would say it cost nothing.
+    pub stopped_sessions: Option<i64>,
+    pub initiated: WorkerEngineUpdateInitiator,
     /// `None` means this attempt never recorded an ending. Read it as unknown,
     /// never as success -- a Hive that was replaced mid-update leaves exactly
     /// this, and it is the case an operator most needs to see.
@@ -107,22 +187,25 @@ impl TaskStore {
         from_version: &str,
         to_version: &str,
         to_protocol: Option<u16>,
-        stopped_sessions: usize,
+        stopped_sessions: Option<usize>,
+        initiated: WorkerEngineUpdateInitiator,
         now: i64,
     ) -> Result<String, TaskStoreError> {
         let id = Uuid::now_v7().to_string();
         let connection = self.connection()?;
         connection.execute(
             "INSERT INTO worker_engine_update_attempts (
-                 id, started_at, from_version, to_version, to_protocol, stopped_sessions
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 id, started_at, from_version, to_version, to_protocol,
+                 stopped_sessions, initiated
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 id,
                 now,
                 from_version,
                 to_version,
                 to_protocol,
-                i64::try_from(stopped_sessions).unwrap_or(i64::MAX)
+                stopped_sessions.map(|count| i64::try_from(count).unwrap_or(i64::MAX)),
+                initiated.as_str()
             ],
         )?;
         // Pruned by START ORDER, which is also insert order, so an attempt that
@@ -186,7 +269,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, started_at, from_version, to_version, to_protocol,
-                    stopped_sessions, outcome, detail, finished_at
+                    stopped_sessions, outcome, detail, finished_at, initiated
                FROM worker_engine_update_attempts
               ORDER BY started_at DESC, id DESC LIMIT ?1",
         )?;
@@ -210,6 +293,14 @@ impl TaskStore {
                     },
                     detail: row.get(7)?,
                     finished_at: row.get(8)?,
+                    // An unreadable initiator reads as automatic: "nobody asked"
+                    // is the answer that prompts a look, and the other way round
+                    // would quietly attribute an unprompted swap to the operator.
+                    initiated: if row.get::<_, String>(9)?.as_str() == "operator" {
+                        WorkerEngineUpdateInitiator::Operator
+                    } else {
+                        WorkerEngineUpdateInitiator::Automatic
+                    },
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?)
@@ -228,7 +319,7 @@ impl TaskStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{KEPT_ATTEMPTS, WorkerEngineUpdateOutcome};
+    use super::{KEPT_ATTEMPTS, WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome};
     use crate::TaskStore;
 
     #[test]
@@ -239,14 +330,21 @@ mod tests {
         // silence and never as success.
         let store = TaskStore::in_memory().unwrap();
         store
-            .begin_worker_engine_update("1.8.1", "1.9.0", Some(18), 4, 1_000)
+            .begin_worker_engine_update(
+                "1.8.1",
+                "1.9.0",
+                Some(18),
+                Some(4),
+                WorkerEngineUpdateInitiator::Operator,
+                1_000,
+            )
             .unwrap();
 
         let attempt = store.last_worker_engine_update().unwrap().unwrap();
 
         assert_eq!(attempt.outcome, None);
         assert_eq!(attempt.finished_at, None);
-        assert_eq!(attempt.stopped_sessions, 4);
+        assert_eq!(attempt.stopped_sessions, Some(4));
         assert_eq!(attempt.to_protocol, Some(18));
         assert_eq!(attempt.from_version, "1.8.1");
     }
@@ -255,7 +353,14 @@ mod tests {
     fn an_ending_is_recorded_once_and_is_not_rewritten_afterwards() {
         let store = TaskStore::in_memory().unwrap();
         let id = store
-            .begin_worker_engine_update("1.8.1", "1.9.0", None, 2, 1_000)
+            .begin_worker_engine_update(
+                "1.8.1",
+                "1.9.0",
+                None,
+                Some(2),
+                WorkerEngineUpdateInitiator::Operator,
+                1_000,
+            )
             .unwrap();
         store
             .finish_worker_engine_update(
@@ -285,7 +390,14 @@ mod tests {
         // it and the ending would be lost entirely.
         let store = TaskStore::in_memory().unwrap();
         let id = store
-            .begin_worker_engine_update("1.8.1", "1.9.0", None, 0, 5_000)
+            .begin_worker_engine_update(
+                "1.8.1",
+                "1.9.0",
+                None,
+                Some(0),
+                WorkerEngineUpdateInitiator::Operator,
+                5_000,
+            )
             .unwrap();
         store
             .finish_worker_engine_update(&id, WorkerEngineUpdateOutcome::Succeeded, "", 4_000)
@@ -305,7 +417,8 @@ mod tests {
                     "1.8.1",
                     &format!("1.9.{index}"),
                     None,
-                    0,
+                    Some(0),
+                    WorkerEngineUpdateInitiator::Operator,
                     1_000 + index,
                 )
                 .unwrap();
@@ -324,7 +437,14 @@ mod tests {
         // over-long one would lose the ending for the sake of the explanation.
         let store = TaskStore::in_memory().unwrap();
         let id = store
-            .begin_worker_engine_update("1.8.1", "1.9.0", None, 0, 1_000)
+            .begin_worker_engine_update(
+                "1.8.1",
+                "1.9.0",
+                None,
+                Some(0),
+                WorkerEngineUpdateInitiator::Operator,
+                1_000,
+            )
             .unwrap();
         store
             .finish_worker_engine_update(
@@ -339,6 +459,51 @@ mod tests {
         assert_eq!(attempt.outcome, Some(WorkerEngineUpdateOutcome::Failed));
         assert!(attempt.detail.len() <= super::MAX_DETAIL_BYTES);
         assert!(attempt.detail.starts_with("unreadable"));
+    }
+
+    #[test]
+    fn an_update_nobody_asked_for_says_so_and_claims_no_worker_count() {
+        // ⚠️ THE CASE SCHEMA 169 COULD NOT RECORD. A timer replaces the engine
+        // whenever no session reports mid-turn; an observer learns afterwards
+        // that it moved and never learns what it cost. Recording 0 there would
+        // say "it stopped no workers", which is a claim rather than a silence.
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .begin_worker_engine_update(
+                "1.8.1",
+                "1.9.0",
+                None,
+                None,
+                WorkerEngineUpdateInitiator::Automatic,
+                1_000,
+            )
+            .unwrap();
+
+        let attempt = store.last_worker_engine_update().unwrap().unwrap();
+
+        assert_eq!(attempt.initiated, WorkerEngineUpdateInitiator::Automatic);
+        assert_eq!(attempt.stopped_sessions, None);
+    }
+
+    #[test]
+    fn an_attempt_recorded_before_the_distinction_existed_is_the_operator_s() {
+        // Nothing but the maintenance endpoint could write a row before schema
+        // 170, so backfilling those as 'operator' states a fact rather than a
+        // guess. The reverse would accuse Swarm of swaps a person made.
+        let store = TaskStore::in_memory().unwrap();
+        let connection = store.connection().unwrap();
+        connection
+            .execute(
+                "INSERT INTO worker_engine_update_attempts
+                     (id, started_at, from_version, to_version)
+                 VALUES ('legacy', 900, '1.7.0', '1.8.0')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let attempt = store.last_worker_engine_update().unwrap().unwrap();
+        assert_eq!(attempt.initiated, WorkerEngineUpdateInitiator::Operator);
     }
 
     #[test]

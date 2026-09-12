@@ -26,6 +26,15 @@ export function engineUpdateHistory(
     : "";
   const stopped = workersStopped(attempt.stopped_sessions);
 
+  // ⚠️ SAID FIRST, AND SAID PLAINLY. Operator decision 01a092cd: automatic
+  // replacement stays, but it must announce itself. Most engine swaps on a Hive
+  // are this one — a timer takes the workers down whenever none reports
+  // mid-turn — and the previous sentence read as a record of something the
+  // operator had done.
+  if (attempt.initiated === "automatic") {
+    return `Swarm replaced the worker engine on its own ${when}, moving ${move}. Nobody was asked and nobody chose the moment; it goes ahead whenever no worker reports being mid-turn, and it ${stopped}.${protocolNote}`;
+  }
+
   switch (attempt.outcome) {
     case "succeeded":
       return `The last worker engine update ${when} moved ${move} and ${stopped}.${protocolNote}`;
@@ -41,7 +50,15 @@ export function engineUpdateHistory(
   }
 }
 
-function workersStopped(count: number): string {
+/**
+ * ⚠️ "NOBODY COUNTED" IS NOT "IT COST NOTHING". An observed swap learns only
+ * that the engine moved, so saying it stopped no workers would be the one
+ * reassuring thing this sentence must never invent.
+ */
+function workersStopped(count: number | null | undefined): string {
+  if (count === null || count === undefined) {
+    return "stopped an unrecorded number of worker sessions";
+  }
   if (count === 0) return "stopped no worker sessions";
   return `stopped ${count} worker session${count === 1 ? "" : "s"}`;
 }

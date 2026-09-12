@@ -8,8 +8,8 @@ use axum::{
 };
 use serde::Serialize;
 use swarm_domain::ControlRoomEventKind;
-use swarm_persistence::WorkerEngineUpdateOutcome;
 use swarm_persistence::WorkerEngineUpdateOutcome::{Failed, Succeeded, TimedOut};
+use swarm_persistence::{WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome};
 use swarm_terminal::{HostRequest, HostResponse, TerminalHostStatus};
 use tokio::time::{sleep, timeout};
 
@@ -731,6 +731,11 @@ async fn maintain_worker_engine_locked(
         )
     })?;
     finish_engine_update(state, attempt.as_deref(), Succeeded, "");
+    // THIS ENGINE WAS ASKED FOR. Without accepting it here the supervisor's next
+    // pass sees a new engine, finds no lifecycle operation running, and files
+    // the operator's own deliberate update a second time as one nobody asked
+    // for -- which is worse than not noticing at all.
+    state.accept_worker_engine(&current);
     // Not revived here. This runs under the worker lifecycle, and starting a
     // worker takes that same non-reentrant mutex, so reviving inside it would
     // deadlock the API against itself. The caller revives after releasing it,
@@ -811,7 +816,10 @@ fn write_down_what_this_costs(
                     from_version,
                     to_version,
                     to_protocol,
-                    running.len(),
+                    // Counted, not guessed: these are the sessions this request
+                    // is about to stop.
+                    Some(running.len()),
+                    WorkerEngineUpdateInitiator::Operator,
                     unix_timestamp(),
                 )
                 .map_err(|error| task_store_error(&error))

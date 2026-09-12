@@ -540,6 +540,7 @@ test("shows what the last worker engine update did, even with the engine current
       to_version: "1.9.0",
       to_protocol: 18,
       stopped_sessions: 4,
+      initiated: "operator",
       outcome: null,
       detail: "",
       finished_at: null,
@@ -565,4 +566,43 @@ test("says nothing about past updates when this Hive has never attempted one", (
   }} />);
 
   expect(screen.queryByText(/worker engine update/)).not.toBeInTheDocument();
+});
+
+/**
+ * An update nobody asked for announces itself on the card.
+ *
+ * ⚠️ OPERATOR DECISION 01a092cd, 2026-09-11: automatic replacement stays, but it
+ * must say so when it happens. A timer takes the workers down whenever none
+ * reports mid-turn, and until now the card could only describe it in the same
+ * words it used for an update the operator had chosen.
+ */
+test("says plainly when Swarm replaced the worker engine on its own", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "76543210fedc",
+    source_dirty: false,
+    deployed_source_published: true,
+    worker_engine_update_required: false,
+    last_worker_engine_update: {
+      id: "01a1",
+      started_at: Math.floor(Date.now() / 1000) - 120,
+      from_version: "1.8.0",
+      to_version: "1.8.1",
+      to_protocol: null,
+      stopped_sessions: null,
+      initiated: "automatic",
+      outcome: "succeeded",
+      detail: "Observed by Swarm",
+      finished_at: Math.floor(Date.now() / 1000) - 120,
+    },
+  }} />);
+
+  expect(screen.getByText(/Swarm replaced the worker engine on its own/)).toBeInTheDocument();
+  expect(screen.getByText(/Nobody was asked/)).toBeInTheDocument();
+  // And it must not offer the one reassuring thing nobody measured.
+  expect(screen.queryByText(/stopped no worker sessions/)).not.toBeInTheDocument();
 });

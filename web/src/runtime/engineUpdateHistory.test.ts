@@ -73,3 +73,39 @@ describe("engineUpdateHistory", () => {
     expect(engineUpdateHistory(base, 500)).toContain("stamped in the future");
   });
 });
+
+describe("engineUpdateHistory, for updates nobody asked for", () => {
+  const automatic: WorkerEngineUpdateAttempt = {
+    ...base,
+    initiated: "automatic",
+    stopped_sessions: null,
+    detail: "Observed by Swarm",
+  };
+
+  it("says Swarm did it on its own, first thing", () => {
+    // ⚠️ WHAT THE OPERATOR RULED ON. Most engine swaps are this one, and the
+    // sentence used to read as a record of something they had done.
+    const sentence = engineUpdateHistory(automatic, 1_600);
+    expect(sentence).toContain("Swarm replaced the worker engine on its own");
+    expect(sentence).toContain("Nobody was asked");
+    expect(sentence).toContain("whenever no worker reports being mid-turn");
+  });
+
+  it("does not say it cost nothing when nobody counted", () => {
+    // 0 and "unknown" are different answers, and only one of them is reassuring.
+    const sentence = engineUpdateHistory(automatic, 1_600);
+    expect(sentence).toContain("unrecorded number of worker sessions");
+    expect(sentence).not.toContain("stopped no worker sessions");
+  });
+
+  it("still names a protocol migration it made on its own", () => {
+    expect(engineUpdateHistory({ ...automatic, to_protocol: 18 }, 1_600))
+      .toContain("cannot preserve running terminals");
+  });
+
+  it("leaves an update the operator asked for reading as theirs", () => {
+    const sentence = engineUpdateHistory({ ...base, initiated: "operator" }, 1_600);
+    expect(sentence).toContain("The last worker engine update");
+    expect(sentence).not.toContain("on its own");
+  });
+});

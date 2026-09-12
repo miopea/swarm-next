@@ -148,7 +148,9 @@ pub use email::{
 };
 pub use night_watch::NightWatchConfiguration;
 pub use presence::PresenceMutation;
-pub use worker_engine_updates::{WorkerEngineUpdateAttempt, WorkerEngineUpdateOutcome};
+pub use worker_engine_updates::{
+    WorkerEngineUpdateAttempt, WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome,
+};
 mod notifications;
 mod terminal_control_projection;
 pub use notifications::{
@@ -303,7 +305,8 @@ const WORKSPACE_SEARCH_SCHEMA_VERSION: i64 = 166;
 const FEDERATION_LIFECYCLE_STATES_SCHEMA_VERSION: i64 = 167;
 const FEDERATION_MEMBERSHIP_EPOCHS_SCHEMA_VERSION: i64 = 168;
 const WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION: i64 = 169;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION;
+const UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION: i64 = 170;
+const CURRENT_SCHEMA_VERSION: i64 = UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4179,6 +4182,9 @@ fn migrate_engine_history_schema_steps(
     // recorded version backwards and the ceiling tests would say so at once.
     if schema_version < WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION {
         worker_engine_updates::migrate(transaction)?;
+    }
+    if schema_version < UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION {
+        worker_engine_updates::migrate_unprompted_updates(transaction)?;
     }
     Ok(())
 }
@@ -9617,6 +9623,24 @@ mod tests {
             undo_sql: "DROP TABLE worker_engine_update_attempts",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
                 AND name = 'worker_engine_update_attempts' AND sql LIKE '%timed_out%'",
+        },
+        SchemaStep {
+            table: "worker_engine_update_attempts",
+            artifact: "initiated",
+            undo_sql: "DROP TABLE worker_engine_update_attempts;
+                CREATE TABLE worker_engine_update_attempts (
+                    id TEXT PRIMARY KEY,
+                    started_at INTEGER NOT NULL CHECK (started_at >= 0),
+                    from_version TEXT NOT NULL,
+                    to_version TEXT NOT NULL,
+                    to_protocol INTEGER,
+                    stopped_sessions INTEGER NOT NULL DEFAULT 0 CHECK (stopped_sessions >= 0),
+                    outcome TEXT CHECK (outcome IN ('succeeded','timed_out','failed')),
+                    detail TEXT NOT NULL DEFAULT '',
+                    finished_at INTEGER CHECK (finished_at >= started_at)
+                )",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
+                AND name = 'worker_engine_update_attempts' AND sql LIKE '%automatic%'",
         },
     ];
 

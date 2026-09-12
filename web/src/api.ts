@@ -505,7 +505,21 @@ export type WorkerEngineUpdateAttempt = {
   from_version: string;
   to_version: string;
   to_protocol?: number | null;
-  stopped_sessions: number;
+  /**
+   * `null` means nobody counted.
+   *
+   * An observed swap learns the engine moved and cannot know what it cost; 0
+   * would say it cost nothing, which is a claim rather than a silence.
+   */
+  stopped_sessions?: number | null;
+  /**
+   * Whether anybody asked for this.
+   *
+   * "automatic" is Swarm replacing the engine on its own — a timer swaps it
+   * whenever no session reports mid-turn. That is the common case and the one
+   * worth saying out loud.
+   */
+  initiated?: "operator" | "automatic";
   outcome?: "succeeded" | "timed_out" | "failed" | null;
   detail: string;
   finished_at?: number | null;

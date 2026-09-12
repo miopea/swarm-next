@@ -59,6 +59,7 @@ mod terminal_control_socket;
 mod terminal_host;
 mod terminal_socket;
 mod tunnel;
+mod unprompted_engine_updates;
 mod worker_description_ai;
 mod worker_runtime;
 mod workers;
@@ -222,6 +223,16 @@ const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 const UNATTENDED_BLOCK_SECONDS: i64 = 4 * 60 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
+/// What the engine looked like the last time this API asked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ObservedEngine {
+    /// `None` from a host too old to report one. Absent is not a value: two
+    /// absences are not a match, and an absence is not a difference.
+    pub(crate) build_id: Option<String>,
+    pub(crate) host_version: String,
+    pub(crate) protocol_version: u16,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     terminal_limits: JournalLimits,
@@ -238,6 +249,16 @@ pub struct AppState {
     ops_integrations_path: Option<Arc<PathBuf>>,
     ops_mcp_limit: Arc<Semaphore>,
     worker_lifecycle: Arc<Mutex<()>>,
+    /// The worker engine this API last SAW running, for noticing a swap nobody
+    /// asked for.
+    ///
+    /// ⚠️ IN MEMORY ON PURPOSE, and the reason is the shape of the event. An
+    /// automatic engine reconcile replaces the terminal host and leaves THIS
+    /// process running, so the baseline survives exactly the thing it watches
+    /// for. Persisting it would buy the one case it must not claim: after an
+    /// API restart nothing here can tell whether the engine moved while it was
+    /// down, and `None` correctly means "no comparison is possible yet".
+    observed_worker_engine: Arc<std::sync::RwLock<Option<ObservedEngine>>>,
     native_source_admission: Arc<Semaphore>,
     review_settlement_cursor: Arc<Mutex<Option<swarm_domain::TaskId>>>,
     worker_description_improvement_limit: Arc<Semaphore>,
@@ -404,6 +425,7 @@ impl AppState {
             ops_integrations_path: None,
             ops_mcp_limit: Arc::new(Semaphore::new(2)),
             worker_lifecycle: Arc::new(Mutex::new(())),
+            observed_worker_engine: Arc::new(std::sync::RwLock::new(None)),
             native_source_admission: Arc::new(Semaphore::new(1)),
             review_settlement_cursor: Arc::new(Mutex::new(None)),
             worker_description_improvement_limit: Arc::new(Semaphore::new(
@@ -1187,6 +1209,10 @@ impl AppState {
 
     /// Reconciles durable worker identities with the terminal host and starts autostart workers.
     pub async fn supervise_workers(&self) {
+        // FIRST, because it is the only thing here that reports on the engine
+        // rather than on the workers, and an engine replaced underneath this
+        // pass is context for everything the pass then finds.
+        self.notice_unprompted_engine_update().await;
         let live = match worker_runtime::reconcile_worker_bindings(self).await {
             Ok(live) => live,
             Err(error) => {
@@ -18019,12 +18045,139 @@ mod tests {
             attempt.outcome,
             Some(swarm_persistence::WorkerEngineUpdateOutcome::TimedOut)
         );
-        assert_eq!(attempt.stopped_sessions, 1, "it stopped this worker");
+        assert_eq!(attempt.stopped_sessions, Some(1), "it stopped this worker");
         assert_eq!(attempt.from_version, "old-host");
         assert!(attempt.finished_at.is_some());
 
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    /// An engine replaced by something other than this API is noticed and named.
+    ///
+    /// ⚠️ THE PATH THE RECORD ORIGINALLY MISSED. `swarm-host-reconcile.timer`
+    /// fires every two minutes and `swarm-package reconcile-host-if-idle`
+    /// replaces the engine whenever no session reports mid-turn — stopping
+    /// loaded workers, entirely in the packaging layer, telling this process
+    /// nothing. Operator decision 01a092cd: keep it automatic, but say so.
+    ///
+    /// Observed rather than reported on purpose: nothing has to remember to
+    /// announce itself, so a swap made by hand at a shell is caught too.
+    #[tokio::test]
+    async fn an_engine_swapped_by_something_else_is_noticed_and_named_as_unprompted() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        let first = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "1.8.0",
+            "engine-before",
+        )
+        .unwrap();
+        let first_task = tokio::spawn(first.run());
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+
+        // FIRST SIGHTING RECORDS NOTHING. With no earlier observation, a
+        // difference cannot be told from never having looked — and claiming one
+        // here would report a swap on every API restart.
+        state.supervise_workers().await;
+        assert_eq!(store.last_worker_engine_update().unwrap(), None);
+
+        first_task.abort();
+        let _ = first_task.await;
+        let second =
+            HostServer::bind_with_identity(&socket, registry, "1.8.1", "engine-after").unwrap();
+        let second_task = tokio::spawn(second.run());
+
+        state.supervise_workers().await;
+
+        let attempt = store
+            .last_worker_engine_update()
+            .unwrap()
+            .expect("the swap was noticed");
+        assert_eq!(
+            attempt.initiated,
+            swarm_persistence::WorkerEngineUpdateInitiator::Automatic
+        );
+        assert_eq!(attempt.from_version, "1.8.0");
+        assert_eq!(attempt.to_version, "1.8.1");
+        // Nobody counted, and 0 would say it cost nothing.
+        assert_eq!(attempt.stopped_sessions, None);
+        assert_eq!(
+            attempt.outcome,
+            Some(swarm_persistence::WorkerEngineUpdateOutcome::Succeeded)
+        );
+
+        // AND NOT AGAIN. The same engine seen twice is not a second swap.
+        state.supervise_workers().await;
+        assert_eq!(store.recent_worker_engine_updates(10).unwrap().len(), 1);
+
+        second_task.abort();
+        let _ = second_task.await;
+    }
+
+    /// An engine this API changed on purpose is not filed as one nobody asked for.
+    ///
+    /// ⚠️ THE WORSE HALF OF GETTING THIS WRONG. Missing an unprompted swap costs
+    /// a line on a card; filing the operator's OWN deliberate update as "Swarm
+    /// did this on its own" tells them something false about their own Hive, and
+    /// it would happen on every successful maintenance run.
+    ///
+    /// Covers the suppression itself. The maintenance endpoint calls
+    /// `accept_worker_engine` on success, which this does not drive end to end —
+    /// nothing in a test performs the package-layer swap the endpoint waits for.
+    #[tokio::test]
+    async fn an_engine_this_api_changed_on_purpose_is_not_filed_as_unprompted() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        let first = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "1.8.0",
+            "engine-before",
+        )
+        .unwrap();
+        let first_task = tokio::spawn(first.run());
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        state.supervise_workers().await;
+
+        first_task.abort();
+        let _ = first_task.await;
+        let second =
+            HostServer::bind_with_identity(&socket, registry, "1.8.1", "engine-after").unwrap();
+        let second_task = tokio::spawn(second.run());
+
+        // What the endpoint does on a successful update: this engine was asked
+        // for, so the observer must treat it as already accounted for.
+        let current = crate::maintenance::host_status_snapshot(&state)
+            .await
+            .unwrap();
+        state.accept_worker_engine(&current);
+
+        state.supervise_workers().await;
+
+        assert_eq!(
+            store.last_worker_engine_update().unwrap(),
+            None,
+            "a deliberate update must not be reported back as unprompted"
+        );
+
+        second_task.abort();
+        let _ = second_task.await;
     }
 
     /// A failure after the workers are down still leaves a receipt.
@@ -18099,7 +18252,7 @@ mod tests {
             Some(swarm_persistence::WorkerEngineUpdateOutcome::Failed),
             "an attempt left open would read as Swarm having been replaced mid-update"
         );
-        assert_eq!(attempt.stopped_sessions, 1);
+        assert_eq!(attempt.stopped_sessions, Some(1));
         assert!(
             attempt.detail.contains("could not be recorded"),
             "the receipt must say what refused: {}",
