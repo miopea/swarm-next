@@ -244,9 +244,12 @@ one by hand. Both are below.
 
 ### Letting Swarm check
 
-The first time you open **Settings → System** you are asked once whether to
-check daily. Until you answer, this Hive contacts nothing — and if you say no
-it never does.
+Swarm looks for a new release about every four hours, and shortly after it
+starts. It is on unless you turn it off, in **Settings → System**, and turning
+it off means this Hive contacts nothing at all.
+
+Checking is not installing. A check tells you a release exists; every install
+below still waits for you.
 
 A check fetches one small signed file and compares it locally. **Nothing is
 sent**: not your version, not your Hive's identity, not how many workers you
@@ -278,9 +281,18 @@ Swarm decides by fingerprinting the engine's own source, not the release number
 asked, because there is nothing to decide.
 
 A release that genuinely changes the engine is different. That restarts loaded
-workers, and it is deferred while any worker is running: Swarm applies it once
-they are idle, or when you ask for it from the worker engine card. Either way it
-says so before you agree to anything.
+workers, and it is deferred while any worker is **mid-turn** — which is not the
+same as loaded. Swarm applies it once none of them reports being mid-turn, or
+when you ask for it from the worker engine card.
+
+Worth knowing plainly, because it happens without being asked: a resting
+terminal is not proof that work has finished. A worker waiting on its provider,
+or holding input you have not sent, reads as resting. Swarm records which
+workers it unloaded and returns them to their saved conversations, but an
+interrupted command is not resumed and unsent input can be lost.
+
+What it did is on the **App and API** card afterwards — which release it moved
+between, when, and that nobody asked for it.
 
 ### A Hive built from a working copy
 
@@ -289,8 +301,8 @@ because replacing a binary built from your checkout would discard work nothing
 can enumerate. Your updates come from the **App and API** card, which rebuilds
 the checkout.
 
-If you never turn checking on, none of this happens and the commands below are
-the whole story.
+If you turn checking off, none of this happens and the commands below are the
+whole story.
 
 ### Installing a release by hand
 

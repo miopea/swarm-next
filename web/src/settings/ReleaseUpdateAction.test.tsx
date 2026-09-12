@@ -70,17 +70,33 @@ test("a prepared release waits without claiming installation or offering another
 });
 
 /** "A Hive never contacts an origin its owner did not choose." */
-test("asks once before this Hive ever contacts an origin", async () => {
+/**
+ * The card says what the Hive is DOING, not what it would do under an old rule.
+ *
+ * ⚠️ THIS TEST USED TO ASSERT "Until you choose, this Hive contacts nothing",
+ * and it was right when it was written. Checking now happens unless it is turned
+ * off — only an explicit "off" is silence — because "I have not chosen" used to
+ * be indistinguishable from "do not tell me", and a freshly built Hive sat on
+ * whatever release it was installed with until somebody found the setting.
+ *
+ * Leaving the old assertion would have locked a promise the product no longer
+ * keeps into the one surface that makes it.
+ */
+test("tells an operator who has not chosen that checking is already happening", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ mode: "unset", offer: null, upgrade_available: false, last_checked_at: null, last_outcome: null }));
   vi.mocked(api.setReleaseCheckMode).mockResolvedValue(status({ mode: "daily" }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText("Check for new Swarm releases?")).toBeInTheDocument();
-  expect(screen.getByText(/Until you choose, this Hive contacts nothing/)).toBeInTheDocument();
+  expect(await screen.findByText("Swarm checks for new releases")).toBeInTheDocument();
+  expect(screen.getByText(/about every four hours/)).toBeInTheDocument();
+  expect(screen.getByText(/Turn it off and this Hive contacts nothing at all/)).toBeInTheDocument();
+  // The privacy claim is unchanged and still true: a check sends nothing.
   expect(screen.getByText(/sends nothing — no version, no identity, no counts/)).toBeInTheDocument();
-  expect(api.checkForRelease).not.toHaveBeenCalled();
+  // And the promise that still holds: nothing installs on its own.
+  expect(screen.getByText(/Nothing installs without you/)).toBeInTheDocument();
+  expect(screen.queryByText(/Until you choose/)).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Check daily" }));
+  fireEvent.click(screen.getByRole("button", { name: "Keep checking" }));
   await waitFor(() => expect(api.setReleaseCheckMode).toHaveBeenCalledWith("token", "daily"));
 });
 
@@ -322,7 +338,7 @@ test("still asks an install running a release", async () => {
   );
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText("Check for new Swarm releases?")).toBeInTheDocument();
+  expect(await screen.findByText("Swarm checks for new releases")).toBeInTheDocument();
   expect(screen.queryByText(/builds from a working copy/)).not.toBeInTheDocument();
 });
 

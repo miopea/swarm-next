@@ -239,9 +239,9 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
         </p>
         {status.mode === "unset" ? (
           <>
-            <small>Comparing needs one signed file fetched from the release origin. Nothing is sent — no version, no identity, no counts.</small>
+            <small>Comparing fetches one signed file from the release origin, about every four hours. Nothing is sent — no version, no identity, no counts. Turn it off and this Hive contacts nothing at all.</small>
             <div className="settings-actions">
-              <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "daily"), "The preference could not be saved.")}>Show the current release</button>
+              <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "daily"), "The preference could not be saved.")}>Keep comparing</button>
               <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "off"), "The preference could not be saved.")}>Don’t check</button>
             </div>
           </>
@@ -264,15 +264,21 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
     return (
       <article className="runtime-subsystem-card runtime-subsystem-safe release-update-action" aria-label="Release updates">
         <header>
-          <div><span className="runtime-component-name">Updates</span><strong>Check for new Swarm releases?</strong></div>
+          <div><span className="runtime-component-name">Updates</span><strong>Swarm checks for new releases</strong></div>
         </header>
-        <p>Swarm can look once a day for a new release and tell you when one exists. It sends nothing — no version, no identity, no counts — and fetches one small signed file.</p>
+        {/* ⚠️ THIS CARD USED TO SAY "Until you choose, this Hive contacts
+            nothing" AND IT WAS NOT TRUE. Checking is on unless it is turned
+            off — a freshly built Hive that never found this setting used to sit
+            on whatever release it was installed with, so "I have not chosen"
+            stopped meaning "do not tell me". The card has to say what the Hive
+            is actually doing, not what it would do under the old rule. */}
+        <p>Swarm looks for a new release about every four hours, and shortly after it starts, and tells you when one exists. It sends nothing — no version, no identity, no counts — and fetches one small signed file. Nothing installs without you.</p>
         {status.development_build ? (
           <p><strong>This Hive builds from a working copy.</strong> Checking would only tell you a release exists — it will never offer to install one, because replacing a build made from your checkout would discard work nothing can enumerate. Your updates come from the App and API card.</p>
         ) : null}
-        <small>Until you choose, this Hive contacts nothing.</small>
+        <small>Turn it off and this Hive contacts nothing at all.</small>
         <div className="settings-actions">
-          <button className="primary-action" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "daily"), "The preference could not be saved.")}>Check daily</button>
+          <button className="primary-action" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "daily"), "The preference could not be saved.")}>Keep checking</button>
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "off"), "The preference could not be saved.")}>Don’t check</button>
         </div>
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -393,12 +399,12 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
       <footer className="release-check-footer">
         <small>
-          {status.mode === "daily" ? "Checked daily. " : "Automatic checks are off. "}
+          {status.mode === "off" ? "Automatic checks are off. " : "Checked about every four hours. "}
           {status.last_outcome === "unreachable" ? "The last check could not reach the origin." : status.last_outcome === "rejected" ? "The last check found a manifest it could not verify, and ignored it." : status.last_checked_at ? `Last checked ${new Date(status.last_checked_at * 1000).toLocaleString()}.` : "Not checked yet."}
         </small>
         <span className="settings-actions">
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => checkForRelease(operatorToken), "The check could not be completed.")}>{working ? "Checking…" : "Check now"}</button>
-          <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "daily" ? "off" : "daily"), "The preference could not be saved.")}>{status.mode === "daily" ? "Stop checking" : "Check daily"}</button>
+          <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "off" ? "daily" : "off"), "The preference could not be saved.")}>{status.mode === "off" ? "Start checking" : "Stop checking"}</button>
           <button className="secondary-button" disabled={disabled} onClick={() => void openNotes()}>Release notes</button>
         </span>
       </footer>
