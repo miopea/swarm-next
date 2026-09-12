@@ -624,3 +624,33 @@ test("collapses the shell to one row wherever the rail is hidden", () => {
   // Same selector on both, so one cannot be narrowed without the other.
   expect(stylesheet.indexOf(collapse)).toBeGreaterThan(stylesheet.indexOf(hide));
 });
+
+/**
+ * The handoff banner must not eat the phone terminal.
+ *
+ * ⚠️ MEASURED IN THE terminal-handoff FIXTURE AT 390x844, both before and after:
+ *   control=owned      toolbar  0px  terminal 370px   (unchanged by this rule)
+ *   control=elsewhere  toolbar 97px  terminal 273px   BEFORE
+ *   control=elsewhere  toolbar 37px  terminal 333px   AFTER
+ *
+ * The operator photographed the before on 2026-09-12 — "the bottom's cut off and
+ * I can't scroll down anymore". 97px is most of what the keys grid and the
+ * navigation tuck recovered earlier that same night (329px -> 370px), handed
+ * straight back the moment a SECOND VIEW exists, which is their ordinary
+ * phone-plus-desktop pattern rather than an edge case.
+ *
+ * The cost was wrapping: the connected chip, Session details, the status
+ * sentence and Resume Here each claimed a row at this width.
+ */
+test("keeps the terminal handoff banner to one row on a phone", () => {
+  // nowrap is the whole mechanism: without it the row count, not the heights,
+  // is what costs the terminal its space.
+  expect(stylesheet).toContain(".terminal-toolbar:has(.terminal-resume-here) { flex-wrap: nowrap;");
+  // Resume Here must survive the compaction — it is the only way back.
+  expect(stylesheet).toContain(".terminal-toolbar .terminal-resume-here {");
+  // And the two identifiers that were dropped must be dropped DELIBERATELY,
+  // scoped to the banner, never to the ordinary toolbar.
+  expect(stylesheet).toContain(".terminal-toolbar:has(.terminal-resume-here) .terminal-session-details { display: none; }");
+  const scoped = stylesheet.indexOf(".terminal-toolbar:has(.terminal-resume-here)");
+  expect(scoped).toBeGreaterThan(-1);
+});

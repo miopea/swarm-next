@@ -387,8 +387,8 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
           {!session.confirmed_selection && !session.recovery_outcome && session.recovery_attempt?.step.kind === "continue" && <small>Continuation fallback · see Session details</small>}
           {!session.confirmed_selection && session.recovery_outcome && recoveryOutcomeNote(session.recovery_outcome)
             && <small role="status">{recoveryOutcomeNote(session.recovery_outcome)}</small>}
-          {control !== "owned" && <small role="status">{control === "unsupported" ? "Viewing only · a safe worker-engine update is needed for terminal control." : control === "checking" ? "Checking terminal control…" : control === "elsewhere" ? "Viewing only · another view controls this terminal." : "Viewing only · ready to resume here."}</small>}
-          {(control === "elsewhere" || control === "available") && <button type="button" className="secondary-button" onClick={() => controller.resumeHere()}>Resume Here</button>}
+          {control !== "owned" && <small role="status">{control === "unsupported" ? "Viewing only · a safe worker-engine update is needed for terminal control." : control === "checking" ? "Checking terminal control…" : control === "elsewhere" ? "Another view has control." : "Viewing only · ready to resume here."}</small>}
+          {(control === "elsewhere" || control === "available") && <button type="button" className="secondary-button terminal-resume-here" onClick={() => controller.resumeHere()}>Resume Here</button>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
               {attachmentState === "uploading" ? `Adding ${attachmentName ?? "file"}…` : attachmentState === "waiting" ? `${attachmentName ?? "File"} uploaded · ${attachmentWaitReason}` : attachmentState === "ready" ? `Added ${attachmentName ?? "file"} · press Enter to send` : attachmentError ? `Could not add ${attachmentName ?? "file"} — ${attachmentError}. Try again.` : `Could not add ${attachmentName ?? "file"}. Try again.`}
