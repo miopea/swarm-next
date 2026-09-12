@@ -298,7 +298,7 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
           value={draft}
           readOnly={submitting || otherDraft || uncertainDraft}
           onChange={(event) => setDraft(event.target.value.slice(0, MAX_TERMINAL_DRAFT_LENGTH))}
-          placeholder="Type or dictate. Slash commands work here."
+          placeholder="Message or /command"
           autoCapitalize="sentences"
           enterKeyHint="enter"
         />
