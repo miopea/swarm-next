@@ -1560,26 +1560,46 @@ impl SessionRegistry {
             let session = self.get(session_id)?;
             let mut child = lock(&session.child)?;
             let mut gate = lock(&session.provider_lifecycle)?;
+            // ⚠️ EVERY REFUSAL SAYS WHICH GATE IT WAS. This function had six ways
+            // to return false and none of them said anything, so an operator
+            // answering in a terminal got "hook error ... provider startup
+            // evidence unavailable" and nobody could tell which check refused.
+            // That silence cost 2026-09-12 five failed proof attempts and a
+            // worker restart: the failure was always visible as a refusal here
+            // and never attributable to a cause.
             let Some(gate) = gate.as_mut() else {
+                tracing::warn!(%session_id, "native interview refused: no provider lifecycle gate");
                 return Ok(false);
             };
             if !gate.authenticates(session_id, capability) {
+                tracing::warn!(%session_id, "native interview refused: capability did not authenticate");
                 return Ok(false);
             }
             let mut capture = lock(&self.native_interviews)?;
             if child.try_wait().map_err(terminal_error)?.is_some() {
                 gate.revoke();
                 capture.invalidate_pending(session_id);
+                tracing::warn!(%session_id, "native interview refused: provider process already exited");
                 return Ok(false);
             }
             if !gate.is_current_conversation(conversation) {
                 capture.invalidate_pending(session_id);
+                tracing::warn!(%session_id, %conversation, "native interview refused: batch belongs to another conversation");
                 return Ok(false);
             }
             let Some(selection) = gate.selection() else {
+                tracing::warn!(%session_id, "native interview refused: gate holds no selection");
                 return Ok(false);
             };
-            return Ok(capture.finalize(session_id, selection.revision, payload));
+            let finalized = capture.finalize(session_id, selection.revision, payload);
+            if !finalized {
+                tracing::warn!(
+                    %session_id,
+                    revision = selection.revision,
+                    "native interview refused: finalize rejected the batch (no pending observation, revision moved, or the final batch did not match)"
+                );
+            }
+            return Ok(finalized);
         }
         self.with_native_interview(
             session_id,
@@ -1645,27 +1665,35 @@ impl SessionRegistry {
         let session = self.get(session_id)?;
         let mut child = lock(&session.child)?;
         let mut gate = lock(&session.provider_lifecycle)?;
+        // Same reasoning as observe_native_interview: a refusal that names no
+        // cause is indistinguishable from the bug it produces.
         let Some(gate) = gate.as_mut() else {
+            tracing::warn!(%session_id, "native interview refused: no provider lifecycle gate");
             return Ok(T::default());
         };
         if !gate.authenticates(session_id, capability) {
+            tracing::warn!(%session_id, "native interview refused: capability did not authenticate");
             return Ok(T::default());
         }
         if child.try_wait().map_err(terminal_error)?.is_some() {
             gate.revoke();
             lock(&self.native_interviews)?.invalidate_pending(session_id);
+            tracing::warn!(%session_id, "native interview refused: provider process already exited");
             return Ok(T::default());
         }
         let mut capture = lock(&self.native_interviews)?;
         let Some(observation) = observation else {
             capture.invalidate_pending(session_id);
+            tracing::warn!(%session_id, "native interview refused: payload is not a readable Claude interview");
             return Ok(T::default());
         };
         if !gate.is_current_conversation(observation.conversation) {
             capture.invalidate_pending(session_id);
+            tracing::warn!(%session_id, conversation = %observation.conversation, "native interview refused: observation belongs to another conversation");
             return Ok(T::default());
         }
         let Some(selection) = gate.selection() else {
+            tracing::warn!(%session_id, "native interview refused: gate holds no selection");
             return Ok(T::default());
         };
         Ok(apply(&mut capture, selection.revision, observation))
