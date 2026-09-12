@@ -252,10 +252,31 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
         .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
         Some("tool_use_id contains characters outside [A-Za-z0-9_]")
-    } else if !hook.tool_input.answers.is_empty() {
-        Some("tool_input.answers is not empty")
-    } else if !hook.tool_input.annotations.is_empty() {
-        Some("tool_input.annotations is not empty")
+    } else if hook.hook_event_name == "PreToolUse" && !hook.tool_input.answers.is_empty() {
+        // ⚠️ THE PROGRAMMATIC MARKER, AND IT ONLY MEANS ANYTHING BEFORE THE
+        // HUMAN ANSWERS. At PreToolUse nothing has been answered yet, so answers
+        // present in the INPUT can only have been supplied by the caller — the
+        // forged-consent shape that claude-2.1.267-programmatic-interview.json
+        // records, where a programmatic invocation pre-filled "Amber".
+        //
+        // At PostToolUse it means the opposite. Claude Code 2.1.270 echoes the
+        // answers the operator just gave back into tool_input, so refusing them
+        // there rejected EVERY genuine interview. Measured 2026-09-12: that
+        // rejection also calls invalidate_pending, destroying the observation
+        // PreToolUse had already stored, so one refusal took out all three hooks
+        // and native_operator_interviews sat at 0 for the life of the feature.
+        //
+        // Provenance is not weakened by this, because it never rested here.
+        // NativeInterviewCapture::complete refuses without a pending entry, and
+        // only a clean Requested observation creates one; it then additionally
+        // requires device writes, a submit sequence and matching write
+        // sequences — evidence a person typed. A programmatic completion with
+        // no prior clean request still produces nothing.
+        Some("tool_input.answers is not empty on a request, which marks a programmatic pre-fill")
+    } else if hook.hook_event_name == "PreToolUse" && !hook.tool_input.annotations.is_empty() {
+        // Same timing argument: annotations are collected from the person at
+        // answer time, so before the answer they can only be caller-supplied.
+        Some("tool_input.annotations is not empty on a request")
     } else if !valid_native_interview_questions(&hook.tool_input.questions) {
         Some("tool_input.questions failed validation")
     } else {
@@ -470,9 +491,22 @@ mod tests {
             event[key] = value;
             assert!(read(&event).is_none());
         }
+        // ⚠️ MOVED TO THE REQUEST PHASE, WHERE THE MARKER STILL MEANS SOMETHING.
+        // On a completion, Claude Code 2.1.270 echoes the operator's answers
+        // into tool_input, so refusing them there rejected every genuine
+        // interview. Before the answer exists, they can only be caller-supplied.
+        let mut event = payload(false);
+        event["tool_input"]["answers"] = json!({"Which fictional fruit?":"Pear"});
+        assert!(
+            read(&event).is_none(),
+            "a request carrying answers is a programmatic pre-fill"
+        );
         let mut event = payload(true);
         event["tool_input"]["answers"] = json!({"Which fictional fruit?":"Pear"});
-        assert!(read(&event).is_none());
+        assert!(
+            read(&event).is_some(),
+            "a completion carrying answers is the 2.1.270 human shape"
+        );
         assert!(read_claude_interview(b"not json").is_none());
     }
 
@@ -491,7 +525,28 @@ mod tests {
             callback["tool_response"]["answers"]["Which fictional jar?"],
             "Amber"
         );
-        assert!(read_claude_interview(bytes).is_none());
+        // ⚠️ THE PROXY MOVED; THE GUARANTEE DID NOT. This used to assert that
+        // read_claude_interview refuses the completion. It no longer can: a
+        // programmatic completion and a genuine 2.1.270 one are byte-identical
+        // in shape — both carry the answers in tool_input AND tool_response —
+        // so the payload layer cannot tell them apart and never really could.
+        //
+        // What actually stops forged consent is the CAPTURE: complete() refuses
+        // without a pending entry, and only a clean Requested observation makes
+        // one. So assert that instead, which is what this test is named for and
+        // is strictly stronger than the shape check it replaces.
+        let completion = read_claude_interview(bytes).expect("2.1.270 shape now reads");
+        assert_eq!(completion.phase, NativeInterviewPhase::Completed);
+        let mut capture = crate::native_interview_capture::NativeInterviewCapture::default();
+        let session = swarm_domain::WorkerSessionId::new();
+        assert!(
+            !capture.observe_at_revision(session, 1, completion),
+            "a completion with no clean request behind it must not become evidence"
+        );
+        assert!(
+            capture.retained().is_empty(),
+            "no operator evidence may exist from a programmatic callback"
+        );
 
         // Reconstruct only the observed pre-hook invocation; it is a request,
         // not an answer. Removing the programmatic marker from a completion
