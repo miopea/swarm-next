@@ -1154,7 +1154,49 @@ impl ServerHandler for AgentMcp {
                                 deadline: input.deadline,
                             },
                         )
-                        .and_then(structured)
+                        .and_then(|decision| {
+                            // ⚠️ A DECISION CARRYING QUESTIONS IS ANSWERABLE IN A
+                            // TERMINAL, AND THE MATCH IS EXACT. The bridge links a
+                            // captured interview to a pending decision only when
+                            // every question converts and equals the captured
+                            // snapshot, which is the right trade: a fuzzy match
+                            // would let one answer settle a question the operator
+                            // was not looking at.
+                            //
+                            // But the worker retypes the batch into its provider's
+                            // interview tool, and retyping is where drift comes
+                            // from. On 2026-09-12 I reworded my own prompt between
+                            // raising the decision and asking it — to ask the
+                            // operator to press a button rather than type — and the
+                            // capture was recorded correctly and linked to NOTHING.
+                            // The item stayed pending, silently, because an
+                            // unmatched answer has no candidate to attach a notice
+                            // to. Asking again with the original wording resolved it
+                            // immediately.
+                            //
+                            // The exact payload is right here in the reply. Saying
+                            // so is what stops the next worker retyping it.
+                            if decision.questions.is_empty() {
+                                return structured(decision);
+                            }
+                            // ADDED BESIDE the record, never wrapped around it.
+                            // Callers read this reply's fields at the top level —
+                            // Queen's automation among them — so nesting the
+                            // decision under a key to make room for guidance would
+                            // break every one of them for the sake of a sentence.
+                            let mut value = serde_json::to_value(&decision).map_err(|error| {
+                                ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                                    error.to_string(),
+                                ))
+                            })?;
+                            if let Some(object) = value.as_object_mut() {
+                                object.insert(
+                                    "next".into(),
+                                    json!("This decision can be answered in your terminal. Ask these EXACT questions with your provider's interview tool — copy `questions` from this reply rather than retyping them. The bridge matches question text, headers and option labels exactly, so rewording even the prompt breaks the link: the answer is captured, matches nothing, and the item stays pending with nothing explaining why."),
+                                );
+                            }
+                            structured(value)
+                        })
                 })
             }
             "swarm_finish_automation_run" => {
@@ -4113,6 +4155,75 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), notified.as_mut())
             .await
             .unwrap();
+    }
+
+    /// A decision carrying questions tells the worker to ask them verbatim.
+    ///
+    /// ⚠️ THE MATCH IS EXACT AND THE WORKER RETYPES THE BATCH, which is where
+    /// drift comes from. On 2026-09-12 I reworded my own prompt between raising
+    /// a decision and asking it — to ask the operator to press a button rather
+    /// than type — and the capture was recorded correctly and linked to NOTHING.
+    /// The item stayed pending, silently, because an unmatched answer has no
+    /// candidate to attach a notice to. Asking again with the original wording
+    /// resolved it immediately (capture 01a0976c, decision 01a09766).
+    ///
+    /// The payload is already in the reply; this is the sentence that stops the
+    /// next worker retyping it.
+    #[tokio::test]
+    async fn a_decision_with_questions_says_to_ask_them_verbatim() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let task = store.create_task("Ask verbatim", "/workspace").unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let with_questions = call_review_test_tool(bridge.clone(), &token, "swarm_request_decision", json!({
+            "kind": "input", "task_id": task.id,
+            "title": "Which way", "summary": "A bounded fixture decision.",
+            "reason": "Fixture.", "suggested_action": "Left",
+            "questions": [{"header": "Way", "question": "Which way?", "options": ["Left", "Right"]}],
+        })).await;
+        assert_eq!(
+            with_questions["result"]["isError"], false,
+            "{with_questions}"
+        );
+        let content = &with_questions["result"]["structuredContent"];
+        let guidance = content["next"].as_str().unwrap_or_default();
+        assert!(
+            guidance.contains("EXACT"),
+            "must tell the worker to ask verbatim: {content}"
+        );
+        assert!(
+            guidance.contains("questions"),
+            "must name the field to copy: {content}"
+        );
+        // ADDITIVE, NEVER WRAPPED. Callers read these fields at the top level,
+        // Queen's automation among them, so the record must stay where it was.
+        assert!(
+            content["id"].is_string(),
+            "the decision id must stay top level: {content}"
+        );
+        assert!(
+            content["questions"].is_array(),
+            "the payload to copy must stay top level: {content}"
+        );
+
+        // And a decision with no questions cannot be answered in a terminal, so
+        // it must not carry advice about doing so.
+        let without = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_request_decision",
+            json!({
+                "kind": "approval", "task_id": task.id,
+                "title": "Plain approval", "summary": "A bounded fixture decision.",
+                "reason": "Fixture.", "suggested_action": "Go", "allowed_actions": ["Go", "Stop"],
+            }),
+        )
+        .await;
+        assert_eq!(without["result"]["isError"], false, "{without}");
+        assert!(
+            without["result"]["structuredContent"]["next"].is_null(),
+            "a decision with no questions must not be told to ask them: {without}"
+        );
     }
 
     /// THE DESCRIPTION AND THE LIFECYCLE AGREE ON ALL 64 PAIRS, checked rather
