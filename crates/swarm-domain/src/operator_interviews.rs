@@ -186,6 +186,13 @@ pub struct NativeInterviewEvidence {
 #[serde(rename_all = "snake_case")]
 pub enum NativeInterviewFinalResult {
     ExactBatch,
+    /// The interview was asked and never came back as a completed answer.
+    ///
+    /// ⚠️ THIS IS NOT AN ANSWER AND MUST NEVER RESOLVE ANYTHING. It carries the
+    /// questions that were asked so the operator can be told WHICH item is
+    /// affected, and no answers, because none were captured. Only `ExactBatch`
+    /// resolves a decision; every other value, including this one, refuses.
+    NeverCompleted,
 }
 
 impl std::fmt::Debug for NativeInterviewEvidence {

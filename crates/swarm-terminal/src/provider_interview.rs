@@ -140,6 +140,34 @@ pub(crate) fn final_batch_conversation(bytes: &[u8]) -> Option<ProviderConversat
     batch.session_id.parse().ok()
 }
 
+/// Whether a final batch is the completion of one specific invocation.
+///
+/// ⚠️ NARROW ON PURPOSE. `PostToolBatch` carries no tool matcher — a batch is not
+/// one tool — so it fires after EVERY tool call and almost none of them are
+/// interviews. This is the only thing that distinguishes "the interview we were
+/// waiting for came back" from ordinary traffic, so it matches the
+/// conversation AND the exact invocation, not merely the shape.
+pub(crate) fn final_batch_answers_invocation(
+    bytes: &[u8],
+    conversation: ProviderConversationId,
+    invocation: &str,
+) -> bool {
+    if bytes.len() > crate::MAX_PROVIDER_LIFECYCLE_BYTES {
+        return false;
+    }
+    let Ok(batch) = serde_json::from_slice::<FinalBatch>(bytes) else {
+        return false;
+    };
+    batch.hook_event_name == "PostToolBatch"
+        && batch.agent_id.is_none()
+        && batch.tool_calls.len() <= swarm_domain::MAX_NATIVE_INTERVIEW_BATCH
+        && batch.session_id.parse::<ProviderConversationId>().ok() == Some(conversation)
+        && batch
+            .tool_calls
+            .iter()
+            .any(|call| call.invocation == invocation && call.name == "AskUserQuestion")
+}
+
 #[derive(Deserialize)]
 struct FinalBatchCall {
     #[serde(rename = "tool_use_id")]

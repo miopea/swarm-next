@@ -1624,6 +1624,22 @@ pub enum NativeAnswerRefusal {
     NoLongerApplicable,
     /// The evidence is already bound elsewhere, or contradicts what is stored.
     Conflicting,
+    /// The interview was asked and never completed: the operator answered in a
+    /// way the engine does not report, so nothing was captured to use.
+    ///
+    /// ⚠️ MEASURED, NOT INFERRED. Claude Code 2.1.270 emits no `PostToolUse` for
+    /// an `AskUserQuestion` answered with typed free text — reproduced with every
+    /// refusal gate instrumented, and nothing arrived at all. Selecting an
+    /// offered option captures reliably. So Swarm cannot capture a typed answer
+    /// and the operator was left with an item that stayed up and said nothing,
+    /// which is the complaint this whole bridge exists to end.
+    ///
+    /// The wording deliberately does not assert HOW they answered. A cancelled
+    /// interview may leave the same trace — asked, never completed — and
+    /// telling someone who pressed Escape to choose an option would be wrong.
+    /// What is true of both is that nothing was captured and that choosing an
+    /// offered option is what works.
+    NeverCompleted,
 }
 
 impl NativeAnswerRefusal {
@@ -1640,6 +1656,9 @@ impl NativeAnswerRefusal {
             Self::NoLongerApplicable => {
                 "An answer was typed in this worker's terminal, but this question or the worker's session changed before Swarm could use it. Answer here."
             }
+            Self::NeverCompleted => {
+                "This was asked in the worker's terminal but never came back as a completed answer, so Swarm captured nothing to use. Answering in the terminal settles it only when you CHOOSE one of the offered options — typed text is not reported to Swarm. Choose an option there, or answer here."
+            }
             Self::Conflicting => {
                 "An answer was typed in this worker's terminal, but it is already recorded against a different question. Answer here."
             }
@@ -1654,6 +1673,7 @@ impl NativeAnswerRefusal {
             Self::Ambiguous => "ambiguous",
             Self::NoLongerApplicable => "no_longer_applicable",
             Self::Conflicting => "conflicting",
+            Self::NeverCompleted => "never_completed",
         }
     }
 
@@ -1668,6 +1688,7 @@ impl NativeAnswerRefusal {
             "ambiguous" => Some(Self::Ambiguous),
             "no_longer_applicable" => Some(Self::NoLongerApplicable),
             "conflicting" => Some(Self::Conflicting),
+            "never_completed" => Some(Self::NeverCompleted),
             _ => None,
         }
     }

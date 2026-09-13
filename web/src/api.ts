@@ -1140,7 +1140,8 @@ export type NativeAnswerRefusal =
   | "unverified"
   | "ambiguous"
   | "no_longer_applicable"
-  | "conflicting";
+  | "conflicting"
+  | "never_completed";
 
 export type DecisionRequest = {
   /**

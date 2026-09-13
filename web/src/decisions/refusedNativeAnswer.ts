@@ -18,6 +18,12 @@ export function refusedNativeAnswerNotice(reason: NativeAnswerRefusal): string {
       return "An answer was typed in this worker's terminal, but the engine did not confirm it as a completed answer, so Swarm cannot treat it as yours. Answer here, or answer in the terminal again.";
     case "ambiguous":
       return "An answer was typed in this worker's terminal, and more than one open question has exactly these options — so Swarm cannot tell which one you answered. Answer here to settle it.";
+    case "never_completed":
+      // ⚠️ SAYS NOTHING ABOUT HOW THEY ANSWERED, because Swarm does not know.
+      // A typed reply and a cancelled interview leave the same trace: asked,
+      // never completed. What is true of both is that nothing was captured and
+      // that choosing an offered option is what a terminal can report.
+      return "This was asked in the worker's terminal but never came back as a completed answer, so Swarm captured nothing to use. Answering there settles it only when you CHOOSE one of the offered options — typed text is not reported to Swarm. Choose an option there, or answer here.";
     case "conflicting":
       return "An answer was typed in this worker's terminal, but it is already recorded against a different question. Answer here.";
     default:

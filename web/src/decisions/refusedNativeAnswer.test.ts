@@ -38,3 +38,21 @@ describe("refusedNativeAnswerNotice", () => {
       .toContain("cannot tell which one you answered");
   });
 });
+
+/**
+ * ⚠️ THE ONE CASE THAT USED TO BE SILENT, and the one whose remedy is different.
+ *
+ * Claude Code 2.1.270 emits no PostToolUse for an AskUserQuestion answered with
+ * typed free text, so Swarm captures nothing and the item stays up saying
+ * nothing. The other reasons all mean an answer EXISTS and could not be used;
+ * this one means none was captured at all, so telling the operator to "answer
+ * in the terminal again" would send them round the same loop.
+ */
+it("tells the operator to choose an option when nothing was ever captured", () => {
+  const notice = refusedNativeAnswerNotice("never_completed");
+  expect(notice).toMatch(/CHOOSE one of the offered options/);
+  expect(notice).toMatch(/typed text is not reported/);
+  // It must not claim to know HOW they answered: a cancelled interview leaves
+  // the same trace, and "you typed" would then be false.
+  expect(notice).not.toMatch(/you typed|An answer was typed/);
+});

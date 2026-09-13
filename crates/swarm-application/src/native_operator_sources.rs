@@ -494,6 +494,12 @@ pub enum NativeAnswerLink {
     /// ADR 0065: "Ambiguous applicability remains open." Picking one would be a
     /// guess wearing a resolution's clothing.
     Ambiguous,
+    /// The interview was asked and never completed, so nothing was captured.
+    ///
+    /// Distinct from Unverified, which means an answer exists and could not be
+    /// confirmed. Here there is no answer at all, and the remedy is different:
+    /// choosing an offered option is what a terminal can report.
+    NeverCompleted,
 }
 
 /// Which refusals the operator needs told about, and which are silence.
@@ -511,6 +517,7 @@ fn refusal_for(outcome: NativeAnswerLink) -> Option<swarm_domain::NativeAnswerRe
         NativeAnswerLink::Unverified => Some(swarm_domain::NativeAnswerRefusal::Unverified),
         NativeAnswerLink::Ambiguous => Some(swarm_domain::NativeAnswerRefusal::Ambiguous),
         NativeAnswerLink::Conflicting => Some(swarm_domain::NativeAnswerRefusal::Conflicting),
+        NativeAnswerLink::NeverCompleted => Some(swarm_domain::NativeAnswerRefusal::NeverCompleted),
         NativeAnswerLink::NoLongerApplicable => {
             Some(swarm_domain::NativeAnswerRefusal::NoLongerApplicable)
         }
@@ -594,6 +601,24 @@ impl TaskService {
         // Being unable to SAY an answer was refused was the larger risk: silence
         // is indistinguishable from the bug this whole feature exists to fix.
         let matching = self.decisions_matching_native_answer(&stored)?;
+        // ⚠️ BEFORE THE VERIFICATION GATE, BECAUSE IT IS A DIFFERENT FACT WITH A
+        // DIFFERENT REMEDY. Unverified means an answer exists and could not be
+        // confirmed. This means no answer was ever captured: the interview was
+        // asked and never completed, which is what a TYPED reply looks like to
+        // Swarm — Claude Code 2.1.270 reports no PostToolUse for one. Falling
+        // through would tell the operator their answer could not be confirmed,
+        // when the truth is that choosing an offered option is what a terminal
+        // can report at all.
+        if stored.source.final_result
+            == Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted)
+        {
+            self.announce_refusal(
+                &matching,
+                swarm_domain::NativeAnswerRefusal::NeverCompleted,
+                now,
+            )?;
+            return Ok(NativeAnswerLink::NeverCompleted);
+        }
         if stored.source.final_result != Some(swarm_domain::NativeInterviewFinalResult::ExactBatch)
         {
             self.announce_refusal(

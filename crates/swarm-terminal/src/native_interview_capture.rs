@@ -289,6 +289,26 @@ impl NativeInterviewCapture {
     /// match releases the provisional result to durable intake. Never replays input.
     pub fn finalize(&mut self, session: WorkerSessionId, revision: u64, payload: &[u8]) -> bool {
         let Some((mut source, observation)) = self.awaiting_final.remove(&session) else {
+            // ⚠️ ASKED AND NEVER COMPLETED — THE ONE CASE THAT USED TO BE SILENT.
+            //
+            // Claude Code 2.1.270 emits no `PostToolUse` for an AskUserQuestion
+            // answered with typed free text. Measured with every refusal gate
+            // instrumented: nothing arrived at all. So the operator answers,
+            // nothing is captured, the item stays up and says nothing — the
+            // complaint this whole bridge exists to end, in the input mode a
+            // person reaches for when the offered options do not fit.
+            //
+            // The trace is exact: a pending REQUEST for this session whose
+            // invocation matches the batch now being finalised, with no
+            // completion ever recorded between them. Anything else is left
+            // alone.
+            //
+            // ⚠️ A CANCELLED INTERVIEW MAY LEAVE THE SAME TRACE, so the
+            // evidence says only that nothing completed. It carries the
+            // questions, so the operator can be told WHICH item is affected,
+            // and no answers, because none exist. It can never resolve
+            // anything: only ExactBatch does.
+            self.report_never_completed(session, revision, payload);
             return false;
         };
         if source.selection_revision != revision
@@ -300,6 +320,45 @@ impl NativeInterviewCapture {
         source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
         self.ready.push_back(source);
         true
+    }
+
+    /// Retains evidence that an interview was asked and never answered.
+    ///
+    /// Only when the batch being finalised is the SAME invocation as a pending
+    /// request for this session. A batch for anything else is ordinary traffic
+    /// — `PostToolBatch` carries no tool matcher and fires after every tool call
+    /// — and must produce nothing.
+    fn report_never_completed(&mut self, session: WorkerSessionId, revision: u64, payload: &[u8]) {
+        let Some(pending) = self.pending.get(&session) else {
+            return;
+        };
+        if pending.selection_revision != revision
+            || self.ready.len() == MAX_READY
+            || !crate::provider_interview::final_batch_answers_invocation(
+                payload,
+                pending.observation.conversation,
+                &pending.observation.tool_use_id,
+            )
+        {
+            return;
+        }
+        let pending = self
+            .pending
+            .remove(&session)
+            .expect("pending invocation exists");
+        self.ready.push_back(NativeInterviewEvidence {
+            final_result: Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted),
+            id: OperatorSubmissionId::new(),
+            session_id: session,
+            conversation: pending.observation.conversation,
+            selection_revision: revision,
+            tool_use_id: pending.observation.tool_use_id.clone(),
+            devices: pending.devices,
+            first_write_sequence: pending.first_write_sequence.unwrap_or_default(),
+            submit_sequence: pending.submit_sequence.unwrap_or_default(),
+            questions: pending.observation.questions().to_vec(),
+            answers: std::collections::BTreeMap::new(),
+        });
     }
 
     #[cfg(test)]
@@ -404,6 +463,75 @@ mod tests {
             "tool_calls":[{"tool_name":"AskUserQuestion", "tool_use_id":observation.tool_use_id,
             "tool_input":{"questions":observation.questions()},
             "tool_response":format!("Your questions have been answered: {clauses}. You can now continue with these answers in mind.")}]})).unwrap()
+    }
+
+    /// An interview asked and never answered is REPORTED, not forgotten.
+    ///
+    /// ⚠️ THE ONE CASE THAT USED TO BE SILENT. Claude Code 2.1.270 emits no
+    /// `PostToolUse` for an `AskUserQuestion` answered with typed free text —
+    /// measured on the operator's Hive with every refusal gate instrumented,
+    /// and nothing arrived at all. So they answered, nothing was captured, and
+    /// the item stayed up saying nothing: the complaint this bridge exists to
+    /// end, in the input mode a person reaches for when the options do not fit.
+    ///
+    /// It carries the QUESTIONS so the operator can be told which item is
+    /// affected, and NO ANSWERS because none exist. It can never resolve
+    /// anything: only `ExactBatch` does.
+    #[test]
+    fn an_interview_asked_and_never_answered_is_reported_with_no_answer() {
+        let mut capture = NativeInterviewCapture::default();
+        let session = WorkerSessionId::new();
+        let requested = observation(false, "toolu_one");
+        capture.observe_at_revision(session, 1, requested.clone());
+        capture.record_write(&input(session, 1), true);
+
+        // The completion never arrives. The batch for that same invocation does.
+        let batch = final_batch(&observation(true, "toolu_one"));
+        assert!(!capture.finalize(session, 1, &batch), "nothing may resolve");
+
+        let retained = capture.retained();
+        assert_eq!(retained.len(), 1, "the operator must be told");
+        assert_eq!(
+            retained[0].final_result,
+            Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted)
+        );
+        assert!(retained[0].answers.is_empty(), "no answer was captured");
+        // Compared, never printed: NativeInterviewQuestion withholds Debug on
+        // purpose because it carries the operator's own words.
+        assert!(
+            retained[0].questions == requested.questions(),
+            "the questions name which item is affected"
+        );
+    }
+
+    /// ⚠️ AND ORDINARY TRAFFIC MUST PRODUCE NOTHING.
+    ///
+    /// `PostToolBatch` carries no tool matcher — a batch is not one tool — so it
+    /// fires after EVERY tool call. If a batch for some unrelated invocation
+    /// counted as "the interview never completed", every worker would generate
+    /// a stream of false notices, which is worse than the silence it replaces.
+    #[test]
+    fn a_batch_for_another_invocation_reports_nothing() {
+        let mut capture = NativeInterviewCapture::default();
+        let session = WorkerSessionId::new();
+        capture.observe_at_revision(session, 1, observation(false, "toolu_one"));
+        capture.record_write(&input(session, 1), true);
+
+        // A batch for a DIFFERENT invocation: ordinary traffic.
+        let unrelated = final_batch(&observation(true, "toolu_other"));
+        assert!(!capture.finalize(session, 1, &unrelated));
+        assert!(
+            capture.retained().is_empty(),
+            "an unrelated batch must not be read as an abandoned interview"
+        );
+
+        // And a batch at a revision the request did not belong to.
+        let batch = final_batch(&observation(true, "toolu_one"));
+        assert!(!capture.finalize(session, 2, &batch));
+        assert!(
+            capture.retained().is_empty(),
+            "a moved selection must not report"
+        );
     }
 
     #[test]
