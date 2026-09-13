@@ -2196,7 +2196,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      terminal itself, and it is what they were looking at when they said "this
      looks bad". Hiding a grid item is not the same as removing its track. */
   .app-shell:has(> .control-rail.terminal-focus.nav-tucked) { grid-template-rows: minmax(0, 1fr); }
-  .header-actions .nav-menu-button { display: inline-flex; }
+  /* ⚠️ grid, NOT inline-flex. .icon-button centres its glyph with
+     `display: grid; place-items: center`, and place-items cannot centre
+     horizontally on a flex container — justify-items does not apply there. So
+     an inline-flex override kept the vertical centring and silently lost the
+     horizontal, which is what the operator saw on 2026-09-13: "The hamburger
+     menu is not centered". Matching the base display keeps the rule it
+     already had. */
+  .header-actions .nav-menu-button { display: grid; }
   /* A detached window on a phone goes back to being the whole width. The rail
      gives it nothing here — its context is hidden at this width — so it stood
      as an empty column taking half the screen, which is what the operator was
@@ -2572,31 +2579,39 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-terminal-key-heading > div { display: flex; flex-wrap: wrap; gap: 6px; }
   .mobile-terminal-key-heading > small { flex-basis: 100%; overflow-wrap: anywhere; }
   .mobile-terminal-key-heading button { min-height: 44px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-raised); }
+  /* ⚠️ MUST FOLLOW the rule above, not precede it. `.terminal-arrow-row button`
+     and `.mobile-terminal-key-heading button` have the SAME specificity, so
+     order decides, and written first the arrows silently kept the 10px side
+     padding meant for text pills: 53px each, 224px for four, and the row broke
+     to two lines. Seven controls fit this line only on a width budget.
+     Measured at 432px (the operator's phone), 408px of usable row:
+       arrows 172 + 8 + Refresh 61 + 6 + Add file 61 + 6 + Keys 56 = 370.
+     At 390px it wraps to two lines rather than clipping — deliberate, and why
+     neither group is given a fixed width. */
+  .terminal-arrow-row { display: flex; flex: 0 0 auto; gap: 4px; }
+  .terminal-arrow-row button { width: 40px; min-width: 0; padding: 0; font-size: 1.12rem; line-height: 1; }
+  .mobile-terminal-key-heading .terminal-tool-row { flex: 1 1 auto; justify-content: flex-end; }
+  .mobile-terminal-key-heading .terminal-tool-row button { padding: 4px 8px; }
   /* Distinct from the keys beside it: those send something to the worker, this
      one repairs the screen and sends nothing. */
   .terminal-refresh-button { border-color: var(--accent-strong) !important; background: var(--accent-soft) !important; }
   .mobile-terminal-keys { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px; }
   .mobile-terminal-keys button { min-width: 44px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel-raised); }
-  .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 44px); flex: 0 0 auto; gap: 4px; }
-  .terminal-dpad button { font-size: 1.12rem; line-height: 1; }
-  .terminal-dpad button:nth-child(1) { grid-area: up; }
-  .terminal-dpad button:nth-child(2) { grid-area: left; }
-  .terminal-dpad button:nth-child(3) { grid-area: down; }
-  .terminal-dpad button:nth-child(4) { grid-area: right; }
   .interrupt-button { color: var(--danger) !important; }
-  /* ⚠️ TWO ROWS, NOT THREE, AND THE DIFFERENCE IS 44px OF TERMINAL. Measured
-     at 390x844: these five keys total 334px of button width and get about
-     220px beside the d-pad, so free wrapping laid them out three rows deep and
-     the key block stood 142px tall against a 92px d-pad. A 3+2 grid is exactly
-     as tall as the d-pad beside it, so the block costs what the d-pad already
-     cost and nothing more.
+  /* ⚠️ TWO ROWS, NOT THREE, AND THE DIFFERENCE IS 44px OF TERMINAL. These five
+     keys total 334px of button width, so free wrapping laid them out three
+     rows deep. A 3+2 grid is two rows at any width this panel gets.
      Operator, emailed 2026-09-08 from a phone: "With the tools open and the
      navigation, there's very little view of the terminal." The terminal had
      329px and this block plus the composer had 312px.
+     The d-pad that used to sit beside this grid is gone from the panel — the
+     arrows are in the tools row now, always visible, and Enter is a blank
+     Send. What is left here is the rarely-needed remainder, which is why
+     opening it at all should now be unusual.
      A grid rather than nowrap+scroll on purpose: scrolling would have saved
      another 54px and put Cycle mode off-screen, and a key you cannot see is
      one you will not use. */
-  .terminal-key-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1 1 160px; min-width: 0; gap: 5px; }
+  .terminal-key-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1 1 100%; min-width: 0; gap: 5px; }
   .terminal-key-actions > button { width: 100%; }
   .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
 }

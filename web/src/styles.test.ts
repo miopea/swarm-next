@@ -593,11 +593,37 @@ test("tucks the phone navigation only where a terminal is on screen", () => {
   // where nothing gave the operator a way back.
   expect(stylesheet).toContain(".control-rail.terminal-focus.nav-tucked { display: none; }");
   // And the way back is only offered where the rail can actually be hidden.
-  expect(stylesheet).toContain(".header-actions .nav-menu-button { display: inline-flex; }");
+  // ⚠️ grid, NOT inline-flex, and this assertion is the guard on that. Operator,
+  // 2026-09-13: "The hamburger menu is not centered." .icon-button centres its
+  // glyph with `display: grid; place-items: center`, and place-items cannot
+  // centre horizontally on a flex container — the glyph sat 1px from the left
+  // edge with 25px to its right. Matching the base display keeps the centring
+  // the button already had.
+  expect(stylesheet).toContain(".header-actions .nav-menu-button { display: grid; }");
+  expect(stylesheet).not.toContain(".header-actions .nav-menu-button { display: inline-flex; }");
   expect(stylesheet).toContain(".header-actions .nav-menu-button { display: none; }");
   // The phone rule must come after the default that hides it.
-  expect(stylesheet.lastIndexOf(".header-actions .nav-menu-button { display: inline-flex; }"))
+  expect(stylesheet.lastIndexOf(".header-actions .nav-menu-button { display: grid; }"))
     .toBeGreaterThan(stylesheet.indexOf(".header-actions .nav-menu-button { display: none; }"));
+});
+
+/**
+ * Operator, 2026-09-13: "Can we fit the arrow keys where it says terminal
+ * tools? Then we don't need to show extra keys."
+ *
+ * The arrows moved out of the collapsible panel and into the tools row, which
+ * only fits on one line at a width budget. Two equal-specificity rules decide
+ * their size, so ORDER is the whole of it: written before
+ * `.mobile-terminal-key-heading button`, the arrows silently keep the 10px
+ * side padding meant for text pills — 53px each instead of 40, 224px for four,
+ * and the row breaks to two lines. That is a 52px loss of terminal on the one
+ * screen the operator was asking to make taller, and nothing about it looks
+ * broken enough to notice in a diff.
+ */
+test("the arrow keys win the cascade against the tool row's text pills", () => {
+  expect(stylesheet).toContain(".terminal-arrow-row button");
+  expect(stylesheet.indexOf(".terminal-arrow-row button"))
+    .toBeGreaterThan(stylesheet.indexOf(".mobile-terminal-key-heading button {"));
 });
 
 /**

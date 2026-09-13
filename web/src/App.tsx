@@ -2250,9 +2250,16 @@ export function App() {
             {popoutBlocked && <span className="saving-state" role="alert">Your browser blocked the new window</span>}
             {operatorToken && <button className="icon-button broadcast-button" aria-label="Tell every worker" title="Say one thing to every running worker" onClick={() => setShowBroadcast(true)}><BroadcastIcon /></button>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
-            {/* IN header-actions RATHER THAN A ROW OF ITS OWN, which is the
-                whole point. A hamburger in the navigation's place would have
-                traded a 44px nav row for a 44px button row and saved seven
+            {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
+            {/* LAST IN THE ROW, so it sits at the far right where a menu is
+                reached for. Operator, 2026-09-13: "it should be on the far
+                right". It was second from the right, beside the quick-navigation
+                button, which put two navigation-ish controls next to each other
+                and neither of them at the edge.
+
+                IN header-actions RATHER THAN A ROW OF ITS OWN, which is the
+                rest of the point. A hamburger in the navigation's place would
+                have traded a 44px nav row for a 44px button row and saved seven
                 pixels. This row already exists on the terminal screen, so
                 tucking the navigation gives back all of it. */}
             {operatorToken && surface === "workers" && activeWorker && !detached && (
@@ -2266,7 +2273,6 @@ export function App() {
                 onClick={() => setNavTucked((tucked) => !tucked)}
               ><NavMenuIcon /></button>
             )}
-            {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button theme-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
 
