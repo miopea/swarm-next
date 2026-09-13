@@ -269,6 +269,39 @@ test("separates a working worker from a resting one by more than a shade", () =>
   );
 });
 
+/**
+ * Operator, 2026-09-12, second half of the same report: "when a worker is
+ * working or in a different state, visually it's very subtle on both desktop
+ * and mobile, and there needs to be a better way to make it easy to scan to see
+ * state status."
+ *
+ * The roster had it backwards. Buzzing — which wants nothing from the operator
+ * — carried a filled label, while awaiting_operator and blocked, the only two
+ * states that want them, carried tinted text at .58rem. So the list shouted
+ * about rows you can ignore and whispered about rows you cannot.
+ */
+test("the states that want the operator are the loudest, not the quietest", () => {
+  // Filled, the same treatment buzzing already had, so the difference between
+  // them is hue rather than weight.
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-awaiting_operator .worker-attention-label { color: var(--panel); background: var(--warn); }",
+  );
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-blocked .worker-attention-label { color: var(--panel); background: var(--bad); }",
+  );
+  // ⚠️ AND IT MUST NOT SILENTLY GO BACK. The old rule stated awaiting_operator
+  // as tinted text; if that returns, the quiet-when-it-matters bug is back.
+  expect(stylesheet).not.toContain(
+    ".worker-row.worker-state-awaiting_operator .worker-attention-label { color: var(--warn); font-weight: 600; }",
+  );
+  // An edge down the side of the row, because a 9px uppercase label is not a
+  // scan target however it is coloured. Only these two get one, so it stays
+  // rare enough to mean something.
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-awaiting_operator,\n.worker-row.worker-state-blocked { box-shadow: inset 3px 0 var(--worker-state); }",
+  );
+});
+
 test("spans a revealed task panel across the card instead of into a column", () => {
   // The Original report and Step 1 of 2 panels drew on top of each other and
   // clipped at the card's right edge. Both are wrapped in a plain div so they

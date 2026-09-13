@@ -34,6 +34,30 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
         return ProviderActivity::Unknown;
     }
     let normalized = visible.to_lowercase();
+
+    // ⚠️ THE LIVE MENU IS CHECKED BEFORE active_signal, and the order is the
+    // whole fix. Operator, 2026-09-12: "Rcg network was on a askuser prompt and
+    // says buzzing. Still state detection problems on Mobile."
+    //
+    // A worker sitting on an AskUserQuestion read as ACTIVE, because a footer
+    // still carrying an interrupt hint matched first and returned before the
+    // menu was ever looked at. Buzzing is what the roster shows for Active, so
+    // a worker waiting on the operator advertised itself as busy.
+    //
+    // ⚠️ AND WHY THIS ONE IS ANCHORED AT THE START OF THE LINE. A narrow
+    // terminal truncates the END. Measured across this Hive's own journals, the
+    // menu footer really does arrive cut:
+    //     "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"  26
+    //     "Enter to select · Tab/Arrow keys to navigate · "                3
+    //     "Enter to select · ↑/↓ to navigate · n to add "                  3
+    //     "Enter to select ·↑/↓ to navigate · ctrl+g to "                  2
+    // Every existing Claude branch keyed on "Esc to cancel", which is the part
+    // truncation removes first, so on a phone they matched nothing. "Enter to
+    // select" is at the start and survives all four.
+    if provider == ProviderKind::ClaudeCode && claude_menu_is_open(visible) {
+        return ProviderActivity::AwaitingOperator;
+    }
+
     if active_signal(&normalized) {
         return ProviderActivity::Active;
     }
@@ -132,10 +156,39 @@ pub fn background_work_running(provider: ProviderKind, snapshot: &TerminalSnapsh
 }
 
 /// The provider is working on the operator's turn and must not be interrupted.
+/// Whether a Claude choice menu is currently open and waiting.
+///
+/// The footer must be the BOTTOM-MOST content, which is what separates a live
+/// menu from an answered one still scrolled up the screen: once answered,
+/// Claude draws its composer below and this line is no longer last.
+fn claude_menu_is_open(visible: &str) -> bool {
+    let mut lines = visible
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let footer_is_last = lines
+        .next()
+        .is_some_and(|line| line.starts_with("Enter to select") && line.contains("to navigate"));
+    // ⚠️ A FOOTER ALONE IS NOT A MENU, and an existing test says so — the
+    // options have to be there too. Numbered options are start-anchored like
+    // the footer, so they survive the same truncation; the selected option and
+    // its cursor may be scrolled off a short screen, which is why one numbered
+    // sibling is enough and a cursor is not required.
+    footer_is_last && lines.take(12).any(is_numbered_choice)
+}
+
+/// ⚠️ A PREFIX, because a narrow terminal truncates the END of the line.
+///
+/// Measured across this Hive's journals: "esc to interrupt" 4486, but also
+/// "esc to interrup…" 104, "esc to interru…" 35, "esc to inter" 18,
+/// "esc to interr…" 16, "esc to inte" 13, "esc to int" 8, "esc to inter…" 6,
+/// "esc to int…" 5, "esc to interrup" 2. The old list matched the full phrase
+/// and exactly one truncation, so 202 observations of a WORKING provider read
+/// as not working — the same phone-width truncation, failing the other way.
 fn active_signal(normalized: &str) -> bool {
-    normalized.contains("esc to interrupt")
-        || normalized.contains("esc to int…")
-        || normalized.contains("esc to stop")
+    normalized.contains("esc to int")
+        || normalized.contains("esc to sto")
         || normalized.contains("esc to …")
 }
 
@@ -259,6 +312,83 @@ fn is_numbered_choice(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// Operator, 2026-09-12: "Rcg network was on a askuser prompt and says
+    /// buzzing. Still state detection problems on Mobile."
+    ///
+    /// A worker WAITING ON THE OPERATOR advertised itself as working, because a
+    /// footer still carrying an interrupt hint matched `active_signal` and
+    /// returned before the menu was ever considered. Buzzing is the roster's
+    /// rendering of Active, so the one state that should shout for attention
+    /// looked like the one that wants none.
+    #[test]
+    fn an_open_menu_beats_a_leftover_interrupt_hint() {
+        let menu = concat!(
+            "Do you want to proceed?\r\n",
+            "❯ 1. Yes\r\n",
+            "  2. No\r\n\r\n",
+            "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+        );
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(menu)),
+            ProviderActivity::AwaitingOperator,
+        );
+        // The reported screen: the same menu with an interrupt hint still on it.
+        let with_hint = format!("esc to interrupt\r\n{menu}");
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(&with_hint)),
+            ProviderActivity::AwaitingOperator,
+            "a live menu is what the worker is doing; the stale hint is not"
+        );
+    }
+
+    /// ⚠️ THE MOBILE HALF, and the reason the operator sees this on a phone and
+    /// not on a desktop. A narrow terminal truncates the END of a line, so every
+    /// check keyed on "Esc to cancel" — the part that goes first — matched
+    /// nothing. These four footers are REAL, taken from this Hive's journals.
+    #[test]
+    fn a_truncated_menu_footer_is_still_a_menu() {
+        for footer in [
+            "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+            "Enter to select · Tab/Arrow keys to navigate · ",
+            "Enter to select · ↑/↓ to navigate · n to add ",
+            "Enter to select ·↑/↓ to navigate · ctrl+g to ",
+        ] {
+            let screen = format!("Pick one:\r\n❯ 1. First\r\n  2. Second\r\n\r\n{footer}");
+            assert_eq!(
+                classify_provider_activity(ProviderKind::ClaudeCode, &snapshot(&screen)),
+                ProviderActivity::AwaitingOperator,
+                "a phone-width footer is the same menu: {footer:?}"
+            );
+        }
+    }
+
+    /// The same truncation, failing the other way: a provider that IS working
+    /// read as not working, because `active_signal` knew one truncated spelling
+    /// out of ten. All of these are real observations from this Hive.
+    #[test]
+    fn a_truncated_interrupt_hint_still_means_working() {
+        for hint in [
+            "esc to interrupt",
+            "esc to interrup…",
+            "esc to interru…",
+            "esc to interr…",
+            "esc to inter…",
+            "esc to int…",
+            "esc to inter",
+            "esc to inte",
+            "esc to int",
+        ] {
+            assert_eq!(
+                classify_provider_activity(
+                    ProviderKind::ClaudeCode,
+                    &snapshot(&format!("Working on it\r\n{hint}"))
+                ),
+                ProviderActivity::Active,
+                "a working provider must not read as idle because its footer was cut: {hint:?}"
+            );
+        }
+    }
     use super::*;
 
     /// An alpha provider reads Unknown, and Unknown is the safe answer.
