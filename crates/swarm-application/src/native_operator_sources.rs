@@ -253,6 +253,73 @@ mod tests {
         );
     }
 
+    /// ⚠️ WHY THERE ARE TWO `ExactBatch` GATES, and why the earlier one is not
+    /// redundant. Filed as 01a09b7c after I found that removing it broke no
+    /// test — which is what an untested reachable guard looks like as well as
+    /// what dead code looks like, and the two have opposite fixes.
+    ///
+    /// The ANNOUNCEMENT is genuinely duplicated: `link_native_answer` returns
+    /// Unverified from its own gate, and `refusal_for` announces it after. So
+    /// the ordinary one-match case is covered either way, which is exactly why
+    /// the ablation looked silent.
+    ///
+    /// What the earlier gate uniquely decides is the case where the answer is
+    /// unverified AND the match is not exactly one. Reached later, those return
+    /// Ambiguous or `NoLongerApplicable` — both of which describe the QUESTION
+    /// when the real problem is the ANSWER: the engine never confirmed it, so
+    /// which question it was for cannot matter yet. Unverified first is the
+    /// honest order, and these two tests are what hold it there.
+    #[test]
+    fn an_unverified_answer_is_unverified_before_it_is_ambiguous() {
+        let store = TaskStore::in_memory().unwrap();
+        // final_result stays None: the engine never confirmed an exact batch.
+        let source = fixture(&store);
+        let service = TaskService::new(store.clone());
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+
+        let first = pending_decision(&store, &source);
+        let second = pending_decision(&store, &source);
+        assert_ne!(first, second);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Unverified,
+            "an answer the engine never confirmed is unverified, not ambiguous — \
+             ambiguity is about which question, and this one is about the answer"
+        );
+        for decision in [first, second] {
+            assert_eq!(
+                store
+                    .get_decision_request(decision)
+                    .unwrap()
+                    .refused_native_answer
+                    .expect("both questions are told")
+                    .reason,
+                swarm_domain::NativeAnswerRefusal::Unverified,
+            );
+        }
+    }
+
+    #[test]
+    fn an_unverified_answer_is_unverified_before_it_is_no_longer_applicable() {
+        let store = TaskStore::in_memory().unwrap();
+        let source = fixture(&store);
+        let service = TaskService::new(store.clone());
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+        // No pending decision at all, so nothing matches.
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Unverified,
+            "with nothing to match, the reportable fact is still that the engine \
+             never confirmed the answer"
+        );
+    }
+
     /// A refused answer says so on the question it was about.
     ///
     /// ⚠️ THE DIFFERENCE BETWEEN FIXING THE BUG AND APPEARING TO. The complaint
