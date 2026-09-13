@@ -777,6 +777,31 @@ pub struct DecisionRequest {
     pub discharge: Option<DecisionDischarge>,
 }
 
+impl DecisionRequest {
+    /// Whether a terminal answer could ever settle this, ignoring the switch.
+    ///
+    /// ⚠️ THIS IS NOT THE MATCHING TEST AND MUST NOT BECOME IT.
+    /// `decisions_matching_native_answer` asks whether a SPECIFIC captured
+    /// answer settles this decision, and ends by comparing the converted
+    /// questions against that capture. This asks the weaker question underneath
+    /// it: could any capture ever match — do the questions convert at all.
+    ///
+    /// The ticket that asked for the inbox label said to reuse that filter.
+    /// Copying it whole would compare against a capture that does not exist and
+    /// mark every item un-answerable. So the CONVERSION is shared and the
+    /// comparison is not, which is the only part that was ever common.
+    #[must_use]
+    pub fn questions_convert_for_a_terminal(&self) -> bool {
+        !self.questions.is_empty()
+            && self
+                .questions
+                .iter()
+                .map(NativeInterviewQuestion::from_decision)
+                .collect::<Option<Vec<_>>>()
+                .is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationPolicy {

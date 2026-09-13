@@ -32,7 +32,20 @@ impl TaskService {
     pub fn operator_decision_inbox(
         &self,
     ) -> Result<Vec<swarm_domain::DecisionInboxEntry>, ApplicationError> {
-        Ok(self.store.decision_inbox()?)
+        // ⚠️ THE SWITCH IS READ ONCE, FOR THE WHOLE INBOX, AND IT GATES EVERY
+        // LABEL. With native answer resolution off, NOTHING is terminal
+        // answerable, and an item still claiming to be would send the operator
+        // somewhere that cannot settle it — the exact failure this label exists
+        // to stop. Unreadable counts as off, matching
+        // native_answer_resolution_enabled, because a label that guesses is
+        // worse than one that sends them to the control room.
+        let resolution_enabled = self.native_answer_resolution_enabled();
+        let mut inbox = self.store.decision_inbox()?;
+        for entry in &mut inbox {
+            entry.terminal_answerable =
+                resolution_enabled && entry.decision.questions_convert_for_a_terminal();
+        }
+        Ok(inbox)
     }
 
     /// Called only after authenticating an operator credential, never a worker token.
@@ -118,6 +131,80 @@ mod tests {
             .bind_worker_session(worker.id, WorkerSessionId::new())
             .unwrap();
         store.get_worker_profile(worker.id).unwrap()
+    }
+
+    /// ⚠️ THE LABEL MUST NEVER SEND THE OPERATOR SOMEWHERE THAT CANNOT WORK.
+    ///
+    /// They answered decision 01a0939d in a worker's terminal and it never
+    /// cleared: kind=help with no questions, so it was never interview eligible
+    /// and no capture could ever have matched it. Nothing said so before,
+    /// during or after. Their words: "It never went away."
+    ///
+    /// Three things have to hold together, and the switch is the one most
+    /// easily forgotten: with native answer resolution OFF, nothing is terminal
+    /// answerable however well formed its questions are.
+    #[test]
+    fn the_inbox_says_which_items_a_terminal_answer_can_settle() {
+        let store = TaskStore::in_memory().unwrap();
+        let requester = running_worker(&store, "Requester");
+        let ask = |title: &str,
+                   questions: &[swarm_domain::DecisionQuestion],
+                   actions: &[String],
+                   suggested: &str| {
+            store
+                .create_decision_request(&NewDecisionRequest {
+                    requesting_worker_id: requester.id,
+                    task_id: None,
+                    kind: DecisionRequestKind::Input,
+                    urgency: DecisionUrgency::Normal,
+                    title,
+                    summary: "Fixture",
+                    reason: "Fixture",
+                    risk: "Fixture",
+                    evidence: "Fixture",
+                    suggested_action: suggested,
+                    allowed_actions: actions,
+                    questions,
+                    deadline: None,
+                    requested_command: None,
+                })
+                .unwrap()
+        };
+        let answerable = ask(
+            "Has questions",
+            &[swarm_domain::DecisionQuestion {
+                header: "Way".into(),
+                question: "Which way?".into(),
+                options: vec!["Left".into(), "Right".into()],
+                option_descriptions: std::collections::BTreeMap::default(),
+                multi_select: false,
+            }],
+            &[],
+            "",
+        );
+        // The shape the operator actually hit: no questions, so no capture can
+        // ever match it however the switch is set.
+        let bare = ask("No questions", &[], &["Wait".to_string()], "Wait");
+
+        let service = TaskService::new(store.clone());
+        let labelled = |service: &TaskService, id| {
+            service
+                .operator_decision_inbox()
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.decision.id == id)
+                .map(|entry| entry.terminal_answerable)
+        };
+
+        // Default on: the questioned one is answerable, the bare one never is.
+        assert_eq!(labelled(&service, answerable.id), Some(true));
+        assert_eq!(labelled(&service, bare.id), Some(false));
+
+        // Switched off, NOTHING is answerable in a terminal — including the
+        // item whose questions are perfectly well formed.
+        store.set_native_answer_resolution(false, 100).unwrap();
+        assert_eq!(labelled(&service, answerable.id), Some(false));
+        assert_eq!(labelled(&service, bare.id), Some(false));
     }
 
     #[test]

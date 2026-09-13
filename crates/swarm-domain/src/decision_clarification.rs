@@ -110,6 +110,21 @@ pub struct DecisionInboxEntry {
     #[serde(flatten)]
     pub decision: crate::DecisionRequest,
     pub clarification: Option<DecisionClarificationSummary>,
+    /// Whether answering this in the asking worker's terminal can settle it.
+    ///
+    /// ⚠️ THE OPERATOR ANSWERED ONE IN A TERMINAL AND IT NEVER CLEARED. Decision
+    /// 01a0939d was kind=help with no questions, so it was never interview
+    /// eligible and no capture could ever have matched it — and nothing said so
+    /// before, during or after. Their words: "It never went away." Saying it up
+    /// front is what prevents that; a notice afterwards only explains it.
+    ///
+    /// FALSE IS THE SAFE DIRECTION and is what an older Hive deserializes to,
+    /// because an item that wrongly says "answer this in your terminal" sends
+    /// the operator somewhere that cannot work, which is the exact failure this
+    /// exists to stop. An item that wrongly says otherwise only sends them to
+    /// the control room, which always works.
+    #[serde(default)]
+    pub terminal_answerable: bool,
 }
 
 /// Exact next movers for explanations; assignment and execution permission do not change.

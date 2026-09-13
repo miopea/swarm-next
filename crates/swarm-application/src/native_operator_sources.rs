@@ -630,7 +630,11 @@ impl TaskService {
             .list_worker_decision_requests(stored.worker_id)?
             .into_iter()
             .filter(|request| {
+                // The conversion is shared with the inbox label; the COMPARISON
+                // against this specific capture is not, and must not be, or the
+                // label would ask whether an answer that does not exist matches.
                 request.state == swarm_domain::DecisionRequestState::Pending
+                    && request.questions_convert_for_a_terminal()
                     && request
                         .questions
                         .iter()

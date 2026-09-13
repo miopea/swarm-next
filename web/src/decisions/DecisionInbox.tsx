@@ -301,6 +301,20 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       {refusedNativeAnswerNotice(decision.refused_native_answer.reason)}
                     </p>
                   : null}
+                {/* ⚠️ SAID BEFORE THEY ANSWER, NOT AFTER. The operator answered
+                    decision 01a0939d in a worker's terminal and it never
+                    cleared — it had no questions, so no capture could ever have
+                    matched it, and nothing told them either way. "It never went
+                    away." A refusal afterwards only explains; this prevents.
+                    Only shown while pending and only when it is TRUE: an item
+                    that cannot be answered in a terminal says nothing, because
+                    the control room already works and a second instruction on
+                    every item would be noise. */}
+                {decision.state === "pending" && decision.terminal_answerable
+                  ? <p className="decision-terminal-answerable" role="status">
+                      You can answer this in {requester}'s terminal, or here.
+                    </p>
+                  : null}
                 {decision.suggested_action && recommendedAction === undefined && <div className="decision-ask"><span>{requester} {decision.state === "pending" ? "recommends" : "recommended"}</span><LongText text={humanize(decision.suggested_action)} label="the recommendation" foldAbove={300} /></div>}
                 {decision.suggested_action === "" && <div className="decision-ask"><span>{requester}'s view</span><p>No preference</p></div>}
                 {decision.risk && <dl className="decision-context">

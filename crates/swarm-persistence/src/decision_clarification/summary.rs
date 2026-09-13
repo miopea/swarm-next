@@ -84,6 +84,12 @@ impl TaskStore {
             .map(|decision| swarm_domain::DecisionInboxEntry {
                 clarification: summaries.remove(&decision.id),
                 decision,
+                // The store cannot know: the label depends on the native answer
+                // resolution switch, which the application layer reads. False
+                // here means "not yet decided", and false is also the safe
+                // answer if nobody ever decides — it sends the operator to the
+                // control room, which always works.
+                terminal_answerable: false,
             })
             .collect();
         transaction.commit()?;

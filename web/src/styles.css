@@ -2914,6 +2914,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    LOUDER THAN THE SUMMARY IT SITS UNDER, because the operator arrives at this
    card believing the question is already answered — that belief is the thing to
    interrupt, and a quiet line would read as the same silence they already met. */
+/* Quieter than the refusal notice above it. That one interrupts a mistaken
+   belief; this one only offers a route, and an offer shouted on every item
+   would be the noise this feature exists to avoid. */
+.decision-terminal-answerable { margin: 8px 0 0; padding: 0; color: var(--muted); font-size: .82rem; }
+
 .decision-refused-answer {
   margin: 8px 0 0;
   padding: 10px 12px;

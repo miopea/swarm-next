@@ -1150,6 +1150,14 @@ export type DecisionRequest = {
    * accepted answer resolves the question and it leaves this inbox.
    */
   refused_native_answer?: { reason: NativeAnswerRefusal; seen_at: number } | null;
+  /**
+   * Whether answering this in the asking worker's terminal can settle it.
+   *
+   * Absent or false means it cannot, and false is the safe direction: an item
+   * that wrongly invites a terminal answer sends the operator somewhere that
+   * cannot work, which is the failure this exists to stop.
+   */
+  terminal_answerable?: boolean;
   /** Compact server-owned facts; history text is fetched only on demand. */
   clarification?: {
     round_count: number;

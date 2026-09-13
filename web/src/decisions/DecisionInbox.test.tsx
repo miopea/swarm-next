@@ -959,3 +959,34 @@ test("does not carry a refusal notice onto a question that is already resolved",
 
   expect(screen.queryByText(/An answer was typed in this worker's terminal/)).not.toBeInTheDocument();
 });
+
+/**
+ * ⚠️ SAID BEFORE THEY ANSWER, NOT AFTER.
+ *
+ * The operator answered decision 01a0939d in a worker's terminal and it never
+ * cleared: it had no questions, so no capture could ever have matched it, and
+ * nothing told them either way. "It never went away." The refusal notice above
+ * explains a mistake after the fact; this prevents it.
+ *
+ * Only when TRUE. An item that cannot be answered in a terminal says nothing,
+ * because the control room already works and a second instruction on every
+ * item is the noise this feature exists to avoid.
+ */
+test("offers the terminal only on items a terminal answer can settle", () => {
+  render(<DecisionInbox decisions={[{
+    ...pending,
+    terminal_answerable: true,
+  }]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText(/You can answer this in .*terminal, or here/)).toBeInTheDocument();
+});
+
+test("says nothing about the terminal on an item it cannot settle", () => {
+  render(<DecisionInbox decisions={[{ ...pending, terminal_answerable: false }]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.queryByText(/You can answer this in/)).not.toBeInTheDocument();
+
+  // Absent is the same as false: an older Hive that does not send the field
+  // must not be read as an invitation.
+  render(<DecisionInbox decisions={[pending]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.queryByText(/You can answer this in/)).not.toBeInTheDocument();
+});
