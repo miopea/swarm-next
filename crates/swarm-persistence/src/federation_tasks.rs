@@ -1800,46 +1800,125 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        if let Some(existing) = relocated_apiary_task(&transaction, local_task_id)? {
-            transaction.commit()?;
-            return Ok(existing);
-        }
-        let (title, description, priority, state): (String, String, String, String) = transaction
-            .query_row(
-                "SELECT title, description, priority, state FROM tasks
-                 WHERE id = ?1 AND hive_id = ?2 AND removed_at IS NULL",
-                params![local_task_id.to_string(), identity.hive.id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()?
-            .ok_or(TaskStoreError::NotFound)?;
-        let priority =
-            TaskPriority::from_str(&priority).map_err(|_| TaskStoreError::InvalidFederationTask)?;
-        let state =
-            TaskState::from_str(&state).map_err(|_| TaskStoreError::InvalidFederationTask)?;
-        // home_hive_id stays None. Routing a shared task to a home Hive requires
-        // an ACTIVE federation membership for it, and the Keeper is not a member
-        // of its own Apiary -- so naming this Hive here would fail. Absent is
-        // also what the model means by unclaimed: "the home Hive is absent until
-        // the Keeper or a governed claim assigns it."
-        let task = insert_apiary_task_for_hive(
+        let task = relocate_one(
             &transaction,
             apiary.id,
-            &title,
-            &description,
-            priority,
-            state,
-            None,
+            identity.hive.id,
+            local_task_id,
             now,
-        )?;
-        transaction.execute(
-            "INSERT INTO apiary_task_local_origins
-                (apiary_task_id, local_task_id, relocated_at)
-             VALUES (?1, ?2, ?3)",
-            params![task.id.to_string(), local_task_id.to_string(), now],
         )?;
         transaction.commit()?;
         Ok(task)
+    }
+
+    /// Relocates a WHOLE SET of Hive tasks in one transaction, carrying their
+    /// prerequisite ordering up with them.
+    ///
+    /// ⚠️ A HALF-MOVED CHAIN IS NOT EXPRESSIBLE, which is the entire reason this
+    /// exists beside the single-task call. An Apiary prerequisite edge may only
+    /// join two Apiary tasks; if one end of a local edge moves and the other
+    /// stays, the ordering can be written on neither side without meaning
+    /// something false. Relocating D without B1b would silently drop "D waits
+    /// for B1b" — and the SOA chain B1b -> D -> E -> F -> G -> H is six tasks
+    /// whose links ARE the migration ordering.
+    ///
+    /// So the set must be CLOSED under the prerequisite relation: any edge with
+    /// exactly one endpoint inside is refused, in either direction, and nothing
+    /// is written. A caller that wants part of a chain must say so by naming the
+    /// whole chain.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, a negative clock, an unknown or removed task, and a
+    /// set that would split a chain.
+    pub fn relocate_local_tasks_to_apiary(
+        &self,
+        local_task_ids: &[TaskId],
+        now: i64,
+    ) -> Result<Vec<ApiaryTask>, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let moving: std::collections::BTreeSet<String> =
+            local_task_ids.iter().map(ToString::to_string).collect();
+
+        // THE CLOSURE CHECK, BEFORE ANYTHING IS WRITTEN. Every edge touching the
+        // set is read first; one endpoint inside and one outside means the move
+        // would split a chain, and the whole thing is refused.
+        let mut statement = transaction.prepare(
+            "SELECT task_id, prerequisite_id FROM task_prerequisites
+             WHERE task_id = ?1 OR prerequisite_id = ?1",
+        )?;
+        let mut internal_edges: Vec<(String, String)> = Vec::new();
+        for id in &moving {
+            let rows = statement.query_map([id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (dependent, prerequisite) = row?;
+                match (moving.contains(&dependent), moving.contains(&prerequisite)) {
+                    (true, true) => internal_edges.push((dependent, prerequisite)),
+                    _ => return Err(TaskStoreError::ApiaryRelocationWouldSplitChain),
+                }
+            }
+        }
+        drop(statement);
+        internal_edges.sort();
+        internal_edges.dedup();
+
+        let mut relocated = Vec::with_capacity(local_task_ids.len());
+        let mut shared_by_local = std::collections::BTreeMap::new();
+        for local_task_id in local_task_ids {
+            let task = relocate_one(
+                &transaction,
+                apiary.id,
+                identity.hive.id,
+                *local_task_id,
+                now,
+            )?;
+            shared_by_local.insert(local_task_id.to_string(), task.id);
+            relocated.push(task);
+        }
+        for (dependent, prerequisite) in internal_edges {
+            // Both ends resolved from the SAME move, so an Apiary edge can never
+            // be written against a local id.
+            let (Some(dependent_id), Some(prerequisite_id)) = (
+                shared_by_local.get(&dependent),
+                shared_by_local.get(&prerequisite),
+            ) else {
+                return Err(TaskStoreError::ApiaryRelocationWouldSplitChain);
+            };
+            let reason: String = transaction.query_row(
+                "SELECT reason FROM task_prerequisites
+                 WHERE task_id = ?1 AND prerequisite_id = ?2",
+                params![dependent, prerequisite],
+                |row| row.get(0),
+            )?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO apiary_task_prerequisites
+                    (task_id, prerequisite_id, reason, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    dependent_id.to_string(),
+                    prerequisite_id.to_string(),
+                    reason,
+                    now
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(relocated)
     }
 
     /// The Apiary task one local task became, if it has been relocated.
@@ -1934,6 +2013,54 @@ impl TaskStore {
 /// Matches `task_prerequisites.reason` at the Hive, so a relocated edge keeps
 /// the sentence that explains why the ordering exists rather than truncating it.
 const MAX_APIARY_PREREQUISITE_REASON_BYTES: usize = 2048;
+
+/// One relocation inside a caller's transaction, so a bulk move is atomic
+/// rather than a loop of independent commits that can stop half way.
+fn relocate_one(
+    transaction: &rusqlite::Transaction<'_>,
+    apiary_id: ApiaryId,
+    hive_id: HiveId,
+    local_task_id: TaskId,
+    now: i64,
+) -> Result<ApiaryTask, TaskStoreError> {
+    if let Some(existing) = relocated_apiary_task(transaction, local_task_id)? {
+        return Ok(existing);
+    }
+    let (title, description, priority, state): (String, String, String, String) = transaction
+        .query_row(
+            "SELECT title, description, priority, state FROM tasks
+             WHERE id = ?1 AND hive_id = ?2 AND removed_at IS NULL",
+            params![local_task_id.to_string(), hive_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::NotFound)?;
+    let priority =
+        TaskPriority::from_str(&priority).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+    let state = TaskState::from_str(&state).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+    // home_hive_id stays None. Routing a shared task to a home Hive requires an
+    // ACTIVE federation membership for it, and the Keeper is not a member of its
+    // own Apiary -- so naming this Hive here would fail. Absent is also what the
+    // model means by unclaimed: "the home Hive is absent until the Keeper or a
+    // governed claim assigns it."
+    let task = insert_apiary_task_for_hive(
+        transaction,
+        apiary_id,
+        &title,
+        &description,
+        priority,
+        state,
+        None,
+        now,
+    )?;
+    transaction.execute(
+        "INSERT INTO apiary_task_local_origins
+            (apiary_task_id, local_task_id, relocated_at)
+         VALUES (?1, ?2, ?3)",
+        params![task.id.to_string(), local_task_id.to_string(), now],
+    )?;
+    Ok(task)
+}
 
 /// Reads back the Apiary task a local task was relocated into, so relocation
 /// can be idempotent rather than minting a second shared task on a retry.
@@ -2048,7 +2175,7 @@ mod tests {
     use super::*;
     use swarm_domain::{
         FederationJoinAcceptance, FederationJoinReadiness, JiraConnectionState, ProviderKind,
-        SharedWorkBackend,
+        SharedWorkBackend, TaskActivityActor,
     };
 
     fn joined_member(now: i64) -> (TaskStore, TaskStore, FederationJoinAcceptance) {
@@ -2641,6 +2768,172 @@ mod tests {
         member
             .apply_federation_task_command_receipt(&conflict, now + 15)
             .expect_err("foreign command cannot enter local outbox");
+    }
+
+    /// ⚠️ THE SOA CASE, SHRUNK TO THREE LINKS. B1b -> D -> E is the shape of the
+    /// six-task chain the ticket names, whose prerequisite links ARE the
+    /// migration ordering. Moving the set must carry that ordering up, rewritten
+    /// to Apiary ids, or the move has relocated the work and lost the only
+    /// record of what has to happen first.
+    #[test]
+    fn a_whole_chain_relocates_with_its_ordering_rewritten_to_apiary_ids() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let actor = TaskActivityActor::operator();
+        let b1b = keeper.create_task("B1b", "/rcg-platform").expect("b1b");
+        let d = keeper.create_task("D", "/rcg-platform").expect("d");
+        let e = keeper.create_task("E", "/rcg-platform").expect("e");
+        for waiting in [d.id, e.id] {
+            keeper
+                .transition_task(waiting, TaskState::Ready)
+                .expect("ready");
+            keeper
+                .transition_task(waiting, TaskState::Blocked)
+                .expect("blocked");
+        }
+        keeper
+            .add_task_prerequisite(d.id, b1b.id, "D waits for B1b", &actor, now)
+            .expect("d<-b1b");
+        keeper
+            .add_task_prerequisite(e.id, d.id, "E waits for D", &actor, now)
+            .expect("e<-d");
+
+        let moved = keeper
+            .relocate_local_tasks_to_apiary(&[b1b.id, d.id, e.id], now)
+            .expect("relocate the whole chain");
+
+        assert_eq!(moved.len(), 3);
+        let shared_b1b = moved[0].id;
+        let shared_d = moved[1].id;
+        let shared_e = moved[2].id;
+        assert_eq!(
+            keeper.apiary_task_prerequisites(shared_d).expect("d"),
+            vec![shared_b1b],
+            "the ordering must survive, pointing at the APIARY id"
+        );
+        assert_eq!(
+            keeper.apiary_task_prerequisites(shared_e).expect("e"),
+            vec![shared_d]
+        );
+        assert!(
+            keeper
+                .apiary_task_prerequisites(shared_b1b)
+                .expect("b1b")
+                .is_empty(),
+            "the head of the chain waits for nothing"
+        );
+    }
+
+    /// ⚠️ THE GUARD THIS WHOLE CALL EXISTS FOR. Moving D without B1b would drop
+    /// "D waits for B1b" silently: the edge cannot be written Apiary-side (B1b
+    /// has no Apiary id) and leaving it Hive-side describes an ordering between
+    /// a task that moved and one that did not. Refusing is the only honest
+    /// outcome, and it must write NOTHING — a partially applied split is worse
+    /// than the split itself.
+    #[test]
+    fn relocating_part_of_a_chain_is_refused_and_writes_nothing() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let actor = TaskActivityActor::operator();
+        let b1b = keeper.create_task("B1b", "/rcg-platform").expect("b1b");
+        let d = keeper.create_task("D", "/rcg-platform").expect("d");
+        keeper
+            .transition_task(d.id, TaskState::Ready)
+            .expect("ready");
+        keeper
+            .transition_task(d.id, TaskState::Blocked)
+            .expect("blocked");
+        keeper
+            .add_task_prerequisite(d.id, b1b.id, "D waits for B1b", &actor, now)
+            .expect("edge");
+
+        let refused = keeper.relocate_local_tasks_to_apiary(&[d.id], now);
+
+        assert!(matches!(
+            refused,
+            Err(TaskStoreError::ApiaryRelocationWouldSplitChain)
+        ));
+        assert!(
+            keeper
+                .relocated_apiary_task_for_local_task(d.id)
+                .expect("lookup")
+                .is_none(),
+            "a refused bulk move must leave NOTHING behind, not even the task it got to first"
+        );
+        assert!(
+            keeper
+                .relocated_apiary_task_for_local_task(b1b.id)
+                .expect("lookup")
+                .is_none()
+        );
+    }
+
+    /// The other direction of the same split: the task left behind is the one
+    /// depending on a task that moved. Both ends matter, and an implementation
+    /// that only checked `task_id` would pass the test above and fail here.
+    #[test]
+    fn leaving_behind_a_task_that_depends_on_a_moved_one_is_also_refused() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let actor = TaskActivityActor::operator();
+        let b1b = keeper.create_task("B1b", "/rcg-platform").expect("b1b");
+        let d = keeper.create_task("D", "/rcg-platform").expect("d");
+        keeper
+            .transition_task(d.id, TaskState::Ready)
+            .expect("ready");
+        keeper
+            .transition_task(d.id, TaskState::Blocked)
+            .expect("blocked");
+        keeper
+            .add_task_prerequisite(d.id, b1b.id, "D waits for B1b", &actor, now)
+            .expect("edge");
+
+        let refused = keeper.relocate_local_tasks_to_apiary(&[b1b.id], now);
+
+        assert!(matches!(
+            refused,
+            Err(TaskStoreError::ApiaryRelocationWouldSplitChain)
+        ));
+        assert!(
+            keeper
+                .relocated_apiary_task_for_local_task(b1b.id)
+                .expect("lookup")
+                .is_none()
+        );
+    }
+
+    /// An unchained set is the ordinary bulk case and must not be held hostage
+    /// to the closure rule.
+    #[test]
+    fn tasks_with_no_chain_relocate_together_without_complaint() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let first = keeper.create_task("One", "/rcg-platform").expect("one");
+        let second = keeper.create_task("Two", "/rcg-public-web").expect("two");
+
+        let moved = keeper
+            .relocate_local_tasks_to_apiary(&[first.id, second.id], now)
+            .expect("relocate");
+
+        assert_eq!(moved.len(), 2);
+        assert!(
+            keeper
+                .apiary_task_prerequisites(moved[0].id)
+                .expect("read")
+                .is_empty()
+        );
     }
 
     /// ⚠️ THE 474 CASE. Of 530 live rcg-* tasks on this Hive, 474 are COMPLETED.

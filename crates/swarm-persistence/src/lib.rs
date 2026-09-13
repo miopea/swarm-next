@@ -453,6 +453,14 @@ pub enum TaskStoreError {
     FederationJiraClaimQueueFull,
     #[error("The Apiary task or task feed is invalid")]
     InvalidFederationTask,
+    /// A relocation would have left a prerequisite chain straddling the Hive
+    /// and the Apiary. The edge cannot be written on either side without
+    /// meaning something false, so the whole move is refused.
+    #[error(
+        "Relocating this set would split a prerequisite chain: move every task in the chain \
+         together, or none of them"
+    )]
+    ApiaryRelocationWouldSplitChain,
     #[error("The Steward task command is invalid")]
     InvalidFederationStewardTask,
     #[error("The Steward assistance request is invalid")]
