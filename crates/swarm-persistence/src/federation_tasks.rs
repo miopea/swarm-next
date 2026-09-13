@@ -1747,6 +1747,127 @@ pub(super) fn record_local_apiary_task_lifecycle_intent(
     Ok(())
 }
 
+impl TaskStore {
+    /// Records that one Keeper-canonical task must wait for another.
+    ///
+    /// # Errors
+    /// Rejects a self-edge, an empty or oversized reason, a negative clock, and
+    /// — the one that matters — either endpoint not being an Apiary task.
+    pub fn record_apiary_task_prerequisite(
+        &self,
+        task_id: ApiaryTaskId,
+        prerequisite_id: ApiaryTaskId,
+        reason: &str,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let reason = reason.trim();
+        if task_id == prerequisite_id
+            || reason.is_empty()
+            || reason.len() > MAX_APIARY_PREREQUISITE_REASON_BYTES
+            || now < 0
+        {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let connection = self.connection()?;
+        // ⚠️ BOTH ENDPOINTS ARE ENFORCED BY THE FOREIGN KEYS, not by a check
+        // here, and that is deliberate after measuring. I first wrote an
+        // explicit `SELECT COUNT(*) FROM apiary_tasks WHERE id IN (?1,?2)`
+        // guard and called it the load-bearing one. Ablating it changed
+        // nothing: every test still passed, because connections open with
+        // `PRAGMA foreign_keys = ON` and `REFERENCES apiary_tasks(id)` already
+        // refuses an endpoint the Apiary does not have. Two guards where one
+        // discriminates is the shape that hides a dead one, so the redundant
+        // check is gone and the test now bites the foreign key itself.
+        //
+        // What it protects: a half-relocated chain would otherwise write an
+        // edge pointing at a LOCAL task id, meaningless to another member and
+        // reading as ordering that is being honoured when nothing honours it.
+        // A missing edge is a gap you can see; a meaningless one is a lie.
+        connection.execute(
+            "INSERT OR IGNORE INTO apiary_task_prerequisites
+                 (task_id, prerequisite_id, reason, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                task_id.to_string(),
+                prerequisite_id.to_string(),
+                reason,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// What one Keeper-canonical task is waiting on, oldest edge first.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn apiary_task_prerequisites(
+        &self,
+        task_id: ApiaryTaskId,
+    ) -> Result<Vec<ApiaryTaskId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT prerequisite_id FROM apiary_task_prerequisites
+             WHERE task_id = ?1 ORDER BY created_at, prerequisite_id",
+        )?;
+        let rows =
+            statement.query_map(params![task_id.to_string()], |row| row.get::<_, String>(0))?;
+        let mut prerequisites = Vec::new();
+        for row in rows {
+            prerequisites.push(
+                ApiaryTaskId::from_str(&row?).map_err(|_| TaskStoreError::InvalidFederationTask)?,
+            );
+        }
+        Ok(prerequisites)
+    }
+}
+
+/// Matches `task_prerequisites.reason` at the Hive, so a relocated edge keeps
+/// the sentence that explains why the ordering exists rather than truncating it.
+const MAX_APIARY_PREREQUISITE_REASON_BYTES: usize = 2048;
+
+/// Ordering between two Keeper-canonical tasks, so a prerequisite chain can
+/// exist at the Apiary level instead of dying at the Hive boundary.
+///
+/// ⚠️ WHY THIS IS ALLOWED HERE WHEN WORKSPACE AND WORKER ARE NOT. `ApiaryTask`
+/// deliberately omits repository, worker, terminal and provider — "this record
+/// never leaves the home Hive". A prerequisite is not that kind of fact. It is
+/// an ordering relation between two tasks that are ALREADY shared, so both
+/// endpoints are things every member can see anyway, and it discloses nothing
+/// about how either Hive does the work. Adding it does not widen the privacy
+/// boundary; omitting it was the reason a relocated chain could not survive.
+///
+/// Filed from 01a09b59-fad2. The operator chose genuine relocation over
+/// promotion-with-linkage, having been told in the question itself that
+/// prerequisites could not follow. This is what makes that choice non-lossy
+/// for the one thing that encodes real work ordering: the SOA chain
+/// B1b -> D -> E -> F -> G -> H, where the links ARE the migration ordering.
+///
+/// BOTH ENDPOINTS MUST BE APIARY TASKS. A half-relocated chain would otherwise
+/// record an edge to a local id that means nothing to another member, which is
+/// worse than no edge because it reads as ordering that is being honoured.
+pub(crate) fn migrate_apiary_task_prerequisites(
+    tx: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_task_prerequisites (
+             task_id TEXT NOT NULL REFERENCES apiary_tasks(id),
+             prerequisite_id TEXT NOT NULL REFERENCES apiary_tasks(id),
+             reason TEXT NOT NULL CHECK(length(CAST(reason AS BLOB)) BETWEEN 1 AND 2048),
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             PRIMARY KEY (task_id, prerequisite_id),
+             CHECK (task_id != prerequisite_id)
+         );
+         CREATE INDEX IF NOT EXISTS apiary_task_prerequisites_by_target
+             ON apiary_task_prerequisites(prerequisite_id, task_id);",
+    )?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::APIARY_TASK_PREREQUISITES_SCHEMA_VERSION,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2345,5 +2466,107 @@ mod tests {
         member
             .apply_federation_task_command_receipt(&conflict, now + 15)
             .expect_err("foreign command cannot enter local outbox");
+    }
+    /// The SOA chain B1b -> D -> E -> F -> G -> H is the case this exists for:
+    /// its prerequisite links ARE the migration ordering, and a relocation that
+    /// dropped them would move the work and lose the only record of what has to
+    /// happen first. Ordering must survive at the Apiary, where the Hive's
+    /// `task_prerequisites` (both columns foreign keys to local `tasks`) cannot
+    /// reach.
+    #[test]
+    fn a_relocated_chain_keeps_its_ordering_at_the_apiary() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let first = keeper
+            .create_apiary_task("B1b", "", TaskPriority::Normal, now)
+            .expect("first");
+        let second = keeper
+            .create_apiary_task("D", "", TaskPriority::Normal, now)
+            .expect("second");
+
+        keeper
+            .record_apiary_task_prerequisite(second.id, first.id, "D waits for B1b", now)
+            .expect("edge");
+
+        assert_eq!(
+            keeper.apiary_task_prerequisites(second.id).expect("read"),
+            vec![first.id],
+            "a relocated task must still say what it is waiting on"
+        );
+        assert!(
+            keeper
+                .apiary_task_prerequisites(first.id)
+                .expect("read")
+                .is_empty(),
+            "the edge points one way only"
+        );
+    }
+
+    /// ⚠️ THE GUARD THAT MATTERS. A half-relocated chain would write an edge to
+    /// a LOCAL task id, which no other member can resolve — it reads as ordering
+    /// being honoured when nothing honours it. A missing edge is a visible gap;
+    /// a meaningless one is a lie, so this refuses rather than storing it.
+    #[test]
+    fn an_edge_to_something_that_is_not_an_apiary_task_is_refused() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let real = keeper
+            .create_apiary_task("D", "", TaskPriority::Normal, now)
+            .expect("real");
+        let stranger = ApiaryTaskId::new();
+
+        assert!(
+            keeper
+                .record_apiary_task_prerequisite(real.id, stranger, "waits for a ghost", now)
+                .is_err(),
+            "a prerequisite must not point at a task the Apiary does not have"
+        );
+        assert!(
+            keeper
+                .record_apiary_task_prerequisite(stranger, real.id, "a ghost waits", now)
+                .is_err(),
+            "and neither endpoint may be absent, not just the target"
+        );
+        assert!(
+            keeper
+                .apiary_task_prerequisites(real.id)
+                .expect("read")
+                .is_empty(),
+            "a refused edge must not be stored"
+        );
+    }
+
+    #[test]
+    fn a_task_cannot_wait_for_itself_and_a_reason_is_required() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let task = keeper
+            .create_apiary_task("D", "", TaskPriority::Normal, now)
+            .expect("task");
+        let other = keeper
+            .create_apiary_task("E", "", TaskPriority::Normal, now)
+            .expect("other");
+
+        assert!(
+            keeper
+                .record_apiary_task_prerequisite(task.id, task.id, "itself", now)
+                .is_err(),
+            "a self-edge is a deadlock written down"
+        );
+        assert!(
+            keeper
+                .record_apiary_task_prerequisite(task.id, other.id, "   ", now)
+                .is_err(),
+            "an edge with no reason cannot be read later by whoever has to honour it"
+        );
     }
 }

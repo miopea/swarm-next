@@ -308,7 +308,8 @@ const WORKER_ENGINE_UPDATE_HISTORY_SCHEMA_VERSION: i64 = 169;
 const UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION: i64 = 170;
 const REFUSED_NATIVE_ANSWER_SCHEMA_VERSION: i64 = 171;
 const NATIVE_ANSWER_SWITCH_SCHEMA_VERSION: i64 = 172;
-const CURRENT_SCHEMA_VERSION: i64 = NATIVE_ANSWER_SWITCH_SCHEMA_VERSION;
+const APIARY_TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 173;
+const CURRENT_SCHEMA_VERSION: i64 = APIARY_TASK_PREREQUISITES_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4194,6 +4195,9 @@ fn migrate_engine_history_schema_steps(
     // LAST, because it stamps the ceiling.
     if schema_version < NATIVE_ANSWER_SWITCH_SCHEMA_VERSION {
         native_operator_interviews::migrate_native_answer_switch(transaction)?;
+    }
+    if schema_version < APIARY_TASK_PREREQUISITES_SCHEMA_VERSION {
+        federation_tasks::migrate_apiary_task_prerequisites(transaction)?;
     }
     Ok(())
 }
@@ -9666,6 +9670,13 @@ mod tests {
             undo_sql: "DROP TABLE native_answer_resolution_switch",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
                 AND name = 'native_answer_resolution_switch'",
+        },
+        SchemaStep {
+            table: "apiary_task_prerequisites",
+            artifact: "prerequisite_id",
+            undo_sql: "DROP TABLE apiary_task_prerequisites",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
+                AND name = 'apiary_task_prerequisites'",
         },
     ];
 
