@@ -276,7 +276,27 @@ impl OutlookProbe {
         if body_text.len() > MAX_BODY_BYTES {
             return Err(OutlookError::ResponseLimitExceeded);
         }
-        let attachments = if graph_message.has_attachments {
+        // ⚠️ hasAttachments IS FALSE FOR A MESSAGE WHOSE ONLY ATTACHMENTS ARE
+        // INLINE, so gating the fetch on it alone silently drops every emailed
+        // screenshot that was pasted into the body rather than attached.
+        //
+        // Reported 2026-09-12: a thread carrying two inline images left their
+        // [cid:...] markers in the ingested body and stored NOTHING. The store
+        // itself was fine — 44 rows across 21 tasks — which is what made it
+        // look like a storage bug rather than a fetch that never ran.
+        //
+        // The evidence that settles it is on this box. The ONE stored row with
+        // is_inline=1 sits beside SIX non-inline attachments on the same task:
+        // that message had ordinary attachments, so hasAttachments was true,
+        // the fetch ran, and the inline one came along with the rest. Inline
+        // storage was never broken; it was only ever reached by accident.
+        //
+        // So the body is consulted too. A cid: reference in the body is the
+        // message saying it has inline parts whatever hasAttachments claims,
+        // and attachments_with_access already selects isInline and handles them
+        // correctly once it is actually called.
+        let references_inline_parts = body_text.contains("cid:");
+        let attachments = if graph_message.has_attachments || references_inline_parts {
             self.attachments_with_access(&access, message_id).await?
         } else {
             Vec::new()
@@ -647,6 +667,56 @@ mod tests {
 
     use super::*;
 
+    /// A message whose ONLY attachment is inline: Graph reports
+    /// hasAttachments=false and the body carries the [cid:...] marker.
+    async fn inline_only_probe() -> (OutlookProbe, Url, tempfile::TempDir) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let fetched = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = fetched.clone();
+        let app = Router::new()
+            .route("/token", post(|| async { Json(json!({"access_token":"access","refresh_token":"refresh","expires_in":3600})) }))
+            .route("/me", get(|| async { Json(json!({"id":"account-1","displayName":"Operator","mail":"operator@example.test","userPrincipalName":"operator@example.test"})) }))
+            .route("/me/mailFolders/inbox/messages", get(|| async {
+                Json(json!({"value":[{"id":"message-1","conversationId":"conversation-1","internetMessageId":"<one@example.test>","subject":"Screenshots","from":{"emailAddress":{"name":"Reporter","address":"reporter@example.test"}},"receivedDateTime":"2026-09-10T12:30:00Z","webLink":"https://outlook.office.com/mail/message-1","hasAttachments":false,"bodyPreview":"See below"}]}))
+            }))
+            // ⚠️ hasAttachments FALSE, and the body references an inline part.
+            .route("/me/messages/{id}", get(|| async {
+                Json(json!({"id":"message-1","conversationId":"conversation-1","internetMessageId":"<one@example.test>","subject":"Screenshots","from":{"emailAddress":{"name":"Reporter","address":"reporter@example.test"}},"receivedDateTime":"2026-09-10T12:30:00Z","webLink":"https://outlook.office.com/mail/message-1","hasAttachments":false,"bodyPreview":"See below","body":{"contentType":"text","content":"Here it is\n[cid:40ab0969-04bb-4060-9382-4dd4bbb2e128]\n"}}))
+            }))
+            .route("/me/messages/{id}/attachments", get(move || {
+                let counted = counted.clone();
+                async move {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Json(json!({"value":[{"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment-1","name":"screen.png","contentType":"image/png","size":15,"isInline":true}]}))
+                }
+            }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let oauth = MicrosoftOAuthClient::new_with_endpoints(
+            Client::new(),
+            "client-id",
+            Some("client-secret"),
+            "https://swarm.example.test/",
+            directory.path().join("email-oauth.json"),
+            "https://login.microsoft.test/authorize",
+            &format!("http://{address}/token"),
+            &format!("http://{address}/"),
+        )
+        .unwrap();
+        let authorization = oauth.authorization_url().await.unwrap();
+        let state = authorization
+            .query_pairs()
+            .find_map(|(name, value)| (name == "state").then(|| value.into_owned()))
+            .unwrap();
+        oauth.exchange_code(&state, "code").await.unwrap();
+        (
+            OutlookProbe::oauth(oauth),
+            Url::parse(&format!("http://{address}/")).unwrap(),
+            directory,
+        )
+    }
+
     async fn connected_probe() -> (OutlookProbe, Url, tempfile::TempDir) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -736,6 +806,34 @@ mod tests {
         assert!(rendered.contains("?a=1&amp;b=2"), "{rendered}");
         // The only tags in the output are the ones this function put there.
         assert!(!rendered.contains("<b>"), "{rendered}");
+    }
+
+    /// An emailed screenshot pasted INTO the body must still be fetched.
+    ///
+    /// ⚠️ GRAPH REPORTS hasAttachments=false WHEN THE ONLY ATTACHMENTS ARE
+    /// INLINE, so gating the fetch on it alone drops every such image silently.
+    /// Reported 2026-09-12: a thread with two inline screenshots ingested its
+    /// body — [cid:...] markers and all — and stored nothing, while the store
+    /// itself was healthy at 44 rows across 21 tasks.
+    ///
+    /// The evidence that identified it: the single stored row with `is_inline=1`
+    /// sits beside SIX non-inline attachments on the same task. That message had
+    /// ordinary attachments, so the fetch ran and the inline one came along by
+    /// accident. Inline storage was never broken; it was only ever reached.
+    #[tokio::test]
+    async fn an_inline_only_message_still_fetches_its_attachments() {
+        let (probe, _, _directory) = inline_only_probe().await;
+        let message = probe.message("message-1").await.unwrap();
+        assert!(
+            message.body_text.contains("[cid:40ab0969"),
+            "the fixture must carry the inline marker the body references"
+        );
+        assert_eq!(
+            message.attachments.len(),
+            1,
+            "hasAttachments was false, but the body references an inline part"
+        );
+        assert!(message.attachments[0].inline, "and it is the inline one");
     }
 
     #[tokio::test]
