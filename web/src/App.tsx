@@ -2258,7 +2258,7 @@ export function App() {
                 and neither of them at the edge.
 
                 IN header-actions RATHER THAN A ROW OF ITS OWN, which is the
-                rest of the point. A hamburger in the navigation's place would
+                rest of the point. A button in the navigation's place would
                 have traded a 44px nav row for a 44px button row and saved seven
                 pixels. This row already exists on the terminal screen, so
                 tucking the navigation gives back all of it. */}
@@ -2271,7 +2271,7 @@ export function App() {
                 aria-label={navTucked ? "Show navigation" : "Hide navigation"}
                 title={navTucked ? "Show navigation" : "Hide navigation"}
                 onClick={() => setNavTucked((tucked) => !tucked)}
-              ><NavMenuIcon /></button>
+              ><NavMenuIcon tucked={navTucked} /></button>
             )}
             <button className="icon-button theme-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
@@ -2694,7 +2694,18 @@ function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><pa
 function FeedbackIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M12 8v4M12 14h.01"/></svg>; }
 function BroadcastIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l6 4V5L8 9H4Z"/><path d="M17.5 8.5a5 5 0 0 1 0 7"/></svg>; }
 function CommandIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4M8 11h6M11 8v6"/></svg>; }
-function NavMenuIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>; }
+/* A CHEVRON, NOT A HAMBURGER, and it points at what the tap will do. Operator,
+   2026-09-13, asked whether the hamburger was the most obvious icon and then
+   chose this: "it should be a up/down chevron".
+   Three lines mean "open a menu of destinations". This button does not open a
+   menu — the navigation is a band that already exists directly below this
+   header, and the tap puts it back or takes it away. A chevron can say which,
+   and a hamburger cannot say anything at all.
+   Tucked, it points DOWN: the band comes down into the space under the header.
+   Shown, it points UP: the band goes back up out of the way. */
+function NavMenuIcon({ tucked }: { tucked: boolean }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={tucked ? "M6 9.5l6 6 6-6" : "M6 14.5l6-6 6 6"} /></svg>;
+}
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;

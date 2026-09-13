@@ -2091,3 +2091,54 @@ test("waking a stalled worker from Needs you actually starts it", async () => {
 
   await waitFor(() => expect(started).toBe("/api/v1/workers/worker-voice-bridge/start"));
 });
+
+/**
+ * Operator, 2026-09-13, asked whether the hamburger was the most obvious icon
+ * and then chose the answer: "it should be a up/down chevron".
+ *
+ * A chevron earns its place only by pointing the right way, and an inverted one
+ * is invisible in a diff and in a screenshot — it still looks like a chevron.
+ * Tucked, it must point DOWN, because the navigation band comes down into the
+ * space under this header. Shown, it must point UP, because that is where the
+ * band goes.
+ *
+ * The direction is read from the path's first vertical delta rather than from
+ * the whole `d`, so moving or resizing the glyph does not fail this, and
+ * flipping it does.
+ */
+function chevronDirection(button: HTMLElement): "up" | "down" {
+  const d = button.querySelector("path")?.getAttribute("d") ?? "";
+  const delta = /l\s*-?[\d.]+\s*(-?[\d.]+)/.exec(d);
+  if (!delta) throw new Error(`no relative vertical delta in path: ${d}`);
+  return Number(delta[1]) > 0 ? "down" : "up";
+}
+
+test("the phone navigation chevron points the way the navigation will move", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const daisySession = "019fedfc-1c30-70e1-a5e2-9a3c94268082";
+  const base = bootFetch();
+  const fetch = vi.fn((input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "/api/v1/workers") return Promise.resolve(ok([
+      { id: "daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/daisy", autostart: false, position: 0, active_session_id: daisySession, running: true, attention_state: "resting", created_at: 1, updated_at: 1 },
+    ]));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: daisySession, running: true }] }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  // Starts tucked — the terminal screen opens with the navigation away — so
+  // the tap will bring the band back down.
+  const tucked = await screen.findByRole("button", { name: "Show navigation" });
+  expect(tucked).toHaveAttribute("aria-expanded", "false");
+  expect(chevronDirection(tucked)).toBe("down");
+
+  fireEvent.click(tucked);
+
+  // Now shown, so the tap will send it back up.
+  const shown = await screen.findByRole("button", { name: "Hide navigation" });
+  expect(shown).toHaveAttribute("aria-expanded", "true");
+  expect(chevronDirection(shown)).toBe("up");
+});
