@@ -81,6 +81,7 @@ impl TaskStore {
             title,
             description,
             priority,
+            TaskState::Ready,
             home_hive_id,
             now,
         )?;
@@ -1107,6 +1108,13 @@ pub(crate) fn insert_apiary_task_for_hive(
     title: &str,
     description: &str,
     priority: TaskPriority,
+    // ⚠️ EXPLICIT, not hardcoded Ready, because relocation carries a task's
+    // real state across. This was `TaskState::Ready` for every caller, which is
+    // right for newly created shared work and catastrophic for a move: of 530
+    // live rcg-* tasks on this Hive 474 are COMPLETED, so relocating them under
+    // the old signature would have resurrected 474 finished tasks as ready
+    // work at the Apiary, in front of every member Hive.
+    state: TaskState,
     home_hive_id: Option<HiveId>,
     now: i64,
 ) -> Result<ApiaryTask, TaskStoreError> {
@@ -1131,7 +1139,7 @@ pub(crate) fn insert_apiary_task_for_hive(
         title: title.to_owned(),
         description: description.to_owned(),
         priority,
-        state: TaskState::Ready,
+        state,
         home_node_id,
         home_hive_id,
         revision: 1,
@@ -1748,6 +1756,107 @@ pub(super) fn record_local_apiary_task_lifecycle_intent(
 }
 
 impl TaskStore {
+    /// Relocates one existing Hive task to the Apiary level, keeping its local
+    /// record as the durable origin.
+    ///
+    /// This is the reverse of `materialize_local_apiary_task_execution`, which
+    /// only ever ran Apiary -> a NEW local task. Nothing could take a task that
+    /// already existed here and lift it up, which is the whole of 01a09b59-fad2.
+    ///
+    /// ⚠️ THE LOCAL TASK IS NOT DELETED OR RETIRED. Its history, evidence,
+    /// decision links and Hive-side prerequisites all key on its id and stay
+    /// exactly where they are; `apiary_task_local_origins` is how a reader gets
+    /// back to them, and how rcg-ness survives a move that `ApiaryTask`
+    /// deliberately cannot carry. The ticket forbids recreate-and-retire
+    /// precisely because that orphans this.
+    ///
+    /// ⚠️ STATE TRAVELS. 474 of 530 live rcg-* tasks here are completed, so a
+    /// relocation that reset state to Ready would republish 474 finished tasks
+    /// as available work to every member Hive.
+    ///
+    /// Idempotent: relocating the same local task twice returns the Apiary task
+    /// it already became rather than minting a second one.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, a negative clock, an unknown or removed local task,
+    /// and a local task already relocated under a different Apiary task.
+    pub fn relocate_local_task_to_apiary(
+        &self,
+        local_task_id: TaskId,
+        now: i64,
+    ) -> Result<ApiaryTask, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if let Some(existing) = relocated_apiary_task(&transaction, local_task_id)? {
+            transaction.commit()?;
+            return Ok(existing);
+        }
+        let (title, description, priority, state): (String, String, String, String) = transaction
+            .query_row(
+                "SELECT title, description, priority, state FROM tasks
+                 WHERE id = ?1 AND hive_id = ?2 AND removed_at IS NULL",
+                params![local_task_id.to_string(), identity.hive.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)?;
+        let priority =
+            TaskPriority::from_str(&priority).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        let state =
+            TaskState::from_str(&state).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        // home_hive_id stays None. Routing a shared task to a home Hive requires
+        // an ACTIVE federation membership for it, and the Keeper is not a member
+        // of its own Apiary -- so naming this Hive here would fail. Absent is
+        // also what the model means by unclaimed: "the home Hive is absent until
+        // the Keeper or a governed claim assigns it."
+        let task = insert_apiary_task_for_hive(
+            &transaction,
+            apiary.id,
+            &title,
+            &description,
+            priority,
+            state,
+            None,
+            now,
+        )?;
+        transaction.execute(
+            "INSERT INTO apiary_task_local_origins
+                (apiary_task_id, local_task_id, relocated_at)
+             VALUES (?1, ?2, ?3)",
+            params![task.id.to_string(), local_task_id.to_string(), now],
+        )?;
+        transaction.commit()?;
+        Ok(task)
+    }
+
+    /// The Apiary task one local task became, if it has been relocated.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn relocated_apiary_task_for_local_task(
+        &self,
+        local_task_id: TaskId,
+    ) -> Result<Option<ApiaryTask>, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let found = relocated_apiary_task(&transaction, local_task_id)?;
+        transaction.commit()?;
+        Ok(found)
+    }
+
     /// Records that one Keeper-canonical task must wait for another.
     ///
     /// # Errors
@@ -1825,6 +1934,72 @@ impl TaskStore {
 /// Matches `task_prerequisites.reason` at the Hive, so a relocated edge keeps
 /// the sentence that explains why the ordering exists rather than truncating it.
 const MAX_APIARY_PREREQUISITE_REASON_BYTES: usize = 2048;
+
+/// Reads back the Apiary task a local task was relocated into, so relocation
+/// can be idempotent rather than minting a second shared task on a retry.
+fn relocated_apiary_task(
+    transaction: &rusqlite::Transaction<'_>,
+    local_task_id: TaskId,
+) -> Result<Option<ApiaryTask>, TaskStoreError> {
+    let snapshot: Option<String> = transaction
+        .query_row(
+            "SELECT shared.snapshot_json FROM apiary_task_local_origins origin
+             JOIN apiary_task_events shared
+               ON shared.task_id = origin.apiary_task_id
+             WHERE origin.local_task_id = ?1
+             ORDER BY shared.task_revision DESC LIMIT 1",
+            [local_task_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    snapshot
+        .map(|json| {
+            serde_json::from_str::<ApiaryTask>(&json)
+                .map_err(|_| TaskStoreError::InvalidFederationTask)
+        })
+        .transpose()
+}
+
+/// Where a relocated Keeper-canonical task came from, so its Hive record stays
+/// reachable after the move.
+///
+/// ⚠️ DELIBERATELY NOT `local_apiary_task_executions`, and the distinction is
+/// load-bearing. That bridge means "a private worker in this Hive is WORKING
+/// this shared task"; its `worker_id` is NOT NULL because an execution without
+/// a worker is meaningless. Relocation asserts something different: "this
+/// shared task USED TO BE that local task, and its history, evidence and
+/// decision links are still over there."
+///
+/// MEASURED BEFORE CHOOSING. Of 530 live rcg-* tasks on this Hive, 23 have no
+/// assigned worker — including ALL 11 drafts, and the operator put drafts
+/// explicitly in scope ("any state includes draft, blocked, active, review,
+/// completed, abandoned"). Reusing the execution bridge would therefore have
+/// either refused those 23, losing exactly the record link that relocation
+/// exists to preserve, or forced `worker_id` nullable and made 23 unworked
+/// tasks read as under execution. Both are worse than one additive table.
+///
+/// Queen's routing note named the execution bridge for this; this is a
+/// deviation, reported rather than taken quietly, and it serves the same
+/// purpose she assigned it — local_task_id reaches the local task's workspace,
+/// which is how rcg-ness survives a move without ApiaryTask ever carrying it.
+pub(crate) fn migrate_apiary_task_local_origins(
+    tx: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_task_local_origins (
+             apiary_task_id TEXT PRIMARY KEY REFERENCES apiary_tasks(id),
+             local_task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id),
+             relocated_at INTEGER NOT NULL CHECK (relocated_at >= 0)
+         );
+         CREATE INDEX IF NOT EXISTS apiary_task_local_origins_by_local
+             ON apiary_task_local_origins(local_task_id);",
+    )?;
+    tx.pragma_update(
+        None,
+        "user_version",
+        crate::APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION,
+    )
+}
 
 /// Ordering between two Keeper-canonical tasks, so a prerequisite chain can
 /// exist at the Apiary level instead of dying at the Hive boundary.
@@ -2467,6 +2642,126 @@ mod tests {
             .apply_federation_task_command_receipt(&conflict, now + 15)
             .expect_err("foreign command cannot enter local outbox");
     }
+
+    /// ⚠️ THE 474 CASE. Of 530 live rcg-* tasks on this Hive, 474 are COMPLETED.
+    /// `insert_apiary_task_for_hive` hardcoded `TaskState::Ready` for every
+    /// caller — correct for newly created shared work, catastrophic for a move:
+    /// relocating under that signature would have republished 474 finished
+    /// tasks as available work in front of every member Hive. State travels.
+    #[test]
+    fn a_relocated_task_keeps_its_state_instead_of_coming_back_as_ready() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let local = keeper
+            .create_task("An rcg task that is already done", "/rcg-platform")
+            .expect("local");
+        keeper
+            .transition_task(local.id, TaskState::Ready)
+            .expect("ready");
+        keeper
+            .transition_task(local.id, TaskState::Active)
+            .expect("active");
+        keeper
+            .transition_task(local.id, TaskState::Review)
+            .expect("review");
+        keeper
+            .transition_task(local.id, TaskState::Completed)
+            .expect("completed");
+
+        let shared = keeper
+            .relocate_local_task_to_apiary(local.id, now)
+            .expect("relocate");
+
+        assert_eq!(
+            shared.state,
+            TaskState::Completed,
+            "a finished task must not be republished as available work"
+        );
+        assert_eq!(shared.title, "An rcg task that is already done");
+    }
+
+    /// The ticket forbids recreate-and-retire because it orphans the record.
+    /// The local task therefore survives the move, and the origin row is how a
+    /// reader gets back to it — including to its workspace, which is how
+    /// rcg-ness outlives a move that `ApiaryTask` deliberately cannot carry.
+    #[test]
+    fn relocation_keeps_the_local_record_and_can_find_its_way_back() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let local = keeper
+            .create_task("Relocate me", "/rcg-member-services")
+            .expect("local");
+
+        let shared = keeper
+            .relocate_local_task_to_apiary(local.id, now)
+            .expect("relocate");
+
+        let still_here = keeper
+            .get_task(local.id)
+            .expect("local task still readable");
+        assert_eq!(
+            still_here.workspace, "/rcg-member-services",
+            "the local record must survive so its workspace, history and evidence stay reachable"
+        );
+        assert_eq!(
+            keeper
+                .relocated_apiary_task_for_local_task(local.id)
+                .expect("lookup")
+                .map(|found| found.id),
+            Some(shared.id),
+            "and the origin link must lead back from the local task to the shared one"
+        );
+    }
+
+    /// A bulk move retries. Minting a second shared task for the same local one
+    /// would put the same work on the board twice with no way to tell which is
+    /// real, so the second call returns the first result.
+    #[test]
+    fn relocating_the_same_task_twice_does_not_mint_a_second_shared_task() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let local = keeper
+            .create_task("Once only", "/rcg-platform")
+            .expect("local");
+
+        let first = keeper
+            .relocate_local_task_to_apiary(local.id, now)
+            .expect("first");
+        let second = keeper
+            .relocate_local_task_to_apiary(local.id, now + 5)
+            .expect("second");
+
+        assert_eq!(
+            first.id, second.id,
+            "a retry must not duplicate shared work"
+        );
+    }
+
+    #[test]
+    fn an_unknown_or_removed_local_task_cannot_be_relocated() {
+        let now = 1_700_000_000;
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+
+        assert!(
+            keeper
+                .relocate_local_task_to_apiary(TaskId::new(), now)
+                .is_err(),
+            "a task the Hive does not have cannot be lifted out of it"
+        );
+    }
+
     /// The SOA chain B1b -> D -> E -> F -> G -> H is the case this exists for:
     /// its prerequisite links ARE the migration ordering, and a relocation that
     /// dropped them would move the work and lose the only record of what has to

@@ -6,6 +6,7 @@ use swarm_domain::{
     FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
     FederationStewardTaskOutboxState, FederationStewardTaskOutcome, FederationStewardTaskReceipt,
     HiveId, LocalApiaryContext, LocalApiaryRole, OperatorId, StewardCapability, StewardshipId,
+    TaskState,
 };
 
 use super::{
@@ -113,6 +114,7 @@ impl TaskStore {
                 command.title.trim(),
                 command.description.trim(),
                 command.priority,
+                TaskState::Ready,
                 Some(command.target_hive_id),
                 now,
             )?;

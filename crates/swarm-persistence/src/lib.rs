@@ -309,7 +309,8 @@ const UNPROMPTED_ENGINE_UPDATE_SCHEMA_VERSION: i64 = 170;
 const REFUSED_NATIVE_ANSWER_SCHEMA_VERSION: i64 = 171;
 const NATIVE_ANSWER_SWITCH_SCHEMA_VERSION: i64 = 172;
 const APIARY_TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 173;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_TASK_PREREQUISITES_SCHEMA_VERSION;
+const APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION: i64 = 174;
+const CURRENT_SCHEMA_VERSION: i64 = APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4198,6 +4199,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < APIARY_TASK_PREREQUISITES_SCHEMA_VERSION {
         federation_tasks::migrate_apiary_task_prerequisites(transaction)?;
+    }
+    if schema_version < APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION {
+        federation_tasks::migrate_apiary_task_local_origins(transaction)?;
     }
     Ok(())
 }
@@ -9677,6 +9681,13 @@ mod tests {
             undo_sql: "DROP TABLE apiary_task_prerequisites",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
                 AND name = 'apiary_task_prerequisites'",
+        },
+        SchemaStep {
+            table: "apiary_task_local_origins",
+            artifact: "local_task_id",
+            undo_sql: "DROP TABLE apiary_task_local_origins",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
+                AND name = 'apiary_task_local_origins'",
         },
     ];
 
