@@ -686,11 +686,33 @@ fn append_record_locked(
         .get(&id)
         .ok_or(HistoryError::SessionNotFound)?
         .retained_bytes();
-    if session_bytes.saturating_add(record_bytes) > limits.max_session_bytes
-        || state.retained_bytes.saturating_add(record_bytes) > limits.max_total_bytes
-    {
+    let over_session = session_bytes.saturating_add(record_bytes) > limits.max_session_bytes;
+    let over_total = state.retained_bytes.saturating_add(record_bytes) > limits.max_total_bytes;
+    if over_session || over_total {
         state.dropped_records = state.dropped_records.saturating_add(1);
         state.dropped_bytes = state.dropped_bytes.saturating_add(payload_bytes);
+        // ⚠️ SAYS SO, BECAUSE A DROPPED RECORD IS TERMINAL OUTPUT NOBODY WILL
+        // EVER SEE AGAIN. dropped_records and dropped_bytes were counted and
+        // then read by nothing outside tests: no log line, no host startup
+        // field, no API surface. So the journal could shed and the only symptom
+        // would be a rebuilt terminal quietly missing output, which is
+        // indistinguishable from a rendering bug — and an evening was spent on
+        // 2026-09-12 ruling the journal out of exactly that kind of complaint.
+        //
+        // Rare by construction and therefore safe to log unthrottled: every
+        // prune runs FIRST, so reaching here means the record does not fit even
+        // after expiry, session and total eviction have all made room.
+        tracing::warn!(
+            session = %id,
+            limit = if over_session { "session" } else { "total" },
+            record_bytes,
+            session_bytes,
+            retained_bytes = state.retained_bytes,
+            max_session_bytes = limits.max_session_bytes,
+            max_total_bytes = limits.max_total_bytes,
+            dropped_records = state.dropped_records,
+            "terminal history dropped a record at capacity; this output cannot be replayed"
+        );
         return Ok(HistoryAppendOutcome::DroppedAtCapacity);
     }
 
