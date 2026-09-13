@@ -59,9 +59,9 @@ vi.mock("./TerminalConnection", () => ({ TerminalConnection: class {} }));
 // The composer renders nothing, but its PROPS are the seam this view is wired
 // through — without capturing them, onAttachment is unreachable and the
 // picker's path is untested while every test still passes.
-const composerProps = vi.hoisted(() => ({ current: undefined as undefined | { onAttachment?: (file: File) => Promise<void> } }));
+const composerProps = vi.hoisted(() => ({ current: undefined as undefined | { onAttachment?: (file: File) => Promise<void>; onGeometryHold?: (held: boolean) => void } }));
 vi.mock("./MobileTerminalComposer", () => ({
-  MobileTerminalComposer: (props: { onAttachment?: (file: File) => Promise<void> }) => {
+  MobileTerminalComposer: (props: { onAttachment?: (file: File) => Promise<void>; onGeometryHold?: (held: boolean) => void }) => {
     composerProps.current = props;
     return null;
   },
@@ -566,4 +566,37 @@ test("switching workers reads the incoming controller state during render", () =
     controller.detailReads,
     "a session change must read the incoming controller's state during render, or the first frame paints the previous worker's status",
   ).toBeGreaterThan(before);
+});
+
+/**
+ * ⚠️ FOUR THINGS CAN SHORTEN THE TERMINAL AND THEY MUST NOT RELEASE EACH OTHER'S HOLD.
+ *
+ * Anything that changes the terminal's height reshapes its grid, and a
+ * multi-part AskUser batch already drawn for the taller shape is reflowed out
+ * of position — the operator's "I don't see the opening text", 2026-09-12.
+ * Holding geometry prevents the reshape, and the keys route was confirmed
+ * fixed on their phone.
+ *
+ * The navigation and the handoff banner reach the same reshape by other routes.
+ * With one shared hold, the danger is a LAST-WRITER RELEASE: the banner
+ * clearing while the navigation is still open must not un-hold the terminal.
+ */
+test("the terminal's shape stays held until every claimant has let go", () => {
+  controller.holdGeometryForMobileComposer.mockClear();
+  const view = render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} navigationVisible={false} />);
+  const held = () => controller.holdGeometryForMobileComposer.mock.calls.at(-1)?.[0];
+
+  // The navigation opens: the terminal is shorter, so its shape is frozen.
+  view.rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} navigationVisible />);
+  expect(held()).toBe(true);
+
+  // The composer takes focus too. Still held, and releasing focus alone must
+  // not free it while the navigation is still on screen.
+  composerProps.current?.onGeometryHold?.(true);
+  composerProps.current?.onGeometryHold?.(false);
+  expect(held()).toBe(true);
+
+  // Only when the last claimant lets go does the terminal resume fitting.
+  view.rerender(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} navigationVisible={false} />);
+  expect(held()).toBe(false);
 });

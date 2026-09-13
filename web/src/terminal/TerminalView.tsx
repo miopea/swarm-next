@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { recoveryOutcomeNote, recoveryOutcomeWording } from "./conversationRecoveryWording";
 
 import { MobileTerminalComposer } from "./MobileTerminalComposer";
@@ -25,9 +25,11 @@ export interface TerminalViewProps {
   queenAutonomy?: QueenAutonomyLevel;
   onOpenQueenSettings?: () => void;
   onConnectionStateChange?: (state: TerminalConnectionState) => void;
+  /** Whether the phone navigation is on screen, which shortens the terminal. */
+  navigationVisible?: boolean;
 }
 
-export default function TerminalView({ session, operatorToken, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, onRefresh, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, onRefresh, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange, navigationVisible }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -314,6 +316,36 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // On a phone the connection chip and the sleep action live in the workspace
   // header instead. The toolbar then has nothing left to say unless something
   // transient is happening, so it reports that and the layout reclaims the row.
+  // ⚠️ ONE HOLD, FOUR CLAIMANTS, and the last to speak must not release it for
+  // the others. Anything that changes the terminal's HEIGHT reshapes its grid,
+  // and a multi-part AskUser batch already drawn for the taller shape is then
+  // reflowed out of position — opening lines scrolled away, option
+  // descriptions running into the next question. That is the defect the
+  // operator reported on 2026-09-12 and confirmed fixed for the keys.
+  //
+  // The keys were only the first route to it. Showing the navigation and the
+  // handoff banner appearing both shorten the same terminal, so both need the
+  // same treatment, and the composer holds on focus so the on-screen keyboard
+  // cannot reshape it either.
+  const holds = useRef({ composer: false, navigation: false, banner: false });
+  const applyGeometryHold = useCallback((source: keyof typeof holds.current, held: boolean) => {
+    if (holds.current[source] === held) return;
+    holds.current[source] = held;
+    controller.holdGeometryForMobileComposer(
+      holds.current.composer || holds.current.navigation || holds.current.banner,
+    );
+  }, [controller]);
+
+  // The banner is not a moment, it is a state: it stays while another view has
+  // control, so the hold stays with it.
+  useEffect(() => {
+    applyGeometryHold("banner", control !== "owned");
+  }, [applyGeometryHold, control]);
+
+  useEffect(() => {
+    applyGeometryHold("navigation", navigationVisible === true);
+  }, [applyGeometryHold, navigationVisible]);
+
   const quiet = connectionState === "connected" && control === "owned" && !detail && attachmentState === "idle";
   const attachmentWaitReason = connectionState === "connected" && control !== "owned"
     ? "Resume Here to add it to this terminal"
@@ -457,7 +489,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
          The terminal must not change shape at all while the keys are open, which
          MobileTerminalComposer now arranges by holding geometry for as long as
          they are. Nothing reflows, so nothing needs redrawing. */
-        keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} onGeometryHold={(held) => controller.holdGeometryForMobileComposer(held)} />
+        keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onAttachment={acceptChosenFile} attachmentState={attachmentState} onRefresh={onRefresh} onGeometryHold={(held) => applyGeometryHold("composer", held)} />
     </div>
   );
 }
