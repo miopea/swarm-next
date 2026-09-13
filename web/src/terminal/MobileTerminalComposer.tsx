@@ -92,6 +92,21 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
   const connectedRef = useRef(connectionState === "connected" && inputAvailable);
   const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
+  // ⚠️ THE HOLD FOLLOWS THE KEYS, not just focus. Opening them shortens the
+  // terminal; without a hold the grid re-fits and anything already drawn for
+  // the taller shape is reflowed out of position.
+  //
+  // Only on a CHANGE, never on mount. Emitting a release at mount time — when
+  // nothing is held — is noise the controller ignores but a reader cannot, and
+  // MobileTerminalComposer.test.tsx asserts that release is never called
+  // spuriously while focus is merely moving between the controls.
+  const heldForKeys = useRef(keysExpanded);
+  useEffect(() => {
+    if (heldForKeys.current === keysExpanded) return;
+    heldForKeys.current = keysExpanded;
+    onGeometryHold?.(keysExpanded || composerFocused.current);
+  }, [keysExpanded, onGeometryHold]);
+  const composerFocused = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const attachmentInput = useRef<HTMLInputElement>(null);
   // WHETHER A PICK IS IN FLIGHT, so that a picker which comes back with nothing
@@ -280,9 +295,24 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
     <section
       className="mobile-terminal-composer"
       aria-label="Mobile terminal controls"
-      onFocusCapture={() => onGeometryHold?.(true)}
+      /* ⚠️ THE KEYS MUST HOLD GEOMETRY THE SAME WAY FOCUS DOES, or opening them
+         reshapes the terminal underneath an interview that is already drawn.
+         Operator, 2026-09-12: "When I toggle to show the keys, it redraws, but
+         redraws broken and I don't see the opening text." Showing the keys made
+         the terminal shorter, the grid re-fitted, and a multi-part AskUser
+         batch drawn for the taller shape no longer fitted — its opening lines
+         scrolled away and its option descriptions ran into the next question.
+         Holding geometry keeps the row count the terminal already had, so
+         nothing reflows and nothing already on screen changes shape. The keys
+         cover part of the view while they are open, which is what they did
+         before; they just stop rewriting the terminal to do it. */
+      onFocusCapture={() => { composerFocused.current = true; onGeometryHold?.(true); }}
       onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onGeometryHold?.(false);
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        composerFocused.current = false;
+        // Still held if the keys are open: releasing here would re-fit the
+        // terminal while they are still covering it.
+        onGeometryHold?.(keysExpanded);
       }}
     >
       <form onSubmit={submit}>
@@ -298,7 +328,7 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
           value={draft}
           readOnly={submitting || otherDraft || uncertainDraft}
           onChange={(event) => setDraft(event.target.value.slice(0, MAX_TERMINAL_DRAFT_LENGTH))}
-          placeholder="Message or /command"
+          placeholder="Type or dictate. Slash commands work here."
           autoCapitalize="sentences"
           enterKeyHint="enter"
         />

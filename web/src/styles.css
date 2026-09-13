@@ -2557,15 +2557,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-terminal-composer form { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 7px; }
   .mobile-terminal-composer form > p { grid-column: 1 / -1; min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: .78rem; }
   .mobile-terminal-composer label { display: flex; grid-column: 1 / -1; justify-content: space-between; gap: 12px; }
-  /* ⚠️ AN EMPTY BOX WAS COSTING THE TERMINAL A ROW AND A HALF. 66px is two
-     lines of room held open before anything is typed, on the one screen where
-     height is the scarce thing. It still grows — max-height is unchanged and
-     resize still works — so nothing a long message needs is lost; it just
-     stops reserving the space in advance.
-     Operator, 2026-09-12, on why hiding the keys is not a workaround: "I need
-     to show keys to use the arrows and enter. It is hard to do it with just
-     numbers." The keys have to stay, so the rows come from elsewhere. */
-  .mobile-terminal-composer textarea { box-sizing: border-box; height: 44px; min-height: 44px; max-height: 116px; resize: vertical; }
+  /* ⚠️ DO NOT SHRINK THIS BOX TO BUY TERMINAL ROWS. Tried on 2026-09-12 —
+     box-sizing: border-box with height: 44px, which did save 22px — and the
+     operator reported the field "behaving differently than before", with
+     gboard's suggestion strip and its voice dictation icon no longer
+     appearing. Reverted the same evening. Two lines of room is what an Android
+     keyboard needs to treat this as an ordinary multi-line composer; a field
+     collapsed to one line is not worth a working keyboard.
+     Rows for the terminal come from the keys, the navigation and the handoff
+     banner instead. */
+  .mobile-terminal-composer textarea { min-height: 66px; max-height: 116px; resize: vertical; }
   .mobile-terminal-composer form > button { min-height: 44px; align-self: stretch; border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
   .mobile-terminal-key-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: .78rem; }
   .mobile-terminal-key-heading > div { display: flex; flex-wrap: wrap; gap: 6px; }

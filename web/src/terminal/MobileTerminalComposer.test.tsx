@@ -14,7 +14,9 @@ beforeEach(() => { terminalDraft.clear(); localStorage.clear(); sessionStorage.c
 
 test("holds terminal geometry while focus remains inside mobile controls", () => {
   const hold = vi.fn();
-  render(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} />);
+  // Keys collapsed, so this measures the FOCUS rule alone. They default to
+  // visible, and an open keys panel holds geometry in its own right.
+  render(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} keysExpanded={false} />);
   const draft = screen.getByLabelText(/Message worker/);
   const send = screen.getByRole("button", { name: "Send" });
   fireEvent.focus(draft);
@@ -23,6 +25,42 @@ test("holds terminal geometry while focus remains inside mobile controls", () =>
   expect(hold).not.toHaveBeenCalledWith(false);
   fireEvent.blur(send, { relatedTarget: null });
   expect(hold).toHaveBeenLastCalledWith(false);
+});
+
+/**
+ * ⚠️ OPENING THE KEYS MUST NOT RESHAPE THE TERMINAL.
+ *
+ * Operator, 2026-09-12: "When I toggle to show the keys, it redraws, but
+ * redraws broken and I don't see the opening text." Showing the keys made the
+ * terminal shorter, the grid re-fitted, and a multi-part AskUser batch already
+ * drawn for the taller shape no longer fitted — its opening lines scrolled away
+ * and its option descriptions ran into the next question.
+ *
+ * Holding geometry keeps the row count the terminal already had, so nothing
+ * reflows. The keys cover part of the view, which they always did; they simply
+ * stop rewriting the terminal to do it.
+ */
+test("an open keys panel holds terminal geometry, and closing it releases", () => {
+  const hold = vi.fn();
+  const view = render(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} keysExpanded={false} />);
+  hold.mockClear();
+
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} keysExpanded />);
+  expect(hold).toHaveBeenLastCalledWith(true);
+
+  view.rerender(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} keysExpanded={false} />);
+  expect(hold).toHaveBeenLastCalledWith(false);
+});
+
+/** Focus leaving must NOT release while the keys are still covering the view. */
+test("blurring out of the composer keeps the hold while the keys are open", () => {
+  const hold = vi.fn();
+  render(<MobileTerminalComposer connectionState="connected" onInput={() => true} onGeometryHold={hold} keysExpanded />);
+  const draft = screen.getByLabelText(/Message worker/);
+  fireEvent.focus(draft);
+  hold.mockClear();
+  fireEvent.blur(draft, { relatedTarget: null });
+  expect(hold).not.toHaveBeenCalledWith(false);
 });
 
 test("a bound draft survives remount and cannot move into another session", () => {
