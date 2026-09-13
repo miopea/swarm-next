@@ -391,7 +391,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 25;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 26;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -403,7 +403,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 25;
 #[cfg(test)]
 /// The served surface as of revision 25. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "38276621f09ddf33c03b81fa61796e7d1a7590176691592ca4f894091eec27ed";
+    "91cbdb6dceadd31fc3c110ac39cc0e27e567e0e862921ecd0b7ab49147d42037";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -631,6 +631,7 @@ impl ServerHandler for AgentMcp {
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
+                relocate_tasks_to_apiary_tool(),
                 claim_apiary_task_tool(),
                 send_apiary_task_to_worker_tool(),
                 transition_apiary_task_tool(),
@@ -680,6 +681,7 @@ impl ServerHandler for AgentMcp {
                 | "swarm_transition_task"
                 | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
+                | "swarm_relocate_tasks_to_apiary"
                 | "swarm_claim_apiary_task"
                 | "swarm_send_apiary_task_to_worker"
                 | "swarm_transition_apiary_task"
@@ -965,6 +967,25 @@ impl ServerHandler for AgentMcp {
                                 input.home_hive_id,
                                 crate::unix_timestamp(),
                             )
+                            .and_then(structured)
+                    })
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
+            "swarm_relocate_tasks_to_apiary" => {
+                if self.principal.role == WorkerRole::Queen {
+                    parse::<RelocateTasksToApiaryInput>(arguments).and_then(|input| {
+                        let task_ids = input
+                            .task_ids
+                            .iter()
+                            .map(|raw| {
+                                swarm_domain::TaskId::from_str(raw)
+                                    .map_err(|_| ApplicationError::MalformedIdentifier("task id"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        ApiaryService::new(self.tasks.store().clone())
+                            .relocate_local_tasks_to_apiary(&task_ids, crate::unix_timestamp())
                             .and_then(structured)
                     })
                 } else {
@@ -2723,6 +2744,11 @@ struct CreateTaskInput {
 }
 
 #[derive(Deserialize)]
+struct RelocateTasksToApiaryInput {
+    task_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct CreateApiaryTaskInput {
     title: String,
     #[serde(default)]
@@ -3589,6 +3615,35 @@ fn create_apiary_task_tool() -> Tool {
     )
 }
 
+fn relocate_tasks_to_apiary_tool() -> Tool {
+    tool(
+        "swarm_relocate_tasks_to_apiary",
+        "Keeper Queen only: move existing Hive tasks UP to the Apiary level, keeping each task's record. \
+         Select what to move by reading each candidate's local workspace first (this is the only place \
+         rcg-ness is expressible; an Apiary task deliberately carries no repository). The local tasks are \
+         NOT retired -- their history, evidence and decision links stay where they are and remain reachable \
+         from the relocated task. \
+         ⚠️ PASS A WHOLE PREREQUISITE CHAIN OR NONE OF IT. An Apiary edge can only join two Apiary tasks, so \
+         a set that would leave one end of a chain behind is refused and nothing is written. Ordering inside \
+         the set travels with it, rewritten to Apiary ids.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_ids": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "description": "Local Hive task IDs to relocate together, in one transaction. Include every task of any prerequisite chain you are moving."
+                }
+            },
+            "required": ["task_ids"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
 fn claim_apiary_task_tool() -> Tool {
     tool(
         "swarm_claim_apiary_task",
@@ -4311,6 +4366,7 @@ mod tests {
         "swarm_list_apiary_tasks",
         "swarm_list_apiary_hives",
         "swarm_create_apiary_task",
+        "swarm_relocate_tasks_to_apiary",
         "swarm_claim_apiary_task",
         "swarm_send_apiary_task_to_worker",
         "swarm_transition_apiary_task",
@@ -8979,6 +9035,99 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|task| task.assigned_worker_id.is_none())
+        );
+    }
+
+    /// The capability 01a09b59-fad2 asked for, exercised through the MCP surface
+    /// rather than only at the store: a Keeper Queen lifts existing Hive tasks
+    /// to the Apiary, a worker cannot, and the chain guard survives the wiring.
+    #[tokio::test]
+    async fn keeper_queen_relocates_hive_tasks_upward_and_a_worker_cannot() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        store
+            .create_apiary_for_local_hive("Grand Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let head = store.create_task("B1b", "/rcg-platform").unwrap();
+        let waiting = store.create_task("D", "/rcg-platform").unwrap();
+        store.transition_task(waiting.id, TaskState::Ready).unwrap();
+        store
+            .transition_task(waiting.id, TaskState::Blocked)
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                waiting.id,
+                head.id,
+                "D waits for B1b",
+                &swarm_domain::TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+
+        // HALF A CHAIN IS REFUSED THROUGH THE TOOL, not merely at the store.
+        let split = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_relocate_tasks_to_apiary",
+                        "arguments": { "task_ids": [waiting.id.to_string()] }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(split["result"]["isError"], true);
+        assert!(store.list_visible_apiary_tasks().unwrap().is_empty());
+
+        let whole_chain = json!({
+            "name": "swarm_relocate_tasks_to_apiary",
+            "arguments": { "task_ids": [head.id.to_string(), waiting.id.to_string()] }
+        });
+
+        // A WORKER CANNOT LIFT WORK OUT OF THE HIVE.
+        let worker = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(Some(&worker_token), "tools/call", &whole_chain),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(worker["result"]["isError"], true);
+        assert!(store.list_visible_apiary_tasks().unwrap().is_empty());
+
+        let queen = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(Some(&queen_token), "tools/call", &whole_chain),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(queen["result"]["isError"], false);
+        assert_eq!(store.list_visible_apiary_tasks().unwrap().len(), 2);
+
+        // THE LOCAL RECORD SURVIVES: not retired, and still carrying the
+        // workspace that is the only place rcg-ness is expressible.
+        let still_local = store.get_task(head.id).unwrap();
+        assert_eq!(still_local.workspace, "/rcg-platform");
+        let relocated = store
+            .relocated_apiary_task_for_local_task(waiting.id)
+            .unwrap()
+            .expect("the local task knows what it became");
+        assert_eq!(
+            store.apiary_task_prerequisites(relocated.id).unwrap().len(),
+            1,
+            "the ordering came up with the chain"
         );
     }
 

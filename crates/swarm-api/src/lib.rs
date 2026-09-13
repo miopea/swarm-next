@@ -8801,6 +8801,15 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_federation_task",
             error.to_string(),
         ),
+        // CONFLICT, not BAD_REQUEST: the request is well formed and the caller
+        // is allowed to make it. What refuses is the state of the board -- a
+        // prerequisite chain straddles the set they named -- and the fix is to
+        // name the rest of the chain, not to correct the call.
+        TaskStoreError::ApiaryRelocationWouldSplitChain => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_relocation_would_split_chain",
+            error.to_string(),
+        ),
         TaskStoreError::FederationClaimConflict => ApiError::new(
             StatusCode::CONFLICT,
             "federation_claim_conflict",

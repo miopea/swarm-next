@@ -752,6 +752,38 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Relocates a set of existing Hive tasks to the Apiary level in one
+    /// transaction, carrying their prerequisite ordering with them.
+    ///
+    /// The local tasks are NOT retired: each keeps its history, evidence and
+    /// decision links, and the origin link is how a reader gets back to them.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown or removed tasks, and any set that would
+    /// leave a prerequisite chain straddling the Hive and the Apiary.
+    pub fn relocate_local_tasks_to_apiary(
+        &self,
+        local_task_ids: &[swarm_domain::TaskId],
+        now: i64,
+    ) -> Result<Vec<ApiaryTask>, ApplicationError> {
+        self.store
+            .relocate_local_tasks_to_apiary(local_task_ids, now)
+            .map_err(Into::into)
+    }
+
+    /// The Apiary task one local task became, if it has been relocated.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn relocated_apiary_task_for_local_task(
+        &self,
+        local_task_id: swarm_domain::TaskId,
+    ) -> Result<Option<ApiaryTask>, ApplicationError> {
+        self.store
+            .relocated_apiary_task_for_local_task(local_task_id)
+            .map_err(Into::into)
+    }
+
     /// Applies one authenticated idempotent Member command on Keeper.
     ///
     /// # Errors

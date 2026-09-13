@@ -422,6 +422,40 @@ confirmation. Exact retries return the same result, accepted handoffs never
 expire silently, and the destination Queen waits for confirmed Hive ownership
 before assigning a private worker.
 
+## Relocating Hive work to the Apiary
+
+Work that began as one Hive's task can be lifted to the Apiary level, where
+every member Hive can see and coordinate it. `swarm_relocate_tasks_to_apiary`
+is Keeper Queen only.
+
+**The local task is not retired.** Its history, evidence, decision links and
+Hive-side prerequisites all key on its id and stay where they are; an origin
+link records what it became, and reading back through that link is how anyone
+reaches the full record afterwards. Recreating the task at the Apiary and
+retiring the original would orphan all of it, which is why relocation exists as
+its own operation rather than as a convention.
+
+**An Apiary task carries less on purpose.** It holds title, description,
+priority, state and home Hive — never the repository, worker, terminal or
+provider, because that record never leaves the home Hive. So a relocated task's
+repository is knowable only through its origin link, and selecting *which*
+tasks to relocate is done before the move by reading each candidate's local
+workspace. A shared task cannot be filtered by repository afterwards, and that
+is the privacy boundary working rather than a gap.
+
+**State travels.** A completed task relocates as completed. Resetting state on
+the way up would republish finished work as available to every member Hive.
+
+**A prerequisite chain moves whole or not at all.** An Apiary prerequisite edge
+joins two Apiary tasks, so if one end of a chain moves and the other stays, the
+ordering can be written on neither side without asserting something false. A
+set that would split a chain is refused, nothing is written, and the caller is
+told to name the rest of the chain. Ordering inside the set travels with it,
+rewritten to Apiary ids, with each edge's reason carried across.
+
+Relocation is idempotent: relocating a task that has already moved returns what
+it became rather than minting a second shared task.
+
 ## Jira-backed Apiaries
 
 Jira identity maps one-to-one with the operator who owns a Hive. Jira remains
