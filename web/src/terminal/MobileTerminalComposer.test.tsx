@@ -1,9 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
   composeTerminalSubmission,
   MAX_TERMINAL_DRAFT_LENGTH,
+  CLAUDE_REWIND_PRESSES,
   MOBILE_TERMINAL_KEYS,
   MobileTerminalComposer,
 } from "./MobileTerminalComposer";
@@ -172,14 +173,15 @@ test("terminal keys cannot interleave with a pending composer submission", async
   render(<MobileTerminalComposer connectionState="connected" keysExpanded onInput={onInput} />);
   fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "one message" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
-  const keys = ["Enter", "Esc", "Tab", "Ctrl+C", "Cycle mode", "Arrow up", "Arrow down", "Arrow left", "Arrow right"];
+  // No "Enter": a blank Send is Enter now, and the panel no longer carries one.
+  const keys = ["Esc", "Tab", "Ctrl+C", "Cycle mode", "Arrow up", "Arrow down", "Arrow left", "Arrow right"];
   for (const name of keys) fireEvent.click(screen.getByRole("button", { name }));
   expect(onInput.mock.calls).toEqual([["\u001b[200~one message\u001b[201~"]]);
   for (const name of keys) expect(screen.getByRole("button", { name })).toBeDisabled();
   await act(async () => { await vi.advanceTimersByTimeAsync(75); });
   expect(onInput.mock.calls).toEqual([["\u001b[200~one message\u001b[201~"], ["\r"]]);
   for (const name of keys) expect(screen.getByRole("button", { name })).toBeEnabled();
-  fireEvent.click(screen.getByRole("button", { name: "Enter" }));
+  fireEvent.click(screen.getByRole("button", { name: "Esc" }));
   expect(onInput).toHaveBeenCalledTimes(3);
 });
 
@@ -255,7 +257,6 @@ test("sends mobile navigation and Claude mode controls as terminal key sequences
   fireEvent.click(screen.getByRole("button", { name: "Arrow left" }));
   fireEvent.click(screen.getByRole("button", { name: "Arrow down" }));
   fireEvent.click(screen.getByRole("button", { name: "Arrow right" }));
-  fireEvent.click(screen.getByRole("button", { name: "Enter" }));
   fireEvent.click(screen.getByRole("button", { name: "Esc" }));
   fireEvent.click(screen.getByRole("button", { name: "Tab" }));
   fireEvent.click(screen.getByRole("button", { name: "Ctrl+C" }));
@@ -266,7 +267,6 @@ test("sends mobile navigation and Claude mode controls as terminal key sequences
     MOBILE_TERMINAL_KEYS.left,
     MOBILE_TERMINAL_KEYS.down,
     MOBILE_TERMINAL_KEYS.right,
-    MOBILE_TERMINAL_KEYS.enter,
     MOBILE_TERMINAL_KEYS.escape,
     MOBILE_TERMINAL_KEYS.tab,
     MOBILE_TERMINAL_KEYS.interrupt,
@@ -441,7 +441,7 @@ test("Redraw survives with the keys panel closed", () => {
 
   // Shut the keys panel; the keys go, Refresh stays.
   fireEvent.click(screen.getByRole("button", { name: "Hide extra keys" }));
-  expect(screen.queryByRole("button", { name: "Enter" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Ctrl+C" })).toBeNull();
 
   const refresh = screen.getByRole("button", { name: "Refresh" });
   expect(refresh.closest(".terminal-key-actions")).toBeNull();
@@ -583,4 +583,66 @@ test("the arrow keys reach the terminal with the keys panel collapsed", () => {
     MOBILE_TERMINAL_KEYS.down,
     MOBILE_TERMINAL_KEYS.right,
   ]);
+});
+
+test("the extra keys are the ones a phone cannot type, and Enter is not among them", () => {
+  render(<MobileTerminalComposer connectionState="connected" keysExpanded onInput={vi.fn()} />);
+
+  const panel = screen.getByLabelText("Terminal keys");
+  expect(within(panel).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "Esc", "Rewind", "Tab", "Cycle mode", "Background", "Expand", "Clear", "Ctrl+C",
+  ]);
+  // Operator, 2026-09-13: "We don't need enter on the extra keys menu."
+  // A blank Send is Enter, and the arrows moved out to the tools row.
+  expect(within(panel).queryByRole("button", { name: "Enter" })).toBeNull();
+  expect(within(panel).queryByRole("button", { name: "Arrow up" })).toBeNull();
+});
+
+test("Rewind is two Escapes, and Background and Expand carry Claude's own chords", () => {
+  const onInput = vi.fn<(text: string) => boolean>(() => true);
+  render(<MobileTerminalComposer connectionState="connected" keysExpanded onInput={onInput} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Rewind" }));
+  // "esc twice to go up a few messages and try again" -- there is no single
+  // code for it, so two frames ARE the key. One Esc only cancels.
+  expect(onInput.mock.calls.map(([value]) => value))
+    .toEqual(Array.from({ length: CLAUDE_REWIND_PRESSES }, () => MOBILE_TERMINAL_KEYS.escape));
+  expect(CLAUDE_REWIND_PRESSES).toBeGreaterThan(1);
+
+  onInput.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Background" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+  // Read out of Claude Code 2.1.270: ctrl+b "run in background", ctrl+o "to expand".
+  expect(onInput.mock.calls.map(([value]) => value)).toEqual(["\u0002", "\u000f"]);
+  expect(MOBILE_TERMINAL_KEYS.background).toBe("\u0002");
+  expect(MOBILE_TERMINAL_KEYS.expand).toBe("\u000f");
+});
+
+test("Clear stages /clear in the box and never sends it by itself", () => {
+  const onInput = vi.fn<(text: string) => boolean>(() => true);
+  render(<MobileTerminalComposer connectionState="connected" keysExpanded onInput={onInput} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+  // NOTHING DOWN THE WIRE. /clear discards the worker's conversation, so the
+  // button loads it and the operator commits it -- one visible, abandonable tap.
+  expect(onInput).not.toHaveBeenCalled();
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("/clear");
+
+  // And Send then carries it through the ordinary bracketed-paste path.
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(onInput).toHaveBeenCalledExactlyOnceWith("\u001b[200~/clear\u001b[201~");
+});
+
+test("Clear refuses to overwrite a draft rather than losing it silently", () => {
+  const onInput = vi.fn<(text: string) => boolean>(() => true);
+  render(<MobileTerminalComposer connectionState="connected" keysExpanded onInput={onInput} />);
+  const box = screen.getByLabelText(/Message worker/);
+  fireEvent.change(box, { target: { value: "a thought I dictated" } });
+
+  fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+  expect(box).toHaveValue("a thought I dictated");
+  expect(onInput).not.toHaveBeenCalled();
+  expect(screen.getByText(/draft is still here, so \/clear was not staged/)).toBeVisible();
 });

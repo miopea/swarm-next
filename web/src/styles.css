@@ -2611,9 +2611,17 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      A grid rather than nowrap+scroll on purpose: scrolling would have saved
      another 54px and put Cycle mode off-screen, and a key you cannot see is
      one you will not use. */
-  .terminal-key-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1 1 100%; min-width: 0; gap: 5px; }
-  .terminal-key-actions > button { width: 100%; }
-  .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
+  /* FOUR COLUMNS FOR EIGHT KEYS: two rows, the same two rows the five keys
+     took at three columns, so four more controls cost no height at all. */
+  .terminal-key-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 1 1 100%; min-width: 0; gap: 5px; }
+  .terminal-key-actions > button { width: 100%; min-width: 0; padding-inline: 2px; font-size: .74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* NO min-width HERE. It was 92px, sized when this was a 3-column row beside
+     the d-pad. Measured at 390px, four columns come out at 88px each and the
+     floor pushes only this one to 92 -- an uneven grid, and the label needs
+     none of it, because "Cycle mode" fits 88px unclipped. It does not overflow
+     the viewport at 390px, which is what I first assumed and then measured;
+     it just makes one key wider than its neighbours for nothing. */
+  .terminal-key-actions .mode-cycle-button { color: var(--text); background: var(--good-soft); }
 }
 
 .presence-settings label { display: grid; gap: .45rem; color: var(--text-muted); font-size: .78rem; font-weight: 700; }

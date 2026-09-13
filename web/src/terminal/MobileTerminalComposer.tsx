@@ -39,7 +39,23 @@ export const MOBILE_TERMINAL_KEYS = {
   tab: "\t",
   interrupt: "\u0003",
   modeCycle: "\u001b[Z",
+  background: "\u0002",
+  expand: "\u000f",
 } as const;
+
+/* VERIFIED AGAINST THE BINARY, not remembered. Read out of Claude Code 2.1.270
+   at /home/bschleifer/.local/share/claude/versions/2.1.270, which is unstripped
+   and carries its own hint strings:
+     shift+tab  "to cycle permission modes"     -> modeCycle, CSI Z (backtab)
+     ctrl+b     action: "run in background"     -> background, 0x02
+     ctrl+o     "to expand"                     -> expand,     0x0f
+     esc esc    "esc twice to go up a few messages and try again"
+   I had proposed ctrl+r for expand from memory and it was wrong -- in this
+   build ctrl+r is "rename". Re-read these from the binary before trusting them
+   against a future version, and note they are CLAUDE's bindings: a Codex
+   worker's differ, and `provider` is on the worker record if this ever needs
+   to vary. */
+export const CLAUDE_REWIND_PRESSES = 2;
 
 const MOBILE_KEYS_VISIBILITY = "swarm-next-mobile-keys-expanded";
 
@@ -226,6 +242,32 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
     if (connected && submitTimer.current === undefined && !submitting) onInput(value);
   }
 
+  function sendRewind() {
+    // ESC TWICE, as two frames. The binary's own hint is "esc twice to go up a
+    // few messages and try again" -- one Esc cancels, the second opens the
+    // message list. There is no single code for it, so the pair is the key.
+    for (let press = 0; press < CLAUDE_REWIND_PRESSES; press++) sendKey(MOBILE_TERMINAL_KEYS.escape);
+  }
+
+  function stageClear() {
+    // /clear GOES IN THE BOX, NOT DOWN THE WIRE, and the extra tap is the
+    // point. Operator, 2026-09-13: "clear should be /clear". Ctrl+L only
+    // redraws; /clear discards the worker's conversation, which is not
+    // something a thumb should be able to do by brushing a button in a row of
+    // eight. Staged in the composer it is visible, editable, abandonable, and
+    // Send commits it through the same bracketed-paste path every other slash
+    // command uses.
+    if (draft.length > 0) {
+      // NEVER SILENTLY CLOBBER a draft. Losing typed or dictated text to a
+      // mis-tap is worse than the button appearing not to work, so it says so.
+      setSubmissionWarning("Your draft is still here, so /clear was not staged. Send or empty the box first.");
+      return;
+    }
+    setSubmissionWarning(undefined);
+    setDraft("/clear");
+    textarea.current?.focus();
+  }
+
   function toggleKeys() {
     const next = !keysExpanded;
     rememberMobileKeysVisibility(next);
@@ -406,12 +448,19 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
         {pickerUploadFailed ? <small role="status">The selected file could not be handed to the upload. Please try again.</small> : null}
       </div>
       {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
+        {/* EIGHT, and each one is a thing you cannot type on a phone. The
+            arrows and Enter are gone from here -- arrows live in the tools row,
+            Enter is a blank Send -- so what is left is only the unreachable.
+            Ordered by how often a phone needs it, not by keyboard layout. */}
         <div className="terminal-key-actions">
-          <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={keysDisabled}>Enter</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={keysDisabled}>Esc</button>
+          <button type="button" title="Esc twice: go back a few messages and try again" onClick={sendRewind} disabled={keysDisabled}>Rewind</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.tab)} disabled={keysDisabled}>Tab</button>
+          <button type="button" className="mode-cycle-button" title="Shift+Tab: cycle permission modes" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.modeCycle)} disabled={keysDisabled}>Cycle mode</button>
+          <button type="button" title="Ctrl+B: run the current command in the background" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.background)} disabled={keysDisabled}>Background</button>
+          <button type="button" title="Ctrl+O: expand truncated output" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.expand)} disabled={keysDisabled}>Expand</button>
+          <button type="button" title="Put /clear in the message box, ready to send" onClick={stageClear} disabled={keysDisabled}>Clear</button>
           <button type="button" className="interrupt-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.interrupt)} disabled={keysDisabled}>Ctrl+C</button>
-          <button type="button" className="mode-cycle-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.modeCycle)} disabled={keysDisabled}>Cycle mode</button>
         </div>
       </div>}
     </section>
