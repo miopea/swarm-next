@@ -180,10 +180,29 @@ async fn send(client: &HostClient, request: &HostRequest) -> io::Result<()> {
     } else {
         request
     };
-    match client.request(request).await {
-        Ok(HostResponse::Acknowledged) => Ok(()),
-        _ => Err(unavailable()),
-    }
+    // ⚠️ THE HOOK IS A COURIER, NOT A JUDGE, and treating the host's verdict as
+    // the hook's failure printed an error into every worker's terminal.
+    //
+    // PostToolBatch carries no tool matcher — a batch is not one tool — so it
+    // fires after EVERY tool call, and almost none of them are interviews. The
+    // host declines those, correctly. Returning Err for a decline made Claude
+    // print "PostToolBatch hook error / Failed with non-blocking status code"
+    // each time: measured in one worker's own scrollback on 2026-09-12, 4303
+    // mentions of PostToolBatch and 2364 hook errors, all of them this.
+    //
+    // The operator reported that error line repeatedly while we were hunting an
+    // unrelated bug, and it was noise I had introduced in 0ec42b33.
+    //
+    // Delivery is the hook's job and it succeeded. Whether the evidence is
+    // usable is the host's business, and since 13aa4769 and 8b43e01a the host
+    // NAMES its refusal in the journal — so nothing is lost by being quiet here.
+    // A genuine failure to deliver still errors, because that is the hook's own.
+    // Delivered is the success condition, whatever the host decided about it.
+    client
+        .request(request)
+        .await
+        .map(|_| ())
+        .map_err(|_| unavailable())
 }
 
 // Startup/resume evidence already existed in16. A replaced helper must retain
