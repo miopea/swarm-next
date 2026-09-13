@@ -78,10 +78,12 @@ impl TaskStore {
         let task = insert_apiary_task_for_hive(
             &transaction,
             apiary.id,
-            title,
-            description,
-            priority,
-            TaskState::Ready,
+            NewApiaryTask {
+                title,
+                description,
+                priority,
+                state: TaskState::Ready,
+            },
             home_hive_id,
             now,
         )?;
@@ -1102,22 +1104,30 @@ impl TaskStore {
 
 /// Inserts one already-authorized Keeper task and its first ordered event in
 /// the caller's transaction. Authorization remains the caller's responsibility.
+/// The content of a shared task, bundled so this stops growing an argument per
+/// field. `state` joined it when relocation needed a task's real state carried
+/// across instead of the hardcoded `Ready` every earlier caller wanted.
+#[derive(Clone, Copy)]
+pub(crate) struct NewApiaryTask<'a> {
+    pub(crate) title: &'a str,
+    pub(crate) description: &'a str,
+    pub(crate) priority: TaskPriority,
+    pub(crate) state: TaskState,
+}
+
 pub(crate) fn insert_apiary_task_for_hive(
     transaction: &rusqlite::Transaction<'_>,
     apiary_id: ApiaryId,
-    title: &str,
-    description: &str,
-    priority: TaskPriority,
-    // ⚠️ EXPLICIT, not hardcoded Ready, because relocation carries a task's
-    // real state across. This was `TaskState::Ready` for every caller, which is
-    // right for newly created shared work and catastrophic for a move: of 530
-    // live rcg-* tasks on this Hive 474 are COMPLETED, so relocating them under
-    // the old signature would have resurrected 474 finished tasks as ready
-    // work at the Apiary, in front of every member Hive.
-    state: TaskState,
+    content: NewApiaryTask<'_>,
     home_hive_id: Option<HiveId>,
     now: i64,
 ) -> Result<ApiaryTask, TaskStoreError> {
+    let NewApiaryTask {
+        title,
+        description,
+        priority,
+        state,
+    } = content;
     let home_node_id = home_hive_id
         .map(|hive_id| {
             let raw_node_id = transaction
@@ -2046,10 +2056,12 @@ fn relocate_one(
     let task = insert_apiary_task_for_hive(
         transaction,
         apiary_id,
-        &title,
-        &description,
-        priority,
-        state,
+        NewApiaryTask {
+            title: &title,
+            description: &description,
+            priority,
+            state,
+        },
         None,
         now,
     )?;
@@ -2107,8 +2119,8 @@ fn relocated_apiary_task(
 ///
 /// Queen's routing note named the execution bridge for this; this is a
 /// deviation, reported rather than taken quietly, and it serves the same
-/// purpose she assigned it — local_task_id reaches the local task's workspace,
-/// which is how rcg-ness survives a move without ApiaryTask ever carrying it.
+/// purpose she assigned it — `local_task_id` reaches the local task's workspace,
+/// which is how rcg-ness survives a move without `ApiaryTask` ever carrying it.
 pub(crate) fn migrate_apiary_task_local_origins(
     tx: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {

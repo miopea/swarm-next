@@ -12,7 +12,7 @@ use swarm_domain::{
 use super::{
     TaskStore, TaskStoreError,
     federation::{authenticate_member_credential, decode_node_credential},
-    federation_tasks::insert_apiary_task_for_hive,
+    federation_tasks::{NewApiaryTask, insert_apiary_task_for_hive},
     parse_domain_id,
 };
 
@@ -111,10 +111,12 @@ impl TaskStore {
             let task = insert_apiary_task_for_hive(
                 &transaction,
                 member.apiary,
-                command.title.trim(),
-                command.description.trim(),
-                command.priority,
-                TaskState::Ready,
+                NewApiaryTask {
+                    title: command.title.trim(),
+                    description: command.description.trim(),
+                    priority: command.priority,
+                    state: TaskState::Ready,
+                },
                 Some(command.target_hive_id),
                 now,
             )?;

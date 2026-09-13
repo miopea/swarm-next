@@ -83,9 +83,15 @@ async fn unused_demo(token: &str, expected: Option<WorkerSessionId>) -> WorkerSe
 async fn require_empty_demo(host: &HostClient, session: WorkerSessionId, marker: &[u8]) {
     assert!(
         matches!(
-            delivery_baseline(host, session, ProviderKind::ClaudeCode, marker)
-                .await
-                .unwrap(),
+            delivery_baseline(
+                host,
+                session,
+                ProviderKind::ClaudeCode,
+                marker,
+                BusyPolicy::Wait
+            )
+            .await
+            .unwrap(),
             Baseline::Ready { .. }
         ),
         "demo prompt is not positively empty; no input written"
@@ -176,13 +182,13 @@ async fn live_demo_recovers_one_withheld_enter_without_repasting() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let proxy = HostClient::new(proxy_path);
     let result = tokio::time::timeout(Duration::from_secs(90), async {
-        let first = submit_terminal_message(&proxy, session, ProviderKind::ClaudeCode, prompt.clone(), marker.as_bytes()).await.unwrap();
+        let first = submit_terminal_message(&proxy, session, ProviderKind::ClaudeCode, prompt.clone(), marker.as_bytes(), BusyPolicy::Wait).await.unwrap();
         assert_eq!(first, TerminalSubmission::Uncertain, "fault must create uncertainty, not a normal success");
         assert_eq!(payloads.load(Ordering::SeqCst), 1);
         assert_eq!(enters.load(Ordering::SeqCst), 1);
-        assert!(matches!(delivery_baseline(&proxy, session, ProviderKind::ClaudeCode, marker.as_bytes()).await.unwrap(), Baseline::HoldsOurUnsentMessage { .. }),
+        assert!(matches!(delivery_baseline(&proxy, session, ProviderKind::ClaudeCode, marker.as_bytes(), BusyPolicy::Wait).await.unwrap(), Baseline::HoldsOurUnsentMessage { .. }),
             "backstop was not triggered: preserve the demo prompt for inspection");
-        let recovered = submit_terminal_message(&proxy, session, ProviderKind::ClaudeCode, prompt, marker.as_bytes()).await.unwrap();
+        let recovered = submit_terminal_message(&proxy, session, ProviderKind::ClaudeCode, prompt, marker.as_bytes(), BusyPolicy::Wait).await.unwrap();
         assert_eq!(recovered, TerminalSubmission::Acknowledged);
         assert_eq!(payloads.load(Ordering::SeqCst), 1, "recovery must not paste again");
         assert_eq!(enters.load(Ordering::SeqCst), 2, "one withheld and one forwarded Enter");

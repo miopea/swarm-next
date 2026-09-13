@@ -117,10 +117,26 @@ impl DeferralReason {
     }
 }
 
-pub(super) fn activity_deferral(activity: ProviderActivity) -> Option<DeferralReason> {
+pub(super) fn activity_deferral(
+    activity: ProviderActivity,
+    busy: BusyPolicy,
+) -> Option<DeferralReason> {
     match activity {
-        ProviderActivity::Active => Some(DeferralReason::ProviderBusy),
+        // THE ONLY CASE THE POLICY CHANGES, deliberately. A working provider is
+        // not an obstacle to writing — the operator does it by hand from the
+        // mobile composer every day, which checks no activity at all — it was
+        // only ever politeness about taking the worker's thread. A broadcast is
+        // the one message where that politeness costs more than it buys.
+        ProviderActivity::Active => match busy {
+            BusyPolicy::Wait => Some(DeferralReason::ProviderBusy),
+            BusyPolicy::WriteThrough => None,
+        },
+        // ⚠️ STILL DEFERRED UNDER EVERY POLICY. The provider is showing a
+        // question and waiting; text written now would be read as its ANSWER.
+        // A broadcast that accidentally answers an AskUserQuestion is worse
+        // than a broadcast that arrives late.
         ProviderActivity::AwaitingOperator => Some(DeferralReason::ProviderAwaitingInput),
+        // Cannot tell what is on screen, so cannot tell what writing would do.
         ProviderActivity::Unknown => Some(DeferralReason::ProviderStateUnknown),
         ProviderActivity::Resting => None,
     }
@@ -344,6 +360,7 @@ fn clarification_message(claim: &swarm_persistence::ClarificationDispatch) -> Co
     let question = terminal_safe_text(&claim.clarification.question);
     CoordinationMessage {
         cadence: Cadence::Immediate,
+        busy: BusyPolicy::Wait,
         marker: delivery_marker(claim.claim_id),
         bytes: format!(
             "[Swarm clarification delivery {}] The operator asks about pending decision {}. Clarification ID: {}. This is a question, NOT a final answer, approval, or permission to resume work. Read the original decision using swarm_list_decisions if needed. Reply with swarm_reply_clarification using the exact clarification ID; do not resolve the original decision. Operator question: {}\r",
@@ -632,9 +649,15 @@ pub(super) async fn submit_coordination_message(
     {
         return Ok(TerminalSubmission::Deferred(DeferralReason::ProviderPolicy));
     }
-    let submission =
-        submit_terminal_message(client, session_id, provider, message.bytes, &message.marker)
-            .await?;
+    let submission = submit_terminal_message(
+        client,
+        session_id,
+        provider,
+        message.bytes,
+        &message.marker,
+        message.busy,
+    )
+    .await?;
     // ONLY AN ACKNOWLEDGED WRITE STARTS A COOLDOWN. A deferred or uncertain
     // delivery interrupted nobody, and starting one for it would delay the
     // retry of a message that never arrived.
@@ -704,6 +727,7 @@ async fn delivery_baseline(
     session_id: WorkerSessionId,
     provider: ProviderKind,
     marker: &[u8],
+    busy: BusyPolicy,
 ) -> Result<Baseline, swarm_terminal::IpcError> {
     let Some(response) = coordination_request(
         client,
@@ -719,7 +743,7 @@ async fn delivery_baseline(
         )));
     };
     Ok(baseline_from_response(
-        session_id, provider, marker, response,
+        session_id, provider, marker, busy, response,
     ))
 }
 
@@ -729,6 +753,7 @@ fn baseline_from_response(
     expected_session: WorkerSessionId,
     provider: ProviderKind,
     marker: &[u8],
+    busy: BusyPolicy,
     response: HostResponse,
 ) -> Baseline {
     match response {
@@ -751,7 +776,7 @@ fn baseline_from_response(
             ..
         } => {
             let activity = provider_activity::classify_observed_activity(provider, &snapshot);
-            if let Some(reason) = activity_deferral(activity) {
+            if let Some(reason) = activity_deferral(activity, busy) {
                 return Baseline::Refused(TerminalSubmission::Deferred(reason));
             }
             if provider_activity::has_open_provider_input(provider, &snapshot) {
@@ -796,13 +821,14 @@ async fn submit_terminal_message(
     provider: ProviderKind,
     mut bytes: Vec<u8>,
     marker: &[u8],
+    busy: BusyPolicy,
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     let submit = bytes.last() == Some(&b'\r');
     if submit {
         bytes.pop();
     }
     let (baseline, baseline_paste_placeholder) =
-        match delivery_baseline(client, session_id, provider, marker).await? {
+        match delivery_baseline(client, session_id, provider, marker, busy).await? {
             Baseline::Ready {
                 sequence,
                 paste_placeholder,
@@ -1246,6 +1272,37 @@ pub(super) struct CoordinationMessage {
     /// a property that drifts from it. Two of six markers were wrong that way
     /// this morning.
     pub(super) cadence: Cadence,
+    /// Whether this message may be written while the provider is mid-turn.
+    ///
+    /// Beside `cadence` and on the message for the same reason, but NOT the same
+    /// axis: cadence is about pacing between deliveries, this is about the
+    /// worker's current turn. A broadcast already bypassed pacing and still
+    /// waited here.
+    pub(super) busy: BusyPolicy,
+}
+
+/// Whether a message waits for the provider to finish what it is doing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BusyPolicy {
+    /// Wait for a resting terminal. Everything that is addressed to one worker
+    /// about its own work, where arriving a minute later costs nothing.
+    Wait,
+    /// Write into the working terminal now.
+    ///
+    /// ⚠️ ONLY A BROADCAST, and only because a broadcast describes NOW.
+    /// Measured on the operator's own 2026-09-12 broadcast, "Continue where you
+    /// left off when the workers were restarted": 9 of 12 workers had it in 5
+    /// seconds, then one at 32s, one at 102s and one at 172s. The three
+    /// stragglers were mid-turn. They received an instruction about a restart
+    /// nearly three minutes after everyone else had acted on it, which is how
+    /// "broadcast" stopped meaning everyone at once. The operator emailed one
+    /// minute after sending it: "This should broadcast and not wait."
+    ///
+    /// This bypasses ONLY the mid-turn wait. It does not touch the guard for a
+    /// prompt already holding somebody's unsent text, or the one for a provider
+    /// visibly awaiting an answer — writing over either would corrupt a worker's
+    /// typing or silently answer a question nobody meant to answer.
+    WriteThrough,
 }
 
 /// Whether a ready message also waits for coordination pacing.
@@ -1317,6 +1374,7 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Coordina
     };
     CoordinationMessage {
         cadence: Cadence::Immediate,
+        busy: BusyPolicy::Wait,
         bytes: format!(
             "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
             delivery.decision_id, outcome, note,
@@ -1417,6 +1475,7 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
     };
     CoordinationMessage {
         cadence: if delivery.generation == 0 { Cadence::Immediate } else { Cadence::Cooled },
+        busy: BusyPolicy::Wait,
         bytes: format!(
             "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
             delivery.task_id, title, instruction, ruling, requester,
@@ -1543,6 +1602,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
     .into_bytes();
     CoordinationMessage {
         cadence: Cadence::Cooled,
+        busy: BusyPolicy::Wait,
         bytes,
         marker: delivery_marker(&delivery.run_id),
     }
@@ -1683,6 +1743,7 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Coordina
     );
     CoordinationMessage {
         cadence: Cadence::Cooled,
+        busy: BusyPolicy::Wait,
         bytes: text.into_bytes(),
         marker: delivery_marker(reference),
     }
@@ -1731,6 +1792,11 @@ pub(super) fn operator_broadcast_message(
         .unwrap_or_default();
     CoordinationMessage {
         cadence: Cadence::Immediate,
+        // THE ONLY WriteThrough IN THE CODEBASE. A broadcast describes NOW, so
+        // a worker that gets it three minutes late has been told something
+        // about a moment that has passed. Operator, 2026-09-12, one minute
+        // after sending one: "This should broadcast and not wait."
+        busy: BusyPolicy::WriteThrough,
         bytes: format!(
             "[Broadcast from the operator to every running worker · {reference}]\n{body}\n\nThis \
              went to all workers at once. It is not addressed to you personally and wants no \
@@ -1745,6 +1811,7 @@ pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Coordina
     let Some((first, rest)) = outcomes.split_first() else {
         return CoordinationMessage {
             cadence: Cadence::Cooled,
+            busy: BusyPolicy::Wait,
             bytes: Vec::new(),
             marker: Vec::new(),
         };
@@ -1753,6 +1820,7 @@ pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Coordina
     if rest.is_empty() {
         return CoordinationMessage {
             cadence: Cadence::Cooled,
+            busy: BusyPolicy::Wait,
             bytes: format!(
                 "[Swarm worker outcome] {} Use swarm_list_tasks and task history for authoritative context.\r",
                 one_outcome(first, HANDOFF_EXCERPT_BYTES),
@@ -1772,6 +1840,7 @@ pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Coordina
         .join(" ");
     CoordinationMessage {
         cadence: Cadence::Cooled,
+        busy: BusyPolicy::Wait,
         bytes: format!(
             "[Swarm worker outcome] {} tasks reported. {reported} Use swarm_list_tasks and task history for authoritative context.\r",
             outcomes.len(),
@@ -1813,6 +1882,61 @@ mod live_test;
 
 #[cfg(test)]
 mod tests {
+
+    /// Operator, 2026-09-12, one minute after sending a broadcast: "This should
+    /// broadcast and not wait."
+    ///
+    /// MEASURED on that exact broadcast, "Continue where you left off when the
+    /// workers were restarted": 9 of 12 workers had it within 5 seconds, then
+    /// one at 32s, one at 102s and one at 172s. The stragglers were mid-turn,
+    /// and a broadcast about a restart arriving three minutes later describes a
+    /// moment that has gone.
+    #[test]
+    fn a_broadcast_is_written_into_a_working_terminal_while_everything_else_waits() {
+        assert_eq!(
+            activity_deferral(ProviderActivity::Active, BusyPolicy::WriteThrough),
+            None,
+            "a broadcast must not wait for a worker to finish its turn"
+        );
+        assert_eq!(
+            activity_deferral(ProviderActivity::Active, BusyPolicy::Wait),
+            Some(DeferralReason::ProviderBusy),
+            "everything addressed to one worker about its own work still waits"
+        );
+        // And the broadcast really does carry the policy, so the gate above is
+        // reached in the live path rather than only in this test.
+        let message = operator_broadcast_message(&[OperatorBroadcastDispatch {
+            broadcast_id: "b".into(),
+            worker_id: "w".into(),
+            session_id: WorkerSessionId::new(),
+            body: "Pause work so I can reload".into(),
+        }]);
+        assert_eq!(message.busy, BusyPolicy::WriteThrough);
+        assert_eq!(message.cadence, Cadence::Immediate);
+    }
+
+    /// ⚠️ WHAT `WriteThrough` MUST NOT BUY. Writing through a working provider is
+    /// safe because the operator already types into busy terminals by hand.
+    /// Writing over a provider that is ASKING something is not: the text would
+    /// be read as the answer, so a broadcast could silently settle a question
+    /// nobody meant to answer. And a prompt already holding somebody's unsent
+    /// text is theirs. Both still defer under every policy.
+    #[test]
+    fn writing_through_never_answers_a_question_or_overwrites_unsent_text() {
+        for busy in [BusyPolicy::Wait, BusyPolicy::WriteThrough] {
+            assert_eq!(
+                activity_deferral(ProviderActivity::AwaitingOperator, busy),
+                Some(DeferralReason::ProviderAwaitingInput),
+                "a broadcast must never be mistaken for an answer"
+            );
+            assert_eq!(
+                activity_deferral(ProviderActivity::Unknown, busy),
+                Some(DeferralReason::ProviderStateUnknown),
+                "an unreadable screen is not permission to write to it"
+            );
+            assert_eq!(activity_deferral(ProviderActivity::Resting, busy), None);
+        }
+    }
     use super::*;
     use swarm_domain::{PresenceMode, QueenAutomationTrigger, TaskId, WorkerId};
     use swarm_persistence::{QueenAutomationDelivery, TaskMessageDispatch};
@@ -2369,8 +2493,13 @@ mod tests {
                 "session_missing",
             ),
         ] {
-            let observed =
-                baseline_from_response(session, ProviderKind::ClaudeCode, b"marker", response);
+            let observed = baseline_from_response(
+                session,
+                ProviderKind::ClaudeCode,
+                b"marker",
+                BusyPolicy::Wait,
+                response,
+            );
             assert!(
                 matches!(&observed, Baseline::Refused(TerminalSubmission::Rejected { code, .. }) if code == expected),
                 "{observed:?}"
@@ -2380,6 +2509,7 @@ mod tests {
             session,
             ProviderKind::ClaudeCode,
             b"marker",
+            BusyPolicy::Wait,
             prompt_observation(session, prompt, true),
         );
         assert!(matches!(recovered, Baseline::Ready { .. }), "{recovered:?}");
@@ -2393,6 +2523,7 @@ mod tests {
             session,
             ProviderKind::ClaudeCode,
             marker,
+            BusyPolicy::Wait,
             prompt_observation(
                 session,
                 "❯ [Swarm delivery exact-id]\r\n● Done.\r\n❯ operator draft\r\nauto mode on",
@@ -2412,6 +2543,7 @@ mod tests {
             session,
             ProviderKind::ClaudeCode,
             marker,
+            BusyPolicy::Wait,
             prompt_observation(session, "❯ operator draft\r\nauto mode on", true),
         );
         assert!(
@@ -2427,6 +2559,7 @@ mod tests {
             session,
             ProviderKind::ClaudeCode,
             marker,
+            BusyPolicy::Wait,
             prompt_observation(session, "❯ [Swarm delivery exact-id]\r\nauto mode on", true),
         );
         assert!(
@@ -2455,6 +2588,7 @@ mod tests {
                 session,
                 ProviderKind::ClaudeCode,
                 marker,
+                BusyPolicy::Wait,
                 prompt_observation(session, text, true),
             );
             if ours {
@@ -2594,6 +2728,7 @@ mod tests {
                     ProviderKind::ClaudeCode,
                     b"[Swarm delivery held]\r".to_vec(),
                     b"[Swarm delivery held]",
+                    BusyPolicy::Wait,
                 )
                 .await
                 .unwrap()
@@ -2650,6 +2785,7 @@ mod tests {
             let outcome = tokio::time::timeout(Duration::from_secs(12), submit_terminal_message(
                 &HostClient::new(socket), session, ProviderKind::ClaudeCode,
                 b"[Swarm delivery bounded]\r".to_vec(), b"[Swarm delivery bounded]",
+                BusyPolicy::Wait,
             )).await.unwrap().unwrap();
             server.await.unwrap();
             (stall_at, outcome)
@@ -2689,17 +2825,20 @@ mod tests {
     #[test]
     fn active_work_is_not_an_unanswered_question_and_clears_old_prompt_warnings() {
         let (store, worker, session) = message_worker_fixture();
-        assert_eq!(activity_deferral(ProviderActivity::Resting), None);
         assert_eq!(
-            activity_deferral(ProviderActivity::Active),
+            activity_deferral(ProviderActivity::Resting, BusyPolicy::Wait),
+            None
+        );
+        assert_eq!(
+            activity_deferral(ProviderActivity::Active, BusyPolicy::Wait),
             Some(DeferralReason::ProviderBusy)
         );
         assert_eq!(
-            activity_deferral(ProviderActivity::Unknown),
+            activity_deferral(ProviderActivity::Unknown, BusyPolicy::Wait),
             Some(DeferralReason::ProviderStateUnknown)
         );
         assert_eq!(
-            activity_deferral(ProviderActivity::AwaitingOperator),
+            activity_deferral(ProviderActivity::AwaitingOperator, BusyPolicy::Wait),
             Some(DeferralReason::ProviderAwaitingInput)
         );
         for reason in [
@@ -2892,6 +3031,7 @@ mod tests {
                 &HostClient::new("/unreachable/terminal.sock"),
                 session,
                 CoordinationMessage {
+                    busy: BusyPolicy::Wait,
                     cadence,
                     bytes: b"test\r".to_vec(),
                     marker: b"test".to_vec(),
@@ -3884,6 +4024,7 @@ mod tests {
     fn unfinished_review_context_preserves_notification_marker_and_submit() {
         let mut message = CoordinationMessage {
             cadence: Cadence::Cooled,
+            busy: BusyPolicy::Wait,
             bytes: b"original worker report\r".to_vec(),
             marker: delivery_marker("notification-identity"),
         };

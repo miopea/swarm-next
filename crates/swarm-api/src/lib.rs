@@ -2502,8 +2502,11 @@ impl AppState {
             &format!("queen-run:{}", delivery.run_id),
             delivery.worker_id,
             delivery.session_id,
-            coordination_delivery::activity_deferral(activity)
-                .unwrap_or(coordination_delivery::DeferralReason::ProviderStateUnknown),
+            coordination_delivery::activity_deferral(
+                activity,
+                coordination_delivery::BusyPolicy::Wait,
+            )
+            .unwrap_or(coordination_delivery::DeferralReason::ProviderStateUnknown),
             "Queen's review",
         );
         match store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp()) {
