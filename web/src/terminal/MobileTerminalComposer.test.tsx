@@ -276,12 +276,15 @@ test("sends mobile navigation and Claude mode controls as terminal key sequences
 
 test("remembers when the operator collapses the mobile key pad", () => {
   const first = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
-  expect(screen.queryByRole("button", { name: "Arrow up" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Hide extra keys" }));
+  expect(screen.queryByRole("button", { name: "Ctrl+C" })).not.toBeInTheDocument();
+  // The arrows are NOT behind this toggle any more, and that is the point of
+  // the change: collapsing the panel must not take them away.
+  expect(screen.getByRole("button", { name: "Arrow up" })).toBeVisible();
   first.unmount();
 
   render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} />);
-  expect(screen.getByRole("button", { name: "Show keys" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: "Show extra keys" })).toHaveAttribute("aria-expanded", "false");
 });
 
 test("reports controlled key visibility for the durable mobile profile", () => {
@@ -295,7 +298,7 @@ test("reports controlled key visibility for the durable mobile profile", () => {
     />,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Show keys" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show extra keys" }));
 
   expect(onKeysExpandedChange).toHaveBeenCalledWith(true);
 });
@@ -305,11 +308,11 @@ test("blocked preference storage cannot prevent opening or toggling terminal key
   vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("Full", "QuotaExceededError"); });
   const input = vi.fn(() => true);
   render(<MobileTerminalComposer connectionState="connected" onInput={input} />);
-  fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
-  expect(screen.queryByRole("button", { name: "Arrow up" })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Show keys" }));
-  fireEvent.click(screen.getByRole("button", { name: "Arrow up" }));
-  expect(input).toHaveBeenCalledExactlyOnceWith(MOBILE_TERMINAL_KEYS.up);
+  fireEvent.click(screen.getByRole("button", { name: "Hide extra keys" }));
+  expect(screen.queryByRole("button", { name: "Ctrl+C" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show extra keys" }));
+  fireEvent.click(screen.getByRole("button", { name: "Ctrl+C" }));
+  expect(input).toHaveBeenCalledExactlyOnceWith(MOBILE_TERMINAL_KEYS.interrupt);
 });
 
 test("reconnect explains the held draft and never submits it automatically", () => {
@@ -437,7 +440,7 @@ test("Redraw survives with the keys panel closed", () => {
   );
 
   // Shut the keys panel; the keys go, Refresh stays.
-  fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
+  fireEvent.click(screen.getByRole("button", { name: "Hide extra keys" }));
   expect(screen.queryByRole("button", { name: "Enter" })).toBeNull();
 
   const refresh = screen.getByRole("button", { name: "Refresh" });
@@ -517,4 +520,67 @@ test("picker return timeout is owned and cancelled on unmount", async () => {
   const handle = schedule.mock.results[index].value;
   view.unmount();
   expect(cancel).toHaveBeenCalledWith(handle);
+});
+
+test("a blank Send is Enter, and never a paste or a source record", () => {
+  const onInput = vi.fn(() => true);
+  const onRecordSubmission = vi.fn();
+  render(<MobileTerminalComposer sessionId="a" connectionState="connected" onInput={onInput} onRecordSubmission={onRecordSubmission} />);
+
+  const send = screen.getByRole("button", { name: "Send" });
+  expect(send).toBeEnabled();
+  fireEvent.click(send);
+
+  // ONE frame, the key itself. A blank Send confirms a provider's prompt; it
+  // has no text to bracket-paste and nothing to record as an operator source.
+  expect(onInput).toHaveBeenCalledExactlyOnceWith(MOBILE_TERMINAL_KEYS.enter);
+  expect(onRecordSubmission).not.toHaveBeenCalled();
+  expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
+});
+
+test("a blank Send stays blocked whenever a typed Send would be", () => {
+  const onInput = vi.fn(() => true);
+  // SUBMIT THE FORM, do not click the button. A disabled button swallows the
+  // click before the handler runs, so clicking here would pass with the
+  // handler's guards deleted — it would be measuring the attribute, not the
+  // rule. Submitting reaches the handler the way a stray Enter or an
+  // autofilled form would.
+  const submitForm = () => fireEvent.submit(screen.getByRole("button", { name: /Send/ }).closest("form")!);
+
+  const view = render(<MobileTerminalComposer connectionState="connected" inputAvailable={false} onInput={onInput} />);
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  submitForm();
+  expect(onInput).not.toHaveBeenCalled();
+
+  view.rerender(<MobileTerminalComposer connectionState="connected" inputAvailable attachmentState="uploading" onInput={onInput} />);
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  submitForm();
+  expect(onInput).not.toHaveBeenCalled();
+
+  view.rerender(<MobileTerminalComposer connectionState="connected" inputAvailable attachmentState="error" onInput={onInput} />);
+  submitForm();
+  expect(onInput).not.toHaveBeenCalled();
+
+  // And the same form, once nothing blocks it, does send the key — so the
+  // three assertions above are about the guards and not about the route.
+  view.rerender(<MobileTerminalComposer connectionState="connected" inputAvailable onInput={onInput} />);
+  submitForm();
+  expect(onInput).toHaveBeenCalledExactlyOnceWith(MOBILE_TERMINAL_KEYS.enter);
+});
+
+test("the arrow keys reach the terminal with the keys panel collapsed", () => {
+  const onInput = vi.fn<(text: string) => boolean>(() => true);
+  render(<MobileTerminalComposer connectionState="connected" keysExpanded={false} onInput={onInput} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Arrow left" }));
+  fireEvent.click(screen.getByRole("button", { name: "Arrow up" }));
+  fireEvent.click(screen.getByRole("button", { name: "Arrow down" }));
+  fireEvent.click(screen.getByRole("button", { name: "Arrow right" }));
+
+  expect(onInput.mock.calls.map(([value]) => value)).toEqual([
+    MOBILE_TERMINAL_KEYS.left,
+    MOBILE_TERMINAL_KEYS.up,
+    MOBILE_TERMINAL_KEYS.down,
+    MOBILE_TERMINAL_KEYS.right,
+  ]);
 });

@@ -179,7 +179,18 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!connected || submitting || otherDraft || uncertainDraft || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") return;
+    if (!connected || submitting || otherDraft || uncertainDraft || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error") return;
+    // A BLANK SEND IS ENTER, which is the second half of the operator's
+    // 2026-09-13 request: "the send button should send the text or just send
+    // enter if blank". Confirming a provider's prompt is the commonest thing
+    // this screen does and it carries no text, so it should not need the keys
+    // panel. Nothing is pasted, so none of the paste bookkeeping below applies
+    // — this is the same single key frame the panel's Enter sends.
+    if (draft.length === 0) {
+      setSubmissionWarning(undefined);
+      sendKey(MOBILE_TERMINAL_KEYS.enter);
+      return;
+    }
     const [content, submitKey] = composeTerminalSubmission(draft);
     // Provider TUIs distinguish pasted text from an Enter key event. Keep
     // these as separate WebSocket frames with a brief bounded pause so Codex's
@@ -332,7 +343,7 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
           autoCapitalize="sentences"
           enterKeyHint="enter"
         />
-        <button type="submit" disabled={!connected || submitting || otherDraft || uncertainDraft || draft.length === 0 || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
+        <button type="submit" title={draft.length === 0 ? "Send Enter to the terminal" : "Send this text to the terminal"} disabled={!connected || submitting || otherDraft || uncertainDraft || attachmentState === "uploading" || attachmentState === "waiting" || attachmentState === "error"}>{submitting ? "Sending…" : "Send"}</button>
         {otherDraft && <p role="status">An unsent draft belongs to another terminal. Return there to continue, or <button type="button" onClick={() => terminalDraft.clear()}>Discard the other terminal’s draft</button> to write here.</p>}
         {uncertainDraft && !submitting && <p role="status">This text may already be in the terminal. Inspect it before sending again. <button type="button" onClick={() => { terminalDraft.markUncertain(sessionId!, false); setSubmissionWarning(undefined); }}>I checked; allow editing or resending</button></p>}
         {sessionId && saved.storageUnavailable && <p role="status">Draft storage is unavailable. Text survives view changes in memory, but may be lost if this page reloads.</p>}
@@ -345,8 +356,21 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
         {sourceWarning ? <p role="status">{sourceWarning}</p> : null}
       </form>
       <div className="mobile-terminal-key-heading">
-        <span>Terminal tools</span>
-        <div>
+        {/* THE ARROWS LIVE HERE, not behind Show keys, and they took the
+            "Terminal tools" label's place rather than adding a row. Operator,
+            2026-09-13: "Can we fit the arrow keys where it says terminal
+            tools? Then we don't need to show extra keys." Arrows and Enter are
+            what a provider TUI actually needs — menu selection and history —
+            and reaching them cost a tap that also reshaped the terminal. Enter
+            is now the blank Send below, so the panel behind Show keys holds
+            only the rest: Esc, Tab, Ctrl+C, Cycle mode. */}
+        <div className="terminal-arrow-row" role="group" aria-label="Terminal arrow keys">
+          <button type="button" aria-label="Arrow left" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.left)} disabled={keysDisabled}>←</button>
+          <button type="button" aria-label="Arrow up" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.up)} disabled={keysDisabled}>↑</button>
+          <button type="button" aria-label="Arrow down" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.down)} disabled={keysDisabled}>↓</button>
+          <button type="button" aria-label="Arrow right" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.right)} disabled={keysDisabled}>→</button>
+        </div>
+        <div className="terminal-tool-row">
           {/* ACCEPT NAMES WHAT IS IN, because `accept` cannot express what is
               out. A bare file input offers the whole photo library and Take
               Video, and the operator asked what a video was even for. */}
@@ -363,7 +387,11 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
             <button type="button" className="terminal-refresh-button" onClick={onRefresh}>Refresh</button>
           ) : null}
           <button type="button" className="terminal-image-button" disabled={!onAttachment || attachmentState === "uploading" || attachmentState === "waiting"} onClick={openPicker}>{attachmentState === "uploading" ? "Adding…" : attachmentState === "waiting" ? "Waiting…" : "Add file"}</button>
-          <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
+          {/* "Keys", not "Show keys"/"Hide keys": the label had to lose 32px for
+              the arrows to share this line, and aria-expanded plus the panel
+              appearing below already carry the open/closed state. What is
+              behind it is now only Esc, Tab, Ctrl+C and Cycle mode. */}
+          <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} aria-label={keysExpanded ? "Hide extra keys" : "Show extra keys"} onClick={toggleKeys}>Keys</button>
         </div>
         {pickerReturnedNothing && (
           // SAYS THE THING THAT WAS SILENT. It does not diagnose, because from
@@ -378,12 +406,6 @@ export function MobileTerminalComposer({ sessionId, connectionState, inputAvaila
         {pickerUploadFailed ? <small role="status">The selected file could not be handed to the upload. Please try again.</small> : null}
       </div>
       {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
-        <div className="terminal-dpad">
-          <button type="button" aria-label="Arrow up" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.up)} disabled={keysDisabled}>↑</button>
-          <button type="button" aria-label="Arrow left" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.left)} disabled={keysDisabled}>←</button>
-          <button type="button" aria-label="Arrow down" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.down)} disabled={keysDisabled}>↓</button>
-          <button type="button" aria-label="Arrow right" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.right)} disabled={keysDisabled}>→</button>
-        </div>
         <div className="terminal-key-actions">
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={keysDisabled}>Enter</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={keysDisabled}>Esc</button>
