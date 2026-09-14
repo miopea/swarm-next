@@ -136,6 +136,8 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         sessions: [
           { session_id: "session-queen", running: true },
           { session_id: "session-web", running: true },
+          { session_id: "session-meadow", running: true },
+          { session_id: "session-hedgerow", running: true },
         ],
       };
     case "/api/v1/workspaces":

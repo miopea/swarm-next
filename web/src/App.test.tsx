@@ -719,7 +719,7 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
   vi.stubGlobal("fetch", fetch);
 
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "Switch worker, current Queen" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Switch worker, current Queen, Resting" }));
   const dialog = screen.getByRole("dialog", { name: "Where do you want to work?" });
 
   // The picker carried a search field that took focus on open, so asking to see
@@ -787,6 +787,47 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
   expect(within(dialog).queryByRole("button", { name: /Sculpt Studio/ })).not.toBeInTheDocument();
   fireEvent.click(within(dialog).getByRole("button", { name: "All" }));
   expect(within(dialog).getByRole("button", { name: /Sculpt Studio/ })).toBeInTheDocument();
+
+  // ⚠️ AND THE STATE IS SOMETHING TO SEE, NOT ONLY SOMETHING TO READ.
+  //
+  // Operator, emailed from a phone 2026-09-13: "We may have fixed the state
+  // reporting issue, but what workers are doing is still not obvious on mobile.
+  // You have to look specifically at the word buzzing or idle or resting or
+  // whatnot. Visually it should be distinct."
+  //
+  // They were right about both halves. The state WAS being reported here — the
+  // line under each name has said it since 2026-08-24 — and it was the only
+  // channel saying it. The picker's dot was painted from `running` alone, so a
+  // buzzing worker, a blocked one and a resting one all drew the same green,
+  // and the rail's state language never reached the phone because the rail's
+  // rows are display:none below 680px.
+  //
+  // What the row carries now is what the stylesheet keys off: the state class
+  // that sets --worker-state, the dot's own presence class, and the state word
+  // as a pill rather than the first token of a sentence.
+  const rowFor = (name: RegExp) => within(dialog).getByRole("button", { name });
+  const queenRow = rowFor(/^Queen/);
+  const realtruthRow = rowFor(/^Realtruth/);
+  const sleepingRow = rowFor(/^Platform API/);
+
+  expect(queenRow).toHaveClass("worker-state-resting");
+  expect(realtruthRow).toHaveClass("worker-state-buzzing");
+  expect(sleepingRow).toHaveClass("worker-state-sleeping");
+
+  // Three states, three different dots. Before this the first two were the same
+  // element with the same class, which is the defect in one line.
+  expect(queenRow.querySelector(".presence")).toHaveClass("online");
+  expect(realtruthRow.querySelector(".presence")).toHaveClass("online");
+  expect(sleepingRow.querySelector(".presence")).toHaveClass("offline");
+
+  // The word is still there and still first — nothing was taken away — but it
+  // is its own element now, so the stylesheet can fill it the way the rail's is.
+  expect(queenRow.querySelector(".worker-attention-label")).toHaveTextContent("Resting");
+  expect(realtruthRow.querySelector(".worker-attention-label")).toHaveTextContent("Buzzing");
+  expect(sleepingRow.querySelector(".worker-attention-label")).toHaveTextContent("Sleeping");
+  // And the rest of the line is unchanged: a sleeping worker still says how to
+  // start it, which used to ride in the same string.
+  expect(sleepingRow).toHaveTextContent("tap to wake");
 });
 
 test("switching workers releases only the previously selected engagement", async () => {
@@ -1263,7 +1304,9 @@ test("the phone names the task its worker is carrying, without taking a row for 
   render(<App />);
 
   const trigger = await screen.findByRole("button", { name: /Switch worker, current Queen/ });
-  expect(trigger).toHaveAccessibleName("Switch worker, current Queen, carrying Render content blocks");
+  // The state is in the name because it is also in the control's colour, and
+  // colour on its own reaches nobody who cannot use it.
+  expect(trigger).toHaveAccessibleName("Switch worker, current Queen, Buzzing, carrying Render content blocks");
   expect(trigger).toHaveTextContent("Render content blocks");
   expect(trigger).toHaveTextContent("Queen");
 });

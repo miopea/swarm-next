@@ -134,13 +134,47 @@ export function workerSwitcherDetail(
   assignedTaskTitle?: string,
   assignedTaskIsActive = false,
 ): string {
+  const { state, rest } = workerSwitcherLine(worker, assignedTaskTitle, assignedTaskIsActive);
+  return rest ? `${state} · ${rest}` : state;
+}
+
+/**
+ * The same line, split where the phone needs to draw it differently.
+ *
+ * WHY THE PARTS ARE EXPOSED AT ALL. The rail gives worker state a dot whose hue
+ * and fill say which state it is, and a filled pill for the states worth
+ * reading. The phone's picker had neither — its dot had two values, running and
+ * not — so the state survived only as the first word of this sentence. The
+ * operator read that on a phone on 2026-09-13: "You have to look specifically
+ * at the word buzzing or idle or resting or whatnot. Visually it should be
+ * distinct."
+ *
+ * So the word becomes the pill and the rest stays a sentence. Nothing new is
+ * said and nothing is dropped — `workerSwitcherDetail` still joins these two
+ * back into exactly the string it always returned, which is what the picker's
+ * accessible name and every existing test read.
+ */
+export function workerSwitcherLine(
+  worker: Worker,
+  assignedTaskTitle?: string,
+  assignedTaskIsActive = false,
+): { key: Worker["attention_state"]; presence: WorkerAttentionPresentation["presence"]; state: string; rest?: string } {
   const attention = worker.running ? workerAttention(worker) : undefined;
   const resting = attention?.state === "resting" && attention.label === "Resting";
   const state = attention
     ? (resting && assignedTaskIsActive ? "Active assignment" : attention.label)
     : "Sleeping";
-  if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;
-  return worker.running ? state : "Sleeping · tap to wake";
+  // ⚠️ THE KEY FOLLOWS THE WORD, and that is the point of returning it rather
+  // than letting the caller reach for `workerAttention` itself. This line calls
+  // an unloaded worker "Sleeping" whatever its last reported attention state
+  // was, so a worker recorded as resting-but-not-running — which the board does
+  // produce — drew a SLEEPING pill beside a resting dot the first time both
+  // were on screen together. Two channels saying different things is worse than
+  // the one channel this replaced.
+  const key = worker.running ? attention?.state ?? "resting" : "sleeping";
+  const presence = worker.running ? attention?.presence ?? "online" : "offline";
+  if (assignedTaskTitle) return { key, presence, state, rest: assignedTaskTitle };
+  return worker.running ? { key, presence, state } : { key, presence, state: "Sleeping", rest: "tap to wake" };
 }
 
 /**

@@ -890,7 +890,7 @@ export const SURFACES: Surface[] = [
   {
     id: "workers",
     title: "Workers",
-    why: "the roster, in its four attention states — the terminal itself is a canvas and is never captured",
+    why: "the roster, in every attention state it has — the terminal itself is a canvas and is never captured",
     render: () => (
       <div className="harness-roster">
         {demoWorkers.map((worker, index) => (

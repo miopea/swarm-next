@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { Worker } from "../api";
-import { foreignEngagement, workerAttention, workerSilence, workerSwitcherDetail } from "./workerAttention";
+import { foreignEngagement, workerAttention, workerSilence, workerSwitcherDetail, workerSwitcherLine } from "./workerAttention";
 
 const worker: Worker = {
   id: "worker", hive_id: "hive", name: "Daisy", role: "worker", provider: "claude_code",
@@ -186,4 +186,48 @@ test("a running worker is never described as waking", () => {
   };
 
   expect(workerAttention(running).label).toBe("Resting");
+});
+
+/**
+ * ⚠️ THE WORD AND THE COLOUR COME FROM ONE CALL, OR THEY WILL DISAGREE.
+ *
+ * The phone's picker now draws three things from this line — a filled pill, a
+ * state-coloured dot and the row's own edge — where it used to draw one
+ * sentence. The first time all three were on screen together, a worker recorded
+ * as resting-but-not-running (which the board does produce, and the harness
+ * fixture has carried for months) showed a SLEEPING pill beside a resting dot,
+ * because the pill came from this line's own running check and the dot came
+ * from `workerAttention` directly.
+ *
+ * Two channels contradicting each other is worse than the one channel this
+ * replaced, so the key and the presence ride along with the word.
+ */
+test("the switcher line's colour follows its own word, not the raw attention state", () => {
+  const restingButUnloaded = { ...worker, running: false, attention_state: "resting" as const };
+
+  // The word was always "Sleeping" here and still is.
+  expect(workerSwitcherLine(restingButUnloaded).state).toBe("Sleeping");
+  // And now so is everything drawn beside it.
+  expect(workerSwitcherLine(restingButUnloaded).key).toBe("sleeping");
+  expect(workerSwitcherLine(restingButUnloaded).presence).toBe("offline");
+  // The raw state it disagrees with, so this test fails if the caller goes back
+  // to reading it directly.
+  expect(workerAttention(restingButUnloaded).state).toBe("resting");
+
+  // A running worker is unchanged: key and presence are the attention state's.
+  const buzzing = { ...worker, running: true, attention_state: "buzzing" as const };
+  expect(workerSwitcherLine(buzzing).key).toBe("buzzing");
+  expect(workerSwitcherLine(buzzing).presence).toBe("online");
+
+  // "Active assignment" describes the TURN and deliberately does not change the
+  // state, so it keeps resting's own quiet colour rather than borrowing one that
+  // would claim the prompt is busy.
+  const restingWithWork = { ...worker, running: true, attention_state: "resting" as const };
+  const active = workerSwitcherLine(restingWithWork, "Fix the importer", true);
+  expect(active.state).toBe("Active assignment");
+  expect(active.key).toBe("resting");
+
+  // And the joined string every existing caller reads is byte-for-byte what it
+  // always was.
+  expect(workerSwitcherDetail(restingButUnloaded)).toBe("Sleeping · tap to wake");
 });

@@ -122,7 +122,7 @@ import WorkerStartNotice from "./runtime/WorkerStartNotice";
 import { passkeysSupported, signInWithPasskey } from "./settings/passkeys";
 import { configureTerminalImageLimit } from "./terminal/TerminalAttachments";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
-import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
+import { foreignEngagement, workerSwitcherLine } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import { needsOperatorDecision } from "./decisions/decisionAttention";
 import DogfoodFeedbackDialog from "./feedback/FeedbackDialog";
@@ -1760,6 +1760,14 @@ export function App() {
     ?? (activeWorker
       ? (activeWorker.role === "queen" ? "Queen" : repositoryName(activeWorker.workspace))
       : "No worker selected");
+  /**
+   * How the collapsed picker draws its worker's state.
+   *
+   * The SAME call the picker's rows use, so the two cannot disagree about a
+   * worker they are both describing — the trigger is the only worker element a
+   * phone shows on the terminal screen, and the picker is one tap behind it.
+   */
+  const activeWorkerLine = activeWorker ? workerSwitcherLine(activeWorker) : undefined;
   const activeWorkerEngagement = activeWorker ? foreignEngagement(activeWorker, presenceDeviceId()) : undefined;
   const taskProjects = useMemo(() => [...new Map(jiraTaskLinks.map((link) => [link.project_key, {
     key: link.project_key,
@@ -2186,7 +2194,13 @@ export function App() {
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
-            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}${activeWorkerWork?.current ? `, carrying ${activeWorkerWork.current.title}` : ""}`} onClick={() => setShowMobileWorkers(true)}>
+            /* STATE, WITHOUT TAKING A COLUMN. The operator ruled this row down to
+               the name and Work here (decision 01a04edb), so nothing is added
+               beside the name — the state rides the control's own edge and
+               border, which cost no width at all. On the terminal screen this
+               trigger is the ONLY worker element a phone shows, and it said
+               nothing about what the worker was doing. */
+            <button className={`mobile-worker-switcher-trigger${activeWorkerLine ? ` worker-state-${activeWorkerLine.key}` : ""}`} type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}${activeWorkerLine ? `, ${activeWorkerLine.state}` : ""}${activeWorkerWork?.current ? `, carrying ${activeWorkerWork.current.title}` : ""}`} onClick={() => setShowMobileWorkers(true)}>
               {activeWorker
                     ? <WorkerAvatar worker={activeWorker} />
                     : <span className="worker-avatar"><BeeMascot expression="sleeping" /></span>}
@@ -2324,11 +2338,15 @@ export function App() {
                   //
                   // Queen is never offered sleep, the same as on the rail.
                   const canSleep = Boolean(sessionId) && worker.role !== "queen";
+                  // THE PICKER IS THE ROSTER ON A PHONE — the rail's worker rows
+                  // are display:none below 680px — so it carries the rail's
+                  // state language rather than a reduced one of its own.
+                  const detail = workerSwitcherLine(worker, assignedTask?.title, assignedTask?.state === "active");
                   return (
                     <div className="mobile-worker-row" key={worker.id}>
                     <button
                       type="button"
-                      className="mobile-worker-choice"
+                      className={`mobile-worker-choice worker-state-${detail.key}`}
                       aria-current={worker.id === terminalSelection.workerId ? "page" : undefined}
                       disabled={busy}
                       onClick={() => {
@@ -2357,10 +2375,15 @@ export function App() {
                               who is driving. */}
                           {worker.id === terminalSelection.workerId ? <em className="mobile-worker-here">You&rsquo;re here</em> : null}
                         </span>
-                        <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title, assignedTask?.state === "active")}</small>
+                        {worker.runtime_error ? <small>{worker.runtime_error}</small> : (
+                          <small className="mobile-worker-detail">
+                            <span className="worker-attention-label">{detail.state}</span>
+                            {detail.rest ? <span className="mobile-worker-detail-rest">{detail.rest}</span> : null}
+                          </small>
+                        )}
                         {work?.summary ? <span className="worker-work-summary" title={`${worker.name}'s open work: ${work.summary}`}>Open work · {work.summary}</span> : null}
                       </span>
-                      <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
+                      <span className={`presence ${detail.presence}`} aria-label={detail.state} />
                     </button>
                     {canSleep ? (
                       <button
@@ -2729,10 +2752,6 @@ function taskStateLabel(task: Task): string {
   if (task.state === "active") return "In progress";
   if (task.state === "awaiting_release") return "Awaiting release";
   return task.state[0].toUpperCase() + task.state.slice(1);
-}
-
-function workerAttentionLabel(worker: Worker): string {
-  return workerAttention(worker).label;
 }
 
 function presenceModeLabel(mode: PresenceMode) {

@@ -113,6 +113,40 @@ export const demoWorkers: Worker[] = [
     running: false,
     attention_state: "sleeping",
   },
+  // THE TWO STATES THE ROSTER SHOUTS ABOUT, so a look at this fixture can tell
+  // whether it is actually shouting. Without them the harness only ever showed
+  // buzzing, resting and sleeping — the three quiet ones — which is how the
+  // phone picker's two-value dot went unnoticed for as long as it did.
+  {
+    id: "0199aaaa-0000-7000-8000-000000000005",
+    hive_id: "0199ffff-0000-7000-8000-000000000000",
+    name: "Meadow",
+    role: "worker",
+    provider: "claude_code",
+    workspace: "/home/you/projects/meadow",
+    autostart: false,
+    position: 4,
+    active_session_id: "session-meadow",
+    created_at: now - 86_400 * 12,
+    updated_at: now - 240,
+    running: true,
+    attention_state: "awaiting_operator",
+  },
+  {
+    id: "0199aaaa-0000-7000-8000-000000000006",
+    hive_id: "0199ffff-0000-7000-8000-000000000000",
+    name: "Hedgerow",
+    role: "worker",
+    provider: "claude_code",
+    workspace: "/home/you/projects/hedgerow",
+    autostart: false,
+    position: 5,
+    active_session_id: "session-hedgerow",
+    created_at: now - 86_400 * 6,
+    updated_at: now - 3_600,
+    running: true,
+    attention_state: "blocked",
+  },
 ];
 
 export const demoTasks: Task[] = [

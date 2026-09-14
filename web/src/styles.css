@@ -441,14 +441,25 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .worker-state-awaiting_operator { --worker-state: var(--warn); }
 .worker-state-with_operator { --worker-state: var(--with-operator); }
 .worker-state-blocked { --worker-state: var(--bad); }
-.worker-row .presence { background: var(--worker-state); box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-state) 14%, transparent); }
+/* ⚠️ THE RAIL AND THE PHONE'S PICKER SHARE THIS VOCABULARY, and that sharing is
+   the fix rather than a tidy-up. Below 680px `.rail-context` is display:none,
+   so these worker rows do not exist on a phone at all and the picker dialog IS
+   the roster there — and it had none of this. Its dot took two values, running
+   and not, so a buzzing worker, a blocked one and a resting one all drew the
+   same green, and state survived only as the first word of the line under the
+   name. Operator, emailed from a phone 2026-09-13: "You have to look
+   specifically at the word buzzing or idle or resting or whatnot. Visually it
+   should be distinct."
+   Written as one selector rather than a copied block because a copy is exactly
+   how the picker came to be a state behind in the first place. */
+:is(.worker-row, .mobile-worker-choice) .presence { background: var(--worker-state); box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-state) 14%, transparent); }
 /* An unloaded worker is hollow. Sleeping and resting are both quiet greens, so
    fill rather than hue separates them, which survives being printed, dimmed, or
    read by someone who does not distinguish the two. */
-.worker-row.worker-state-sleeping .presence { background: transparent; box-shadow: inset 0 0 0 2px var(--worker-state); }
+:is(.worker-row, .mobile-worker-choice).worker-state-sleeping .presence { background: transparent; box-shadow: inset 0 0 0 2px var(--worker-state); }
 /* Only the state that is actually doing something moves. */
-.worker-row.worker-state-buzzing .presence { position: relative; }
-.worker-row.worker-state-buzzing .presence::after {
+:is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence { position: relative; }
+:is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence::after {
   content: ""; position: absolute; inset: -3px; border-radius: 50%;
   background: color-mix(in srgb, var(--worker-state) 26%, transparent);
   animation: worker-buzz 1.8s ease-in-out infinite;
@@ -472,7 +483,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 /* Buzzing carries weight as well as hue, so a scan separates it from resting
    without depending on colour at all — the same reason sleeping is a hollow
    dot rather than a different shade. */
-.worker-row.worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }
+:is(.worker-row, .mobile-worker-choice).worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }
 /* ⚠️ THE PRIORITY WAS INVERTED, and that is the second half of the operator's
    2026-09-12 report: "when a worker is working or in a different state,
    visually it's very subtle on both desktop and mobile, and there needs to be a
@@ -482,8 +493,8 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    them, carried tinted text at .58rem. So the roster shouted about the rows you
    can ignore and whispered about the rows you cannot. Both now fill, and hue
    carries the difference in kind the way it already does on the dots. */
-.worker-row.worker-state-awaiting_operator .worker-attention-label { color: var(--panel); background: var(--warn); }
-.worker-row.worker-state-blocked .worker-attention-label { color: var(--panel); background: var(--bad); }
+:is(.worker-row, .mobile-worker-choice).worker-state-awaiting_operator .worker-attention-label { color: var(--panel); background: var(--warn); }
+:is(.worker-row, .mobile-worker-choice).worker-state-blocked .worker-attention-label { color: var(--panel); background: var(--bad); }
 /* AND A MARKER THAT NEEDS NO READING. A 9px uppercase label is not a scan
    target however it is coloured; the eye finds an edge down the side of a list
    far faster than it reads. Only the two states that want the operator get one,
@@ -494,8 +505,8 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    `inset 3px 0 var(--worker-state, var(--good))` and this draws the same edge
    from the same variable, so the edge is identical and only the selected
    background — a different property — survives from that rule. */
-.worker-row.worker-state-awaiting_operator,
-.worker-row.worker-state-blocked { box-shadow: inset 3px 0 var(--worker-state); }
+:is(.worker-row, .mobile-worker-choice).worker-state-awaiting_operator,
+:is(.worker-row, .mobile-worker-choice).worker-state-blocked { box-shadow: inset 3px 0 var(--worker-state); }
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 .start-worker-disclosure > button { display: none; }
@@ -644,8 +655,19 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 }
 .mobile-worker-sleep:hover { color: var(--text); border-color: var(--line-strong); }
 .mobile-worker-dialog-note { margin: 0; color: var(--muted); font-size: .72rem; }
-.mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 9px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
-.mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--good); }
+/* A 7px dot is a desktop measurement, taken at a desk. This list is read at
+   arm's length on a phone, and the dot is now the row's fastest signal rather
+   than decoration beside a word, so it gets the size that buys — and the column
+   gets room for the buzzing ring, which scales to 1.9 and was clipping. */
+.mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 12px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
+.mobile-worker-choice .presence { width: 10px; height: 10px; }
+/* The edge carries the STATE on a selected row, the way the rail's selected row
+   already does — `var(--worker-state, var(--good))`, so a row with no state
+   class still draws the green it always did. This rule comes after the
+   awaiting/blocked edge above and at equal specificity, so it wins here; that
+   is harmless and checked rather than assumed, because both rules resolve the
+   same variable to the same colour and only this rule's background survives. */
+.mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--worker-state, var(--good)); }
 /* Reads as a label rather than as emphasis, which is what <em> would give it. */
 .mobile-worker-here { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; color: var(--on-accent, var(--text)); background: var(--good); font-size: .62rem; font-style: normal; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .mobile-worker-choice .worker-avatar { width: 42px; height: 42px; }
@@ -655,6 +677,13 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .mobile-worker-choice-copy strong, .mobile-worker-choice-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-worker-choice-copy > span small { color: var(--quiet); }
 .mobile-worker-choice-copy > small { color: var(--muted); }
+/* The state word is a pill and the rest of the line stays a sentence, so the
+   row says exactly what it said before and the eye no longer has to read it to
+   know. The pill never shrinks; the title beside it ellipses, because a title
+   cut short still tells you which job it is and a state cut short does not. */
+.mobile-worker-detail { display: flex; min-width: 0; align-items: baseline; gap: 6px; }
+.mobile-worker-detail .worker-attention-label { flex: 0 0 auto; }
+.mobile-worker-detail-rest { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .mobile-worker-choice-copy > .worker-work-summary { color: var(--good); }
 .mobile-manage-workers { width: 100%; }
 
@@ -2281,6 +2310,19 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      rather than the leftovers of one. */
   .worker-context .worker-claim { min-height: var(--pill-touch-height); }
   .mobile-worker-switcher-trigger strong { font-size: .76rem; }
+  /* ⚠️ THE EDGE IS THE WHOLE STATE SIGNAL HERE, and it is drawn this way
+     BECAUSE of the operator's ruling rather than in spite of it. Decision
+     01a04edb — "Keep Work here and the name, drop the rest" — answered a row
+     carrying eight things across a phone width, so a dot, a pill or a third
+     line would put one of them back. A border colour and a 3px edge take no
+     column from the name and add no element to the row.
+     It earns its place because on the terminal screen this control is the only
+     worker the phone draws: the rail is tucked, the picker is closed, and
+     until now nothing on that screen said whether the worker was buzzing,
+     blocked or asleep. The word is still available — the picker is one tap
+     away and states it — and the accessible name now carries it too, so this
+     is a second channel rather than colour carrying meaning alone. */
+  .mobile-worker-switcher-trigger { border-color: color-mix(in srgb, var(--worker-state, var(--line)) 55%, var(--line)); box-shadow: inset 3px 0 var(--worker-state, transparent); }
   .mobile-worker-backdrop { display: grid; }
   .header-actions { gap: 5px; }
   /* Presence keeps its signal and gives up its word. The dot carries the state
@@ -2872,7 +2914,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .maintenance-progress span { color: var(--muted); font-size: .75rem; line-height: 1.45; }
 .maintenance-spinner { width: .9rem; height: .9rem; flex: 0 0 auto; margin-top: .12rem; border: 2px solid color-mix(in srgb, var(--honey) 30%, transparent); border-top-color: var(--honey-deep); border-radius: 50%; animation: maintenance-spin .8s linear infinite; }
 @keyframes maintenance-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } .worker-row.worker-state-buzzing .presence::after { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } :is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence::after { animation: none; } }
 
 /* The command a decision would allow.
    Set apart and monospaced because it is the thing being authorised, not

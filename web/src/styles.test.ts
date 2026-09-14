@@ -231,7 +231,7 @@ test("reads worker state as a scale rather than a palette", () => {
   // Sleeping and resting are separated by fill, not hue, so the distinction
   // survives where colour does not.
   expect(stylesheet).toContain(
-    ".worker-row.worker-state-sleeping .presence { background: transparent;",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-sleeping .presence { background: transparent;",
   );
 });
 
@@ -243,11 +243,11 @@ test("moves only the worker state that is actually doing something", () => {
   // The ring is now its own element moved by transform and opacity, which the
   // compositor handles without painting. compositedAnimations.test.ts enforces
   // that for every looping animation; this asserts the pulse still exists.
-  expect(stylesheet).toContain(".worker-row.worker-state-buzzing .presence::after {");
+  expect(stylesheet).toContain(":is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence::after {");
   expect(stylesheet).toContain("animation: worker-buzz 1.8s ease-in-out infinite;");
   // Motion is never the only signal, and never forced on someone who asked for less.
   expect(stylesheet).toContain(
-    ".worker-row.worker-state-buzzing .presence::after { animation: none; }",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence::after { animation: none; }",
   );
 });
 
@@ -265,7 +265,7 @@ test("separates a working worker from a resting one by more than a shade", () =>
   // And the difference does not rest on hue alone, for the same reason sleeping
   // is a hollow dot rather than another shade.
   expect(stylesheet).toContain(
-    ".worker-row.worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }",
   );
 });
 
@@ -284,10 +284,10 @@ test("the states that want the operator are the loudest, not the quietest", () =
   // Filled, the same treatment buzzing already had, so the difference between
   // them is hue rather than weight.
   expect(stylesheet).toContain(
-    ".worker-row.worker-state-awaiting_operator .worker-attention-label { color: var(--panel); background: var(--warn); }",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-awaiting_operator .worker-attention-label { color: var(--panel); background: var(--warn); }",
   );
   expect(stylesheet).toContain(
-    ".worker-row.worker-state-blocked .worker-attention-label { color: var(--panel); background: var(--bad); }",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-blocked .worker-attention-label { color: var(--panel); background: var(--bad); }",
   );
   // ⚠️ AND IT MUST NOT SILENTLY GO BACK. The old rule stated awaiting_operator
   // as tinted text; if that returns, the quiet-when-it-matters bug is back.
@@ -298,7 +298,56 @@ test("the states that want the operator are the loudest, not the quietest", () =
   // scan target however it is coloured. Only these two get one, so it stays
   // rare enough to mean something.
   expect(stylesheet).toContain(
-    ".worker-row.worker-state-awaiting_operator,\n.worker-row.worker-state-blocked { box-shadow: inset 3px 0 var(--worker-state); }",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-awaiting_operator,\n:is(.worker-row, .mobile-worker-choice).worker-state-blocked { box-shadow: inset 3px 0 var(--worker-state); }",
+  );
+});
+
+/**
+ * Operator, emailed from a phone 2026-09-13: "As you can see on mobile, it's
+ * still incredibly difficult to be able to see what the state of the worker is.
+ * We may have fixed the state reporting issue, but what workers are doing is
+ * still not obvious on mobile. You have to look specifically at the word buzzing
+ * or idle or resting or whatnot. Visually it should be distinct."
+ *
+ * The rail's rows do not exist on a phone — `.rail-context` is display:none
+ * below 680px — so the picker dialog IS the roster there, and it had none of
+ * this. Every state rule above now names `.mobile-worker-choice` beside
+ * `.worker-row`, which is what these assert; this test exists so a future edit
+ * cannot quietly drop the picker out of one of them and leave it a state
+ * behind again.
+ */
+test("the phone picker speaks the rail's state language, not a reduced one", () => {
+  const covered = [
+    ":is(.worker-row, .mobile-worker-choice) .presence {",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-sleeping .presence {",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence {",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-buzzing .presence::after {",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-buzzing .worker-attention-label {",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-awaiting_operator .worker-attention-label {",
+    ":is(.worker-row, .mobile-worker-choice).worker-state-blocked .worker-attention-label {",
+  ];
+  for (const selector of covered) expect(stylesheet).toContain(selector);
+  // ⚠️ AND THE OLD TWO-VALUE DOT MUST NOT COME BACK. The picker painted its dot
+  // from `running`, so buzzing, blocked and resting all drew the same green and
+  // the word was the only channel left.
+  expect(stylesheet).not.toMatch(/\.mobile-worker-choice \.presence \{[^}]*background:/);
+});
+
+test("the phone picker's dot is sized for a phone, with room for its ring", () => {
+  // 7px is the desk measurement. Here the dot is the row's fastest signal, and
+  // the buzzing ring scales to 1.9 — it clipped against the old 9px column.
+  const row = stylesheet.match(/^\.mobile-worker-choice \{([^}]+)\}/m)?.[1];
+  expect(row).toMatch(/grid-template-columns:\s*42px minmax\(0, 1fr\) 12px/);
+  expect(stylesheet).toContain(".mobile-worker-choice .presence { width: 10px; height: 10px; }");
+});
+
+test("the phone's switcher trigger carries state without taking a column", () => {
+  // Decision 01a04edb ruled this row down to the name and Work here, so state
+  // rides the control's own border and edge rather than adding an element. It
+  // earns the space because on the terminal screen this is the only worker the
+  // phone draws — the rail is tucked and the picker is closed.
+  expect(stylesheet).toContain(
+    ".mobile-worker-switcher-trigger { border-color: color-mix(in srgb, var(--worker-state, var(--line)) 55%, var(--line)); box-shadow: inset 3px 0 var(--worker-state, transparent); }",
   );
 });
 
