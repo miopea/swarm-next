@@ -673,9 +673,34 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .mobile-worker-choice .worker-avatar { width: 42px; height: 42px; }
 .mobile-worker-choice .worker-avatar .bee-mascot { width: 46px; height: 46px; }
 .mobile-worker-choice-copy { display: grid; min-width: 0; gap: 4px; }
-.mobile-worker-choice-copy > span { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+/* ⚠️ AND IT WRAPS RATHER THAN TRUNCATES, because giving the repository up was
+   not enough on its own. Measured on the selected row at 390px: the line is
+   168px, the "You're here" pill is 91px of it, and the name was left 61px for
+   81px of "Hedgerow". No shrink order rescues that — there is simply not room
+   for both on one line, and the name is not the one that should lose.
+   Wrapping costs ~16px of height on the ONE row that carries the pill, and only
+   when it does not fit: a short name (Queen) still measures under the line and
+   stays on it. Every word survives, which is the point — this pill is words
+   rather than a coloured tint precisely because the operator looked at a tint
+   and asked "Shouldn't it be showing that I'm on that worker currently?" */
+.mobile-worker-choice-copy > span { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .mobile-worker-choice-copy strong, .mobile-worker-choice-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-worker-choice-copy > span small { color: var(--quiet); }
+/* ⚠️ THE NAME IS THE ONE THING THIS ROW EXISTS TO SAY, so it is the last thing
+   to give up space rather than an equal party to it.
+   Flexbox shrinks items in proportion to their own base size, so the LONGER a
+   worker's name the more of it was taken — and the "You're here" pill, which
+   only ever appears on the row you are already on, is ~90px of a ~270px line.
+   The result was that the row for the worker you are standing on was the one
+   row that could not name it: observed as "H…" beside "h…" for a worker called
+   Hedgerow. A short name (Queen) hid it completely, which is how it survived.
+   `flex: 1 1 0` gives the repository a zero base, so it takes only what is
+   LEFT: it fills the room when the name is short, gives every pixel back when
+   the name is long, and vanishes before the name loses a character. The name
+   keeps `flex-shrink: 1` with `min-width: 0` so a name that overruns the line
+   on its own still ellipses inside the row instead of pushing out of it. */
+.mobile-worker-choice-copy > span > strong { flex: 0 1 auto; min-width: 0; }
+.mobile-worker-choice-copy > span > small { flex: 1 1 0; min-width: 0; }
 .mobile-worker-choice-copy > small { color: var(--muted); }
 /* The state word is a pill and the rest of the line stays a sentence, so the
    row says exactly what it said before and the eye no longer has to read it to
