@@ -149,6 +149,62 @@ impl AgentBridge {
         self.config_root.join(format!("{worker_id}.settings.json"))
     }
 
+    /// Puts Queen on the cheaper model unless the operator has said otherwise.
+    ///
+    /// ⚠️ WHY QUEEN SPECIFICALLY, AND WHY A DEFAULT RATHER THAN A RULE.
+    /// Measured on a live Hive: Queen was 36.6% of all provider spend, more
+    /// than three times the next workspace, and rising 17% week-on-week while
+    /// the rest of the fleet was flat. The cause is not that she says more --
+    /// output is 8.9% of her cost -- it is that she takes three to four times
+    /// as many turns as any other worker and re-reads half a megabyte of
+    /// context on each one. Most of those turns are routine coordination:
+    /// noticing stale work, surfacing delivered tasks, checking a queue. That
+    /// is classification, not judgement, and Sonnet is a fifth of the price.
+    ///
+    /// Operator, whose tokens these are and who asked for this across every
+    /// Hive and not just theirs: "make sure she is on sonnet for anyone in
+    /// claude so we don't burn their tokens as well."
+    ///
+    /// A DEFAULT, NOT A CEILING. It is written only when the settings file does
+    /// not already name a model, so an operator who chooses one -- including
+    /// choosing Opus back -- keeps it across restarts and upgrades. A hidden
+    /// override nobody can see or change would be the wrong answer to a cost
+    /// problem; this one is a normal Claude Code setting in a file they own.
+    fn ensure_queen_model_default(&self, worker_id: WorkerId) -> Result<(), AgentBridgeError> {
+        let is_queen = self
+            .tasks
+            .store()
+            .list_worker_profiles()
+            .is_ok_and(|profiles| {
+                profiles
+                    .iter()
+                    .any(|profile| profile.id == worker_id && profile.role == WorkerRole::Queen)
+            });
+        if !is_queen {
+            return Ok(());
+        }
+        let path = self.worker_settings_path(worker_id);
+        let mut document = match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                serde_json::from_str::<serde_json::Value>(&contents).unwrap_or_else(|_| json!({}))
+            }
+            Err(_) => json!({}),
+        };
+        let Some(object) = document.as_object_mut() else {
+            // An operator file that is not an object is theirs to fix, not
+            // ours to replace. Leaving it alone loses the default, never
+            // their settings.
+            return Ok(());
+        };
+        if object.contains_key("model") {
+            return Ok(());
+        }
+        object.insert("model".to_owned(), json!("sonnet"));
+        let bytes = serde_json::to_vec_pretty(&document)?;
+        write_private_atomic(&path, &bytes)?;
+        Ok(())
+    }
+
     /// Ensures one private provider config and durable digest exist for a worker.
     ///
     /// # Errors
@@ -171,6 +227,11 @@ impl AgentBridge {
                     let payload = self.worker_config_payload(&token)?;
                     write_private_atomic(&path, &payload)?;
                 }
+                // Both return paths, because an existing Hive reaches only this
+                // one -- its config was minted before the default existed, and
+                // a default that applies to new Hives alone helps nobody
+                // already paying for it.
+                self.ensure_queen_model_default(worker_id)?;
                 return Ok(path);
             }
         }
@@ -182,6 +243,7 @@ impl AgentBridge {
             .replace_worker_agent_credential(worker_id, &digest)?;
         let payload = self.worker_config_payload(&token)?;
         write_private_atomic(&path, &payload)?;
+        self.ensure_queen_model_default(worker_id)?;
         Ok(path)
     }
 
@@ -815,7 +877,39 @@ impl ServerHandler for AgentMcp {
                                     "next_action": QUEEN_BLOCK_RECOVERY_GUIDANCE,
                                 },
                                 "prerequisite_ready": {
-                                    "tasks": prerequisite_ready,
+                                    // ⚠️ A SUMMARY, LIKE EVERY SIBLING IN THIS RESPONSE, AND IT WAS
+                                    // THE ONLY ONE THAT WAS NOT. This serialized whole `Task` records
+                                    // -- description, operator_instruction, prerequisites,
+                                    // review_request, every timestamp -- into a poll Queen runs
+                                    // thousands of times a day. Measured on this Hive: ONE task here
+                                    // was 11.6k characters, while `blocked_reassessment` beside it
+                                    // carried NINE tasks in 4.9k and `attention` ten items in 6.3k.
+                                    // Queen re-read that on every turn for as long as the task stayed
+                                    // ready, and her context is what she pays for on every message.
+                                    //
+                                    // The fields kept are the ones this block's own `next_action`
+                                    // asks her to act on: which task, whose it is, what state it is
+                                    // in, and what it was blocked on. Anything more is a full read
+                                    // away with swarm_list_tasks, deliberately, because a poll should
+                                    // say what changed and not restate the board.
+                                    "tasks": prerequisite_ready.iter().map(|task| json!({
+                                        "task_id": task.id,
+                                        "title": task.title,
+                                        "state": task.state,
+                                        "assigned_worker_id": task.assigned_worker_id,
+                                        "next_move_owner": task.next_move_owner,
+                                        "workspace": task.workspace,
+                                        // Same bound and the same char-wise take as the sibling
+                                        // block below, so a multi-byte note cannot be split.
+                                        "blocked_note_excerpt": task.blocked_note.as_deref()
+                                            .map(|note| note.chars().take(240).collect::<String>()),
+                                        "prerequisites": task.prerequisites.iter().map(|prerequisite| json!({
+                                            "prerequisite_id": prerequisite.prerequisite_id,
+                                            "title": prerequisite.title,
+                                            "state": prerequisite.state,
+                                            "removed": prerequisite.removed,
+                                        })).collect::<Vec<_>>(),
+                                    })).collect::<Vec<_>>(),
                                     "truncated": prerequisite_ready_truncated,
                                     "next_action": "Queen must check the recorded block and current worker, then resume through the ordinary guarded task transition if no other blocker remains. Completed prerequisites alone do not authorize automatic resumption."
                                 },
@@ -4392,6 +4486,53 @@ mod tests {
         "swarm_sleep_worker",
     ];
 
+    /// ⚠️ QUEEN DEFAULTS TO THE CHEAPER MODEL, AND ONLY WHEN NOBODY HAS CHOSEN.
+    ///
+    /// Measured on a live Hive before this existed: Queen was 36.6% of all
+    /// provider spend, over three times the next workspace, rising 17% a week
+    /// while the fleet was flat. Her output is 8.9% of that -- the cost is
+    /// turns multiplied by half a megabyte of context, and most of those turns
+    /// are routine coordination rather than judgement. The operator asked for
+    /// it across every Hive, not just theirs: "so we don't burn their tokens as
+    /// well."
+    ///
+    /// The second half is the part worth a test. A default that silently
+    /// reasserted itself would take an operator's own choice away on every
+    /// restart, which is how a cost fix turns into a complaint.
+    #[test]
+    fn queen_gets_a_sonnet_default_that_never_overrides_a_chosen_model() {
+        let (bridge, _store, queen_id, worker_id, _directory) = setup();
+
+        bridge.ensure_worker_config(queen_id).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(bridge.worker_settings_path(queen_id)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["model"], "sonnet");
+
+        // An ordinary worker is untouched: this is about one worker's
+        // disproportionate share, not a fleet-wide downgrade nobody asked for.
+        assert!(
+            !bridge.worker_settings_path(worker_id).exists(),
+            "a repository worker must not be given a model it did not ask for",
+        );
+
+        // The operator chooses Opus back. Re-minting must leave it alone --
+        // including the re-mint that happens on every ordinary start.
+        std::fs::write(
+            bridge.worker_settings_path(queen_id),
+            serde_json::to_vec_pretty(&json!({ "model": "opus", "keep": "mine" })).unwrap(),
+        )
+        .unwrap();
+        bridge.ensure_worker_config(queen_id).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(bridge.worker_settings_path(queen_id)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["model"], "opus", "an explicit choice survives");
+        assert_eq!(settings["keep"], "mine", "and so does everything beside it");
+    }
+
     fn setup() -> (
         AgentBridge,
         TaskStore,
@@ -6411,9 +6552,37 @@ mod tests {
         );
         assert_eq!(queue["queen_tasks_truncated"], false);
         let ready = &attention["result"]["structuredContent"]["prerequisite_ready"];
-        assert_eq!(ready["tasks"][0]["id"], consumer.id.to_string());
+        assert_eq!(ready["tasks"][0]["task_id"], consumer.id.to_string());
         assert_eq!(ready["tasks"][0]["state"], "blocked");
         assert_eq!(ready["truncated"], false);
+        // ⚠️ A SUMMARY, NOT A WHOLE TASK. This block serialized entire `Task`
+        // records into a poll Queen runs thousands of times a day: measured on
+        // a live Hive, ONE task here was 11.6k characters while the sibling
+        // `blocked_reassessment` carried NINE in 4.9k. Her context is what she
+        // pays for on every message, so the board is not restated here.
+        //
+        // Asserted as ABSENCE of the heavy fields, because the defect is not
+        // that a summary is missing -- it is that everything else is present.
+        let first = ready["tasks"][0].as_object().unwrap();
+        for heavy in ["description", "operator_instruction", "review_request"] {
+            assert!(
+                !first.contains_key(heavy),
+                "prerequisite_ready must not restate {heavy}; it is a poll, not a read",
+            );
+        }
+        // And the fields its own next_action tells Queen to act on are kept.
+        for needed in [
+            "task_id",
+            "title",
+            "state",
+            "assigned_worker_id",
+            "prerequisites",
+        ] {
+            assert!(
+                first.contains_key(needed),
+                "prerequisite_ready dropped {needed}"
+            );
+        }
         let reassessment = &attention["result"]["structuredContent"]["blocked_reassessment"];
         let candidates = reassessment["tasks"].as_array().unwrap();
         assert_eq!(candidates.len(), 2);
