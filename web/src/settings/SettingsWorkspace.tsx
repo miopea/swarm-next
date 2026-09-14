@@ -261,8 +261,18 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       {/* The section list lives in the rail now, with every other surface's
           navigation. */}
       {/* Keep the single roster's unsaved forms across section/search changes.
-          Hidden controls cannot be operated; this adds no polling or storage. */}
-      <div hidden={!shows("settings-crew")}>
+          Hidden controls cannot be operated; this adds no polling or storage.
+
+          ⚠️ AND IT CARRIES THE ROSTER'S COLUMN SPAN, because THIS div is the
+          grid item — not the card inside it. `.worker-settings` declares
+          `grid-column: 1 / -1` and that did nothing here: the span applied
+          against this wrapper's block formatting context, so the roster was
+          laid out in one 467px column while its rows needed 622px and hung
+          157px past the card's own edge.
+          Same shape as the task-card-panel defect: a wrapper added so
+          something could be hidden without unmounting silently becomes the
+          grid item, and a span declared inside it is addressed to nobody. */}
+      <div className="settings-crew-slot" hidden={!shows("settings-crew")}>
     <WorkerSettings operatorToken={operatorToken} workers={workers} workspaces={workspaces} busy={busy} providers={providers} providerCapabilitiesUnavailable={providerCapabilitiesUnavailable} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onChooseMark={onChooseWorkerMark} onRemove={onRemoveWorker} onDraftDescription={async (workerId) => (await draftWorkerDescription(operatorToken, workerId)).description} onImproveDescription={async (workerId) => (await improveWorkerDescription(operatorToken, workerId)).description} onReorder={onReorderWorkers} />
       </div>
       {shows("settings-presence") && (

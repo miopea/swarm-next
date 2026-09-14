@@ -313,6 +313,36 @@ test("a section shows its own cards and nothing else", async () => {
   expect(container.querySelector("#settings-backup")).toBeNull();
 });
 
+/**
+ * ⚠️ THE ROSTER'S COLUMN SPAN HAS TO LAND ON SOMETHING THAT IS ACTUALLY A GRID
+ * ITEM, and for this one card that is not the card.
+ *
+ * The crew card is wrapped in a plain div so its unsaved forms survive a
+ * section or search change without unmounting. That wrapper is what
+ * `.settings-workspace` lays out, so `.worker-settings { grid-column: 1 / -1 }`
+ * declared on the card inside it was addressed to a block formatting context
+ * and did nothing. Measured on the running app: the roster sat in one 467px
+ * column while its rows needed 622px and hung 157px past the card's right
+ * edge, taking the "N repository workers" count with them. The operator
+ * photographed exactly that on a Hive with 29 workers.
+ *
+ * jsdom has no layout, so this cannot assert the overflow -- styles.test.ts
+ * owns the rule. What it CAN assert is what the rule needs in order to bite:
+ * the wrapper is still the card's parent, still carries the class the
+ * stylesheet targets, and is still a direct child of the workspace. Break any
+ * of the three and the span is silently homeless again.
+ */
+test("the crew card's wrapper carries the span, because the wrapper is the grid item", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok([])));
+
+  const { container } = render(<SettingsWorkspace {...minimalProps()} section="settings-workers" />);
+
+  await waitFor(() => expect(container.querySelector("#settings-crew")).not.toBeNull());
+  const slot = container.querySelector("#settings-crew")?.parentElement;
+  expect(slot).toHaveClass("settings-crew-slot");
+  expect(slot?.parentElement).toHaveClass("settings-workspace");
+});
+
 /** Typing a word finds the card holding it, wherever it lives. */
 test("the filter reaches a card the selected section does not contain", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

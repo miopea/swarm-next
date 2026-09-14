@@ -1398,6 +1398,18 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .settings-workspace > #settings-runtime,
 .settings-workspace > #settings-dogfood,
 .settings-workspace > .settings-card:only-child { grid-column: 1 / -1; }
+/* ⚠️ THE ROSTER'S SPAN LIVES ON ITS WRAPPER, NOT ON ITS CARD. The crew card is
+   wrapped in a plain div so its unsaved forms survive a section or search
+   change without unmounting, and that wrapper is what `.settings-workspace`
+   lays out — so `.worker-settings { grid-column: 1 / -1 }` inside it was
+   addressed to a block formatting context and did nothing at all.
+   Measured: the roster sat in one 467px column while its own rows needed
+   622px, and every row plus the "N repository workers" count hung 157px past
+   the card's right edge. On a real Hive with 29 workers that is what the
+   operator photographed.
+   `min-width: 0` because a grid item defaults to min-content, and the roster's
+   min-content is exactly the 622px that caused this. */
+.settings-workspace > .settings-crew-slot { grid-column: 1 / -1; min-width: 0; }
 .settings-card { display: grid; align-content: start; gap: 16px; min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .settings-card h3 { margin: 0; font-size: 1.08rem; }
 .settings-card > p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.55; }

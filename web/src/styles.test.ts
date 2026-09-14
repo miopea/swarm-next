@@ -403,6 +403,19 @@ test("the phone's switcher trigger carries state without taking a column", () =>
   );
 });
 
+/**
+ * The same defect as the task-card-panel rule below, in a different card, and
+ * found on a real Hive rather than in review: a wrapper added so something
+ * could be hidden without unmounting quietly became the grid item, and the span
+ * declared inside it was addressed to nobody. Measured at 157px of roster
+ * hanging past its own card.
+ */
+test("the worker roster spans both columns from its wrapper, not from its card", () => {
+  expect(stylesheet).toContain(
+    ".settings-workspace > .settings-crew-slot { grid-column: 1 / -1; min-width: 0; }",
+  );
+});
+
 test("spans a revealed task panel across the card instead of into a column", () => {
   // The Original report and Step 1 of 2 panels drew on top of each other and
   // clipped at the card's right edge. Both are wrapped in a plain div so they
