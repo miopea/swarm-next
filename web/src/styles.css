@@ -1453,6 +1453,41 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .migration-section { display: grid; gap: 12px; padding-block: 16px; border-block-start: 1px solid var(--line); }
 .migration-section > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .worker-settings { grid-column: 1 / -1; }
+
+/* Provider usage. The bar is the scan target and the number is the detail, in
+   that order: a reader arrives at this panel asking "who", not "how many". */
+.usage-settings { grid-column: 1 / -1; }
+.usage-note { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
+.usage-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.usage-window { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
+.usage-window button { min-height: var(--pill-touch-height); padding-inline: 12px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: .74rem; font-weight: 650; }
+.usage-window button[aria-pressed="true"] { color: var(--on-accent, var(--panel)); background: var(--accent-strong); }
+.usage-freshness { color: var(--quiet); font-size: .72rem; }
+.usage-empty { margin: 0; padding: 14px 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.usage-headline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.usage-headline > strong { font-size: 1.7rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.usage-headline > span { color: var(--muted); font-size: .8rem; }
+.usage-headline em { margin-left: 6px; font-style: normal; font-weight: 700; }
+/* Direction is stated in words by the sign, so hue only reinforces it. */
+.usage-up { color: var(--warn); }
+.usage-down { color: var(--busy); }
+.usage-headline > small { margin-left: auto; color: var(--quiet); font-size: .72rem; white-space: nowrap; }
+.usage-list { display: grid; margin: 0; padding: 0; gap: 7px; list-style: none; }
+.usage-list li { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(60px, 1fr) auto; align-items: center; gap: 10px; }
+.usage-row-name { display: grid; min-width: 0; gap: 1px; }
+.usage-row-name strong, .usage-row-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-row-name strong { font-size: .84rem; }
+.usage-row-name small { color: var(--quiet); font-size: .7rem; }
+.usage-bar { display: block; overflow: hidden; height: 9px; border-radius: 999px; background: var(--surface-soft); }
+.usage-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--accent-strong); }
+.usage-row-figures { display: grid; justify-items: end; gap: 1px; }
+.usage-row-figures strong { font-size: .84rem; font-variant-numeric: tabular-nums; }
+.usage-row-figures small { color: var(--quiet); font-size: .7rem; white-space: nowrap; }
+.usage-detail summary { min-height: 44px; align-content: center; cursor: pointer; color: var(--muted); font-size: .76rem; }
+.usage-detail table { width: 100%; border-collapse: collapse; font-size: .74rem; font-variant-numeric: tabular-nums; }
+.usage-detail th, .usage-detail td { padding: 5px 6px; text-align: right; }
+.usage-detail thead th, .usage-detail tbody th { color: var(--muted); font-weight: 650; text-align: left; }
+.usage-detail tbody tr + tr { border-top: 1px solid var(--line); }
 .workspace-search-settings { padding: 12px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; overflow-wrap: anywhere; }
 .workspace-search-settings summary { cursor: pointer; min-height: 32px; }
 .workspace-search-settings > div { margin-top: 12px; }
@@ -2553,6 +2588,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .coordinator-status > span:first-child { grid-column: 1 / -1; }
   .coordinator-metrics { justify-items: start; text-align: left; }
   .worker-settings { grid-column: auto; }
+  .usage-settings { grid-column: auto; }
+  /* The bar gives up its column first: at this width it is decoration beside a
+     number that is not. Name and figure keep theirs. */
+  .usage-list li { grid-template-columns: minmax(0, 1fr) auto; }
+  .usage-bar { display: none; }
+  .usage-headline > small { margin-left: 0; }
+  /* Only the table scrolls. The page never does. */
+  .usage-detail { overflow-x: auto; }
   .configure-worker-form { grid-template-columns: 1fr; }
   .configure-worker-form button { width: 100%; margin-top: 0; }
   .configured-worker { grid-template-columns: 38px minmax(0, 1fr) auto; padding: 7px; }

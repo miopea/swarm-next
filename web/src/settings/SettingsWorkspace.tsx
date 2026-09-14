@@ -31,6 +31,7 @@ import EmailSettings from "./EmailSettings";
 import ConnectionsSettings from "./ConnectionsSettings";
 import JiraSettings from "./JiraSettings";
 import LegacyMigrationSettings from "./LegacyMigrationSettings";
+import UsageSettings from "./UsageSettings";
 import WorkerSettings from "./WorkerSettings";
 import { navigateToSettingsSection, readSettingsSection, SETTINGS_SECTIONS } from "./settingsNavigation";
 import { compactRuntimeVersion, runtimeVersionIdentity } from "./runtimeVersion";
@@ -275,6 +276,9 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       <div className="settings-crew-slot" hidden={!shows("settings-crew")}>
     <WorkerSettings operatorToken={operatorToken} workers={workers} workspaces={workspaces} busy={busy} providers={providers} providerCapabilitiesUnavailable={providerCapabilitiesUnavailable} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onChooseMark={onChooseWorkerMark} onRemove={onRemoveWorker} onDraftDescription={async (workerId) => (await draftWorkerDescription(operatorToken, workerId)).description} onImproveDescription={async (workerId) => (await improveWorkerDescription(operatorToken, workerId)).description} onReorder={onReorderWorkers} />
       </div>
+      {shows("settings-usage") && operatorToken ? (
+        <UsageSettings operatorToken={operatorToken} visible={shows("settings-usage")} />
+      ) : null}
       {shows("settings-presence") && (
     <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
           <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>

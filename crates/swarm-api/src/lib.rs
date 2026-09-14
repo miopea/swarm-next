@@ -42,6 +42,7 @@ mod presence;
 mod presentation;
 mod private_store;
 mod provider_activity;
+mod provider_usage;
 mod queen_run_history;
 mod release;
 mod released_tasks;
@@ -263,6 +264,11 @@ pub struct AppState {
     review_settlement_cursor: Arc<Mutex<Option<swarm_domain::TaskId>>>,
     worker_description_improvement_limit: Arc<Semaphore>,
     conversation_scan_limit: Arc<Semaphore>,
+    /// Whether a provider-usage pass is in flight. A flag rather than a lock
+    /// held across the work: a request arriving mid-pass is told a scan is
+    /// running and handed the stored numbers, not made to wait minutes for
+    /// file reading it did not ask for.
+    provider_usage_scanning: Arc<std::sync::atomic::AtomicBool>,
     database_export_limit: Arc<Semaphore>,
     database_probe_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
@@ -432,6 +438,7 @@ impl AppState {
                 MAX_WORKER_DESCRIPTION_IMPROVEMENTS,
             )),
             conversation_scan_limit: Arc::new(Semaphore::new(1)),
+            provider_usage_scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             database_export_limit: Arc::new(Semaphore::new(1)),
             database_probe_limit: Arc::new(Semaphore::new(1)),
             development_reload: Arc::new(Mutex::new(())),
@@ -4100,6 +4107,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/workers/conversations",
             get(workers::conversation_freshness),
         )
+        .route("/api/v1/usage", get(provider_usage::usage_report))
         .route("/api/v1/providers", get(provider_activity::capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
         .route(

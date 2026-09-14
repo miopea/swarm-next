@@ -110,6 +110,12 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       };
     case "/api/v1/workers":
       return demoWorkers;
+    // Transcribed from the real measurement that prompted this panel
+    // (2026-09-14, 7-day window), not invented: Queen at a third of everything,
+    // a 98-99% cache hit rate, and cache reads dwarfing everything else. A
+    // fixture with tidy round numbers would render a panel nobody has seen.
+    case "/api/v1/usage":
+      return usageFixture();
     case "/api/v1/workers/conversations":
       return { workers: new URLSearchParams(window.location.search).get("history") === "unknown"
         ? [{ worker_id: "demo-history-worker", name: "Petal", freshness: { state: "unknown", reason: "No readable conversation entry in this synthetic workspace" } }]
@@ -177,4 +183,53 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
     default:
       return undefined;
   }
+}
+
+
+/**
+ * The operator's own 7-day figures, so the panel can be looked at against the
+ * shape it was built for: one worker taking a third, a very high cache hit rate,
+ * and cache reads as the overwhelming majority of the burn.
+ */
+function usageFixture() {
+  const day = (offset: number) =>
+    new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+  const workspaces = [
+    { workspace: "/home/you/projects/queen", workers: ["Queen"], weighted: 763_000_000, previous: 675_000_000, messages: 13_999 },
+    { workspace: "/home/you/projects/sculpt-studio", workers: ["Sculpt Studio"], weighted: 248_000_000, previous: 70_000_000, messages: 4_248 },
+    { workspace: "/home/you/projects/orchard", workers: ["Orchard Web", "Orchard Web · Codex"], weighted: 239_000_000, previous: 290_000_000, messages: 4_463 },
+    { workspace: "/home/you/projects/orchard-api", workers: ["Orchard API"], weighted: 205_000_000, previous: 286_000_000, messages: 3_560 },
+    { workspace: "/home/you/projects/field-notes", workers: ["Field Notes"], weighted: 175_000_000, previous: 3_000_000, messages: 2_101 },
+  ];
+  return {
+    days: 7,
+    last_scan_at: Math.floor(Date.now() / 1000) - 240,
+    scanning: false,
+    by_workspace: workspaces.map((entry) => ({
+      workspace: entry.workspace,
+      workers: entry.workers,
+      // Cache reads are ~99% of the raw tokens, which is the point of the
+      // cached/uncached breakdown.
+      input_tokens: Math.round(entry.weighted / 60_000),
+      cache_write_tokens: Math.round(entry.weighted / 60),
+      cache_read_tokens: Math.round(entry.weighted * 9.2),
+      output_tokens: Math.round(entry.weighted / 140),
+      messages: entry.messages,
+      weighted: entry.weighted,
+      weighted_previous: entry.previous,
+    })),
+    by_day: [6, 5, 4, 3, 2, 1, 0].map((offset, index) => {
+      const weighted = [240_580_000, 327_370_000, 357_010_000, 394_620_000, 267_400_000, 318_590_000, 306_660_000][index];
+      return {
+        day: day(offset),
+        input_tokens: Math.round(weighted / 30_000),
+        cache_write_tokens: Math.round(weighted / 10),
+        cache_read_tokens: Math.round(weighted * 8.2),
+        output_tokens: Math.round(weighted / 70),
+        weighted,
+      };
+    }),
+    total_weighted: 2_212_000_000,
+    total_weighted_previous: 2_325_000_000,
+  };
 }

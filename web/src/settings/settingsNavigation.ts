@@ -81,6 +81,8 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["jira", "atlassian", "project", "issue", "board", "ticket"] },
   { id: "settings-email", section: "settings-connections", title: "Email",
     keywords: ["email", "outlook", "microsoft", "mailbox", "reply", "oauth", "inbox"] },
+  { id: "settings-usage", section: "settings-maintenance", title: "Provider usage",
+    keywords: ["usage", "tokens", "token", "spend", "spending", "burn", "cost", "cache", "cached", "context", "budget", "quota", "provider usage"] },
   { id: "settings-runtime", section: "settings-updates", title: "App and API",
     keywords: ["update", "release", "version", "upgrade", "install", "worker engine", "development", "reload", "build", "provider", "restart", "system"] },
   { id: "settings-backup", section: "settings-maintenance", title: "Backup",

@@ -23,6 +23,7 @@ use uuid::Uuid;
 mod apiary;
 mod apiary_directory;
 pub use apiary_directory::LocalPublicHiveProfile;
+pub use provider_usage::{CountedMessage, ProviderUsageCursor, ProviderUsageDay};
 mod attention;
 mod coordinator;
 mod database_integrity;
@@ -30,6 +31,7 @@ mod decision_clarification;
 pub use decision_clarification::{
     ClarificationAttention, ClarificationDispatch, DecisionClarification,
 };
+mod provider_usage;
 mod queen_recovery;
 mod queen_review;
 mod queen_review_focus;
@@ -310,7 +312,8 @@ const REFUSED_NATIVE_ANSWER_SCHEMA_VERSION: i64 = 171;
 const NATIVE_ANSWER_SWITCH_SCHEMA_VERSION: i64 = 172;
 const APIARY_TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 173;
 const APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION: i64 = 174;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION;
+const PROVIDER_USAGE_SCHEMA_VERSION: i64 = 175;
+const CURRENT_SCHEMA_VERSION: i64 = PROVIDER_USAGE_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4210,6 +4213,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION {
         federation_tasks::migrate_apiary_task_local_origins(transaction)?;
+    }
+    if schema_version < PROVIDER_USAGE_SCHEMA_VERSION {
+        provider_usage::migrate_provider_usage(transaction)?;
     }
     Ok(())
 }
@@ -9696,6 +9702,21 @@ mod tests {
             undo_sql: "DROP TABLE apiary_task_local_origins",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type='table'
                 AND name = 'apiary_task_local_origins'",
+        },
+        // Undoes ALL FOUR tables, because the step created all four and a
+        // database missing only one of them is not a database that stopped at
+        // 174 -- it is one that never existed, and a test migrating it would
+        // pass or fail for reasons unrelated to the step.
+        SchemaStep {
+            table: "provider_usage_daily",
+            artifact: "cache_read_tokens",
+            undo_sql: "DROP TABLE provider_usage_daily;
+                DROP TABLE provider_usage_seen;
+                DROP TABLE provider_usage_cursor;
+                DROP TABLE provider_usage_scan",
+            probe_sql: "SELECT COUNT(*) = 4 FROM sqlite_master WHERE type='table'
+                AND name IN ('provider_usage_daily', 'provider_usage_seen',
+                             'provider_usage_cursor', 'provider_usage_scan')",
         },
     ];
 

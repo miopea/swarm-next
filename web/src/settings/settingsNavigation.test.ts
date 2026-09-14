@@ -81,7 +81,13 @@ test("finds a control by the word someone would actually type", () => {
   expect(titles("passkey")).toEqual(["Operator access"]);
   expect(titles("tunnel")).toEqual(["Open on my phone"]);
   expect(titles("qr")).toEqual(["Open on my phone"]);
-  expect(titles("token")).toEqual(["Operator access"]);
+  // ⚠️ "token" MEANS TWO THINGS IN THIS APP and the filter is right to show
+  // both: the operator's own credential, and the unit a provider bills in.
+  // Narrowing either card's keywords to disambiguate would hide the one the
+  // reader wanted from whichever of the two they did not think to spell out.
+  expect(titles("token")).toEqual(["Operator access", "Provider usage"]);
+  expect(titles("operator token")).toEqual(["Operator access"]);
+  expect(titles("token spend")).toEqual(["Provider usage"]);
   expect(titles("outlook")).toEqual(["Email"]);
   expect(titles("upgrade")).toEqual(["App and API"]);
   expect(titles("membership")).toEqual(["Your Hive"]);
