@@ -342,35 +342,55 @@ test("the phone picker's dot is sized for a phone, with room for its ring", () =
 });
 
 /**
- * Task 01a09fe4, found while fixing the state work above and fixed on the
- * operator's "fix 01a09fe4 too while you're in there".
+ * Task 01a09fe4, resolved by the operator's own words in decision 01a09ff1:
+ * "Pin the name, ellipse the repository first."
  *
  * The row for the worker you are STANDING ON was the one row that could not
- * name it: "H…" beside "h…" for a worker called Hedgerow. Flexbox shrinks items
- * in proportion to their own base size, so the longer a name was the more of it
- * went — and a short one (Queen) hid the defect completely, which is how it
- * survived.
+ * name it: "H…" beside "h…" for a worker called Hedgerow. Flexbox shrank the
+ * name and the repository in proportion to their own base size, so the longer
+ * a name was the more of it went — and a short one (Queen) hid the defect
+ * completely, which is how it survived.
  *
- * ⚠️ MEASURED, NOT REASONED. At 390px the selected row's first line is 168px
- * and the "You're here" pill is 91px of it, leaving 61px for 81px of name. No
- * shrink order rescues that; there is genuinely not room for both, so the line
- * wraps and the name keeps its width. Read off the live page at 390x844, not
- * derived — jsdom has no layout, so a rendering test cannot assert this and
- * this file is the honest instrument for it.
+ * ⚠️ MEASURED, NOT REASONED, and the numbers are why the exception below
+ * exists. Read off the live page at 390x844: the selected row's line is 168px
+ * (narrower than the rest — the Sleep button sits beside it), the name needs
+ * 81px, and the "You're here" pill is 91px. With the name pinned and the
+ * repository already ellipsed to nothing that is 188px into 168px, so on that
+ * ONE row the ruling cannot be obeyed on a single line.
+ *
+ * jsdom has no layout, so no rendering test can assert any of this and this
+ * file is the honest instrument. It pins the rules, not the pixels.
  */
-test("the picker never crushes the name of the worker you are on", () => {
-  // The repository takes only what is LEFT: it fills the room when the name is
-  // short and gives every pixel back before the name loses a character.
-  expect(stylesheet).toContain(".mobile-worker-choice-copy > span > strong { flex: 0 1 auto; min-width: 0; }");
-  expect(stylesheet).toContain(".mobile-worker-choice-copy > span > small { flex: 1 1 0; min-width: 0; }");
-  // And when even that is not enough, the line wraps rather than truncating.
-  const line = stylesheet.match(/\.mobile-worker-choice-copy > span \{([^}]+)\}/)?.[1];
-  expect(line).toMatch(/flex-wrap:\s*wrap/);
-  // `min-width: 0` on the name is what keeps the LAST resort an ellipsis inside
-  // the row rather than an overflow out of it, for a name longer than the whole
-  // line. Checked on the page: 335px of name renders in 168px, row scrollWidth
-  // unchanged.
-  expect(line).toMatch(/min-width:\s*0/);
+test("the picker pins the worker name and ellipses the repository first", () => {
+  // The name does not shrink at all. `max-width: 100%` is the single limit on
+  // that: a name longer than the whole line has nothing to yield to it, so it
+  // ellipses inside the row rather than pushing out of it — checked on the page
+  // at 275px of name rendering in 168px with the row's scrollWidth unchanged.
+  expect(stylesheet).toContain(
+    ".mobile-worker-choice-copy > span > strong { flex: 0 0 auto; min-width: 0; max-width: 100%; }",
+  );
+  // 999, so "first" means first rather than merely sooner: the repository
+  // carries the whole reduction and ELLIPSES rather than vanishing, which is
+  // the distinction the ruling names. "orchar…" still says which repository.
+  expect(stylesheet).toContain(
+    ".mobile-worker-choice-copy > span > small { flex: 0 999 auto; min-width: 0; }",
+  );
+});
+
+test("only the row that cannot obey the ruling on one line gets a second", () => {
+  // ⚠️ A DELIBERATE, CONFINED EXCEPTION to 01a09ff1 — see the arithmetic above.
+  // Wrapping was briefly unconditional and that was wrong in a way worth
+  // keeping a test for: with the name pinned, an unpinned wrap made EVERY row
+  // drop its repository to a second line instead of ellipsing it, which is the
+  // opposite of what was ruled. Orchard Web measured "orchard-web" on its own
+  // line rather than "orchar…" beside the name.
+  const base = stylesheet.match(/\.mobile-worker-choice-copy > span \{([^}]+)\}/)?.[1];
+  expect(base).toBeDefined();
+  expect(base).not.toMatch(/flex-wrap/);
+  // Only the row carrying the pill, which is only ever the row you are on.
+  expect(stylesheet).toContain(
+    '.mobile-worker-choice-copy > span:has(.mobile-worker-here) { flex-wrap: wrap; }',
+  );
 });
 
 test("the phone's switcher trigger carries state without taking a column", () => {

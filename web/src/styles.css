@@ -673,34 +673,46 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .mobile-worker-choice .worker-avatar { width: 42px; height: 42px; }
 .mobile-worker-choice .worker-avatar .bee-mascot { width: 46px; height: 46px; }
 .mobile-worker-choice-copy { display: grid; min-width: 0; gap: 4px; }
-/* ⚠️ AND IT WRAPS RATHER THAN TRUNCATES, because giving the repository up was
-   not enough on its own. Measured on the selected row at 390px: the line is
-   168px, the "You're here" pill is 91px of it, and the name was left 61px for
-   81px of "Hedgerow". No shrink order rescues that — there is simply not room
-   for both on one line, and the name is not the one that should lose.
-   Wrapping costs ~16px of height on the ONE row that carries the pill, and only
-   when it does not fit: a short name (Queen) still measures under the line and
-   stays on it. Every word survives, which is the point — this pill is words
-   rather than a coloured tint precisely because the operator looked at a tint
-   and asked "Shouldn't it be showing that I'm on that worker currently?" */
-.mobile-worker-choice-copy > span { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.mobile-worker-choice-copy > span { display: flex; min-width: 0; align-items: baseline; gap: 4px 8px; }
+/* ⚠️ AND THE ONE ROW WHERE THE RULING CANNOT BE OBEYED ON A SINGLE LINE GETS A
+   SECOND ONE. This is a deliberate exception to 01a09ff1, confined to the row
+   that forces it, and it is here rather than silent because the arithmetic is
+   the whole argument.
+   Measured at 390px: the selected row's line is 168px — narrower than the
+   others because the Sleep button sits beside it — the name needs 81px and the
+   "You're here" pill is 91px. With the name pinned and the repository already
+   ellipsed to nothing, 81 + 8 + 0 + 8 + 91 = 188px into 168px. There is no
+   shrink order that fits; only the name, the pill, or the line can give, and
+   the ruling says the name does not.
+   So the pill drops below rather than the name losing characters. Every other
+   row keeps `nowrap` and ellipses its repository exactly as ruled, and even
+   this row only wraps when it must — a short name (Queen) measures under the
+   line and stays on it.
+   The pill is words rather than a coloured tint because the operator looked at
+   a tint and asked "Shouldn't it be showing that I'm on that worker
+   currently?", so shrinking it to fit would walk back a different fix. */
+.mobile-worker-choice-copy > span:has(.mobile-worker-here) { flex-wrap: wrap; }
 .mobile-worker-choice-copy strong, .mobile-worker-choice-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-worker-choice-copy > span small { color: var(--quiet); }
-/* ⚠️ THE NAME IS THE ONE THING THIS ROW EXISTS TO SAY, so it is the last thing
-   to give up space rather than an equal party to it.
-   Flexbox shrinks items in proportion to their own base size, so the LONGER a
-   worker's name the more of it was taken — and the "You're here" pill, which
-   only ever appears on the row you are already on, is ~90px of a ~270px line.
-   The result was that the row for the worker you are standing on was the one
-   row that could not name it: observed as "H…" beside "h…" for a worker called
-   Hedgerow. A short name (Queen) hid it completely, which is how it survived.
-   `flex: 1 1 0` gives the repository a zero base, so it takes only what is
-   LEFT: it fills the room when the name is short, gives every pixel back when
-   the name is long, and vanishes before the name loses a character. The name
-   keeps `flex-shrink: 1` with `min-width: 0` so a name that overruns the line
-   on its own still ellipses inside the row instead of pushing out of it. */
-.mobile-worker-choice-copy > span > strong { flex: 0 1 auto; min-width: 0; }
-.mobile-worker-choice-copy > span > small { flex: 1 1 0; min-width: 0; }
+/* ⚠️ PIN THE NAME, ELLIPSE THE REPOSITORY FIRST — the operator's own words,
+   decision 01a09ff1, answered against this row.
+   Flexbox shrank these two in proportion to their own base size, so the LONGER
+   a worker's name the more of it went, and the row for the worker you are
+   standing on was the one row that could not name it: "H…" beside "h…" for a
+   worker called Hedgerow. A short name (Queen) hid it completely, which is how
+   it survived.
+   So the name does not shrink at all, and the repository carries the whole
+   reduction — `flex-shrink: 999` is what makes "first" mean first rather than
+   merely sooner. It ELLIPSES rather than vanishing, which is the distinction
+   the ruling actually names: a repository cut to "orchar…" still tells you
+   which one it is, and that is worth more than the few pixels returned by
+   dropping it outright.
+   `max-width: 100%` is the one limit on the pin. A name longer than the whole
+   line has nothing to yield to it, so it ellipses inside the row rather than
+   pushing out of it — measured at 335px of name rendering in a 168px line with
+   the row's own scrollWidth unchanged. */
+.mobile-worker-choice-copy > span > strong { flex: 0 0 auto; min-width: 0; max-width: 100%; }
+.mobile-worker-choice-copy > span > small { flex: 0 999 auto; min-width: 0; }
 .mobile-worker-choice-copy > small { color: var(--muted); }
 /* The state word is a pill and the rest of the line stays a sentence, so the
    row says exactly what it said before and the eye no longer has to read it to
