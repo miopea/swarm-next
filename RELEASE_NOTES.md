@@ -12,6 +12,46 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.10.0
+
+⚠️ This release adds two database tables. The automatic backup covers a reload
+from a checkout and NOT a tarball install, so copy your `swarm.sqlite3` before
+installing this one. Your workers are not stopped — the terminal protocol has
+not changed.
+
+### New features
+- Queen can move a Hive's tasks up to the Apiary level, where every member Hive
+  can see them, without losing the task. The original stays put and keeps its
+  history, evidence and decision links; the shared copy points back to it.
+- A prerequisite chain moves as a whole or not at all. If moving a set would
+  leave one end of a chain behind, the move is refused rather than quietly
+  dropping the ordering that says what has to happen first.
+- Needs You items now say whether you can answer them in a worker's terminal or
+  only in the control room, instead of leaving you to find out by trying.
+- If you answer in a terminal and Swarm could not use the answer, it now tells
+  you on the question itself rather than leaving the item lit with no reason.
+
+### Fixes
+- A broadcast reaches every worker at once instead of waiting for each to finish
+  what it is doing. Sending one before this, nine workers had it in five seconds
+  and three took up to three minutes — long enough for "pause what you are
+  doing" to arrive after the moment had passed.
+- A worker sitting on a question now shows as waiting for you rather than as
+  busy. On a phone the screen is narrow enough to cut the end off the line Swarm
+  was reading, so it could not tell a question from work in progress.
+- The same narrow-screen problem in reverse: a worker that really was working
+  could read as idle.
+- Answering in a terminal now works on every Hive rather than only on the one it
+  was proven on — the half that captures your answer was missing everywhere else
+  (after the worker engine update).
+- Inline images in an email now reach the attachment store, so a task that says
+  "see the screenshot" has the screenshot.
+- Swarm says when terminal history is dropped at its size limit instead of
+  shedding it silently.
+- On a phone: the arrow keys are always visible instead of hidden behind a tap,
+  Send with an empty box sends Enter, and the navigation button is where you
+  would expect and points the way it will move.
+
 ## 1.9.1
 
 One install-breaking bug, reported within an hour of 1.9.0 going out, and one
