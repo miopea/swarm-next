@@ -50,6 +50,7 @@ mod reload_backup;
 mod runtime;
 mod runtime_storage;
 mod session_history;
+mod session_worktree;
 mod support_http;
 pub mod support_sender;
 pub mod support_transport;

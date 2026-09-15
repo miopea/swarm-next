@@ -10,8 +10,8 @@ use swarm_terminal::{
 };
 
 use crate::{
-    ApiError, AppState, WorkerViewFacts, task_store, task_store_error, terminal_host::request_host,
-    worker_view,
+    ApiError, AppState, WorkerViewFacts, session_worktree, session_worktree::SessionWorkspace,
+    task_store, task_store_error, terminal_host::request_host, worker_view,
 };
 
 /// Turns the terminal host's serde error into the sentence that names the fix.
@@ -385,6 +385,45 @@ fn workspace_and_root_override(state: &AppState, workspace: &str) -> (PathBuf, b
     (resolved, allow_outside_roots)
 }
 
+/// The directory this worker's session actually runs in.
+///
+/// Almost always the checkout. A worker that SHARES its checkout with an older
+/// worker gets a worktree of its own instead, because `.git/index` belongs to
+/// the worktree and two sessions staging into one index produce a commit whose
+/// message and diff describe different changes -- with a clean `git status`
+/// throughout. See `session_worktree` for the incident and the deliberate limits.
+///
+/// ⚠️ NEVER FAILS THE START. Every failure here returns the checkout, which is
+/// precisely today's behaviour: the hazard stays, and the worker runs. A
+/// provisioning problem that grounded a worker would be a worse fault than the
+/// rare collision it is guarding against, and the operator could not route
+/// around it.
+fn session_workspace(state: &AppState, worker_id: WorkerId, checkout: PathBuf) -> PathBuf {
+    let Ok(profiles) = task_store(state).and_then(|store| {
+        store
+            .list_worker_profiles()
+            .map_err(|error| task_store_error(&error))
+    }) else {
+        return checkout;
+    };
+    let SessionWorkspace::Worktree { path, branch } =
+        session_worktree::decide(&profiles, worker_id, &checkout)
+    else {
+        return checkout;
+    };
+    match session_worktree::ensure(&checkout, &path, &branch) {
+        Ok(()) => path,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                worktree = %path.display(),
+                "could not provision this worker a worktree; starting it in the shared checkout"
+            );
+            checkout
+        }
+    }
+}
+
 fn provider_start_request(
     state: &AppState,
     worker_id: WorkerId,
@@ -392,8 +431,8 @@ fn provider_start_request(
     size: TerminalSize,
     mcp_config: Option<PathBuf>,
 ) -> Result<HostRequest, ApiError> {
-    let (worker_workspace, allow_outside_roots) =
-        workspace_and_root_override(state, &profile.workspace);
+    let (checkout, allow_outside_roots) = workspace_and_root_override(state, &profile.workspace);
+    let worker_workspace = session_workspace(state, worker_id, checkout);
     let request = match profile.provider {
         // This build read a provider it does not recognise, which happens after
         // a rollback to a release predating that provider. The worker stays
@@ -2131,6 +2170,110 @@ mod tests {
                 ..
             } if session_id == conversation
         ));
+    }
+
+    /// ⚠️ THE CHAIN, NOT THE LINKS. The last fix in this session passed a test
+    /// of its own file, passed a test of the file it handed to, and delivered
+    /// nothing -- because no test crossed the boundary where the value was
+    /// dropped. So this one starts at the request a worker start actually
+    /// builds and finishes by staging a file in each tree: the API's election,
+    /// git's provisioning and the path the host is handed, in one assertion
+    /// chain.
+    #[test]
+    fn the_second_worker_in_a_checkout_is_started_in_a_worktree_of_its_own() {
+        let home = tempfile::tempdir().unwrap();
+        let checkout = home.path().join("repo");
+        std::fs::create_dir(&checkout).unwrap();
+        let git = |directory: &std::path::Path, arguments: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(directory)
+                .args(arguments)
+                .output()
+                .expect("git runs");
+            assert!(
+                output.status.success(),
+                "git {arguments:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        git(
+            &checkout,
+            &["-c", "init.defaultBranch=main", "init", "--quiet"],
+        );
+        git(
+            &checkout,
+            &["config", "user.email", "worker@example.invalid"],
+        );
+        git(&checkout, &["config", "user.name", "Worker"]);
+        std::fs::write(checkout.join("first.txt"), "first\n").unwrap();
+        git(&checkout, &["add", "first.txt"]);
+        git(&checkout, &["commit", "--quiet", "-m", "first"]);
+
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let workspace = checkout.to_string_lossy().into_owned();
+        let older = store
+            .create_worker("Platform", ProviderKind::ClaudeCode, &workspace, false, 1)
+            .unwrap();
+        let newer = store
+            .create_worker(
+                "Platform · Codex",
+                ProviderKind::ClaudeCode,
+                &workspace,
+                false,
+                2,
+            )
+            .unwrap();
+        let state = AppState::default()
+            .with_workspace_roots(vec![home.path().to_path_buf()])
+            .with_task_store(store.clone());
+
+        let HostRequest::StartClaude {
+            workspace: held, ..
+        } = provider_start_request(&state, older.id, &older, TerminalSize::default(), None)
+            .unwrap()
+        else {
+            panic!("a Claude worker starts with StartClaude");
+        };
+        let HostRequest::StartClaude {
+            workspace: moved, ..
+        } = provider_start_request(&state, newer.id, &newer, TerminalSize::default(), None)
+            .unwrap()
+        else {
+            panic!("a Claude worker starts with StartClaude");
+        };
+
+        assert_eq!(
+            held, checkout,
+            "the worker that was there first keeps the checkout and the ordinary \
+             on-main workflow"
+        );
+        assert_eq!(
+            moved,
+            checkout
+                .join(".claude")
+                .join("worktrees")
+                .join(newer.id.to_string()),
+            "the second worker is handed a worktree, and it is keyed by the full \
+             worker id"
+        );
+
+        // And the point of all of it: the two trees cannot stage into one index.
+        std::fs::write(held.join("from-checkout.txt"), "a\n").unwrap();
+        git(&held, &["add", "from-checkout.txt"]);
+        std::fs::write(moved.join("from-worktree.txt"), "b\n").unwrap();
+        git(&moved, &["add", "from-worktree.txt"]);
+        assert_eq!(
+            git(&held, &["diff", "--cached", "--name-only"]),
+            "from-checkout.txt"
+        );
+        assert_eq!(
+            git(&moved, &["diff", "--cached", "--name-only"]),
+            "from-worktree.txt",
+            "one session's commit absorbing another's staged changes is the \
+             corruption this exists to make impossible"
+        );
     }
 
     use super::*;
