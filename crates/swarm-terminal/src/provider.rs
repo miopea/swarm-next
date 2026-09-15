@@ -108,6 +108,7 @@ impl ClaudeCodeAdapter {
         conversation: ClaudeConversationStart,
         mcp_config: Option<&Path>,
         settings: Option<&Path>,
+        model: Option<&str>,
     ) -> Result<ProviderCommand, ProviderCommandError> {
         let mut command = self.command_for_with_mcp(workspace, conversation, mcp_config)?;
         if let Some(settings) = settings {
@@ -116,6 +117,21 @@ impl ClaudeCodeAdapter {
                 .ok_or(ProviderCommandError::ClaudeSettingsNotUtf8)?;
             command.arguments.push("--settings".into());
             command.arguments.push(settings.into());
+        }
+        // ⚠️ AN ARGUMENT, NOT A SETTINGS KEY, and that is the whole point of the
+        // rebuild. The first attempt wrote `model` into the per-worker settings
+        // file and it never reached the provider: `merged_settings` copies only
+        // `permissions.allow` out of that file and discards everything else, and
+        // it REFUSES the file outright when it lists no commands -- which a file
+        // carrying only a model does not. Two silent drops in one path.
+        //
+        // A launch argument cannot be quietly discarded by a merge that does not
+        // know about it, and it is visible in `ps` to anyone asking what a worker
+        // is actually running. The caller decides WHO gets one; this only relays
+        // it, so nothing here needs to know a Queen from a repository worker.
+        if let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) {
+            command.arguments.push("--model".into());
+            command.arguments.push(model.into());
         }
         Ok(command)
     }
@@ -469,6 +485,73 @@ mod tests {
         }
     }
 
+    /// ⚠️ THE ACCEPTANCE THE FIRST ATTEMPT COULD NOT MEET.
+    ///
+    /// That version asserted a FILE the code under test had just written, and
+    /// passed while the model never reached the provider at all --
+    /// `merged_settings` copies only `permissions.allow` out of that file and
+    /// refuses it outright when it lists no commands. This asserts the
+    /// constructed command instead, which is the thing the provider is actually
+    /// launched with.
+    #[test]
+    fn a_model_named_for_this_worker_reaches_the_launched_command() {
+        let command = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                absolute_workspace(),
+                ClaudeConversationStart::Continue,
+                Some(Path::new("/state/swarm/agents/worker.json")),
+                Some(Path::new("/home/operator/.claude/settings.json")),
+                Some("sonnet"),
+            )
+            .unwrap();
+
+        let position = command
+            .arguments
+            .iter()
+            .position(|argument| argument == "--model")
+            .expect("the command must name the model");
+        assert_eq!(command.arguments[position + 1], "sonnet");
+    }
+
+    /// A worker with no model of its own is launched exactly as before, so this
+    /// cannot become a fleet-wide downgrade nobody asked for.
+    #[test]
+    fn a_worker_with_no_model_of_its_own_is_launched_unchanged() {
+        let with_model = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                absolute_workspace(),
+                ClaudeConversationStart::Continue,
+                Some(Path::new("/state/swarm/agents/worker.json")),
+                None,
+                Some("sonnet"),
+            )
+            .unwrap();
+        let without = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                absolute_workspace(),
+                ClaudeConversationStart::Continue,
+                Some(Path::new("/state/swarm/agents/worker.json")),
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert!(!without.arguments.contains(&"--model".to_owned()));
+        // Blank is treated as absent rather than passed through as an empty
+        // model, which the provider would reject.
+        let blank = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                absolute_workspace(),
+                ClaudeConversationStart::Continue,
+                Some(Path::new("/state/swarm/agents/worker.json")),
+                None,
+                Some("   "),
+            )
+            .unwrap();
+        assert_eq!(blank.arguments, without.arguments);
+        assert_eq!(with_model.arguments.len(), without.arguments.len() + 2);
+    }
+
     #[test]
     fn claude_layers_operator_settings_without_replacing_private_session_state() {
         let command = ClaudeCodeAdapter
@@ -477,6 +560,7 @@ mod tests {
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
                 Some(Path::new("/home/operator/.claude/settings.json")),
+                None,
             )
             .unwrap();
         assert_eq!(

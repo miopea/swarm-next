@@ -902,12 +902,14 @@ fn start_claude_session(
         claude_holds_no_such_conversation(session_id, workspace)
     });
     let settings = claude_settings_for(mcp_config);
+    let model = worker_model_beside(mcp_config);
     let command = ClaudeCodeAdapter
         .command_for_with_configuration(
             workspace,
             selection.conversation,
             mcp_config,
             settings.as_deref(),
+            model.as_deref(),
         )
         .map_err(|error| error.to_string())?;
     let fallback = if matches!(selection.conversation, ClaudeConversationStart::Continue) {
@@ -919,6 +921,10 @@ fn start_claude_session(
                 },
                 mcp_config,
                 settings.as_deref(),
+                // The recovery launch too: a fallback that quietly ran a
+                // different model from the session it replaces would make the
+                // cost control depend on whether a resume happened to succeed.
+                model.as_deref(),
             )
             .map_err(|error| error.to_string())?;
         Some(
@@ -1627,6 +1633,26 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
+/// The model this worker was assigned, if any, from the file the API writes.
+///
+/// ⚠️ THE HOST DOES NOT KNOW A QUEEN FROM A REPOSITORY WORKER, and should not
+/// have to. It is a separate process started with a workspace and a config
+/// path; roles live in the API's store. So the API decides WHO gets a model and
+/// writes it beside the worker's config, and this only relays it to the launch
+/// argument. No protocol change, which matters because `swarm-package` refuses
+/// a protocol bump outright and one here would have made this unshippable.
+///
+/// Read from the same file the grants come from, but read SEPARATELY: the grant
+/// merge refuses a file that lists no commands, and a file carrying only a model
+/// lists none. Folding this into that path would have inherited the exact
+/// discard that made the first attempt fail silently.
+fn worker_model_beside(mcp_config: Option<&Path>) -> Option<String> {
+    let settings = mcp_config.and_then(worker_settings_beside)?;
+    let document = provider_settings::read_settings(&settings).ok()?;
+    let model = document.get("model")?.as_str()?.trim();
+    (!model.is_empty()).then(|| model.to_owned())
+}
+
 /// `<worker>.json` -> `<worker>.settings.json`, when that file exists.
 fn worker_settings_beside(mcp_config: &Path) -> Option<PathBuf> {
     let stem = mcp_config.file_stem()?.to_str()?;
@@ -1747,6 +1773,102 @@ mod grant_settings_tests {
 }
 
 #[cfg(test)]
+mod worker_model_tests {
+    use super::*;
+
+    /// ⚠️ THE WHOLE CHAIN, BECAUSE EVERY LAYER PASSED ITS OWN TEST LAST TIME.
+    ///
+    /// The first attempt had a green test for the API writing the file and no
+    /// test that anything read it. Each half was correct and the feature did
+    /// nothing. This joins them: a model written beside a worker config comes
+    /// out the other end as a launch argument on the real constructed command.
+    #[test]
+    fn a_model_beside_the_config_ends_up_on_the_launched_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(&config, "{}").unwrap();
+        std::fs::write(
+            directory.path().join("worker.settings.json"),
+            r#"{"model":"sonnet"}"#,
+        )
+        .unwrap();
+
+        let model = worker_model_beside(Some(&config));
+        let command = swarm_terminal::ClaudeCodeAdapter
+            .command_for_with_configuration(
+                Path::new("/workspace"),
+                ClaudeConversationStart::Continue,
+                Some(&config),
+                None,
+                model.as_deref(),
+            )
+            .unwrap();
+
+        let position = command
+            .arguments
+            .iter()
+            .position(|argument| argument == "--model")
+            .expect("the model must survive the whole chain to the command");
+        assert_eq!(command.arguments[position + 1], "sonnet");
+    }
+
+    /// ⚠️ THE LAYER THE FIRST ATTEMPT'S VALUE DIED IN.
+    ///
+    /// That version wrote `model` into this very file and it never reached the
+    /// provider, for two separate reasons in one function: `merged_settings`
+    /// copies only `permissions.allow` out of it, and it REFUSES the file
+    /// outright when no commands are listed -- which a file carrying only a
+    /// model does not list. So this reads the model on its own path, and the
+    /// test asserts the read rather than trusting the merge.
+    #[test]
+    fn a_model_written_beside_a_worker_config_is_found_even_with_no_grants() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(&config, "{}").unwrap();
+        // Only a model. No permissions block at all -- exactly the shape the
+        // grant merge rejects.
+        std::fs::write(
+            directory.path().join("worker.settings.json"),
+            r#"{"model":"sonnet"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            worker_model_beside(Some(&config)).as_deref(),
+            Some("sonnet"),
+        );
+    }
+
+    #[test]
+    fn a_worker_with_no_settings_file_or_no_model_reports_none() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(&config, "{}").unwrap();
+
+        // No settings file beside it at all.
+        assert_eq!(worker_model_beside(Some(&config)), None);
+
+        // A settings file that carries grants but names no model must not
+        // invent one, or every worker with an approved command would be
+        // silently moved onto a model nobody chose.
+        std::fs::write(
+            directory.path().join("worker.settings.json"),
+            r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(worker_model_beside(Some(&config)), None);
+
+        // And a blank one is absent, not an empty model the provider rejects.
+        std::fs::write(
+            directory.path().join("worker.settings.json"),
+            r#"{"model":"  "}"#,
+        )
+        .unwrap();
+        assert_eq!(worker_model_beside(Some(&config)), None);
+    }
+}
+
+#[cfg(test)]
 mod conversation_oracle_tests {
     use super::*;
     use swarm_domain::ProviderConversationId;
@@ -1832,6 +1954,7 @@ mod conversation_oracle_tests {
                 start.conversation,
                 Some(Path::new("/state/worker.json")),
                 Some(Path::new("/state/settings.json")),
+                None,
             )
             .unwrap();
         assert_eq!(calls.get(), 1);

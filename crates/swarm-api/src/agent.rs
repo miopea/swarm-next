@@ -4523,6 +4523,44 @@ mod tests {
     /// The second half is the part worth a test. A default that silently
     /// reasserted itself would take an operator's own choice away on every
     /// restart, which is how a cost fix turns into a complaint.
+    /// ⚠️ QUEEN'S ACTUAL SITUATION, WHICH THE FIRST TEST DID NOT COVER.
+    ///
+    /// On this Hive her mcp config is a month older than the default that was
+    /// supposed to write beside it: the credential still matches, so
+    /// `ensure_worker_config` takes its EARLY RETURN and never re-mints. The
+    /// original test only ever reached that branch with the settings file
+    /// already present, so it could not distinguish "the branch writes it" from
+    /// "the branch leaves the existing one alone".
+    ///
+    /// That distinction is the whole question. If this passes, an existing Hive
+    /// gets the default the first time Queen actually starts, and the absence
+    /// observed in production means the path simply has not run yet. If it
+    /// fails, an already-configured Queen could never receive it — which is
+    /// every Hive that has been running for more than a day.
+    #[test]
+    fn an_already_configured_queen_still_gets_the_default_on_a_later_start() {
+        let (bridge, _store, queen_id, _worker_id, _directory) = setup();
+
+        bridge.ensure_worker_config(queen_id).unwrap();
+        // Model the production state: the config is minted and its credential
+        // is good, but no settings file was ever written beside it.
+        std::fs::remove_file(bridge.worker_settings_path(queen_id)).unwrap();
+        assert!(!bridge.worker_settings_path(queen_id).exists());
+
+        // A later start. This takes the early-return branch, because the config
+        // is present and the credential still matches.
+        bridge.ensure_worker_config(queen_id).unwrap();
+
+        let settings: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(bridge.worker_settings_path(queen_id)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            settings["model"], "sonnet",
+            "a Hive whose Queen was configured before this shipped must still get the default",
+        );
+    }
+
     #[test]
     fn queen_gets_a_sonnet_default_that_never_overrides_a_chosen_model() {
         let (bridge, _store, queen_id, worker_id, _directory) = setup();
