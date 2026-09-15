@@ -120,7 +120,42 @@ impl AgentBridge {
             .filter(|command| !command.contains(['\n', '\r']))
             .map(|command| format!("Bash({command})"))
             .collect();
+        // ⚠️ THIS FILE HAS TWO WRITERS AND ONLY ONE OF THEM USED TO KNOW IT.
+        //
+        // `ensure_queen_model_default` writes {"model": ...} into this same
+        // path, and start_worker calls it FIRST and this SECOND. The previous
+        // version of this function replaced the whole document, and deleted the
+        // file outright when a worker had no live grants -- which is Queen's
+        // ordinary state. So the model default was written and then removed,
+        // milliseconds later, on every single start.
+        //
+        // Nothing caught it. Both writers have tests, both pass, and neither
+        // test runs the other writer; the operator restarted the worker engine
+        // and `--model` was still absent from Queen's command line. That is the
+        // fourth distinct cause in this one feature, and the third that a test
+        // of a mechanism against itself could not see.
+        //
+        // So each writer now owns its own KEY rather than the file: grants
+        // touch `permissions`, the model default touches `model`, and the file
+        // goes away only when nothing is left in it.
+        let mut document = match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                serde_json::from_str::<serde_json::Value>(&contents).unwrap_or_else(|_| json!({}))
+            }
+            Err(_) => json!({}),
+        };
+        if !document.is_object() {
+            document = json!({});
+        }
+        let object = document
+            .as_object_mut()
+            .expect("the document was just forced to an object");
         if allow.is_empty() {
+            object.remove("permissions");
+        } else {
+            object.insert("permissions".to_owned(), json!({ "allow": allow }));
+        }
+        if object.is_empty() {
             // remove_file on a missing path is not a failure here: the state we
             // want is "no file", and it is already true.
             if let Err(error) = std::fs::remove_file(&path)
@@ -132,12 +167,10 @@ impl AgentBridge {
         }
         std::fs::create_dir_all(self.config_root.as_ref())?;
         set_private_directory(self.config_root.as_ref())?;
-        let payload = serde_json::to_vec_pretty(&serde_json::json!({
-            "permissions": { "allow": allow }
-        }))
-        .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
+        let payload = serde_json::to_vec_pretty(&document)
+            .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
         write_private_atomic(&path, &payload)?;
-        Ok(Some(path))
+        Ok(if allow.is_empty() { None } else { Some(path) })
     }
 
     /// Where this worker's granted-command settings live.
@@ -5016,6 +5049,46 @@ mod tests {
         assert_eq!(
             settings["model"], "sonnet",
             "a Hive whose Queen was configured before this shipped must still get the default",
+        );
+    }
+
+    /// ⚠️ THE TWO WRITERS IN THE ORDER `start_worker` ACTUALLY CALLS THEM.
+    ///
+    /// This is the test that was missing, and its absence cost four attempts at
+    /// one feature. `ensure_worker_config` writes the model default into
+    /// `<id>.settings.json`; `ensure_worker_settings` then writes GRANTS into
+    /// the same file, and used to delete it outright when a worker had none —
+    /// which is Queen's ordinary state. Both had passing tests. Neither test
+    /// ran the other function, so the second silently undid the first on every
+    /// start, and the operator restarting the whole worker engine still saw no
+    /// `--model` on Queen's command line.
+    ///
+    /// A test that exercises one writer proves that writer works. It says
+    /// nothing about what the next line of production code does to the file.
+    #[test]
+    fn the_grants_writer_does_not_delete_the_model_default_beside_it() {
+        let (bridge, _store, queen_id, _worker_id, _directory) = setup();
+
+        // Exactly what start_worker does, in order.
+        bridge.ensure_worker_config(queen_id).unwrap();
+        bridge.ensure_worker_settings(queen_id).unwrap();
+
+        let path = bridge.worker_settings_path(queen_id);
+        assert!(
+            path.exists(),
+            "a Queen with no command grants still needs the file her model \
+             default lives in"
+        );
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            settings["model"], "sonnet",
+            "the grants refresh must not take the model with it"
+        );
+        assert!(
+            settings.get("permissions").is_none(),
+            "and it must not invent a permissions block for a worker with no \
+             grants: {settings}"
         );
     }
 
