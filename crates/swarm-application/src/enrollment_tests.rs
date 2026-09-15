@@ -18,6 +18,7 @@ fn completed_history_is_hidden_after_departure_and_backoff_skips_transport() {
         .record_enrollment_attempt(
             link.link.id,
             Some(swarm_domain::ApiaryEnrollmentProblem::KeeperUnavailable),
+            None,
             12,
         )
         .unwrap();

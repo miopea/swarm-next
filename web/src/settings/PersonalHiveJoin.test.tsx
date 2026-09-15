@@ -128,7 +128,11 @@ test("saved completed enrollment opens Apiary without another member action", as
 test.each([
   ["keeper_unavailable", "awaiting_approval", /Keeper is temporarily unreachable/],
   ["invitation_unavailable", "attention", /This invitation expired or was cancelled/],
-  ["approval_changed", "attention", /no longer matches your submitted terms/],
+  // ⚠️ The legacy value, which NEVER detected a changed approval -- it was the
+  // fallback arm. A record written before the rename must now read as the
+  // unknown it always was, not as an accusation about terms.
+  ["approval_changed", "attention", /could not determine why/],
+  ["unclassified", "attention", /could not determine why/],
   ["runtime_incompatible", "attention", /could not agree on the joining protocol/],
 ] as const)("saved %s explains the next step without another approval", async (problem, phase, message) => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
@@ -136,6 +140,34 @@ test.each([
   render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
   await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(message));
   expect(screen.queryByRole("button", { name: /Accept policy|Join Apiary/ })).not.toBeInTheDocument();
+});
+
+/**
+ * ⚠️ THE CODE IS THE WHOLE POINT OF THE UNCLASSIFIED CASE.
+ *
+ * Before this, every unrecognised failure rendered "The approved invitation no
+ * longer matches your submitted terms" -- fluent, specific, and about a cause
+ * nobody had established. On 2026-09-14 an operator followed that sentence for
+ * an afternoon while the real block was a stranded invitation. The screen must
+ * hand them something they can quote back to us instead.
+ */
+test("an unclassified failure shows the code rather than guessing a cause", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
+    String(input).endsWith("/enrollments")
+      ? JSON.stringify([{
+          consent: { link_id: "link-1" },
+          phase: "attention",
+          problem: "unclassified",
+          problem_code: "apiary_join_not_ready (409)",
+        }])
+      : "[]")));
+
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("status"))
+    .toHaveTextContent(/apiary_join_not_ready \(409\)/));
+  // And it must not resurrect the sentence it replaced.
+  expect(screen.getByRole("status")).not.toHaveTextContent(/submitted terms/);
 });
 
 // Profile persistence is covered independently; these tests isolate join policy

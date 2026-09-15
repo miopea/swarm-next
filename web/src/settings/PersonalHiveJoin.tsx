@@ -318,7 +318,16 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           ? "This invitation expired or was cancelled. Ask your Keeper for a current invitation."
           : record.problem === "runtime_incompatible"
             ? "The Hives could not agree on the joining protocol. Check that both are updated; your local work is safe."
-            : "The approved invitation no longer matches your submitted terms. Review the current invitation with your Keeper; Swarm has not accepted new permissions."}
+            /* ⚠️ SAYS WHAT IS KNOWN, WHICH IS SOMETIMES ONLY A CODE. This
+                branch used to read "The approved invitation no longer matches
+                your submitted terms" for EVERY unclassified failure, because
+                the variant behind it was the fallback arm rather than a
+                detection. An operator followed that sentence for an afternoon
+                while the real block was a stranded invitation. A code they can
+                quote to us beats fluent prose nobody established. */
+            : record.problem_code
+              ? `Joining could not finish, and Swarm could not classify why. Report this code to your Keeper: ${record.problem_code}. Your local work is unchanged.`
+              : "Joining could not finish and Swarm could not determine why. Ask your Keeper for a current invitation; your local work is unchanged."}
         {record.next_attempt_at ? <> Next check: {new Date(record.next_attempt_at * 1000).toLocaleTimeString()}.</> : null}
       </p> : null}
       {record.phase === "awaiting_approval" || record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {

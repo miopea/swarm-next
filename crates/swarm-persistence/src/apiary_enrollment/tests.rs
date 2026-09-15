@@ -13,6 +13,7 @@ fn outage_backoff_is_durable_and_clears_after_recovery() {
         .record_apiary_enrollment_attempt(
             consent.link_id,
             Some(swarm_domain::ApiaryEnrollmentProblem::KeeperUnavailable),
+            None,
             11,
         )
         .unwrap();
@@ -22,7 +23,7 @@ fn outage_backoff_is_durable_and_clears_after_recovery() {
     assert_eq!(first.next_attempt_at, Some(16));
     assert_eq!(first.consecutive_failures, 1);
     store
-        .record_apiary_enrollment_attempt(consent.link_id, None, 16)
+        .record_apiary_enrollment_attempt(consent.link_id, None, None, 16)
         .unwrap();
     let recovered = store.apiary_enrollments().unwrap().remove(0);
     assert_eq!(recovered.next_attempt_at, None);
@@ -38,7 +39,8 @@ fn permanent_refusal_stops_retry_without_reviving_cancelled_work() {
     store
         .record_apiary_enrollment_attempt(
             consent.link_id,
-            Some(swarm_domain::ApiaryEnrollmentProblem::ApprovalChanged),
+            Some(swarm_domain::ApiaryEnrollmentProblem::Unclassified),
+            None,
             11,
         )
         .unwrap();
@@ -46,7 +48,7 @@ fn permanent_refusal_stops_retry_without_reviving_cancelled_work() {
     assert_eq!(refused.phase, ApiaryEnrollmentPhase::Attention);
     assert_eq!(refused.next_attempt_at, None);
     store
-        .record_apiary_enrollment_attempt(consent.link_id, None, 12)
+        .record_apiary_enrollment_attempt(consent.link_id, None, None, 12)
         .unwrap();
     assert_eq!(store.apiary_enrollments().unwrap(), vec![refused]);
 }
@@ -451,4 +453,287 @@ fn migration_preserves_existing_links_without_inventing_consent() {
         consent.link_id
     );
     assert!(store.save_apiary_enrollment(&consent, 11).is_ok());
+}
+
+/// A member, the Keeper that invited it, and a helper to issue FURTHER
+/// invitations for the same Apiary — which is the whole subject of the
+/// stranded-invitation fix below.
+struct JoinFixture {
+    member: TaskStore,
+    keeper: TaskStore,
+}
+
+impl JoinFixture {
+    fn new() -> Self {
+        let member = TaskStore::in_memory().unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Test garden", swarm_domain::SharedWorkBackend::Jira, 9)
+            .unwrap();
+        Self { member, keeper }
+    }
+
+    /// Carries one invitation all the way to imported, with its enrollment
+    /// saved, exactly as a real join does.
+    fn invite(&self, at: i64) -> (ApiaryEnrollmentConsent, swarm_domain::ApiaryInvitationId) {
+        let card = self.member.issue_hive_connection_card(at, 3600).unwrap();
+        let keeper_card = self.keeper.issue_hive_connection_card(at, 3600).unwrap();
+        let link = self
+            .keeper
+            .issue_apiary_join_link("https://keeper.example", at, 3600)
+            .unwrap();
+        self.member
+            .save_local_apiary_keeper_link(
+                link.link.id,
+                &link.link.keeper_endpoint,
+                &link.one_time_secret,
+                at,
+            )
+            .unwrap();
+        let consent = ApiaryEnrollmentConsent {
+            link_id: link.link.id,
+            apiary_id: link.link.apiary_id,
+            keeper_node_id: keeper_card.payload.node_id,
+            member_node_id: card.payload.node_id,
+            member_hive_id: card.payload.hive_id,
+            member_operator_id: card.payload.operator_id,
+            policy_revision: 1,
+            accepted_at: at,
+            expires_at: link.link.expires_at,
+        };
+        self.member.save_apiary_enrollment(&consent, at).unwrap();
+        self.keeper
+            .present_apiary_join_link_identity(link.link.id, &link.one_time_secret, &card, at + 1)
+            .unwrap();
+        self.keeper
+            .approve_apiary_join_link(link.link.id, at + 2)
+            .unwrap();
+        let bundle = self
+            .keeper
+            .poll_apiary_join_link(link.link.id, &link.one_time_secret, at + 3)
+            .unwrap()
+            .invitation
+            .unwrap();
+        let id = bundle.invitation.payload.invitation_id;
+        self.member
+            .import_apiary_invitation_bundle(&bundle, at + 4)
+            .unwrap();
+        (consent, id)
+    }
+
+    fn invitation_state(&self, id: swarm_domain::ApiaryInvitationId) -> String {
+        self.member
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM apiary_join_invitations WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+}
+
+/// ⚠️ THE DEADLOCK THIS FIX EXISTS FOR, reproduced.
+///
+/// Observed on a member Hive 2026-09-14: one `submitted` invitation,
+/// `apiary_enrollments` EMPTY, `hives.apiary_id` NULL, and fourteen consecutive
+/// invitations from the Keeper that could not be imported. Only
+/// `apply_remote_join_acceptance` moves a row out of `submitted`, and it is
+/// reachable only through `reconcile_one` <- `pending_enrollments`; with no
+/// enrollment nothing can ever advance it. `remove_local_apiary_keeper_link`
+/// deliberately refuses to revoke `submitted`, and nothing sweeps it on expiry
+/// because the blocking index keys on STATE. The operator is not even offered
+/// Cancel, because that button is gated on having an enrollment.
+///
+/// The enrollment is deleted directly here because that IS the observed state,
+/// and it is not reachable through the happy path -- that is what made it a
+/// trap rather than a transient.
+#[test]
+fn a_stranded_invitation_no_longer_blocks_every_future_join() {
+    let fixture = JoinFixture::new();
+    let (consent, first) = fixture.invite(10);
+    fixture
+        .member
+        .prepare_consented_apiary_join(consent.link_id, first, 20)
+        .unwrap();
+    fixture
+        .member
+        .connection()
+        .unwrap()
+        .execute_batch(
+            "UPDATE apiary_join_invitations SET state = 'submitted', submitted_at = 21;
+             DELETE FROM apiary_enrollments;",
+        )
+        .unwrap();
+    assert_eq!(fixture.invitation_state(first), "submitted");
+
+    // The Keeper retires the dead link before issuing another, which is what
+    // the operator did fourteen times. Its own one-pending-invitation rule
+    // requires it, and it is NOT what was blocking the member.
+    fixture
+        .keeper
+        .revoke_apiary_join_link(consent.link_id, 99)
+        .unwrap();
+
+    // Before the fix this returned FederationInvitationConflict, forever.
+    let (_, second) = fixture.invite(100);
+
+    assert_eq!(fixture.invitation_state(second), "keeper_pinned");
+    assert_eq!(
+        fixture.invitation_state(first),
+        "revoked",
+        "the stranded row must be retired, or the unique index still blocks the new one",
+    );
+}
+
+/// ⚠️ AND THE PROTECTION IT MUST NOT REMOVE. An invitation still backed by an
+/// enrollment may be genuinely in flight: the Keeper may already have accepted
+/// it and the receipt may still be arriving. Retiring that would discard a
+/// membership the Keeper believes exists. The predicate is "nothing can advance
+/// this", never "this is old".
+#[test]
+fn an_invitation_still_backed_by_an_enrollment_is_never_retired() {
+    let fixture = JoinFixture::new();
+    let (consent, first) = fixture.invite(10);
+    fixture
+        .member
+        .prepare_consented_apiary_join(consent.link_id, first, 20)
+        .unwrap();
+    fixture
+        .member
+        .connection()
+        .unwrap()
+        .execute("UPDATE apiary_join_invitations SET state = 'submitted'", [])
+        .unwrap();
+
+    // The enrollment is left in place, so this submission may still resolve.
+    fixture
+        .keeper
+        .revoke_apiary_join_link(consent.link_id, 99)
+        .unwrap();
+    let card = fixture
+        .member
+        .issue_hive_connection_card(100, 3600)
+        .unwrap();
+    let link = fixture
+        .keeper
+        .issue_apiary_join_link("https://keeper.example", 100, 3600)
+        .unwrap();
+    fixture
+        .member
+        .save_local_apiary_keeper_link(
+            link.link.id,
+            &link.link.keeper_endpoint,
+            &link.one_time_secret,
+            100,
+        )
+        .unwrap();
+    fixture
+        .keeper
+        .present_apiary_join_link_identity(link.link.id, &link.one_time_secret, &card, 101)
+        .unwrap();
+    fixture
+        .keeper
+        .approve_apiary_join_link(link.link.id, 102)
+        .unwrap();
+    let bundle = fixture
+        .keeper
+        .poll_apiary_join_link(link.link.id, &link.one_time_secret, 103)
+        .unwrap()
+        .invitation
+        .unwrap();
+
+    let refused = fixture
+        .member
+        .import_apiary_invitation_bundle(&bundle, 104)
+        .unwrap_err();
+
+    assert!(
+        matches!(refused, TaskStoreError::FederationInvitationConflict),
+        "a live submission must still hold the slot, got {refused:?}",
+    );
+    assert_eq!(fixture.invitation_state(first), "submitted");
+}
+
+/// ⚠️ AN UNCLASSIFIED FAILURE MUST CARRY ITS CODE ALL THE WAY TO STORAGE.
+///
+/// The classified variants each name a cause somebody established.
+/// `Unclassified` names none, and before this the transport code was discarded
+/// at the match arm that produced it — so the member's screen fell back to "the
+/// approved invitation no longer matches your submitted terms", a fluent
+/// sentence about a cause nobody had checked. On 2026-09-14 that sent an
+/// operator looking at terms that were fine while the real block was a stranded
+/// invitation.
+///
+/// Also asserts the code is CLEARED on recovery, because a stale code beside a
+/// healthy enrollment is its own small lie.
+#[test]
+fn an_unclassified_failure_keeps_the_code_and_a_recovery_clears_it() {
+    let store = TaskStore::in_memory().unwrap();
+    let stuck = consent(&store);
+    store.save_apiary_enrollment(&stuck, 10).unwrap();
+
+    store
+        .record_apiary_enrollment_attempt(
+            stuck.link_id,
+            Some(swarm_domain::ApiaryEnrollmentProblem::Unclassified),
+            Some("apiary_join_not_ready (409)".to_owned()),
+            11,
+        )
+        .unwrap();
+
+    let stored = store.apiary_enrollments().unwrap();
+    let record = stored.first().expect("the enrollment survives the attempt");
+    assert_eq!(
+        record.problem,
+        Some(swarm_domain::ApiaryEnrollmentProblem::Unclassified),
+    );
+    assert_eq!(
+        record.problem_code.as_deref(),
+        Some("apiary_join_not_ready (409)"),
+        "the code is the only thing that can tell anyone what actually failed",
+    );
+
+    // ⚠️ AND THIS ONE CANNOT BE CLEARED, which is worth asserting rather than
+    // discovering. `record_attempt` returns early unless the phase is
+    // AwaitingApproval or Joining, and an Unclassified failure has already moved
+    // it to Attention — so the record is frozen with its code, exactly as the
+    // no-retry policy intends. Written as an assertion because the first draft
+    // of this test assumed a later success would clear it, and it does not.
+    store
+        .record_apiary_enrollment_attempt(stuck.link_id, None, None, 12)
+        .unwrap();
+    assert_eq!(
+        store.apiary_enrollments().unwrap().first().unwrap().problem,
+        Some(swarm_domain::ApiaryEnrollmentProblem::Unclassified),
+        "Attention is terminal; a later observation does not revive the record",
+    );
+
+    // Clearing is exercised where it can happen: a retryable failure, which
+    // leaves the enrollment in AwaitingApproval.
+    let retryable = TaskStore::in_memory().unwrap();
+    let retry_consent = consent(&retryable);
+    retryable
+        .save_apiary_enrollment(&retry_consent, 10)
+        .unwrap();
+    retryable
+        .record_apiary_enrollment_attempt(
+            retry_consent.link_id,
+            Some(swarm_domain::ApiaryEnrollmentProblem::KeeperUnavailable),
+            Some("keeper_unavailable (503)".to_owned()),
+            11,
+        )
+        .unwrap();
+    retryable
+        .record_apiary_enrollment_attempt(retry_consent.link_id, None, None, 12)
+        .unwrap();
+
+    let record = retryable.apiary_enrollments().unwrap();
+    let record = record.first().expect("still present");
+    assert_eq!(record.problem, None);
+    assert_eq!(
+        record.problem_code, None,
+        "a cleared problem must not leave its code behind",
+    );
 }

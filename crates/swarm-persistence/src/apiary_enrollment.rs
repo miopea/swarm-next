@@ -210,6 +210,7 @@ impl TaskStore {
             consecutive_failures: 0,
             next_attempt_at: None,
             problem: None,
+            problem_code: None,
         };
         let changed = tx.execute(
             "INSERT INTO apiary_enrollments (link_id, record_json)
@@ -250,6 +251,7 @@ impl TaskStore {
         &self,
         link_id: ApiaryJoinLinkId,
         problem: Option<swarm_domain::ApiaryEnrollmentProblem>,
+        problem_code: Option<String>,
         now: i64,
     ) -> Result<(), TaskStoreError> {
         if now < 0 {
@@ -266,7 +268,7 @@ impl TaskStore {
             .optional()?
             .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)?;
         let mut record = decode(&stored)?;
-        record.record_attempt(problem, now);
+        record.record_attempt(problem, problem_code, now);
         tx.execute(
             "UPDATE apiary_enrollments SET record_json = ?2 WHERE link_id = ?1",
             params![link_id.to_string(), encode(&record)?],

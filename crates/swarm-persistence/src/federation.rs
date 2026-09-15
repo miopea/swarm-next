@@ -1753,6 +1753,52 @@ impl TaskStore {
         if !still_personal {
             return Err(TaskStoreError::ApiaryMembershipConflict);
         }
+        // ⚠️ RETIRE A STRANDED INVITATION FIRST, OR THIS HIVE CAN NEVER JOIN AGAIN.
+        //
+        // `one_current_join_invitation_per_apiary` is UNIQUE on apiary_id while
+        // state is keeper_pinned/policy_accepted/submitted, so exactly one
+        // invitation per Apiary may be current. That is right while a request is
+        // alive. It becomes a permanent deadlock when the request DIES and its
+        // invitation does not:
+        //
+        //   * only `apply_remote_join_acceptance` moves a row out of 'submitted',
+        //   * it is reachable only through `reconcile_one` <- `pending_enrollments`,
+        //   * so with no enrollment, nothing will ever advance that row,
+        //   * `remove_local_apiary_keeper_link` deliberately refuses to revoke
+        //     'submitted' (its delete guard says so in as many words), and
+        //   * nothing sweeps the row on expiry -- the index keys on STATE.
+        //
+        // Every later invitation the Keeper issues then collides here, forever.
+        // Observed on a member Hive 2026-09-14: apiary_join_invitations held one
+        // 'submitted' row, apiary_enrollments was EMPTY, hives.apiary_id was NULL,
+        // and fourteen invitations in a row failed. No UI action could recover it,
+        // because with no enrollment the operator is not even offered Cancel.
+        //
+        // THE PREDICATE IS "NOTHING CAN ADVANCE THIS", NOT "THIS IS OLD". An
+        // invitation still backed by an enrollment may be genuinely in flight --
+        // the Keeper may have accepted and the receipt may still be arriving --
+        // and retiring that would lose a membership the Keeper thinks exists. So
+        // the enrollment join below is the whole safety argument, and the
+        // `id <> ?` is the other half: re-importing the SAME invitation is a
+        // normal idempotent retry, and revoking the row we are about to re-insert
+        // would turn a working path into a broken one.
+        transaction.execute(
+            "UPDATE apiary_join_invitations
+                SET state = 'revoked', resolved_at = ?3
+              WHERE apiary_id = ?1
+                AND id <> ?2
+                AND state IN ('keeper_pinned', 'policy_accepted', 'submitted')
+                AND NOT EXISTS (
+                    SELECT 1 FROM local_apiary_keeper_links l
+                    JOIN apiary_enrollments e ON e.link_id = l.link_id
+                    WHERE l.one_time_secret = apiary_join_invitations.one_time_secret
+                      AND l.keeper_endpoint = apiary_join_invitations.keeper_endpoint)",
+            params![
+                invitation.apiary_id.to_string(),
+                invitation.invitation_id.to_string(),
+                now,
+            ],
+        )?;
         transaction
             .execute(
                 "INSERT INTO apiary_join_invitations

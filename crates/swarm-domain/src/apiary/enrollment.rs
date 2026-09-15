@@ -89,6 +89,18 @@ pub struct ApiaryEnrollment {
     pub next_attempt_at: Option<i64>,
     #[serde(default)]
     pub problem: Option<ApiaryEnrollmentProblem>,
+    /// The transport code and status actually observed, when the failure could
+    /// not be classified.
+    ///
+    /// ⚠️ WITHOUT THIS NOBODY CAN SEE WHY A JOIN FAILED. The classified variants
+    /// each carry a cause somebody established; `Unclassified` carries none, and
+    /// the code was previously discarded at the match arm that produced it. An
+    /// operator then read a confident sentence about a cause nobody had checked
+    /// and went looking in the wrong place -- which is exactly what happened on
+    /// 2026-09-14, where the real block was a stranded invitation and the screen
+    /// said their terms had changed.
+    #[serde(default)]
+    pub problem_code: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -96,14 +108,30 @@ pub struct ApiaryEnrollment {
 pub enum ApiaryEnrollmentProblem {
     KeeperUnavailable,
     InvitationUnavailable,
-    ApprovalChanged,
     RuntimeIncompatible,
+    /// Something refused the join and nothing here knows what.
+    ///
+    /// ⚠️ THIS REPLACES `ApprovalChanged`, WHICH WAS A GUESS WEARING A FACT.
+    /// Nothing ever detected a changed approval: that variant was only ever the
+    /// `_ =>` fallback arm, and the member's screen rendered it as "The approved
+    /// invitation no longer matches your submitted terms." Every unrecognised
+    /// client error -- a stranded invitation, an auth refusal, a payload the
+    /// Keeper would not take -- was reported as the one cause it almost never
+    /// was. The serde alias keeps records written before this rename readable;
+    /// they were never really approval changes either.
+    #[serde(alias = "approval_changed")]
+    Unclassified,
 }
 
 impl ApiaryEnrollment {
     /// Keeps retry authority bounded by the original consent lifetime.
     /// Permanent refusals require review; successful observations clear trouble.
-    pub fn record_attempt(&mut self, problem: Option<ApiaryEnrollmentProblem>, now: i64) {
+    pub fn record_attempt(
+        &mut self,
+        problem: Option<ApiaryEnrollmentProblem>,
+        problem_code: Option<String>,
+        now: i64,
+    ) {
         if !matches!(
             self.phase,
             ApiaryEnrollmentPhase::AwaitingApproval | ApiaryEnrollmentPhase::Joining
@@ -111,6 +139,9 @@ impl ApiaryEnrollment {
             return;
         }
         self.problem = problem;
+        // Cleared alongside the problem, so a recovered enrollment never shows a
+        // stale code from the attempt before it.
+        self.problem_code = problem_code;
         self.next_attempt_at = None;
         if problem.is_none() {
             self.consecutive_failures = 0;
@@ -187,9 +218,10 @@ mod tests {
             consecutive_failures: 0,
             next_attempt_at: None,
             problem: None,
+            problem_code: None,
         };
         for _ in 0..1100 {
-            record.record_attempt(Some(ApiaryEnrollmentProblem::KeeperUnavailable), 99);
+            record.record_attempt(Some(ApiaryEnrollmentProblem::KeeperUnavailable), None, 99);
             assert!(record.next_attempt_at.is_none_or(|next| next <= 100));
         }
         assert_eq!(record.consecutive_failures, 1000);

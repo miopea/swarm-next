@@ -1958,7 +1958,14 @@ export type ApiaryEnrollment = {
   phase: "awaiting_approval" | "joining" | "complete" | "cancelled" | "attention";
   consecutive_failures?: number;
   next_attempt_at?: number | null;
-  problem?: "keeper_unavailable" | "invitation_unavailable" | "approval_changed" | "runtime_incompatible" | null;
+  /**
+   * `unclassified` means nothing established a cause — see `problem_code`.
+   * `approval_changed` is retained only to read records written before that
+   * variant was renamed; it never actually detected a changed approval.
+   */
+  problem?: "keeper_unavailable" | "invitation_unavailable" | "unclassified" | "approval_changed" | "runtime_incompatible" | null;
+  /** The transport code and status observed, when the cause is unclassified. */
+  problem_code?: string | null;
 };
 
 export async function fetchApiaryEnrollments(operatorToken: string, signal?: AbortSignal): Promise<ApiaryEnrollment[]> {

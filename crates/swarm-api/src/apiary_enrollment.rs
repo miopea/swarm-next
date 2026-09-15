@@ -56,26 +56,48 @@ impl AppState {
             return;
         };
         for record in records {
-            let problem = match reconcile_one(&service, &record, unix_timestamp()).await {
-                Ok(()) => None,
-                Err(error) => {
-                    use swarm_domain::ApiaryEnrollmentProblem;
-                    Some(match error.code {
-                        "keeper_unavailable" => ApiaryEnrollmentProblem::KeeperUnavailable,
-                        "apiary_invitation_rejected" => {
-                            ApiaryEnrollmentProblem::InvitationUnavailable
+            // ⚠️ THE CODE IS KEPT WHEN THE CAUSE IS NOT KNOWN, because the
+            // alternative was worse than saying nothing: the `_` arm used to
+            // produce ApprovalChanged, which the member's screen rendered as
+            // "your terms no longer match", and the code that would have said
+            // otherwise was dropped right here. On 2026-09-14 the real block was
+            // a stranded invitation and an operator spent an afternoon checking
+            // terms that were fine. A named code the reader can look up beats a
+            // fluent sentence nobody established.
+            let (problem, problem_code) =
+                match reconcile_one(&service, &record, unix_timestamp()).await {
+                    Ok(()) => (None, None),
+                    Err(error) => {
+                        use swarm_domain::ApiaryEnrollmentProblem;
+                        match error.code {
+                            "keeper_unavailable" => {
+                                (Some(ApiaryEnrollmentProblem::KeeperUnavailable), None)
+                            }
+                            "apiary_invitation_rejected" => {
+                                (Some(ApiaryEnrollmentProblem::InvitationUnavailable), None)
+                            }
+                            "keeper_response_invalid" => {
+                                (Some(ApiaryEnrollmentProblem::RuntimeIncompatible), None)
+                            }
+                            _ if error.status.is_server_error() => {
+                                (Some(ApiaryEnrollmentProblem::KeeperUnavailable), None)
+                            }
+                            other => (
+                                Some(ApiaryEnrollmentProblem::Unclassified),
+                                // Code and status, never the remote's own text:
+                                // this is shown to an operator and must not
+                                // become a channel for another Hive's prose.
+                                Some(format!("{other} ({})", error.status.as_u16())),
+                            ),
                         }
-                        "keeper_response_invalid" => ApiaryEnrollmentProblem::RuntimeIncompatible,
-                        _ if error.status.is_server_error() => {
-                            ApiaryEnrollmentProblem::KeeperUnavailable
-                        }
-                        _ => ApiaryEnrollmentProblem::ApprovalChanged,
-                    })
-                }
-            };
-            if let Err(error) =
-                service.record_enrollment_attempt(record.consent.link_id, problem, unix_timestamp())
-            {
+                    }
+                };
+            if let Err(error) = service.record_enrollment_attempt(
+                record.consent.link_id,
+                problem,
+                problem_code,
+                unix_timestamp(),
+            ) {
                 tracing::warn!(%error, "Apiary enrollment outcome could not be saved");
             }
         }

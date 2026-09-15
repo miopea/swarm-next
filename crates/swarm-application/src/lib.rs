@@ -1629,10 +1629,11 @@ impl ApiaryService {
         &self,
         link_id: ApiaryJoinLinkId,
         problem: Option<swarm_domain::ApiaryEnrollmentProblem>,
+        problem_code: Option<String>,
         now: i64,
     ) -> Result<(), ApplicationError> {
         self.store
-            .record_apiary_enrollment_attempt(link_id, problem, now)
+            .record_apiary_enrollment_attempt(link_id, problem, problem_code, now)
             .map_err(Into::into)
     }
 
@@ -1656,6 +1657,8 @@ impl ApiaryService {
                 self.record_enrollment_attempt(
                     record.consent.link_id,
                     Some(swarm_domain::ApiaryEnrollmentProblem::InvitationUnavailable),
+                    // Classified, so there is nothing unexplained to record.
+                    None,
                     now,
                 )?;
             } else if pending.len() < 4 && record.next_attempt_at.is_none_or(|next| next <= now) {
