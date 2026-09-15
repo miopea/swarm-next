@@ -235,6 +235,7 @@ mod tests {
                     verdict: CommitVerdict::Present,
                     subject: String::new(),
                     changed_paths: Vec::new(),
+                    found_in: None,
                 })
                 .collect(),
         }

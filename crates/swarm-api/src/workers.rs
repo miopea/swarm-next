@@ -2020,8 +2020,22 @@ async fn repository_status(workspace: &str) -> Option<String> {
 /// nobody put under version control still has to be able to close, so that
 /// reports `NotARepository` with every commit `Unchecked` — which is a
 /// different answer from `Missing`, and deliberately so.
+/// ⚠️ `elsewhere` IS SEARCHED ONLY FOR A SHA THE TASK'S OWN WORKSPACE DID NOT
+/// HAVE, and it exists because `Missing` was being read as an accusation.
+///
+/// A task may legitimately name a workspace that is not where its code lives:
+/// operator ruling 01a07352 put a member-services WORKER on a platform ticket,
+/// which moves ownership and not the code. Member Services then reported a
+/// real, merged, CI-green SHA and this function said "missing" — the exact
+/// shape that means fabricated work. Nobody auditing it later would reach the
+/// truth without independently re-deriving the mismatch.
+///
+/// Bounded on purpose: the fallback runs per missing SHA, over workspaces the
+/// Hive already has configured, and stops at the first that holds the commit.
+/// A clean report costs nothing extra, because nothing is missing to chase.
 pub(super) async fn verify_reported_commits(
     workspace: &str,
+    elsewhere: &[String],
     shas: &[String],
 ) -> (CommitRepositoryState, Vec<TaskCommit>) {
     if git(workspace, &["rev-parse", "--git-dir"]).await.is_none() {
@@ -2032,15 +2046,45 @@ pub(super) async fn verify_reported_commits(
                 verdict: CommitVerdict::Unchecked,
                 subject: String::new(),
                 changed_paths: Vec::new(),
+                found_in: None,
             })
             .collect();
         return (CommitRepositoryState::NotARepository, unchecked);
     }
     let mut verified = Vec::with_capacity(shas.len());
     for sha in shas {
-        verified.push(verify_one(workspace, sha).await);
+        let mut found = verify_one(workspace, sha).await;
+        if found.verdict == CommitVerdict::Missing {
+            found = locate_elsewhere(elsewhere, sha).await.unwrap_or(found);
+        }
+        verified.push(found);
     }
     (CommitRepositoryState::Read, verified)
+}
+
+/// Looks for one missing SHA in the other workspaces this Hive knows about.
+///
+/// Returns `None` when no configured repository holds it — which leaves the
+/// original `Missing`, and that verdict then means what a reader takes it to
+/// mean: not anywhere Swarm can see.
+async fn locate_elsewhere(elsewhere: &[String], sha: &str) -> Option<TaskCommit> {
+    for candidate in elsewhere {
+        if git(candidate, &["rev-parse", "--git-dir"]).await.is_none() {
+            continue;
+        }
+        let found = verify_one(candidate, sha).await;
+        // Only a commit a ref still reaches. A dangling object in some other
+        // repository is not evidence that the work is real, and promoting it
+        // would trade one misleading verdict for another.
+        if found.verdict == CommitVerdict::Present {
+            return Some(TaskCommit {
+                verdict: CommitVerdict::InAnotherWorkspace,
+                found_in: Some(candidate.clone()),
+                ..found
+            });
+        }
+    }
+    None
 }
 
 async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
@@ -2054,6 +2098,7 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
             verdict: CommitVerdict::Missing,
             subject: String::new(),
             changed_paths: Vec::new(),
+            found_in: None,
         };
     }
     let subject = git(workspace, &["show", "--no-patch", "--format=%s", sha])
@@ -2092,6 +2137,7 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
         },
         subject,
         changed_paths,
+        found_in: None,
     }
 }
 
@@ -2311,11 +2357,76 @@ mod commit_verification_tests {
         (dir, sha)
     }
 
+    /// ⚠️ THE CASE THAT READ AS FABRICATED WORK.
+    ///
+    /// A task may legitimately name a workspace that is not where its code
+    /// lives: operator ruling 01a07352 put a member-services WORKER on a
+    /// platform ticket, which moves ownership and not the code. Member Services
+    /// then recorded a real, merged, CI-green SHA and this function answered
+    /// "missing" — the exact shape that means a worker claimed work it never
+    /// did. Anyone auditing the task later reached the opposite of the truth.
+    ///
+    /// The commit is now reported as real, and the record names the repository
+    /// it actually lives in. NOT `Present`: the task's recorded workspace is
+    /// still wrong and somebody has to fix it, so `commit_settlement` keeps the
+    /// report Unestablished. But "your task points at the wrong repo" and "you
+    /// made this up" are different accusations.
+    #[tokio::test]
+    async fn a_commit_that_lives_in_another_repository_is_not_called_missing() {
+        let (elsewhere, sha) = repository_with_one_commit();
+        let empty = tempfile::tempdir().unwrap();
+        git_in(empty.path(), &["init", "--quiet"]);
+
+        let (state, commits) = verify_reported_commits(
+            empty.path().to_str().unwrap(),
+            &[elsewhere.path().to_str().unwrap().to_owned()],
+            std::slice::from_ref(&sha),
+        )
+        .await;
+
+        assert_eq!(state, CommitRepositoryState::Read);
+        assert_eq!(commits[0].verdict, CommitVerdict::InAnotherWorkspace);
+        assert_eq!(
+            commits[0].found_in.as_deref(),
+            Some(elsewhere.path().to_str().unwrap()),
+            "naming the repository is the whole point; the verdict alone still leaves the reader to re-derive it",
+        );
+        // The facts about the commit are carried across, so the record is as
+        // useful as a clean one apart from the workspace being wrong.
+        assert_eq!(commits[0].subject, "docs: write a note");
+        assert_eq!(commits[0].changed_paths, vec!["docs/note.md".to_owned()]);
+    }
+
+    /// ⚠️ AND A SHA NOBODY HAS STAYS MISSING. The fallback must not turn every
+    /// invented SHA into a softer verdict — `missing` has to keep meaning
+    /// "not anywhere Swarm can see", or the fix would destroy the signal it was
+    /// built to protect.
+    #[tokio::test]
+    async fn an_invented_sha_is_still_missing_after_searching_everywhere() {
+        let (elsewhere, _) = repository_with_one_commit();
+        let empty = tempfile::tempdir().unwrap();
+        git_in(empty.path(), &["init", "--quiet"]);
+
+        let (_, commits) = verify_reported_commits(
+            empty.path().to_str().unwrap(),
+            &[elsewhere.path().to_str().unwrap().to_owned()],
+            &["0123456789abcdef0123456789abcdef01234567".to_owned()],
+        )
+        .await;
+
+        assert_eq!(commits[0].verdict, CommitVerdict::Missing);
+        assert_eq!(commits[0].found_in, None);
+    }
+
     #[tokio::test]
     async fn a_real_commit_is_present_and_carries_the_paths_it_touched() {
         let (dir, sha) = repository_with_one_commit();
-        let (state, commits) =
-            verify_reported_commits(dir.path().to_str().unwrap(), std::slice::from_ref(&sha)).await;
+        let (state, commits) = verify_reported_commits(
+            dir.path().to_str().unwrap(),
+            &[],
+            std::slice::from_ref(&sha),
+        )
+        .await;
 
         assert_eq!(state, CommitRepositoryState::Read);
         assert_eq!(commits.len(), 1);
@@ -2332,7 +2443,8 @@ mod commit_verification_tests {
         let (dir, _) = repository_with_one_commit();
         let invented = "0123456789abcdef0123456789abcdef01234567";
         let (state, commits) =
-            verify_reported_commits(dir.path().to_str().unwrap(), &[invented.to_owned()]).await;
+            verify_reported_commits(dir.path().to_str().unwrap(), &[], &[invented.to_owned()])
+                .await;
 
         assert_eq!(state, CommitRepositoryState::Read);
         assert_eq!(commits[0].verdict, CommitVerdict::Missing);
@@ -2355,7 +2467,8 @@ mod commit_verification_tests {
         git_in(path, &["reset", "--hard", "--quiet", &first]);
 
         let (_, commits) =
-            verify_reported_commits(path.to_str().unwrap(), std::slice::from_ref(&orphaned)).await;
+            verify_reported_commits(path.to_str().unwrap(), &[], std::slice::from_ref(&orphaned))
+                .await;
 
         assert_eq!(
             commits[0].verdict,
@@ -2368,7 +2481,8 @@ mod commit_verification_tests {
     async fn a_workspace_that_is_not_a_repository_is_unchecked_rather_than_missing() {
         let dir = tempfile::tempdir().expect("temp dir");
         let (state, commits) =
-            verify_reported_commits(dir.path().to_str().unwrap(), &["abc1234".to_owned()]).await;
+            verify_reported_commits(dir.path().to_str().unwrap(), &[], &["abc1234".to_owned()])
+                .await;
 
         assert_eq!(state, CommitRepositoryState::NotARepository);
         // Unchecked, NOT Missing. Missing is an answer about the repository;
@@ -2380,7 +2494,8 @@ mod commit_verification_tests {
     #[tokio::test]
     async fn reporting_nothing_reads_the_repository_and_records_no_commits() {
         let (dir, _) = repository_with_one_commit();
-        let (state, commits) = verify_reported_commits(dir.path().to_str().unwrap(), &[]).await;
+        let (state, commits) =
+            verify_reported_commits(dir.path().to_str().unwrap(), &[], &[]).await;
         assert_eq!(state, CommitRepositoryState::Read);
         assert!(commits.is_empty());
     }

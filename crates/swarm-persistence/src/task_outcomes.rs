@@ -438,6 +438,7 @@ mod tests {
             verdict: CommitVerdict::Present,
             subject: "build(release): refuse without headroom".to_owned(),
             changed_paths: vec!["packaging/linux/build-release.sh".to_owned()],
+            found_in: None,
         };
         for id in [parked.id, reviewing.id] {
             store
@@ -2785,6 +2786,7 @@ mod settlement_tests {
             verdict: CommitVerdict::Present,
             subject: "did a thing".to_owned(),
             changed_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+            found_in: None,
         }
     }
 
@@ -3130,6 +3132,7 @@ mod settlement_tests {
                     verdict: CommitVerdict::Unchecked,
                     subject: String::new(),
                     changed_paths: Vec::new(),
+                    found_in: None,
                 }],
                 1_000,
             )
@@ -3242,6 +3245,7 @@ mod commit_report_tests {
             verdict,
             subject: "feat: something".to_owned(),
             changed_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+            found_in: None,
         }
     }
 
@@ -3638,12 +3642,14 @@ impl TaskStore {
         )?;
         for commit in commits {
             transaction.execute(
-                "INSERT INTO task_commits (task_id, sha, verdict, subject, changed_paths, recorded_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO task_commits
+                     (task_id, sha, verdict, subject, changed_paths, found_in, recorded_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(task_id, sha) DO UPDATE SET
                      verdict = excluded.verdict,
                      subject = excluded.subject,
                      changed_paths = excluded.changed_paths,
+                     found_in = excluded.found_in,
                      recorded_at = excluded.recorded_at",
                 params![
                     task_id.to_string(),
@@ -3651,6 +3657,7 @@ impl TaskStore {
                     commit.verdict.to_string(),
                     commit.subject,
                     commit.changed_paths.join("\n"),
+                    commit.found_in,
                     now
                 ],
             )?;
@@ -3738,7 +3745,7 @@ impl TaskStore {
             return Ok(None);
         };
         let mut statement = connection.prepare(
-            "SELECT sha, verdict, subject, changed_paths
+            "SELECT sha, verdict, subject, changed_paths, found_in
              FROM task_commits WHERE task_id = ?1 ORDER BY recorded_at, sha",
         )?;
         let commits = statement
@@ -3756,6 +3763,7 @@ impl TaskStore {
                         .filter(|line| !line.trim().is_empty())
                         .map(str::to_owned)
                         .collect(),
+                    found_in: row.get(4)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

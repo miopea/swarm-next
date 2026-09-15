@@ -313,7 +313,8 @@ const NATIVE_ANSWER_SWITCH_SCHEMA_VERSION: i64 = 172;
 const APIARY_TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 173;
 const APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION: i64 = 174;
 const PROVIDER_USAGE_SCHEMA_VERSION: i64 = 175;
-const CURRENT_SCHEMA_VERSION: i64 = PROVIDER_USAGE_SCHEMA_VERSION;
+const COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION: i64 = 176;
+const CURRENT_SCHEMA_VERSION: i64 = COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4217,6 +4218,9 @@ fn migrate_engine_history_schema_steps(
     if schema_version < PROVIDER_USAGE_SCHEMA_VERSION {
         provider_usage::migrate_provider_usage(transaction)?;
     }
+    if schema_version < COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION {
+        migrate_commit_found_elsewhere(transaction)?;
+    }
     Ok(())
 }
 
@@ -4767,6 +4771,49 @@ fn migrate_task_commit_reports(transaction: &rusqlite::Transaction<'_>) -> rusql
          CREATE INDEX IF NOT EXISTS task_commits_by_task ON task_commits(task_id);",
     )?;
     transaction.pragma_update(None, "user_version", TASK_COMMIT_REPORT_SCHEMA_VERSION)
+}
+
+/// Lets a commit report say "found, but in another repository".
+///
+/// ⚠️ A REBUILD, BECAUSE THE VERDICT VOCABULARY IS A CHECK CONSTRAINT and
+/// `SQLite` offers no way to relax one in place. The old CHECK admits four verdicts, so
+/// an `in_another_workspace` row would be REFUSED at insert — loudly, but the
+/// feature would simply not work.
+///
+/// The column is why the verdict is worth having. A record that says a commit
+/// lives elsewhere, without saying where, leaves the reader exactly as stuck as
+/// `missing` did: they still have to go and re-derive it. `found_in` carries
+/// the workspace the commit was actually reached in.
+///
+/// Copying the old rows forward with `found_in` NULL is correct rather than
+/// lossy: every verdict recorded before this migration was decided by looking
+/// in one repository, and none of them established anything about another.
+fn migrate_commit_found_elsewhere(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE task_commits_rebuilt (
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             sha TEXT NOT NULL,
+             verdict TEXT NOT NULL
+                 CHECK (verdict IN ('present','unreachable','missing','unchecked',
+                                    'in_another_workspace')),
+             subject TEXT NOT NULL DEFAULT '',
+             changed_paths TEXT NOT NULL DEFAULT '',
+             -- The workspace the commit was actually reached in, and NULL for
+             -- every other verdict. Absent means not found anywhere Swarm
+             -- knows about, which is a different fact from found elsewhere.
+             found_in TEXT,
+             recorded_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             PRIMARY KEY (task_id, sha)
+         );
+         INSERT INTO task_commits_rebuilt
+             (task_id, sha, verdict, subject, changed_paths, found_in, recorded_at)
+         SELECT task_id, sha, verdict, subject, changed_paths, NULL, recorded_at
+         FROM task_commits;
+         DROP TABLE task_commits;
+         ALTER TABLE task_commits_rebuilt RENAME TO task_commits;
+         CREATE INDEX IF NOT EXISTS task_commits_by_task ON task_commits(task_id);",
+    )?;
+    transaction.pragma_update(None, "user_version", COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION)
 }
 
 /// The coordinator may approve what it settled, and is named as itself.
@@ -9717,6 +9764,15 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 4 FROM sqlite_master WHERE type='table'
                 AND name IN ('provider_usage_daily', 'provider_usage_seen',
                              'provider_usage_cursor', 'provider_usage_scan')",
+        },
+        // LAST, because newest_step() reads the end of this list and the
+        // migration that stamps the ceiling is the one a test must undo.
+        SchemaStep {
+            table: "task_commits",
+            artifact: "found_in",
+            undo_sql: "ALTER TABLE task_commits DROP COLUMN found_in",
+            probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('task_commits')
+                WHERE name = 'found_in'",
         },
     ];
 

@@ -2249,8 +2249,32 @@ impl AgentMcp {
         let input = parse::<RecordTaskCommitsInput>(arguments)?;
         let task_id = self.task_evidence_may_reach(&input.task_id)?;
         let workspace = self.tasks.store().get_task(task_id)?.workspace;
+        // ⚠️ THE OTHER REPOSITORIES ARE OFFERED AS A FALLBACK, NOT AS A SECOND
+        // OPINION. A task can legitimately name a workspace that is not where
+        // its code lives — operator ruling 01a07352 put a member-services
+        // WORKER on a platform ticket, which moves ownership and not the code.
+        // Without this, a real merged SHA came back "missing", which is the
+        // shape that means fabricated work, and the only record of the truth
+        // was a prose note somebody had to find and believe.
+        //
+        // The task's own workspace is still asked FIRST and still decides a
+        // clean report. These are consulted only for a SHA it did not have.
+        let elsewhere: Vec<String> = self
+            .tasks
+            .store()
+            .list_worker_profiles()
+            .map(|profiles| {
+                let mut seen: Vec<String> = Vec::new();
+                for profile in profiles {
+                    if profile.workspace != workspace && !seen.contains(&profile.workspace) {
+                        seen.push(profile.workspace);
+                    }
+                }
+                seen
+            })
+            .unwrap_or_default();
         let (repository_state, commits) =
-            crate::workers::verify_reported_commits(&workspace, &input.commits).await;
+            crate::workers::verify_reported_commits(&workspace, &elsewhere, &input.commits).await;
         let report = self.tasks.store().record_task_commits(
             task_id,
             &workspace,

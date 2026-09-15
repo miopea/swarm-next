@@ -696,6 +696,25 @@ pub enum CommitVerdict {
     /// Nothing was asked, because the workspace could not be read as a
     /// repository. Distinct from `Missing`, which is an answer.
     Unchecked,
+    /// The commit is real and reachable, but in a DIFFERENT configured
+    /// workspace than the one this task names. `TaskCommit::found_in` says
+    /// which.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE `Missing` WAS ANSWERING A DIFFERENT QUESTION.
+    /// `Missing` means "no such object in the repository I looked in", and it
+    /// was being read as "this commit does not exist" — which is the shape that
+    /// means fabricated work. A task can legitimately name a workspace that is
+    /// not where its code lives: operator ruling 01a07352 assigned a
+    /// member-services WORKER to a platform ticket, which moves ownership and
+    /// not the code. Member Services then recorded a real, merged, CI-green SHA
+    /// and the board said it did not exist. An auditor reading that reaches the
+    /// opposite of the truth.
+    ///
+    /// Not `Present`: the task's recorded workspace is still wrong and somebody
+    /// has to fix it, so `commit_settlement` leaves this Unestablished. But
+    /// "your task points at the wrong repo" and "you made this up" are not the
+    /// same accusation, and the record now tells them apart.
+    InAnotherWorkspace,
 }
 
 impl fmt::Display for CommitVerdict {
@@ -705,6 +724,7 @@ impl fmt::Display for CommitVerdict {
             Self::Unreachable => "unreachable",
             Self::Missing => "missing",
             Self::Unchecked => "unchecked",
+            Self::InAnotherWorkspace => "in_another_workspace",
         })
     }
 }
@@ -718,6 +738,7 @@ impl FromStr for CommitVerdict {
             "unreachable" => Ok(Self::Unreachable),
             "missing" => Ok(Self::Missing),
             "unchecked" => Ok(Self::Unchecked),
+            "in_another_workspace" => Ok(Self::InAnotherWorkspace),
             _ => Err(ParseTaskStateError),
         }
     }
@@ -764,6 +785,12 @@ pub struct TaskCommit {
     /// which paths count as documentation stays a policy someone else applies
     /// rather than a judgement baked into the record.
     pub changed_paths: Vec<String>,
+    /// The workspace the commit was actually found in, when that is NOT the one
+    /// the task names. `None` for every other verdict, including `Missing` —
+    /// absent means "not found anywhere Swarm knows about", which is a
+    /// different fact from "found, but somewhere else".
+    #[serde(default)]
+    pub found_in: Option<String>,
 }
 
 /// What a task's worker said it produced, and what the repository said back.

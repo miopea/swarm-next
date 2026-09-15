@@ -1499,6 +1499,7 @@ mod commit_settlement_tests {
             verdict,
             subject: "something".to_owned(),
             changed_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+            found_in: None,
         }
     }
 
