@@ -2414,6 +2414,51 @@ impl AgentMcp {
         }))
     }
 
+    /// The fragments of a record id sitting in free text, lowercased and deduped.
+    ///
+    /// ⚠️ WHY A READING AID EXISTS FOR SOMETHING EVERY TOOL REFUSES. A brief that
+    /// says "report completion on 01a063d6" names a record the reader cannot open:
+    /// `swarm_read_task_history` and `swarm_list_decisions` both refuse a prefix,
+    /// deliberately, because `UUIDv7` ids share leading characters by construction.
+    /// The worker then has to route its report through Queen -- an explicitly
+    /// assigned step converted into a relay nobody asked for. Three times in one
+    /// week, and the worst case is a truncated DECISION id, which leaves a worker
+    /// unable to verify the operator ruling that authorises its own work.
+    ///
+    /// ⚠️ AND THE SOURCE IS NOT A GENERATOR. Every instance was typed into a task
+    /// description by the worker that filed it; the brief carried those words
+    /// faithfully. Nothing in this repository shortens an id on the way to a brief.
+    /// So this resolves fragments where they are READ, which also repairs the
+    /// briefs already on the board rather than only the ones written from now on.
+    ///
+    /// Only fragments starting with a digit are considered. Every id here is
+    /// `UUIDv7` and begins with one, and the filter keeps ordinary prose made of
+    /// hex letters -- "deadbeef", "effaced" -- from costing a query each.
+    fn id_fragments(text: &str) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        for token in
+            text.split(|character: char| !(character.is_ascii_hexdigit() || character == '-'))
+        {
+            let token = token.trim_matches('-').to_ascii_lowercase();
+            // A whole id needs no help, and a fragment under eight characters is
+            // too short to resolve to anything a reader should act on.
+            if token.len() < 8 || token.len() >= 36 {
+                continue;
+            }
+            if !token.starts_with(|character: char| character.is_ascii_digit()) {
+                continue;
+            }
+            if !found.contains(&token) {
+                found.push(token);
+            }
+        }
+        found
+    }
+
+    /// How many fragments one listing will resolve, so a pathological description
+    /// cannot turn reading the board into hundreds of queries.
+    const FRAGMENT_LOOKUP_LIMIT: usize = 40;
+
     /// Tasks with their corrections attached, so a reader of the description
     /// sees what is wrong with it in the same place.
     ///
@@ -2431,11 +2476,67 @@ impl AgentMcp {
     ) -> Result<Vec<Value>, ApplicationError> {
         let ids = tasks.iter().map(|task| task.id).collect::<Vec<_>>();
         let mut grouped = self.tasks.store().amendments_for_tasks(&ids)?;
+        // Resolved for the WHOLE listing in one call rather than per task:
+        // Queen reads the entire queue here, and an N+1 would make reading the
+        // board more expensive the more work it holds -- the same reason
+        // amendments_for_tasks is batched.
+        let mut fragments: Vec<String> = Vec::new();
+        for task in tasks {
+            let mut text = format!("{} {}", task.title, task.description);
+            for amendment in grouped.get(&task.id).into_iter().flatten() {
+                text.push(' ');
+                text.push_str(&amendment.body);
+            }
+            for fragment in Self::id_fragments(&text) {
+                if !fragments.contains(&fragment) && fragments.len() < Self::FRAGMENT_LOOKUP_LIMIT {
+                    fragments.push(fragment);
+                }
+            }
+        }
+        let resolved = self.tasks.store().records_starting_with(&fragments)?;
         Ok(tasks
             .iter()
             .map(|task| {
                 let mut value = json!(task);
                 let amendments = grouped.remove(&task.id).unwrap_or_default();
+                let mut named: Vec<Value> = Vec::new();
+                let mut text = format!("{} {}", task.title, task.description);
+                for amendment in &amendments {
+                    text.push(' ');
+                    text.push_str(&amendment.body);
+                }
+                for fragment in Self::id_fragments(&text) {
+                    let Some(matches) = resolved.get(&fragment) else {
+                        continue;
+                    };
+                    // ⚠️ EVERY MATCH, NOT THE FIRST. A fragment that resolves to
+                    // more than one record is exactly the collision that makes
+                    // prefixes unusable as identity, and picking one would hide
+                    // it behind an answer that looks certain.
+                    for (kind, id) in matches {
+                        named.push(json!({
+                            "written": fragment,
+                            "kind": kind,
+                            "id": id,
+                            "ambiguous": matches.len() > 1,
+                        }));
+                    }
+                }
+                if !named.is_empty()
+                    && let Some(object) = value.as_object_mut()
+                {
+                    object.insert("referenced_records".into(), json!(named));
+                    object.insert(
+                        "referenced_records_note".into(),
+                        json!(
+                            "This task's text names a record by PART of its id, and every tool \
+                             that takes an id refuses a prefix. The full ids are resolved here so \
+                             you can read and act on them directly rather than routing through \
+                             Queen. `ambiguous` means the fragment matched more than one record: \
+                             check which one is meant before acting, and say so in your report."
+                        ),
+                    );
+                }
                 if !amendments.is_empty()
                     && let Some(object) = value.as_object_mut()
                 {
@@ -4328,6 +4429,151 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), notified.as_mut())
             .await
             .unwrap();
+    }
+
+    /// ⚠️ A BRIEF THAT NAMES A RECORD BY PART OF ITS ID SENDS A WORKER SOMEWHERE
+    /// IT CANNOT GO. Every tool that takes an id refuses a prefix, on purpose,
+    /// so "report completion on 01a063d6" turns an explicitly assigned step
+    /// into a relay through Queen. Three times in one week. The resolution is
+    /// attached where the task is READ, which also repairs the briefs already
+    /// on the board.
+    #[tokio::test]
+    async fn a_task_naming_another_by_a_fragment_carries_the_full_id() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let referenced = store
+            .create_task("The work being pointed at", "/workspace")
+            .unwrap();
+        let fragment = referenced.id.to_string()[..8].to_owned();
+        store
+            .create_task_with_details(
+                "Points at it badly",
+                &format!("Report completion on {fragment} when this lands."),
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listed = &response["result"]["structuredContent"]["tasks"];
+        let pointing = listed
+            .as_array()
+            .expect("tasks are listed")
+            .iter()
+            .find(|task| task["title"] == "Points at it badly")
+            .expect("the filing task is listed");
+        let named = &pointing["referenced_records"][0];
+        assert_eq!(named["written"], fragment);
+        assert_eq!(named["id"], referenced.id.to_string());
+        assert_eq!(named["kind"], "task");
+        assert!(
+            pointing["referenced_records_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("refuses a prefix")),
+            "the note has to say why the fragment was useless, or the next \
+             writer repeats it: {pointing}"
+        );
+    }
+
+    /// ⚠️ AND IT MUST NOT PICK ONE. Measured on this Hive: the fragment
+    /// `01a015f8` fronts THIRTEEN different tasks, and `019ffd5b` another
+    /// thirteen. `UUIDv7` puts the timestamp first, so every record created
+    /// inside the same ~65-second window agrees for eight characters -- which
+    /// is exactly why a prefix is refused as identity everywhere else. An
+    /// answer that looked certain here would be worse than no answer.
+    #[tokio::test]
+    async fn a_fragment_matching_two_records_reports_both_as_ambiguous() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let first = store.create_task("First neighbour", "/workspace").unwrap();
+        let second = store.create_task("Second neighbour", "/workspace").unwrap();
+        let fragment = first.id.to_string()[..8].to_owned();
+        assert_eq!(
+            fragment,
+            second.id.to_string()[..8],
+            "this test needs two ids sharing a prefix, which UUIDv7 gives \
+             within the same time window"
+        );
+        store
+            .create_task_with_details(
+                "Points at both without knowing",
+                &format!("See {fragment} for the background."),
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listed = &response["result"]["structuredContent"]["tasks"];
+        let pointing = listed
+            .as_array()
+            .expect("tasks are listed")
+            .iter()
+            .find(|task| task["title"] == "Points at both without knowing")
+            .expect("the filing task is listed");
+        let named = pointing["referenced_records"]
+            .as_array()
+            .expect("the fragment resolved");
+        assert!(named.len() >= 2, "both candidates are named: {pointing}");
+        assert!(
+            named.iter().all(|entry| entry["ambiguous"] == true),
+            "a fragment with more than one match says so: {pointing}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_task_citing_a_whole_id_gains_nothing_to_read() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let referenced = store.create_task("Properly cited", "/workspace").unwrap();
+        store
+            .create_task_with_details(
+                "Cites it in full",
+                &format!("Report completion on {} when this lands.", referenced.id),
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listed = &response["result"]["structuredContent"]["tasks"];
+        let citing = listed
+            .as_array()
+            .expect("tasks are listed")
+            .iter()
+            .find(|task| task["title"] == "Cites it in full")
+            .expect("the citing task is listed");
+        assert!(
+            citing.get("referenced_records").is_none(),
+            "a whole id needs no reading aid, and adding one would train readers \
+             to skim past the section that matters: {citing}"
+        );
+    }
+
+    /// The scanner runs over every description on the board, so what it does
+    /// NOT pick up is as much a part of the design as what it does.
+    #[test]
+    fn ordinary_prose_and_commit_shas_are_not_read_as_record_fragments() {
+        assert!(AgentMcp::id_fragments("effaced the deadbeef facade").is_empty());
+        assert!(
+            AgentMcp::id_fragments("fixed in bec8f05e").is_empty(),
+            "a git sha starts with a letter here, and a sha that starts with a \
+             digit is filtered by finding no record, not by the scanner"
+        );
+        assert_eq!(
+            AgentMcp::id_fragments("see 01a063d6 for context"),
+            vec!["01a063d6".to_owned()]
+        );
+        assert!(
+            AgentMcp::id_fragments("see 01a063d6-46e9-7751-89e2-40ee75ebfa14").is_empty(),
+            "a whole id is not a fragment"
+        );
     }
 
     /// A decision carrying questions tells the worker to ask them verbatim.

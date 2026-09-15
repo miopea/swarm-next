@@ -1835,6 +1835,62 @@ impl TaskStore {
         Ok(changed)
     }
 
+    /// The records whose id BEGINS with each fragment, for text that names a
+    /// record by part of its id.
+    ///
+    /// ⚠️ THIS IS A READING AID AND NEVER AN IDENTITY. A prefix is refused
+    /// everywhere an id is ACCEPTED, and that refusal is right: `UUIDv7` ids
+    /// share leading characters by construction, so two records created in the
+    /// same millisecond-range agree for many characters. Resolving one here is
+    /// safe only because the answer is shown to a reader, who can see when it
+    /// found more than one, rather than acted on.
+    ///
+    /// Returns every match up to a small cap per fragment, so an ambiguous
+    /// fragment reads as ambiguous instead of silently picking the first row.
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn records_starting_with(
+        &self,
+        fragments: &[String],
+    ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, TaskStoreError> {
+        let mut resolved: std::collections::HashMap<String, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+        if fragments.is_empty() {
+            return Ok(resolved);
+        }
+        let connection = self.connection()?;
+        for fragment in fragments {
+            // The caller only ever passes hex and dashes, so there is no LIKE
+            // metacharacter to escape -- and an ESCAPE clause here would be a
+            // comment claiming a protection the pattern does not need.
+            if !fragment
+                .chars()
+                .all(|character| character.is_ascii_hexdigit() || character == '-')
+            {
+                continue;
+            }
+            let pattern = format!("{}%", fragment.to_ascii_lowercase());
+            for (kind, sql) in [
+                ("task", "SELECT id FROM tasks WHERE id LIKE ?1 LIMIT 4"),
+                (
+                    "decision",
+                    "SELECT id FROM decision_requests WHERE id LIKE ?1 LIMIT 4",
+                ),
+            ] {
+                let mut statement = connection.prepare(sql)?;
+                let rows = statement.query_map([&pattern], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    resolved
+                        .entry(fragment.clone())
+                        .or_default()
+                        .push((kind.to_owned(), row?));
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
     /// Amendments for MANY tasks at once, keyed by task.
     ///
     /// One query rather than one per task: the listing that needs this is
