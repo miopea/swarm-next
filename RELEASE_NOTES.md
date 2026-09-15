@@ -12,6 +12,47 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.11.0
+
+⚠️ This release carries two schema migrations, 175 and 176. The first adds four
+tables for the usage measurement; the second REBUILDS `task_commits`, which is a
+table rewrite rather than an addition. The automatic backup covers a reload from
+a checkout and NOT a tarball install, so copy your `swarm.sqlite3` before
+installing this one. Your workers are not stopped — the terminal protocol has
+not changed.
+
+### New features
+- Settings now shows what each worker is spending with its provider: fresh
+  input, cache reads, cache writes and output kept apart, weighted into one
+  comparable figure, per workspace and per day, over 7, 14 or 30 days. It is a
+  comparison between workers, not a bill. It says how old the reading is,
+  because the first pass reads every transcript once and can take minutes.
+- A workspace with two workers in it names both of them rather than crediting
+  one. The provider files its transcripts by folder, so two workers in one
+  repository genuinely cannot be told apart, and the panel says so instead of
+  guessing.
+
+### Fixes
+- On a phone you can now SEE which worker is busy instead of reading the word.
+  Each state has its own colour and motion on the dot, and the worker picker
+  speaks the same language as the rail, so the two cannot disagree.
+- The worker picker no longer truncates the name you are looking for. The name
+  is kept whole and the repository beside it is shortened first.
+- The worker roster in Settings spans the full width again instead of being
+  squeezed into one column.
+- Queen stops restating the whole board every time she polls. Her polls were the
+  largest single item on this Hive's provider bill, and this is the half of that
+  fix that is already in effect.
+- Queen runs on a cheaper model by default, so a Hive that leaves her checking
+  automatically does not spend Opus tokens on it. An explicit model you choose
+  for her still wins. (after the worker engine update)
+- A commit made in another repository is no longer reported as missing. Swarm
+  says which workspace it found it in rather than leaving a real commit looking
+  fabricated.
+- A member Hive whose join stalls can now recover it. A join that was approved
+  but never landed no longer blocks every later attempt, and a failure says what
+  went wrong instead of sitting silent.
+
 ## 1.10.0
 
 ⚠️ This release adds two database tables. The automatic backup covers a reload
