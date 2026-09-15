@@ -18,7 +18,7 @@ type Props = {
   providers: ProviderCapabilities;
   providerCapabilitiesUnavailable?: boolean;
   onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean, acknowledgeExperimentalProvider?: boolean) => Promise<void>;
-  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider?: boolean) => Promise<void>;
+  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider?: boolean, boardRead?: boolean) => Promise<void>;
   /** Applies a chosen bee on its own, without the rest of the edit form. */
   onChooseMark: (workerId: string, mark: string) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
@@ -312,6 +312,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   const newExperimentalBinding = provider !== worker.provider && isExperimentalProvider(provider);
   const experimentalBlocked = newExperimentalBinding && (!allowExperimental || !isExperimentalProvider(provider) || providers.experimental?.[provider] !== true || providerCapabilitiesUnavailable);
   const [autostart, setAutostart] = useState(worker.autostart);
+  const [boardRead, setBoardRead] = useState(worker.board_read);
   const [repository, setRepository] = useState(worker.workspace);
   const [allowOutsideRoots, setAllowOutsideRoots] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
@@ -326,15 +327,15 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   const moving = normalizePath(repository.trim()) !== normalizePath(worker.workspace);
   const customRepository = moving && Boolean(repository.trim()) && !workspaces.some((choice) => normalizePath(choice.path) === normalizePath(repository.trim()));
   const repositoryBlocked = moving && (!repository.trim() || (customRepository && !allowOutsideRoots));
-  const dirty = name !== worker.name || descriptionChanged || provider !== worker.provider || autostart !== worker.autostart || moving;
+  const dirty = name !== worker.name || descriptionChanged || provider !== worker.provider || autostart !== worker.autostart || boardRead !== worker.board_read || moving;
 
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!name.trim() || repositoryBlocked || experimentalBlocked) return;
     setSaveError("");
     try {
-      if (newExperimentalBinding) await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, true);
-      else await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots);
+      if (newExperimentalBinding) await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, true, boardRead);
+      else await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, false, boardRead);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "The worker could not be saved. Your choices are unchanged.");
       return;
@@ -351,6 +352,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
     setDescription(worker.description ?? "");
     setProvider(worker.provider);
     setAutostart(worker.autostart);
+    setBoardRead(worker.board_read);
     setRepository(worker.workspace);
     setAllowOutsideRoots(false);
     setConfirmingRemoval(false);
@@ -465,6 +467,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
           {!worker.running && <ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} />}
           {saveError && <p role="alert" className="field-error">{saveError}</p>}
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
+          <label className="worker-autostart"><input type="checkbox" checked={boardRead} onChange={(event) => setBoardRead(event.target.checked)} /><span><strong>Let this worker read the whole board</strong><small>It can see every task and its history, so you can ask it what is happening without spending a Queen turn. It still cannot move, assign or approve anything — what it may act on is its own assignment, exactly as before.</small></span></label>
           {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, repository, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim() || repositoryBlocked || experimentalBlocked}>{moving ? "Move worker" : descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
           {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}

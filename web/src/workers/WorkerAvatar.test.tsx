@@ -7,7 +7,7 @@ import WorkerAvatar from "./WorkerAvatar";
 
 const worker: Worker = {
   id: "worker-daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code",
-  workspace: "/workspace/daisy", autostart: false, position: 1, active_session_id: "session-1",
+  workspace: "/workspace/daisy", autostart: false, board_read: false, position: 1, active_session_id: "session-1",
   running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
 };
 

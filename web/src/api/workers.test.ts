@@ -23,6 +23,7 @@ const worker: Worker = {
   provider: "claude_code",
   workspace: "/projects/clover",
   autostart: false,
+  board_read: false,
   position: 1,
   active_session_id: null,
   created_at: 1,

@@ -238,6 +238,7 @@ mod tests {
             updated_at: created_at,
             ephemeral: false,
             mark: None,
+            board_read: false,
         }
     }
 

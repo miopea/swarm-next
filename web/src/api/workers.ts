@@ -55,6 +55,7 @@ export type Worker = {
   provider: ProviderKind;
   workspace: string;
   autostart: boolean;
+  board_read: boolean;
   position: number;
   active_session_id: string | null;
   created_at: number;
@@ -122,6 +123,13 @@ export type UpdateWorkerInput = {
   allow_outside_roots?: boolean;
   /** The bee this worker wears. An empty string returns it to the derived one. */
   mark?: string;
+  /**
+   * Whether this worker may READ the whole board.
+   *
+   * Reading only. It grants no authority over anything it can now see: what
+   * the worker may ACT on is still its own assignment.
+   */
+  board_read?: boolean;
 };
 
 export type RepositoryState = {

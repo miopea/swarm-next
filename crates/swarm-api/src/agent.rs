@@ -486,7 +486,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 26;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 27;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -792,9 +792,16 @@ impl ServerHandler for AgentMcp {
             }
         }
         let result = match request.name.as_ref() {
+            // ⚠️ THE READ PATH, AND ONLY HERE. Every other caller of
+            // list_visible_tasks in this file is an ACT gate — the transition
+            // check, the reload guard, and visible_task_id, which every
+            // transition, note and evidence record runs through. Switching any
+            // of those to the read path would hand a board reader the authority
+            // to move work it can merely see, in one line, with nothing in the
+            // type system to say so.
             "swarm_list_tasks" => self
                 .tasks
-                .list_visible_tasks(self.principal)
+                .list_tasks_readable_by(self.principal)
                 .and_then(|tasks| self.task_list_result(&tasks)),
             "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_message_worker" => self.message_worker(arguments),
@@ -4819,6 +4826,148 @@ mod tests {
             structured["amendment_id"].is_string(),
             "the amendment still landed: {structured}"
         );
+    }
+
+    /// ⚠️ THE ONE THAT MATTERS: READING THE BOARD MUST NOT MOVE ANYTHING ON IT.
+    ///
+    /// `list_visible_tasks` answered two different questions with one function —
+    /// what may this agent SEE, and, through `visible_task_id`, what may it
+    /// TOUCH. Widening it would have handed a board reader the authority to
+    /// transition, note and record evidence against every task in the Hive, in
+    /// one line, with nothing in the type system to say so. This test exists to
+    /// fail if anyone ever makes that edit.
+    #[tokio::test]
+    async fn a_board_reader_sees_every_task_and_can_still_move_only_its_own() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let somebody_elses = store
+            .create_task("Not this worker's work", "/workspace/elsewhere")
+            .unwrap();
+        store
+            .update_worker_profile(
+                worker_id,
+                &swarm_persistence::WorkerProfileEdit {
+                    board_read: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let listed =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        let titles: Vec<String> = listed["result"]["structuredContent"]["tasks"]
+            .as_array()
+            .expect("tasks are listed")
+            .iter()
+            .map(|task| task["title"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert!(
+            titles.iter().any(|title| title == "Not this worker's work"),
+            "a board reader sees work assigned to nobody and to others: {titles:?}"
+        );
+
+        let refused = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_transition_task",
+            json!({"task_id": somebody_elses.id, "state": "active"}),
+        )
+        .await;
+        assert_eq!(
+            refused["result"]["isError"], true,
+            "SEEING a task must not confer moving it: {refused}"
+        );
+    }
+
+    /// Revoking has to work too, or it is not a capability.
+    #[tokio::test]
+    async fn an_ordinary_worker_still_sees_only_its_own_assignment() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        store
+            .create_task("Not this worker's work", "/workspace/elsewhere")
+            .unwrap();
+        store
+            .update_worker_profile(
+                worker_id,
+                &swarm_persistence::WorkerProfileEdit {
+                    board_read: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .update_worker_profile(
+                worker_id,
+                &swarm_persistence::WorkerProfileEdit {
+                    board_read: Some(false),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let listed =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        let tasks = listed["result"]["structuredContent"]["tasks"]
+            .as_array()
+            .expect("tasks are listed")
+            .len();
+        assert_eq!(
+            tasks, 0,
+            "a worker whose capability was taken back is back to its own \
+             assignment, and it has none: {listed}"
+        );
+    }
+
+    /// The history of a task it does not own, which is the second half of
+    /// answering "what is happening" without asking Queen.
+    #[tokio::test]
+    async fn a_board_reader_can_read_the_history_of_work_it_does_not_own() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let somebody_elses = store
+            .create_task("Not this worker's work", "/workspace/elsewhere")
+            .unwrap();
+        store
+            .update_worker_profile(
+                worker_id,
+                &swarm_persistence::WorkerProfileEdit {
+                    board_read: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let history = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({"task_id": somebody_elses.id}),
+        )
+        .await;
+
+        assert_eq!(history["result"]["isError"], false, "{history}");
+    }
+
+    /// And without the capability that same read is refused, so the test above
+    /// is measuring the capability rather than an open door.
+    #[tokio::test]
+    async fn a_worker_without_the_capability_cannot_read_another_task_history() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let somebody_elses = store
+            .create_task("Not this worker's work", "/workspace/elsewhere")
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let history = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({"task_id": somebody_elses.id}),
+        )
+        .await;
+
+        assert_eq!(history["result"]["isError"], true, "{history}");
     }
 
     /// A decision carrying questions tells the worker to ask them verbatim.
@@ -9689,11 +9838,12 @@ mod tests {
         store
             .update_worker_profile(
                 worker_id,
-                None,
-                Some("Owns petal rendering and its repository-scoped release checks."),
-                None,
-                None,
-                None,
+                &swarm_persistence::WorkerProfileEdit {
+                    description: Some(
+                        "Owns petal rendering and its repository-scoped release checks.",
+                    ),
+                    ..Default::default()
+                },
             )
             .unwrap();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());

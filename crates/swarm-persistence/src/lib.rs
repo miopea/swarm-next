@@ -184,7 +184,10 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
-pub use workers::{ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts};
+pub use workers::{
+    ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts,
+    WorkerProfileEdit,
+};
 pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
 /// Matches the ceiling the Outlook fetcher accepts for a message body, because
 /// an imported email becomes a description verbatim. Anything smaller fetches
@@ -314,7 +317,8 @@ const APIARY_TASK_PREREQUISITES_SCHEMA_VERSION: i64 = 173;
 const APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION: i64 = 174;
 const PROVIDER_USAGE_SCHEMA_VERSION: i64 = 175;
 const COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION: i64 = 176;
-const CURRENT_SCHEMA_VERSION: i64 = COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION;
+const BOARD_READ_SCHEMA_VERSION: i64 = 177;
+const CURRENT_SCHEMA_VERSION: i64 = BOARD_READ_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4277,7 +4281,37 @@ fn migrate_engine_history_schema_steps(
     if schema_version < COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION {
         migrate_commit_found_elsewhere(transaction)?;
     }
+    if schema_version < BOARD_READ_SCHEMA_VERSION {
+        migrate_board_read(transaction)?;
+    }
     Ok(())
+}
+
+/// One worker may READ the whole board without gaining any authority over it.
+///
+/// ⚠️ A CAPABILITY, NOT A ROLE. Adding a third `WorkerRole` would change the
+/// meaning of every `role == Queen` and `role == Worker` read in the codebase --
+/// twenty-nine of them in the agent surface alone -- which is a refactor wearing
+/// a feature's clothes. A column answers one question and changes nothing else.
+///
+/// Defaults to 0, so every existing worker keeps exactly the visibility it has.
+fn migrate_board_read(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('worker_profiles') WHERE name = 'board_read'",
+        [],
+        |row| row.get(0),
+    )?;
+    if present == 0 {
+        transaction.execute_batch(
+            "ALTER TABLE worker_profiles ADD COLUMN board_read INTEGER NOT NULL DEFAULT 0",
+        )?;
+    }
+    // ⚠️ THE LAST STEP STAMPS THE CEILING, and omitting this does not fail
+    // loudly: the column appears, everything works here, and a freshly opened
+    // database still reports the previous version -- so this runs again on
+    // every open and any step added after it is skipped. Schema 175 shipped
+    // that way and the reload-backup guard caught it.
+    transaction.pragma_update(None, "user_version", BOARD_READ_SCHEMA_VERSION)
 }
 
 /// Checks that a recovery candidate already contains a supported Hive schema.
@@ -9829,6 +9863,13 @@ mod tests {
             undo_sql: "ALTER TABLE task_commits DROP COLUMN found_in",
             probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('task_commits')
                 WHERE name = 'found_in'",
+        },
+        SchemaStep {
+            table: "worker_profiles",
+            artifact: "board_read",
+            undo_sql: "ALTER TABLE worker_profiles DROP COLUMN board_read",
+            probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('worker_profiles')
+                WHERE name = 'board_read'",
         },
     ];
 

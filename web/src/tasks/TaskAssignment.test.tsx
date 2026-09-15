@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 const worker = (over: Partial<Worker> = {}): Worker => ({
   id: "worker-1", hive_id: "hive-1", name: "Sculpt Studio", role: "worker", provider: "claude_code",
-  workspace: "/workspace/sculpt", autostart: false, position: 1, active_session_id: "session-new",
+  workspace: "/workspace/sculpt", autostart: false, board_read: false, position: 1, active_session_id: "session-new",
   running: true, attention_state: "buzzing", created_at: 1, updated_at: 1, ...over,
 });
 

@@ -337,6 +337,10 @@ impl fmt::Display for ParseProviderKindError {
 impl std::error::Error for ParseProviderKindError {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent operator setting on one worker and none excludes another: a worker can start automatically, be temporary, resume a conversation and read the board in any combination. Collapsing them into an enum would assert an exclusivity the roster does not have, and this record mirrors stored columns a person edits one at a time"
+)]
 pub struct WorkerProfile {
     pub id: WorkerId,
     pub hive_id: HiveId,
@@ -366,6 +370,16 @@ pub struct WorkerProfile {
     /// temporary worker that looks permanent is one an operator will rely on and
     /// then lose.
     pub ephemeral: bool,
+    /// Whether this worker may READ the whole board.
+    ///
+    /// ⚠️ READING ONLY, AND DELIBERATELY NOT AN AUTHORITY. It widens what the
+    /// worker can see and nothing else: what it may ACT on is still its own
+    /// assignment, decided by the same gate as every other worker. The two were
+    /// welded together before -- Queen could see everything because she may
+    /// move everything -- and this exists to take them apart, so asking "what
+    /// is happening" does not have to cost a turn from the one agent that can
+    /// also change it.
+    pub board_read: bool,
     /// The bee this worker wears, when an operator chose one.
     ///
     /// None is the ordinary case and means "derive it from my id", so a Hive

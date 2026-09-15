@@ -60,6 +60,12 @@ pub(super) struct UpdateWorkerRequest {
     /// The bee this worker wears. An empty string clears the choice and returns
     /// it to the mark derived from its id.
     mark: Option<String>,
+    /// Whether this worker may READ the whole board.
+    ///
+    /// Reading only: it grants no authority over anything it can now see, and
+    /// what the worker may ACT on is unchanged. Granted here rather than in a
+    /// release so the operator can give it and take it back.
+    board_read: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1297,11 +1303,14 @@ pub(super) async fn update_worker(
         task_store(&state)?
             .update_worker_profile(
                 worker_id,
-                request.name.as_deref(),
-                request.description.as_deref(),
-                request.provider,
-                request.autostart,
-                workspace.as_deref(),
+                &swarm_persistence::WorkerProfileEdit {
+                    name: request.name.as_deref(),
+                    description: request.description.as_deref(),
+                    provider: request.provider,
+                    autostart: request.autostart,
+                    workspace: workspace.as_deref(),
+                    board_read: request.board_read,
+                },
             )
             .map_err(|error| task_store_error(&error))?
     };

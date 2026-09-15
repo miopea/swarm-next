@@ -17,7 +17,7 @@ const task: Task = {
 };
 const worker: Worker = {
   id: "worker-1", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code",
-  workspace: "/workspace/swarm", autostart: false, position: 1, active_session_id: null,
+  workspace: "/workspace/swarm", autostart: false, board_read: false, position: 1, active_session_id: null,
   created_at: 1, updated_at: 1, running: false, attention_state: "sleeping",
 };
 const jiraTaskLink = {

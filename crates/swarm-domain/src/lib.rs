@@ -924,6 +924,7 @@ mod tests {
             updated_at: 1,
             ephemeral: false,
             mark: None,
+            board_read: false,
         };
         assert_eq!(profile.role, WorkerRole::Queen);
         assert!(profile.autostart);

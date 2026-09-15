@@ -1099,6 +1099,7 @@ mod tests {
             updated_at: 0,
             ephemeral: false,
             mark: None,
+            board_read: false,
         }
     }
 

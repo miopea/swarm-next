@@ -155,7 +155,7 @@ test("experimental provider change requires fresh consent after a completed edit
   fireEvent.change(within(editor).getByLabelText("Default coding provider"), { target: { value: "gemini" } });
   fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
   await waitFor(() => expect(screen.queryByRole("form", { name: "Edit Daisy" })).not.toBeInTheDocument());
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, budget.name, "", "gemini", budget.autostart, undefined, false, true);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, budget.name, "", "gemini", budget.autostart, undefined, false, true, false);
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   editor = screen.getByRole("form", { name: "Edit Daisy" });
   expect(within(editor).getByRole("checkbox", { name: "Allow experimental providers for this change" })).not.toBeChecked();
@@ -193,7 +193,7 @@ test.each(["gemini", "grok", "opencode"] as const)("preserves and identifies an 
   expect(within(screen.getByLabelText("Coding provider")).queryByRole("option", { name: /experimental/ })).not.toBeInTheDocument();
   fireEvent.change(within(editor).getByLabelText("Worker name"), { target: { value: "Daisy renamed" } });
   fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Daisy renamed", budget.description ?? "", provider, budget.autostart, undefined, false);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Daisy renamed", budget.description ?? "", provider, budget.autostart, undefined, false, false, false);
 });
 
 test("configures and reorders durable workers with progressive path completion", async () => {
@@ -241,7 +241,47 @@ test("configures and reorders durable workers with progressive path completion",
   fireEvent.change(within(editForm).getByLabelText("Queen routing description"), { target: { value: "Owns budgets and bills." } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
   fireEvent.click(within(editForm).getByRole("button", { name: "Save description to worker" }));
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true, undefined, false);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true, undefined, false, false, false);
+});
+
+/**
+ * ⚠️ THE OPERATOR HAS TO BE ABLE TO GIVE THIS AND TAKE IT BACK.
+ *
+ * A capability that can only be granted by editing the database, or by cutting
+ * a release, is not a capability — it is a hard-coded exception with extra
+ * steps. This is the control that makes it one, and the label says plainly what
+ * it does NOT confer, because "read the whole board" reads like power to
+ * anyone who has not been told otherwise.
+ */
+test("the operator can let one worker read the whole board, and the label says it grants no authority", () => {
+  const onUpdate = vi.fn();
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={onUpdate} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")}
+      onReorder={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+  const toggle = within(editForm).getByLabelText(/Let this worker read the whole board/);
+  expect(toggle).not.toBeChecked();
+  expect(
+    within(editForm).getByText(/cannot move, assign or approve anything/),
+  ).toBeInTheDocument();
+
+  fireEvent.click(toggle);
+  fireEvent.click(within(editForm).getByRole("button", { name: "Save worker" }));
+
+  expect(onUpdate).toHaveBeenCalledWith(
+    budget.id, budget.name, budget.description ?? "", budget.provider, budget.autostart,
+    undefined, false, false, true,
+  );
 });
 
 test("requires explicit confirmation before removing a sleeping worker", async () => {
@@ -382,6 +422,8 @@ test("drafts private repository context into an editable unsaved description", a
     budget.autostart,
     undefined,
     false,
+    false,
+    false,
   );
 });
 
@@ -426,6 +468,8 @@ test("moves a sleeping worker to a repository that is not a discovered one", () 
     budget.autostart,
     "/projects/moved-budgetbug",
     true,
+    false,
+    false,
   );
 });
 
@@ -621,6 +665,7 @@ function worker(id: string, name: string, workspace: string, position: number, r
   return {
     id,
     hive_id: "hive",
+    board_read: false,
     name,
     role,
     provider: "claude_code",

@@ -671,6 +671,16 @@ pub(super) fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workers::WorkerProfileEdit;
+
+    /// A rename and nothing else, so the call fits one line in a test already at
+    /// the length clippy allows.
+    fn renamed(name: &str) -> WorkerProfileEdit<'_> {
+        WorkerProfileEdit {
+            name: Some(name),
+            ..WorkerProfileEdit::default()
+        }
+    }
     use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
 
     fn hive() -> (TaskStore, TaskId, WorkerId) {
@@ -947,7 +957,7 @@ mod tests {
             Err(TaskStoreError::ScoutSecondOpinionRequiresManagedScout)
         ));
         store
-            .update_worker_profile(lookalike.id, Some("Fern"), None, None, None, None)
+            .update_worker_profile(lookalike.id, &renamed("Fern"))
             .unwrap();
 
         let project_root = store

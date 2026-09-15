@@ -2646,6 +2646,72 @@ impl TaskService {
             }))
     }
 
+    /// Every task a principal may READ, which is not the same set as the ones
+    /// it may act on.
+    ///
+    /// ⚠️ READ AND ACT WERE ONE GATE, AND THAT IS THE WHOLE DEFECT THIS EXISTS
+    /// TO AVOID. `list_visible_tasks` answers "what may this agent see", and
+    /// `visible_task_id` — the check every transition, note and evidence record
+    /// runs through — answers "what may this agent touch" by calling it. Widening
+    /// that one function to give a worker board-wide READING would have handed it
+    /// board-wide WRITING in the same line, silently, and nothing in the type
+    /// system would have said so. So reading gets its own function and every
+    /// mutating path keeps calling the old one.
+    ///
+    /// Queen sees everything because she may move everything. A `board_read`
+    /// worker sees everything and may still move only its own assignment.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn list_tasks_readable_by(
+        &self,
+        principal: AgentPrincipal,
+    ) -> Result<Vec<Task>, ApplicationError> {
+        // Read from the store rather than from the principal, so revoking the
+        // capability takes effect on the next call instead of when a long-lived
+        // session happens to end.
+        let reads_the_board = principal.role == WorkerRole::Queen
+            || self
+                .store
+                .get_worker_profile(principal.worker_id)
+                .is_ok_and(|profile| profile.board_read);
+        if reads_the_board {
+            return self.list_tasks();
+        }
+        self.list_visible_tasks(principal)
+    }
+
+    /// Whether this principal may READ one task, by either route.
+    ///
+    /// ⚠️ ONE TOOL, FOUR GATES. `swarm_read_task_history` calls four separate
+    /// application methods — the activity log, the evidence record, the message
+    /// exchange and the returned-review request — and each carried its own copy
+    /// of "is this yours". Widening the first and stopping there produced a
+    /// board reader that got an authorisation error from a tool it had just
+    /// been granted, which is worse than a plain refusal: the capability looks
+    /// broken rather than absent. This is the single answer all four now ask.
+    ///
+    /// It is a READ check. Nothing here decides what may be changed.
+    ///
+    /// # Errors
+    /// Returns `NotAuthorized` when the task is neither readable nor this
+    /// worker's own.
+    fn may_read_task(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<(), ApplicationError> {
+        if self
+            .list_tasks_readable_by(principal)?
+            .iter()
+            .any(|task| task.id == task_id)
+        {
+            return Ok(());
+        }
+        self.task_this_worker_finished(principal, task_id)?;
+        Ok(())
+    }
+
     /// The task this worker owns, INCLUDING one it has just finished.
     ///
     /// `list_visible_tasks` hides completed work from a worker on purpose: its
@@ -2772,7 +2838,11 @@ impl TaskService {
         task_id: TaskId,
         limit: usize,
     ) -> Result<swarm_domain::TaskActivityPage, ApplicationError> {
-        self.task_this_worker_finished(principal, task_id)?;
+        // A reader granted the whole board reads the whole board's history.
+        // Anyone else is held to their own assignment exactly as before —
+        // `task_this_worker_finished` is the same check it has always been, and
+        // this is an additional way in rather than a relaxation of it.
+        self.may_read_task(principal, task_id)?;
         Ok(self.store.list_task_activity(task_id, limit)?)
     }
 
@@ -2837,6 +2907,7 @@ impl TaskService {
         let task = self.store.get_task(task_id)?;
         if principal.role != WorkerRole::Queen
             && task.assigned_worker_id != Some(principal.worker_id)
+            && self.may_read_task(principal, task_id).is_err()
         {
             return Err(ApplicationError::NotAuthorized);
         }
@@ -2857,7 +2928,7 @@ impl TaskService {
         principal: AgentPrincipal,
         task_id: TaskId,
     ) -> Result<Vec<swarm_persistence::TaskMessage>, ApplicationError> {
-        self.task_this_worker_finished(principal, task_id)?;
+        self.may_read_task(principal, task_id)?;
         Ok(self.store.task_messages(task_id)?)
     }
 
@@ -2876,7 +2947,7 @@ impl TaskService {
         principal: AgentPrincipal,
         task_id: TaskId,
     ) -> Result<swarm_persistence::TaskEvidenceRecord, ApplicationError> {
-        self.task_this_worker_finished(principal, task_id)?;
+        self.may_read_task(principal, task_id)?;
         Ok(self.store.task_evidence_record(task_id)?)
     }
 

@@ -3047,6 +3047,7 @@ mod tests {
             updated_at: 1,
             ephemeral: false,
             mark: None,
+            board_read: false,
         }
     }
 }

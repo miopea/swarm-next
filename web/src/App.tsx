@@ -957,10 +957,10 @@ export function App() {
     });
   }
 
-  async function maintainWorkerProfile(workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider = false) {
+  async function maintainWorkerProfile(workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider = false, boardRead?: boolean) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await updateWorker(operatorToken, workerId, { name, description, provider, autostart, workspace, allow_outside_roots: allowOutsideRoots, acknowledge_experimental_provider: acknowledgeExperimentalProvider });
+      const updated = await updateWorker(operatorToken, workerId, { name, description, provider, autostart, workspace, allow_outside_roots: allowOutsideRoots, acknowledge_experimental_provider: acknowledgeExperimentalProvider, board_read: boardRead });
       setWorkers((current) => current.map((worker) => worker.id === updated.id ? updated : worker));
     }, "Saving worker…", true);
   }

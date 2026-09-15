@@ -1851,6 +1851,7 @@ fn import_new_legacy_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workers::WorkerProfileEdit;
     use swarm_domain::{ProviderKind, WorkerSessionId};
 
     fn bundle(tasks: Vec<LegacyTaskRecord>) -> LegacyMigrationBundle {
@@ -2464,11 +2465,10 @@ mod tests {
         store
             .update_worker_profile(
                 receipt.imported_worker_ids[0],
-                None,
-                Some("Reviewed owner description"),
-                None,
-                None,
-                None,
+                &WorkerProfileEdit {
+                    description: Some("Reviewed owner description"),
+                    ..Default::default()
+                },
             )
             .unwrap();
 

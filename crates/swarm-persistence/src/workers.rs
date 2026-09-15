@@ -156,6 +156,22 @@ pub struct ConnectionProfile {
     pub updated_at: i64,
 }
 
+/// What an operator is changing about one worker, named rather than positional.
+///
+/// Every field is `None` for "leave this alone", so a caller states only what it
+/// touches. `..Default::default()` is the idiom at the call sites.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WorkerProfileEdit<'a> {
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub provider: Option<ProviderKind>,
+    pub autostart: Option<bool>,
+    pub workspace: Option<&'a str>,
+    /// Whether this worker may READ the whole board. Reading only: it confers
+    /// no authority over anything it can then see.
+    pub board_read: Option<bool>,
+}
+
 impl TaskStore {
     /// Returns the singleton Queen profile, creating it on first start.
     ///
@@ -396,22 +412,28 @@ impl TaskStore {
 
     /// Updates operator-owned worker preferences without changing repository or conversation identity.
     ///
+    /// ⚠️ NAMED FIELDS RATHER THAN SIX POSITIONAL OPTIONS, and the sixth is what
+    /// forced it: `update_worker_profile(id, None, None, None, None, None, Some(true))`
+    /// is a line nobody can read, and two of those slots are booleans, which is
+    /// the shape where a transposed argument compiles and does the wrong thing
+    /// silently. Clippy objected at eight arguments; the objection was right.
+    ///
     /// # Errors
     /// Rejects the managed Queen, empty updates, invalid or duplicate names, and unknown workers.
     pub fn update_worker_profile(
         &self,
         worker_id: WorkerId,
-        name: Option<&str>,
-        description: Option<&str>,
-        provider: Option<ProviderKind>,
-        autostart: Option<bool>,
-        workspace: Option<&str>,
+        edit: &WorkerProfileEdit<'_>,
     ) -> Result<WorkerProfile, TaskStoreError> {
+        let (name, description) = (edit.name, edit.description);
+        let (provider, autostart) = (edit.provider, edit.autostart);
+        let (workspace, board_read) = (edit.workspace, edit.board_read);
         if name.is_none()
             && description.is_none()
             && provider.is_none()
             && autostart.is_none()
             && workspace.is_none()
+            && board_read.is_none()
         {
             return Err(TaskStoreError::EmptyWorkerUpdate);
         }
@@ -494,12 +516,7 @@ impl TaskStore {
                 params![worker_id.to_string(), provider.to_string()],
             )?;
         }
-        if let Some(autostart) = autostart {
-            transaction.execute(
-                "UPDATE worker_profiles SET autostart = ?2 WHERE id = ?1",
-                params![worker_id.to_string(), autostart],
-            )?;
-        }
+        write_worker_flags(&transaction, worker_id, autostart, board_read)?;
         move_worker_repository(&transaction, worker_id, workspace, running)?;
         transaction.execute(
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
@@ -941,7 +958,7 @@ impl TaskStore {
                     OR p.provider_conversation_resume = 1),
                    e.expires_at,
                    p.created_at, p.updated_at, p.description, p.ephemeral,
-                   p.mark
+                   p.mark, p.board_read
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -1007,7 +1024,7 @@ impl TaskStore {
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
                        p.created_at, p.updated_at, p.description, p.ephemeral,
-                   p.mark
+                   p.mark, p.board_read
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -2126,7 +2143,7 @@ impl TaskStore {
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
                        p.created_at, p.updated_at, p.description, p.ephemeral,
-                   p.mark
+                   p.mark, p.board_read
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -2318,7 +2335,39 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         // position, so inserting a column anywhere else silently re-maps all of
         // them — a change that compiles, passes, and returns the wrong field.
         mark: row.get(16)?,
+        // And 17 for the same reason. The warning above is not decoration: it
+        // is why board_read went on the END of every SELECT rather than beside
+        // the other flags where it reads better.
+        board_read: row.get::<_, i64>(17)? != 0,
     })
+}
+
+/// The two independent on/off settings, written together.
+///
+/// Lifted out for the same reason `move_worker_repository` was: the caller had
+/// grown past what one function should hold, and clippy said so at 113 lines.
+/// Neither flag interacts with the other or with anything else in that function.
+fn write_worker_flags(
+    transaction: &rusqlite::Transaction<'_>,
+    worker_id: WorkerId,
+    autostart: Option<bool>,
+    board_read: Option<bool>,
+) -> Result<(), TaskStoreError> {
+    if let Some(autostart) = autostart {
+        transaction.execute(
+            "UPDATE worker_profiles SET autostart = ?2 WHERE id = ?1",
+            params![worker_id.to_string(), autostart],
+        )?;
+    }
+    if let Some(board_read) = board_read {
+        // Granted and revoked like any other per-worker setting, because a
+        // capability that needs a release to change is not a capability.
+        transaction.execute(
+            "UPDATE worker_profiles SET board_read = ?2 WHERE id = ?1",
+            params![worker_id.to_string(), board_read],
+        )?;
+    }
+    Ok(())
 }
 
 /// Repoints a worker at another repository, when that is what changed.
@@ -2670,7 +2719,13 @@ mod tests {
             "an ordinary worker's name is not managed identity"
         );
         store
-            .update_worker_profile(worker.id, Some("Petal"), None, None, None, None)
+            .update_worker_profile(
+                worker.id,
+                &WorkerProfileEdit {
+                    name: Some("Petal"),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         store
             .create_worker(
@@ -2767,7 +2822,13 @@ mod tests {
         assert!(!scout.autostart);
         assert_eq!(store.scout_worker_id().unwrap(), Some(scout.id));
         assert!(matches!(
-            store.update_worker_profile(scout.id, Some("Root"), None, None, None, None),
+            store.update_worker_profile(
+                scout.id,
+                &WorkerProfileEdit {
+                    name: Some("Root"),
+                    ..Default::default()
+                }
+            ),
             Err(TaskStoreError::ScoutIdentityImmutable)
         ));
         assert!(matches!(
@@ -2777,11 +2838,13 @@ mod tests {
         let updated = store
             .update_worker_profile(
                 scout.id,
-                Some("Scout"),
-                Some("Routes larger cross-repository work."),
-                Some(ProviderKind::Codex),
-                Some(false),
-                None,
+                &WorkerProfileEdit {
+                    name: Some("Scout"),
+                    description: Some("Routes larger cross-repository work."),
+                    provider: Some(ProviderKind::Codex),
+                    autostart: Some(false),
+                    ..Default::default()
+                },
             )
             .unwrap();
         assert_eq!(updated.provider, ProviderKind::Codex);
@@ -2966,11 +3029,12 @@ mod tests {
         let updated = store
             .update_worker_profile(
                 worker.id,
-                Some(" Clover "),
-                Some("Owns subscriptions and billing."),
-                None,
-                Some(true),
-                None,
+                &WorkerProfileEdit {
+                    name: Some(" Clover "),
+                    description: Some("Owns subscriptions and billing."),
+                    autostart: Some(true),
+                    ..Default::default()
+                },
             )
             .unwrap();
 
@@ -3005,15 +3069,27 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            store.update_worker_profile(queen.id, Some("Empress"), None, None, None, None),
+            store.update_worker_profile(
+                queen.id,
+                &WorkerProfileEdit {
+                    name: Some("Empress"),
+                    ..Default::default()
+                }
+            ),
             Err(TaskStoreError::QueenProfileImmutable)
         ));
         assert!(matches!(
-            store.update_worker_profile(daisy.id, Some("poppy"), None, None, None, None),
+            store.update_worker_profile(
+                daisy.id,
+                &WorkerProfileEdit {
+                    name: Some("poppy"),
+                    ..Default::default()
+                }
+            ),
             Err(TaskStoreError::DuplicateWorkerName)
         ));
         assert!(matches!(
-            store.update_worker_profile(poppy.id, None, None, None, None, None),
+            store.update_worker_profile(poppy.id, &WorkerProfileEdit::default()),
             Err(TaskStoreError::EmptyWorkerUpdate)
         ));
     }
@@ -3033,7 +3109,13 @@ mod tests {
         let conversation = worker.provider_conversation_id;
 
         let updated = store
-            .update_worker_profile(worker.id, None, None, Some(ProviderKind::Codex), None, None)
+            .update_worker_profile(
+                worker.id,
+                &WorkerProfileEdit {
+                    provider: Some(ProviderKind::Codex),
+                    ..Default::default()
+                },
+            )
             .unwrap();
         assert_eq!(updated.provider, ProviderKind::Codex);
         assert_eq!(updated.provider_conversation_id, conversation);
@@ -3043,11 +3125,10 @@ mod tests {
         assert!(matches!(
             store.update_worker_profile(
                 worker.id,
-                None,
-                None,
-                Some(ProviderKind::ClaudeCode),
-                None,
-                None,
+                &WorkerProfileEdit {
+                    provider: Some(ProviderKind::ClaudeCode),
+                    ..Default::default()
+                }
             ),
             Err(TaskStoreError::WorkerMustBeSleeping)
         ));
@@ -3862,13 +3943,25 @@ mod tests {
 
         // A running worker keeps the repository it is running in.
         assert!(matches!(
-            store.update_worker_profile(worker.id, None, None, None, None, Some("/projects/new")),
+            store.update_worker_profile(
+                worker.id,
+                &WorkerProfileEdit {
+                    workspace: Some("/projects/new"),
+                    ..Default::default()
+                }
+            ),
             Err(TaskStoreError::WorkerMustBeSleeping)
         ));
 
         store.release_worker_session(session).unwrap();
         let moved = store
-            .update_worker_profile(worker.id, None, None, None, None, Some("/projects/new"))
+            .update_worker_profile(
+                worker.id,
+                &WorkerProfileEdit {
+                    workspace: Some("/projects/new"),
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         assert_eq!(moved.workspace, "/projects/new");
@@ -3968,11 +4061,10 @@ mod tests {
         assert!(matches!(
             store.update_worker_profile(
                 rolled_back.id,
-                None,
-                None,
-                Some(ProviderKind::Unsupported),
-                None,
-                None
+                &WorkerProfileEdit {
+                    provider: Some(ProviderKind::Unsupported),
+                    ..Default::default()
+                }
             ),
             Err(TaskStoreError::IntegrityFailure(_))
         ));
@@ -4230,7 +4322,13 @@ mod tests {
 
         // Running, but the repository is unchanged, so nothing is refused.
         let same = store
-            .update_worker_profile(worker.id, None, None, None, None, Some("/projects/petal"))
+            .update_worker_profile(
+                worker.id,
+                &WorkerProfileEdit {
+                    workspace: Some("/projects/petal"),
+                    ..Default::default()
+                },
+            )
             .unwrap();
 
         assert_eq!(same.workspace, "/projects/petal");
