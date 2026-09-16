@@ -2075,14 +2075,19 @@ impl TaskStore {
         Ok(())
     }
 
-    /// Releases database bindings that are absent from the terminal host snapshot.
+    /// Releases database bindings that are absent from the terminal host
+    /// snapshot, returning the sessions it released.
+    ///
+    /// The ids are the caller's only way to say WHICH worker lost its terminal.
+    /// A bare count cannot, and the warning built on one sent an investigation
+    /// after the host for its first several steps while the host was healthy.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable or contains an invalid ID.
     pub fn release_missing_worker_sessions(
         &self,
         live_sessions: &HashSet<WorkerSessionId>,
-    ) -> Result<usize, TaskStoreError> {
+    ) -> Result<Vec<WorkerSessionId>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let stale = {
@@ -2117,7 +2122,7 @@ impl TaskStore {
             insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
         }
         transaction.commit()?;
-        Ok(stale.len())
+        Ok(stale)
     }
 
     /// Creates or rotates the digest used to authenticate one agent profile.
@@ -3014,7 +3019,8 @@ mod tests {
         assert_eq!(
             store
                 .release_missing_worker_sessions(&HashSet::new())
-                .unwrap(),
+                .unwrap()
+                .len(),
             1
         );
         let second = WorkerSessionId::new();
@@ -3048,7 +3054,8 @@ mod tests {
         assert_eq!(
             store
                 .release_missing_worker_sessions(&HashSet::new())
-                .unwrap(),
+                .unwrap()
+                .len(),
             1
         );
         assert_eq!(
@@ -3057,6 +3064,43 @@ mod tests {
                 .unwrap()
                 .active_session_id,
             None
+        );
+    }
+
+    #[test]
+    fn a_release_names_the_session_that_went_and_leaves_the_live_ones_alone() {
+        // The shape of the outage this reporting exists for: the host is
+        // healthy and still running other workers, and exactly one child has
+        // exited. A count cannot say whose terminal died, so the caller can
+        // only name the worker if these ids come back.
+        let store = TaskStore::in_memory().unwrap();
+        let gone = store
+            .create_worker("Rose", ProviderKind::ClaudeCode, "/workspace", true, 1)
+            .unwrap();
+        let alive = store
+            .create_worker("Sage", ProviderKind::ClaudeCode, "/workspace", true, 1)
+            .unwrap();
+        let dead_session = WorkerSessionId::new();
+        let live_session = WorkerSessionId::new();
+        store.bind_worker_session(gone.id, dead_session).unwrap();
+        store.bind_worker_session(alive.id, live_session).unwrap();
+
+        let released = store
+            .release_missing_worker_sessions(&HashSet::from([live_session]))
+            .unwrap();
+
+        assert_eq!(
+            released,
+            vec![dead_session],
+            "the release must name the session that went, and only that one"
+        );
+        assert_eq!(
+            store
+                .get_worker_profile(alive.id)
+                .unwrap()
+                .active_session_id,
+            Some(live_session),
+            "a worker the host still reports keeps its binding"
         );
     }
 

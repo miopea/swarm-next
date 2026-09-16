@@ -204,6 +204,16 @@ fn unix_seconds() -> i64 {
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
     stop_pending_release: AtomicBool,
+    /// Latches the single log line a provider exit gets.
+    ///
+    /// A child could die at any moment and nothing anywhere recorded it. The
+    /// only trace was an API warning ~20 seconds later saying the host "no
+    /// longer reports" the session, which reads as a host fault; one Queen
+    /// outage was investigated as exactly that before the real cause — her
+    /// provider exiting — was found. The exit status is read in eleven places
+    /// in this file and was logged in none of them. The poll observes the
+    /// transition on every pass, so this keeps it to one line, not one a pass.
+    exit_reported: AtomicBool,
     recovery_attempt: OnceLock<ConversationRecoveryAttempt>,
     startup_failure: Arc<Mutex<crate::startup_failure::StartupFailureCapture>>,
     continuation_launch: OnceLock<FreshRecoveryLaunch>,
@@ -405,6 +415,7 @@ impl ProcessTerminalSession {
         Ok(Self {
             id,
             stop_pending_release: AtomicBool::new(false),
+            exit_reported: AtomicBool::new(false),
             control: TerminalControlGate::default(),
             recovery_attempt: OnceLock::new(),
             startup_failure,
@@ -847,6 +858,33 @@ impl ProcessTerminalSession {
             .is_none())
     }
 
+    /// Reports whether the provider is still running, recording the
+    /// running → exited transition exactly once.
+    ///
+    /// This is the only place a provider death is written down. Call it from
+    /// the periodic poll. `is_running` stays a silent query for the call sites
+    /// that ask mid-operation, where narrating an exit they are about to
+    /// handle would be noise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the child process lock is poisoned or the wait
+    /// fails.
+    pub fn running_reporting_exit(&self) -> Result<bool, SessionRegistryError> {
+        let Some(exit) = lock(&self.child)?.try_wait().map_err(terminal_error)? else {
+            return Ok(true);
+        };
+        if !self.exit_reported.swap(true, Ordering::AcqRel) {
+            warn!(
+                session_id = %self.id,
+                exit_code = exit.exit_code(),
+                signal = exit.signal().unwrap_or("none"),
+                "provider process exited"
+            );
+        }
+        Ok(false)
+    }
+
     /// Samples the provider process tree owned by this terminal session.
     ///
     /// # Errors
@@ -887,6 +925,10 @@ impl ProcessTerminalSession {
 
     fn stop_unchecked(&self) -> Result<(), SessionRegistryError> {
         let mut child = lock(&self.child)?;
+        // An exit we asked for is not news. Spend the report here so the poll
+        // stays quiet for every deliberate stop, and the one line it does write
+        // always means a provider died without being told to.
+        self.exit_reported.store(true, Ordering::Release);
         lock(&self.startup_failure)?.disarm();
         if let Some(gate) = lock(&self.provider_lifecycle)?.as_mut() {
             gate.revoke();
@@ -1788,7 +1830,7 @@ impl SessionRegistry {
                     let process_id = lock(&session.child)?.process_id();
                     Ok(SessionResourceState {
                         session_id: session.id(),
-                        running: session.is_running()?,
+                        running: session.running_reporting_exit()?,
                         stop_pending_release: session.stop_pending_release.load(Ordering::Acquire),
                         resources: process_id.map(|pid| resources.sample(pid)),
                         last_output_at: session.last_output_at(),
@@ -2849,6 +2891,73 @@ mod tests {
         ));
         registry.stop(first.id()).unwrap();
         assert!(registry.is_empty().unwrap());
+    }
+
+    #[test]
+    fn a_provider_exit_is_recorded_by_the_poll_and_only_once() {
+        // A child could die and nothing anywhere wrote it down; the only trace
+        // was an API warning twenty seconds later that blamed the host. The
+        // poll is the thing that notices, so the poll is what must say so.
+        let root = env::temp_dir().canonicalize().unwrap();
+        let registry = SessionRegistry::new(JournalLimits::new(1024, 16), 1, [root]).unwrap();
+        let session = registry
+            .spawn(&shell_command("exit 3"), TerminalSize::default())
+            .unwrap();
+
+        let deadline = SystemTime::now() + Duration::from_secs(10);
+        while session.is_running().unwrap() && SystemTime::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !session.is_running().unwrap(),
+            "the child should have exited"
+        );
+
+        // `is_running` is the silent query used mid-operation by call sites
+        // that are about to handle the exit themselves. It must not spend the
+        // one report, or the poll would find nothing left to say.
+        assert!(
+            !session.exit_reported.load(Ordering::Acquire),
+            "the silent query must not consume the report"
+        );
+
+        registry.session_resource_states().unwrap();
+        assert!(
+            session.exit_reported.load(Ordering::Acquire),
+            "the poll must record that the provider exited"
+        );
+
+        // The poll repeats every few seconds for as long as the host lives. The
+        // latch is the whole guard against a dead worker filling the journal.
+        registry.session_resource_states().unwrap();
+        assert!(
+            !session.running_reporting_exit().unwrap(),
+            "the session stays exited, with its report already spent"
+        );
+    }
+
+    #[test]
+    fn a_stop_we_asked_for_is_not_reported_as_a_provider_death() {
+        // The one line this writes has to mean something. If an ordinary stop
+        // logged it too, a worker dying on its own would read exactly like an
+        // operator pressing stop, and the log would be back to saying nothing.
+        let root = env::temp_dir().canonicalize().unwrap();
+        let registry = SessionRegistry::new(JournalLimits::new(1024, 16), 1, [root]).unwrap();
+        let session = registry
+            .spawn(&shell_command("sleep 30"), TerminalSize::default())
+            .unwrap();
+
+        registry.stop(session.id()).unwrap();
+
+        assert!(!session.is_running().unwrap(), "stop terminates the child");
+        assert!(
+            session.exit_reported.load(Ordering::Acquire),
+            "the stop spends the report itself, so no death is announced"
+        );
+        assert!(
+            !session.running_reporting_exit().unwrap(),
+            "and a later poll has nothing left to say about it"
+        );
     }
 
     #[test]

@@ -1151,18 +1151,42 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
     let released = task_store(state)?
         .release_missing_worker_sessions(&live_ids)
         .map_err(|error| task_store_error(&error))?;
-    if released > 0 {
+    if !released.is_empty() {
         // Releasing a session detaches a worker from its profile: the roster
         // shows it sleeping while its terminal keeps running under a generated
         // name. That is a large, visible change to make silently, and it went
-        // unexplained for hours once because nothing recorded it. An empty
-        // report from the host releases every session at once, so the count the
-        // host gave is recorded beside the count released.
-        tracing::warn!(
-            released,
-            host_reported_running = live_ids.len(),
-            "worker sessions were released because the terminal host no longer reports them"
-        );
+        // unexplained for hours once because nothing recorded it.
+        //
+        // Name the sessions, and say which of two very different things
+        // happened. An empty host report releases EVERY session at once and
+        // means the host lost them. A report that still names other sessions
+        // means only these particular ones stopped being listed as running.
+        // The old wording asserted the first in both cases, and an
+        // investigation into a Queen outage spent its opening steps chasing a
+        // host that was fine and reporting ten other sessions.
+        //
+        // Say what was observed, not what it implies: a session also leaves the
+        // live set while pending release, so this is not always an exit. The
+        // host logs the exits themselves, and that is where the cause lives.
+        let sessions = released
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if live_ids.is_empty() {
+            tracing::warn!(
+                released = released.len(),
+                %sessions,
+                "every worker session was released: the terminal host reported no running sessions at all"
+            );
+        } else {
+            tracing::warn!(
+                released = released.len(),
+                host_reported_running = live_ids.len(),
+                %sessions,
+                "worker sessions were released because the terminal host no longer lists them as running; it is still reporting other sessions"
+            );
+        }
         state.control_room_notify.notify_waiters();
     }
     Ok(live)
