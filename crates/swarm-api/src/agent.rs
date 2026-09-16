@@ -1597,7 +1597,7 @@ impl AgentMcp {
                 // host is deferred on purpose so a reload cannot kill a
                 // worker's terminal mid-turn. It only says so.
                 "worker_engine_update_required":
-                    crate::runtime::worker_engine_update_required(&self.state).await,
+                    crate::runtime::worker_engine_update_notice(&self.state).await,
                 // INSTALLED, RESTARTED AND MIGRATED ARE THREE MOMENTS, not one.
                 // Queen caught `current` pointing at a new build while the API
                 // was still the old process and the database still carried the

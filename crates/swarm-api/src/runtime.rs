@@ -975,27 +975,131 @@ pub(super) fn resource_response(
 /// DOES NOT AND MUST NOT RESTART THE HOST. Deferring that update while sessions
 /// are live is deliberate: it is what stops a reload killing every worker's
 /// terminal mid-turn. This only reports.
-pub(super) async fn worker_engine_update_required(state: &AppState) -> Option<String> {
-    let client = state.terminal_host.as_ref()?;
-    let running = match client.request(&HostRequest::HostStatus).await {
-        Ok(HostResponse::HostStatus { status }) => status.protocol_version,
-        // A host that cannot be reached is not a host that is out of date, and
-        // guessing either way here would be worse than saying nothing.
-        Ok(_) | Err(_) => return None,
-    };
-    (running != swarm_terminal::PROTOCOL_VERSION).then(|| {
+///
+/// ⚠️ ASKS `maintenance::worker_engine_update_required` RATHER THAN DECIDING FOR
+/// ITSELF. This function used to compare only the terminal PROTOCOL version,
+/// while the web endpoint, worker revival and the return-recovery circuit all
+/// compared the BUILD ID. Two functions shared this name and disagreed, and the
+/// weaker one was the one agents could see.
+///
+/// That is not hypothetical. On 2026-09-16 the API ran e60fe89a while the host
+/// stayed on 829476e5 — three commits back, one of them a change to
+/// swarm-terminal itself. Measured at the same second: the HTTP endpoint said
+/// `worker_engine_update_required: true` with 8 sessions at stake, and this
+/// function said null, because both builds happened to speak protocol 17. A
+/// half-deployment went unnoticed because the surface that should have reported
+/// it was answering a narrower question than its name promised. A build change
+/// that leaves the protocol alone is the COMMON case, so the old check was
+/// silent for most real drift.
+///
+/// A protocol change implies a build change, so the build id subsumes both; the
+/// protocol is now used only to say which KIND of drift it is.
+pub(super) async fn worker_engine_update_notice(state: &AppState) -> Option<String> {
+    // A host that cannot be reached is not a host that is out of date, and
+    // guessing either way here would be worse than saying nothing.
+    let status = crate::maintenance::host_status_snapshot(state).await.ok()?;
+    worker_engine_update_message(&status)
+}
+
+/// The sentence itself, kept pure so the drift cases can be tested without a
+/// live terminal host. The async wrapper only fetches the status.
+fn worker_engine_update_message(status: &swarm_terminal::TerminalHostStatus) -> Option<String> {
+    if !crate::maintenance::worker_engine_update_required(status) {
+        return None;
+    }
+    let running = status.protocol_version;
+    let drift = if running == swarm_terminal::PROTOCOL_VERSION {
         format!(
-            "the worker engine update is required: this build speaks terminal protocol {}, \
-             the running terminal host speaks {running}. A reload restarts the API and web \
-             only -- the terminal host is a separate service so worker terminals survive it.",
+            "the running terminal host is build {}, which is not the engine this build expects",
+            status.host_version
+        )
+    } else {
+        format!(
+            "this build speaks terminal protocol {}, the running terminal host speaks {running}",
             swarm_terminal::PROTOCOL_VERSION
         )
-    })
+    };
+    // The session count is what turns "the engine is behind" into a sentence an
+    // operator can weigh: a swap that stops eight sessions and a swap that stops
+    // none read identically without it.
+    Some(format!(
+        "the worker engine update is required: {drift}. Swapping the engine stops {} running \
+         worker session(s). A reload restarts the API and web only -- the terminal host is a \
+         separate service so worker terminals survive it.",
+        status.running_sessions
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::reload_state_from;
+    use super::worker_engine_update_message;
+
+    fn host_status(build_id: &str, protocol: u16) -> swarm_terminal::TerminalHostStatus {
+        swarm_terminal::TerminalHostStatus {
+            protocol_version: protocol,
+            host_version: "1.11.0-dev-829476e5e6d3-20260916144913-1583930".to_owned(),
+            host_build_id: Some(build_id.to_owned()),
+            draining: false,
+            running_sessions: 8,
+            retained_sessions: 9,
+            busy_sessions: Some(1),
+            unreadable_sessions: Some(0),
+            resources: None,
+            takeover_relay: true,
+        }
+    }
+
+    #[test]
+    fn an_engine_behind_on_build_alone_is_still_reported() {
+        // THE CASE THAT WAS SILENT. On 2026-09-16 the API ran e60fe89a and the
+        // host ran 829476e5 — three commits apart, one of them a change to
+        // swarm-terminal itself — and both spoke protocol 17. The old check
+        // compared only the protocol, so the agent-facing surface said null
+        // while the web endpoint said true about the same host in the same
+        // second. A build change that leaves the wire format alone is the
+        // ORDINARY case, so this was silent for most real drift.
+        let notice = worker_engine_update_message(&host_status(
+            "74b1dfe239bb11a7201cbe85587a6cff1fed5a13e6d94d91952adf53940a30d9",
+            swarm_terminal::PROTOCOL_VERSION,
+        ))
+        .expect("a host on a different build is behind, whatever protocol it speaks");
+        assert!(
+            notice.contains("8 running worker session"),
+            "the notice must price the swap in sessions an operator would lose: {notice}"
+        );
+        assert!(
+            notice.contains("829476e5e6d3"),
+            "and name the build actually running: {notice}"
+        );
+    }
+
+    #[test]
+    fn a_protocol_gap_is_named_as_a_protocol_gap() {
+        let notice = worker_engine_update_message(&host_status(
+            "74b1dfe239bb11a7201cbe85587a6cff1fed5a13e6d94d91952adf53940a30d9",
+            swarm_terminal::PROTOCOL_VERSION - 1,
+        ))
+        .expect("an older protocol is behind");
+        assert!(
+            notice.contains("terminal protocol"),
+            "a wire-format gap should say so rather than read as a plain build gap: {notice}"
+        );
+    }
+
+    #[test]
+    fn a_matching_engine_says_nothing() {
+        // The build id the API expects is the one it was compiled with, so a
+        // host reporting it is not behind and must not be nagged about.
+        assert_eq!(
+            worker_engine_update_message(&host_status(
+                crate::worker_engine_build_id(),
+                swarm_terminal::PROTOCOL_VERSION,
+            )),
+            None
+        );
+    }
+
     use super::{
         ResourcePressure, cpu_pressure, layer_pressure, machine_of as machine, worst_pressure,
     };
