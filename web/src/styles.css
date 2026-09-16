@@ -1538,6 +1538,28 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .worker-preference-form > small { grid-column: 1 / -1; }
 .worker-autostart { display: flex; align-items: center; gap: 7px; font-size: .8rem; }
 .worker-autostart input { width: 18px; height: 18px; margin: 0; }
+/* WHAT THIS WORKER MAY DO — grouped, and spanning the form rather than squeezed
+   into one grid column. These two controls grant CAPABILITY, unlike everything
+   else in this form, which names or configures the worker. They were first
+   shipped with no styles at all and landed as a squashed column of run-together
+   text; the operator's word for it was "a train wreck", and they were right. */
+.worker-capability-group { grid-column: 1 / -1; display: grid; gap: 9px; margin-top: 2px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.worker-capability-group > .worker-capability-heading { color: var(--muted); font-size: .72rem; font-weight: 700; }
+/* A checkbox beside a two-line explanation, rather than beside a word. `start`
+   because the box belongs with the first line, not the middle of the block. */
+.worker-capability { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 4px 8px; font-size: .8rem; }
+.worker-capability input { width: 18px; height: 18px; margin: 2px 0 0; }
+.worker-capability > span { display: grid; gap: 2px; min-width: 0; }
+.worker-capability strong { font-size: .8rem; }
+.worker-capability small, .worker-system-access small { color: var(--muted); font-weight: 400; line-height: 1.4; white-space: normal; }
+.worker-system-access { display: grid; gap: 4px; min-width: 0; }
+.worker-system-access > label { color: var(--muted); font-size: .72rem; font-weight: 700; }
+/* Each explanation on its own line. Two adjacent inline <small>s ran their
+   sentences together: "...stops and asks you.Takes effect the next time..." */
+.worker-system-access small { display: block; }
+.worker-system-access-timing { color: var(--muted); font-style: italic; }
+.worker-system-access-confirm { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 8px; margin-top: 2px; padding: 8px 9px; border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line)); border-radius: 9px; background: var(--bad-soft); font-size: .78rem; font-weight: 700; }
+.worker-system-access-confirm input { width: 18px; height: 18px; margin: 1px 0 0; }
 .worker-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .worker-edit-actions button { min-height: 34px; padding: 5px 11px; }
 .worker-remove-zone { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding-top: 9px; border-top: 1px solid var(--line); }

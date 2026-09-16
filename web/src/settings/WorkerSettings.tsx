@@ -313,7 +313,25 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   const experimentalBlocked = newExperimentalBinding && (!allowExperimental || !isExperimentalProvider(provider) || providers.experimental?.[provider] !== true || providerCapabilitiesUnavailable);
   const [autostart, setAutostart] = useState(worker.autostart);
   const [boardRead, setBoardRead] = useState(worker.board_read);
-  const [systemAccess, setSystemAccess] = useState<SystemAccess>(worker.system_access);
+  const [systemAccess, setSystemAccess] = useState<SystemAccess>(worker.system_access ?? "none");
+  // ⚠️ useState CAPTURES ITS VALUE AT MOUNT, and this row stays mounted while the
+  // roster polls. So a level changed anywhere else — another tab, another
+  // device, or an API that only began reporting the field after a reload — left
+  // the form showing a stale value with nothing on screen disagreeing. Observed
+  // once, and it is the worst possible shape for a PRIVILEGE control: the
+  // operator read "Ask me every time" while the database said "services".
+  //
+  // Following the PROP RATHER THAN RESETTING ON OPEN is deliberate. A blanket
+  // reset also discarded an unconfirmed provider choice, which this form keeps
+  // on purpose until refreshed data confirms the binding.
+  const lastKnownAccess = useRef(worker.system_access);
+  useEffect(() => {
+    if (worker.system_access !== lastKnownAccess.current) {
+      lastKnownAccess.current = worker.system_access;
+      setSystemAccess(worker.system_access ?? "none");
+      setUnderstandsFullAccess(false);
+    }
+  }, [worker.system_access]);
   // ⚠️ THE SECOND STEP FOR THE TOP LEVEL, and only when RAISING to it. A worker
   // already at Full does not re-confirm on every unrelated edit, or the
   // confirmation becomes something people click past without reading — which is
@@ -360,7 +378,10 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
     setProvider(worker.provider);
     setAutostart(worker.autostart);
     setBoardRead(worker.board_read);
-    setSystemAccess(worker.system_access);
+    // Falling back to "none" rather than undefined: a select whose value matches
+    // no option silently displays the FIRST one, which reads as a deliberate
+    // setting of "ask me every time" when the truth is that the field is absent.
+    setSystemAccess(worker.system_access ?? "none");
     setUnderstandsFullAccess(false);
     setRepository(worker.workspace);
     setAllowOutsideRoots(false);
@@ -476,7 +497,14 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
           {!worker.running && <ExperimentalProviderControl enabled={allowExperimental} onChange={setAllowExperimental} />}
           {saveError && <p role="alert" className="field-error">{saveError}</p>}
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
-          <label className="worker-autostart"><input type="checkbox" checked={boardRead} onChange={(event) => setBoardRead(event.target.checked)} /><span><strong>Let this worker read the whole board</strong><small>It can see every task and its history, so you can ask it what is happening without spending a Queen turn. It still cannot move, assign or approve anything — what it may act on is its own assignment, exactly as before.</small></span></label>
+          {/* ⚠️ THE TWO CONTROLS THAT GRANT CAPABILITY, kept together and apart
+              from the rest. Everything else in this form names or configures the
+              worker; these two decide what it may DO. They were first dropped
+              loose into the grid with no styles and rendered as a squashed
+              column of run-together text. */}
+          <fieldset className="worker-capability-group">
+            <legend className="worker-capability-heading">What this worker may do</legend>
+            <label className="worker-capability"><input type="checkbox" checked={boardRead} onChange={(event) => setBoardRead(event.target.checked)} /><span><strong>Read the whole board</strong><small>It can see every task and its history, so you can ask it what is happening without spending a Queen turn. It still cannot move, assign or approve anything — what it may act on is its own assignment, exactly as before.</small></span></label>
           <div className="worker-system-access">
             <label htmlFor={`worker-system-access-${worker.id}`}>Commands it may run without asking</label>
             <select id={`worker-system-access-${worker.id}`} value={systemAccess} onChange={(event) => { setSystemAccess(event.target.value as SystemAccess); setUnderstandsFullAccess(false); }}>
@@ -503,6 +531,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
               </label>
             )}
           </div>
+          </fieldset>
           {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, repository, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim() || repositoryBlocked || experimentalBlocked || (raisingToFull && !understandsFullAccess)}>{moving ? "Move worker" : descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
           {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}

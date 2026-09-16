@@ -269,7 +269,7 @@ test("the operator can let one worker read the whole board, and the label says i
 
   fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
   const editForm = screen.getByRole("form", { name: "Edit Daisy" });
-  const toggle = within(editForm).getByLabelText(/Let this worker read the whole board/);
+  const toggle = within(editForm).getByLabelText(/Read the whole board/);
   expect(toggle).not.toBeChecked();
   expect(
     within(editForm).getByText(/cannot move, assign or approve anything/),
@@ -316,6 +316,44 @@ test("a worker can be allowed to look at the machine without being allowed to ch
     budget.id, budget.name, budget.description ?? "", budget.provider, budget.autostart,
     undefined, false, false, false, "inspect",
   );
+});
+
+/**
+ * ⚠️ THE FORM MUST FOLLOW THE SERVER, and this is the bug that shipped: the
+ * editor showed "Ask me every time" while the database said "services", with
+ * nothing on screen to suggest a disagreement. useState captures its value at
+ * mount and this row stays mounted while the roster polls, so a level set in
+ * another tab — or reported by an API that only started sending the field after
+ * a reload — never reached the control.
+ *
+ * For a PRIVILEGE control that is the worst possible failure: it tells the
+ * operator a worker is locked down when it is not.
+ */
+test("the level control follows the worker when it changes underneath the form", () => {
+  const view = render(
+    <WorkerSettings
+      workers={[queen, budget]} workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={vi.fn()} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")} onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  const label = "Commands it may run without asking";
+  expect(within(screen.getByRole("form", { name: "Edit Daisy" })).getByLabelText(label)).toHaveValue("none");
+
+  view.rerender(
+    <WorkerSettings
+      workers={[queen, { ...budget, system_access: "services" }]} workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={vi.fn()} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")} onReorder={vi.fn()}
+    />,
+  );
+
+  expect(
+    within(screen.getByRole("form", { name: "Edit Daisy" })).getByLabelText(label),
+  ).toHaveValue("services");
 });
 
 /**
