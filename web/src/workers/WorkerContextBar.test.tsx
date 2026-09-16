@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 const worker: Worker = {
   id: "worker-1", hive_id: "hive", name: "Public Website", role: "worker", provider: "claude_code",
-  workspace: "/home/operator/projects/rcg/rcg-public-web", autostart: false, board_read: false, position: 1,
+  workspace: "/home/operator/projects/rcg/rcg-public-web", autostart: false, board_read: false, system_access: "none", position: 1,
   active_session_id: "session", running: true, attention_state: "resting", created_at: 1, updated_at: 1,
 };
 

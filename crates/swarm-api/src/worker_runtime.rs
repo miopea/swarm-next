@@ -3048,6 +3048,7 @@ mod tests {
             ephemeral: false,
             mark: None,
             board_read: false,
+            system_access: swarm_domain::SystemAccess::None,
         }
     }
 }

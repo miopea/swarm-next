@@ -5,7 +5,7 @@ import { foreignEngagement, workerAttention, workerSilence, workerSwitcherDetail
 
 const worker: Worker = {
   id: "worker", hive_id: "hive", name: "Daisy", role: "worker", provider: "claude_code",
-  workspace: "/projects/daisy", autostart: false, board_read: false, position: 1, active_session_id: "session",
+  workspace: "/projects/daisy", autostart: false, board_read: false, system_access: "none", position: 1, active_session_id: "session",
   running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
 };
 

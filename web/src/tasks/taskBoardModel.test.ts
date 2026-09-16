@@ -5,7 +5,7 @@ import { buildTaskBoardView, type TaskBoardQuery } from "./taskBoardModel";
 
 const worker: Worker = {
   id: "worker-a", hive_id: "hive", name: "Daisy", role: "worker", provider: "claude_code",
-  workspace: "/projects/a", autostart: false, board_read: false, position: 0, active_session_id: null,
+  workspace: "/projects/a", autostart: false, board_read: false, system_access: "none", position: 0, active_session_id: null,
   created_at: 1, updated_at: 1, running: false, attention_state: "sleeping",
 };
 

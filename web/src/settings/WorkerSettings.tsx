@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 
-import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
+import type { ProviderCapabilities, ProviderKind, SystemAccess, Worker, WorkspaceChoice } from "../api";
 import { fetchWorkspaces } from "../api";
 import WorkspaceSearchSettings from "./WorkspaceSearchSettings";
 import BeeMascot from "../brand/BeeMascot";
@@ -18,7 +18,7 @@ type Props = {
   providers: ProviderCapabilities;
   providerCapabilitiesUnavailable?: boolean;
   onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean, acknowledgeExperimentalProvider?: boolean) => Promise<void>;
-  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider?: boolean, boardRead?: boolean) => Promise<void>;
+  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean, workspace?: string, allowOutsideRoots?: boolean, acknowledgeExperimentalProvider?: boolean, boardRead?: boolean, systemAccess?: SystemAccess) => Promise<void>;
   /** Applies a chosen bee on its own, without the rest of the edit form. */
   onChooseMark: (workerId: string, mark: string) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
@@ -313,6 +313,13 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   const experimentalBlocked = newExperimentalBinding && (!allowExperimental || !isExperimentalProvider(provider) || providers.experimental?.[provider] !== true || providerCapabilitiesUnavailable);
   const [autostart, setAutostart] = useState(worker.autostart);
   const [boardRead, setBoardRead] = useState(worker.board_read);
+  const [systemAccess, setSystemAccess] = useState<SystemAccess>(worker.system_access);
+  // ⚠️ THE SECOND STEP FOR THE TOP LEVEL, and only when RAISING to it. A worker
+  // already at Full does not re-confirm on every unrelated edit, or the
+  // confirmation becomes something people click past without reading — which is
+  // the failure mode a confirmation exists to prevent.
+  const [understandsFullAccess, setUnderstandsFullAccess] = useState(false);
+  const raisingToFull = systemAccess === "full" && worker.system_access !== "full";
   const [repository, setRepository] = useState(worker.workspace);
   const [allowOutsideRoots, setAllowOutsideRoots] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
@@ -327,15 +334,15 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
   const moving = normalizePath(repository.trim()) !== normalizePath(worker.workspace);
   const customRepository = moving && Boolean(repository.trim()) && !workspaces.some((choice) => normalizePath(choice.path) === normalizePath(repository.trim()));
   const repositoryBlocked = moving && (!repository.trim() || (customRepository && !allowOutsideRoots));
-  const dirty = name !== worker.name || descriptionChanged || provider !== worker.provider || autostart !== worker.autostart || boardRead !== worker.board_read || moving;
+  const dirty = name !== worker.name || descriptionChanged || provider !== worker.provider || autostart !== worker.autostart || boardRead !== worker.board_read || systemAccess !== worker.system_access || moving;
 
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!name.trim() || repositoryBlocked || experimentalBlocked) return;
     setSaveError("");
     try {
-      if (newExperimentalBinding) await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, true, boardRead);
-      else await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, false, boardRead);
+      if (newExperimentalBinding) await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, true, boardRead, systemAccess);
+      else await onUpdate(worker.id, name, description, provider, autostart, moving ? repository.trim() : undefined, customRepository && allowOutsideRoots, false, boardRead, systemAccess);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "The worker could not be saved. Your choices are unchanged.");
       return;
@@ -353,6 +360,8 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
     setProvider(worker.provider);
     setAutostart(worker.autostart);
     setBoardRead(worker.board_read);
+    setSystemAccess(worker.system_access);
+    setUnderstandsFullAccess(false);
     setRepository(worker.workspace);
     setAllowOutsideRoots(false);
     setConfirmingRemoval(false);
@@ -468,7 +477,33 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
           {saveError && <p role="alert" className="field-error">{saveError}</p>}
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
           <label className="worker-autostart"><input type="checkbox" checked={boardRead} onChange={(event) => setBoardRead(event.target.checked)} /><span><strong>Let this worker read the whole board</strong><small>It can see every task and its history, so you can ask it what is happening without spending a Queen turn. It still cannot move, assign or approve anything — what it may act on is its own assignment, exactly as before.</small></span></label>
-          {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, repository, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim() || repositoryBlocked || experimentalBlocked}>{moving ? "Move worker" : descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
+          <div className="worker-system-access">
+            <label htmlFor={`worker-system-access-${worker.id}`}>Commands it may run without asking</label>
+            <select id={`worker-system-access-${worker.id}`} value={systemAccess} onChange={(event) => { setSystemAccess(event.target.value as SystemAccess); setUnderstandsFullAccess(false); }}>
+              <option value="none">Ask me every time</option>
+              <option value="inspect">Look at the machine — disk, memory, processes, logs</option>
+              <option value="services">Look, and restart Swarm&rsquo;s own services</option>
+              <option value="full">Every command, including sudo</option>
+            </select>
+            <small>
+              {systemAccess === "none" && "Today's behaviour: anything it has not been granted stops and asks you."}
+              {systemAccess === "inspect" && "Read-only. It can investigate a full disk or a slow machine on its own, and cannot change anything. Nothing here uses sudo, so it can never stall on a password prompt."}
+              {systemAccess === "services" && "Everything above, plus restarting swarm-api and swarm-terminal-host and reading their journals. Named units only — it cannot touch other services."}
+              {systemAccess === "full" && "No command asks first, sudo included. File edits and other tools keep their normal rules. Bounded only by what your sudo rules already permit this account — if that is passwordless sudo, that is the whole machine."}
+            </small>
+            {/* ⚠️ SAID OUT LOUD BECAUSE REVOCATION IS THE SILENT HALF. The
+                settings file is read once, when the provider starts, so lowering
+                a level does nothing to a worker already running. A control that
+                implied otherwise would be worse than no control. */}
+            <small className="worker-system-access-timing">Takes effect the next time this worker starts. Restart it if you want the change to bite now.</small>
+            {raisingToFull && (
+              <label className="worker-system-access-confirm">
+                <input type="checkbox" checked={understandsFullAccess} onChange={(event) => setUnderstandsFullAccess(event.target.checked)} />
+                <span>I understand this worker will run any command unattended, without asking.</span>
+              </label>
+            )}
+          </div>
+          {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, repository, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim() || repositoryBlocked || experimentalBlocked || (raisingToFull && !understandsFullAccess)}>{moving ? "Move worker" : descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
           {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}
           </div>}

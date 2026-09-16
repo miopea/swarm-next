@@ -336,6 +336,175 @@ impl fmt::Display for ParseProviderKindError {
 
 impl std::error::Error for ParseProviderKindError {}
 
+/// Which of Swarm's own service commands a worker may run without being asked.
+///
+/// ⚠️ ENFORCED BY SWARM, NOT BY THE OPERATING SYSTEM. Every worker's terminal
+/// runs as the same Unix user, so what separates one worker from another is the
+/// per-worker `permissions.allow` list Claude Code reads at launch: a command
+/// outside it prompts rather than runs, and nothing here is launched with a
+/// permission-bypass flag. This enum decides what goes into that list, which
+/// makes that file a boundary rather than a convenience.
+///
+/// Defaults to `None` everywhere, including for every worker that existed before
+/// this was added.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemAccess {
+    /// Nothing beyond the commands an operator has approved one at a time.
+    #[default]
+    None,
+    /// Looking, without asking first, and without the ability to change
+    /// anything: disk, memory, processes, block devices, journals, `/proc`.
+    ///
+    /// ⚠️ THIS IS THE LEVEL THAT SOLVES THE PROBLEM PEOPLE ACTUALLY HIT. The
+    /// operator's example was being unable to investigate free space. Measured
+    /// on this machine, every command that investigation needs — `df`, `du`,
+    /// `lsblk`, `free`, reading `/proc` and `/var/log/syslog` — already works
+    /// with no elevation at all. What stopped it was the PROMPT: a worker that
+    /// must stop and ask before running `df -h` cannot explore a machine, and
+    /// that reads exactly like "it cannot see system details" while looking
+    /// nothing like a permissions problem.
+    ///
+    /// Deliberately no `sudo` here. Everything at this level works as the
+    /// ordinary user, so it cannot hang on a password prompt nobody can answer,
+    /// and a worker holding it cannot change the machine even by accident. A
+    /// few root-owned directories stay out of reach; that is the trade.
+    Inspect,
+    /// Everything Inspect can see, plus control of Swarm's own units: restart
+    /// them, read their journals with the elevation that needs.
+    ///
+    /// Enough for a worker to recover a wedged Hive, and bounded to that.
+    Services,
+    /// Every shell command, without being asked — and nothing beyond that.
+    ///
+    /// ⚠️ WHAT CHANGES IS THE GATE, NOT THE CEILING, and an earlier version of
+    /// this comment got that wrong by calling the level "bounded by the
+    /// machine's own sudoers rules". True about the ceiling, silent about the
+    /// part that matters. Today a worker reaching for a command it has no grant
+    /// for STOPS and asks the operator. At this level it does not ask. That is
+    /// unattended command execution, at any hour, with nobody watching, and it
+    /// is the whole point of the level rather than a side effect of it.
+    ///
+    /// ⚠️ TWO WRONG MECHANISMS WERE TRIED BEFORE THIS ONE, both caught by the
+    /// operator, and the mistakes are worth keeping because each looked right:
+    ///
+    /// 1. `Bash(sudo:*)` — silences commands beginning with `sudo` and leaves
+    ///    every ordinary one still prompting. Neither full, nor honestly named.
+    /// 2. `--permission-mode bypassPermissions` — the provider's "ask me
+    ///    nothing" switch, which also stops asking about file writes, network
+    ///    calls and every other tool. That is a different and much larger grant
+    ///    than "let it run commands".
+    ///
+    /// So this grants the BASH TOOL and only that. Reads, writes and every other
+    /// tool keep whatever rules they had, which is the line the operator drew:
+    /// "bypass permissions is ALL open, that is too far".
+    ///
+    /// The ceiling stays whatever the machine permits that user. Swarm does not
+    /// write sudoers and cannot widen it — but note that this removes the one
+    /// thing standing between an agent and that ceiling.
+    Full,
+}
+
+impl SystemAccess {
+    /// The stored form, which is also the wire form.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Inspect => "inspect",
+            Self::Services => "services",
+            Self::Full => "full",
+        }
+    }
+
+    /// Reads a stored value, treating anything unrecognised as `None`.
+    ///
+    /// ⚠️ UNRECOGNISED MEANS NONE, NEVER MORE. A row written by a newer build, or
+    /// damaged, must never be read as a WIDER grant than it says. Failing closed
+    /// costs a worker a capability until somebody looks; failing open is not
+    /// recoverable by noticing later.
+    #[must_use]
+    pub fn from_stored(value: &str) -> Self {
+        match value {
+            "inspect" => Self::Inspect,
+            "services" => Self::Services,
+            "full" => Self::Full,
+            _ => Self::None,
+        }
+    }
+
+    /// The exact allow-list entries this level puts in a worker's settings.
+    ///
+    /// ⚠️ ENTRIES, NOT COMMANDS, and the difference is the whole of the top
+    /// level: every other level is a list of `Bash(...)` patterns, while Full is
+    /// the bare tool name `Bash`, which permits every shell command. Returning
+    /// commands and wrapping them at the call site made that impossible to
+    /// express, and produced the first wrong implementation of Full.
+    ///
+    /// Named patterns rather than wildcards everywhere else: `sudo systemctl *`
+    /// would also permit masking sshd, and a list nobody can read at a glance is
+    /// not a list anyone will review.
+    #[must_use]
+    pub fn allow_entries(self) -> &'static [&'static str] {
+        // Looking only, and all of it works as the ordinary user.
+        const LOOKING: &[&str] = &[
+            "Bash(df:*)",
+            "Bash(du:*)",
+            "Bash(lsblk:*)",
+            "Bash(free:*)",
+            "Bash(ps:*)",
+            "Bash(uptime:*)",
+            "Bash(uname:*)",
+            "Bash(lscpu:*)",
+            "Bash(systemctl status:*)",
+            "Bash(systemctl list-units:*)",
+            "Bash(journalctl:*)",
+            "Bash(cat /proc/:*)",
+            "Bash(cat /var/log/:*)",
+            "Bash(ip addr:*)",
+            "Bash(ip route show:*)",
+        ];
+        const SERVICES: &[&str] = &[
+            "Bash(df:*)",
+            "Bash(du:*)",
+            "Bash(lsblk:*)",
+            "Bash(free:*)",
+            "Bash(ps:*)",
+            "Bash(uptime:*)",
+            "Bash(uname:*)",
+            "Bash(lscpu:*)",
+            "Bash(systemctl status:*)",
+            "Bash(systemctl list-units:*)",
+            "Bash(journalctl:*)",
+            "Bash(cat /proc/:*)",
+            "Bash(cat /var/log/:*)",
+            "Bash(ip addr:*)",
+            "Bash(ip route show:*)",
+            // The elevated few, each naming its unit. A worker at this level can
+            // restart Swarm and read its logs, and cannot touch sshd.
+            "Bash(sudo systemctl restart swarm-api:*)",
+            "Bash(sudo systemctl restart swarm-terminal-host:*)",
+            "Bash(sudo journalctl -u swarm-api:*)",
+            "Bash(sudo journalctl -u swarm-terminal-host:*)",
+        ];
+        match self {
+            Self::None => &[],
+            Self::Inspect => LOOKING,
+            Self::Services => SERVICES,
+            // One entry, and it has to be one. An operator choosing this is
+            // choosing "stop asking me about commands", and a list pretending to
+            // enumerate what that covers would be a comforting lie.
+            Self::Full => &["Bash"],
+        }
+    }
+}
+
+impl fmt::Display for SystemAccess {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -380,6 +549,9 @@ pub struct WorkerProfile {
     /// is happening" does not have to cost a turn from the one agent that can
     /// also change it.
     pub board_read: bool,
+    /// Which service commands this worker may run unasked. See `SystemAccess`.
+    #[serde(default)]
+    pub system_access: SystemAccess,
     /// The bee this worker wears, when an operator chose one.
     ///
     /// None is the ordinary case and means "derive it from my id", so a Hive

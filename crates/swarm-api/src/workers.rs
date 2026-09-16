@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use swarm_domain::{
     CommitRepositoryState, CommitVerdict, PresenceDeviceId, ProviderConversationId, ProviderKind,
-    TaskCommit, WorkerId, WorkerProfile,
+    SystemAccess, TaskCommit, WorkerId, WorkerProfile,
 };
 use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 
@@ -66,6 +66,13 @@ pub(super) struct UpdateWorkerRequest {
     /// what the worker may ACT on is unchanged. Granted here rather than in a
     /// release so the operator can give it and take it back.
     board_read: Option<bool>,
+    /// How far into the machine this worker may reach.
+    ///
+    /// Only this endpoint can set it, and this endpoint is operator-credentialed
+    /// — which is why the audit row can honestly record the operator as its
+    /// author. If an agent-facing path ever sets this, it must pass its own
+    /// author rather than inheriting this one.
+    system_access: Option<SystemAccess>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1310,6 +1317,7 @@ pub(super) async fn update_worker(
                     autostart: request.autostart,
                     workspace: workspace.as_deref(),
                     board_read: request.board_read,
+                    system_access: request.system_access.map(|level| (level, "operator")),
                 },
             )
             .map_err(|error| task_store_error(&error))?

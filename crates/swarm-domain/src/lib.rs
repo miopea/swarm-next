@@ -925,6 +925,7 @@ mod tests {
             ephemeral: false,
             mark: None,
             board_read: false,
+            system_access: crate::SystemAccess::None,
         };
         assert_eq!(profile.role, WorkerRole::Queen);
         assert!(profile.autostart);

@@ -7,7 +7,8 @@ import WorkerRosterItem from "./WorkerRosterItem";
 const queen: Worker = {
   id: "queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen",
   autostart: true,
-  board_read: false, position: 0, active_session_id: "queen-session", running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
+  board_read: false,
+  system_access: "none", position: 0, active_session_id: "queen-session", running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
 };
 
 afterEach(cleanup);

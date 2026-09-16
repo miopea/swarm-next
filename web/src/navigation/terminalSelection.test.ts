@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { Worker, SessionSummary } from "../api";
 import { reconcileTerminalSelection, restoreTerminalSelection, saveTerminalSelection, selectTerminal } from "./terminalSelection";
 
-const worker = (id: string, session: string | null): Worker => ({ id, name: id, hive_id: "hive", role: id === "queen" ? "queen" : "worker", provider: "claude_code", workspace: `/${id}`, autostart: false, board_read: false, position: 0, active_session_id: session, running: session !== null, attention_state: "resting", created_at: 1, updated_at: 1 });
+const worker = (id: string, session: string | null): Worker => ({ id, name: id, hive_id: "hive", role: id === "queen" ? "queen" : "worker", provider: "claude_code", workspace: `/${id}`, autostart: false, board_read: false, system_access: "none", position: 0, active_session_id: session, running: session !== null, attention_state: "resting", created_at: 1, updated_at: 1 });
 const sessions = (...ids: string[]): SessionSummary[] => ids.map((session_id) => ({ session_id, running: true }));
 afterEach(() => { vi.restoreAllMocks(); window.localStorage.clear(); window.sessionStorage.clear(); });
 

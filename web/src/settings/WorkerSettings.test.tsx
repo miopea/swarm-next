@@ -155,7 +155,7 @@ test("experimental provider change requires fresh consent after a completed edit
   fireEvent.change(within(editor).getByLabelText("Default coding provider"), { target: { value: "gemini" } });
   fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
   await waitFor(() => expect(screen.queryByRole("form", { name: "Edit Daisy" })).not.toBeInTheDocument());
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, budget.name, "", "gemini", budget.autostart, undefined, false, true, false);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, budget.name, "", "gemini", budget.autostart, undefined, false, true, false, "none");
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
   editor = screen.getByRole("form", { name: "Edit Daisy" });
   expect(within(editor).getByRole("checkbox", { name: "Allow experimental providers for this change" })).not.toBeChecked();
@@ -193,7 +193,7 @@ test.each(["gemini", "grok", "opencode"] as const)("preserves and identifies an 
   expect(within(screen.getByLabelText("Coding provider")).queryByRole("option", { name: /experimental/ })).not.toBeInTheDocument();
   fireEvent.change(within(editor).getByLabelText("Worker name"), { target: { value: "Daisy renamed" } });
   fireEvent.click(within(editor).getByRole("button", { name: "Save worker" }));
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Daisy renamed", budget.description ?? "", provider, budget.autostart, undefined, false, false, false);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Daisy renamed", budget.description ?? "", provider, budget.autostart, undefined, false, false, false, "none");
 });
 
 test("configures and reorders durable workers with progressive path completion", async () => {
@@ -241,7 +241,7 @@ test("configures and reorders durable workers with progressive path completion",
   fireEvent.change(within(editForm).getByLabelText("Queen routing description"), { target: { value: "Owns budgets and bills." } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
   fireEvent.click(within(editForm).getByRole("button", { name: "Save description to worker" }));
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true, undefined, false, false, false);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true, undefined, false, false, false, "none");
 });
 
 /**
@@ -280,8 +280,101 @@ test("the operator can let one worker read the whole board, and the label says i
 
   expect(onUpdate).toHaveBeenCalledWith(
     budget.id, budget.name, budget.description ?? "", budget.provider, budget.autostart,
-    undefined, false, false, true,
+    undefined, false, false, true, "none",
   );
+});
+
+/**
+ * ⚠️ THE LEVEL THAT SOLVES THE PROBLEM PEOPLE ACTUALLY HAVE.
+ *
+ * The operator's example was being unable to investigate free space. Every
+ * command that needs — df, du, lsblk — already works unprivileged; what stopped
+ * it was the PROMPT. So the editor offers looking as its own level, and says
+ * plainly that it changes nothing on the machine.
+ */
+test("a worker can be allowed to look at the machine without being allowed to change it", () => {
+  const onUpdate = vi.fn();
+  render(
+    <WorkerSettings
+      workers={[queen, budget]} workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={onUpdate} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")} onReorder={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+  const level = within(editForm).getByLabelText("Commands it may run without asking");
+  fireEvent.change(level, { target: { value: "inspect" } });
+
+  expect(within(editForm).getByText(/cannot change anything/)).toBeInTheDocument();
+  // No confirmation for a level that can only look.
+  expect(within(editForm).queryByText(/run any command unattended/)).not.toBeInTheDocument();
+  fireEvent.click(within(editForm).getByRole("button", { name: "Save worker" }));
+  expect(onUpdate).toHaveBeenCalledWith(
+    budget.id, budget.name, budget.description ?? "", budget.provider, budget.autostart,
+    undefined, false, false, false, "inspect",
+  );
+});
+
+/**
+ * ⚠️ RAISING TO THE TOP LEVEL TAKES A SECOND STEP, and the save is REFUSED until
+ * it is taken. A control that granted this on save is the shape where a misclick
+ * during an unrelated edit — renaming a worker — goes unnoticed.
+ */
+test("granting every command requires a second, explicit confirmation", () => {
+  const onUpdate = vi.fn();
+  render(
+    <WorkerSettings
+      workers={[queen, budget]} workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={onUpdate} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")} onReorder={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+  fireEvent.change(within(editForm).getByLabelText("Commands it may run without asking"), {
+    target: { value: "full" },
+  });
+
+  const save = within(editForm).getByRole("button", { name: "Save worker" });
+  expect(save).toBeDisabled();
+  fireEvent.click(save);
+  expect(onUpdate).not.toHaveBeenCalled();
+
+  fireEvent.click(within(editForm).getByLabelText(/run any command unattended/));
+  expect(save).toBeEnabled();
+  fireEvent.click(save);
+  expect(onUpdate).toHaveBeenCalledWith(
+    budget.id, budget.name, budget.description ?? "", budget.provider, budget.autostart,
+    undefined, false, false, false, "full",
+  );
+});
+
+/**
+ * ⚠️ REVOCATION IS THE SILENT HALF. The provider reads its settings once, at
+ * launch, so lowering a level does nothing to a worker already running. The
+ * editor has to say that where the choice is made, not in a changelog.
+ */
+test("the editor says a level change waits for the next start", () => {
+  render(
+    <WorkerSettings
+      workers={[queen, budget]} workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={vi.fn()} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")} onReorder={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+
+  expect(
+    within(editForm).getByText(/Takes effect the next time this worker starts/),
+  ).toBeInTheDocument();
 });
 
 test("requires explicit confirmation before removing a sleeping worker", async () => {
@@ -424,6 +517,7 @@ test("drafts private repository context into an editable unsaved description", a
     false,
     false,
     false,
+    "none",
   );
 });
 
@@ -470,6 +564,7 @@ test("moves a sleeping worker to a repository that is not a discovered one", () 
     true,
     false,
     false,
+    "none",
   );
 });
 
@@ -666,6 +761,7 @@ function worker(id: string, name: string, workspace: string, position: number, r
     id,
     hive_id: "hive",
     board_read: false,
+    system_access: "none",
     name,
     role,
     provider: "claude_code",

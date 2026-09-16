@@ -115,11 +115,29 @@ impl AgentBridge {
         // A command spanning lines is refused rather than flattened. The rule is
         // an exact match on the text, so anything that changes the text changes
         // what runs, and the operator approved the text they read.
-        let allow: Vec<String> = granted
+        let mut allow: Vec<String> = granted
             .iter()
             .filter(|command| !command.contains(['\n', '\r']))
             .map(|command| format!("Bash({command})"))
             .collect();
+        // ⚠️ READ FROM THE PROFILE AT EVERY START, never carried in memory. This
+        // is the line that turns an operator's stored choice into what a worker
+        // may actually run, and a level lowered while the worker slept must take
+        // effect the moment it wakes. A failure to read the profile leaves the
+        // list as the grants alone -- fewer permissions, never more, which is
+        // the only direction this may fail in.
+        let level = self
+            .tasks
+            .store()
+            .get_worker_profile(worker_id)
+            .map(|profile| profile.system_access)
+            .unwrap_or_default();
+        for entry in level.allow_entries() {
+            let entry = (*entry).to_owned();
+            if !allow.contains(&entry) {
+                allow.push(entry);
+            }
+        }
         // ⚠️ THIS FILE HAS TWO WRITERS AND ONLY ONE OF THEM USED TO KNOW IT.
         //
         // `ensure_queen_model_default` writes {"model": ...} into this same
@@ -4968,6 +4986,167 @@ mod tests {
         .await;
 
         assert_eq!(history["result"]["isError"], true, "{history}");
+    }
+
+    fn set_level(store: &TaskStore, worker_id: WorkerId, level: swarm_domain::SystemAccess) {
+        store
+            .update_worker_profile(
+                worker_id,
+                &swarm_persistence::WorkerProfileEdit {
+                    system_access: Some((level, "operator")),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    fn written_settings(bridge: &AgentBridge, worker_id: WorkerId) -> String {
+        std::fs::read_to_string(bridge.worker_settings_path(worker_id)).unwrap_or_default()
+    }
+
+    /// ⚠️ THE DEFAULT HAS TO BE PROVEN, NOT ASSUMED. Every worker that existed
+    /// before this feature reads `none`, and a defect that silently upgraded
+    /// them would stay invisible until somebody noticed a worker running
+    /// commands nobody granted. This fails if the column default, the enum
+    /// default and `from_stored` ever stop agreeing.
+    #[test]
+    fn a_worker_at_none_gains_nothing_from_this_feature() {
+        let (bridge, _store, _queen_id, worker_id, _directory) = setup();
+
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let written = written_settings(&bridge, worker_id);
+        assert!(
+            !written.contains("Bash"),
+            "a worker nobody granted anything must acquire nothing: {written}"
+        );
+    }
+
+    /// The level that answers the operator's actual complaint — being unable to
+    /// investigate free space — and the assertion that it cannot do more.
+    #[test]
+    fn the_inspect_level_can_look_and_cannot_change_anything() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        set_level(&store, worker_id, swarm_domain::SystemAccess::Inspect);
+
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let written = written_settings(&bridge, worker_id);
+        assert!(written.contains("Bash(df:*)"), "{written}");
+        assert!(written.contains("Bash(du:*)"), "{written}");
+        assert!(
+            !written.contains("sudo"),
+            "Inspect works as the ordinary user on purpose, so it can never hang \
+             on a password prompt nobody can answer: {written}"
+        );
+        assert!(
+            !written.contains("\"Bash\""),
+            "looking must not quietly become everything: {written}"
+        );
+    }
+
+    #[test]
+    fn the_services_level_names_its_units_rather_than_taking_systemctl_whole() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        set_level(&store, worker_id, swarm_domain::SystemAccess::Services);
+
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let written = written_settings(&bridge, worker_id);
+        assert!(
+            written.contains("sudo systemctl restart swarm-api"),
+            "{written}"
+        );
+        assert!(
+            !written.contains("Bash(sudo systemctl:*)"),
+            "a wildcard here would also permit masking sshd: {written}"
+        );
+    }
+
+    /// ⚠️ WHAT FULL ACTUALLY IS, after two wrong mechanisms the operator caught.
+    /// Not `Bash(sudo:*)`, which leaves every ordinary command still prompting;
+    /// not `--permission-mode bypassPermissions`, which also stops asking about
+    /// file writes and every other tool. The Bash tool, and nothing else.
+    #[test]
+    fn the_full_level_is_the_bash_tool_and_not_a_global_bypass() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        set_level(&store, worker_id, swarm_domain::SystemAccess::Full);
+
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&written_settings(&bridge, worker_id)).unwrap();
+        let allow = settings["permissions"]["allow"]
+            .as_array()
+            .expect("an allow list");
+        assert!(
+            allow.iter().any(|entry| entry == "Bash"),
+            "every shell command, which is what the level claims: {settings}"
+        );
+        assert!(
+            settings.get("permissionMode").is_none()
+                && !written_settings(&bridge, worker_id).contains("bypassPermissions"),
+            "and NOT a global bypass — the operator drew that line explicitly: \
+             {settings}"
+        );
+    }
+
+    /// ⚠️ GRANTING IS VISIBLE, REVOKING IS SILENT, which is the half that goes
+    /// untested. The file is rebuilt from the stored level at every start, so a
+    /// worker put back to None comes up without the commands rather than
+    /// keeping whatever it was last given.
+    #[test]
+    fn lowering_the_level_takes_the_commands_away_again() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        set_level(&store, worker_id, swarm_domain::SystemAccess::Services);
+        bridge.ensure_worker_settings(worker_id).unwrap();
+        assert!(written_settings(&bridge, worker_id).contains("swarm-api"));
+
+        set_level(&store, worker_id, swarm_domain::SystemAccess::None);
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let written = written_settings(&bridge, worker_id);
+        assert!(
+            !written.contains("sudo") && !written.contains("Bash(df"),
+            "taking a level back has to reach the file too, or revocation is a \
+             label rather than a change: {written}"
+        );
+    }
+
+    /// ⚠️ THE REGRESSION THAT BROKE THIS MORNING, NOW GUARDING A PRIVILEGE.
+    /// Several writers share this one file — command grants, the Queen model
+    /// default, and now the system level — and the grants writer used to
+    /// replace the whole document and delete it outright when a worker had no
+    /// grants. A level living in that file would go with it, silently, on every
+    /// start. So this puts a neighbouring key in the file by hand and proves
+    /// both survive.
+    ///
+    /// ⚠️ IT CANNOT BE WRITTEN AGAINST QUEEN, which is worth knowing rather than
+    /// working around: `update_worker_profile` refuses her outright with
+    /// `QueenProfileImmutable`, so no system level can be set on her by this path
+    /// at all. That is an existing rule about the managed profile, and it means
+    /// the model default and a system level never actually meet in production.
+    #[test]
+    fn a_system_level_survives_a_neighbouring_key_in_the_same_file() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let path = bridge.worker_settings_path(worker_id);
+        std::fs::write(&path, serde_json::json!({"model": "sonnet"}).to_string()).unwrap();
+        set_level(&store, worker_id, swarm_domain::SystemAccess::Inspect);
+
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&written_settings(&bridge, worker_id)).unwrap();
+        assert_eq!(
+            settings["model"], "sonnet",
+            "the level's writer must not take a neighbour with it: {settings}"
+        );
+        assert!(
+            settings["permissions"]["allow"]
+                .as_array()
+                .is_some_and(|allow| allow.iter().any(|entry| entry == "Bash(df:*)")),
+            "and the level itself has to land: {settings}"
+        );
     }
 
     /// A decision carrying questions tells the worker to ask them verbatim.

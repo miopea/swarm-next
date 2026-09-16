@@ -24,6 +24,7 @@ const worker: Worker = {
   workspace: "/projects/clover",
   autostart: false,
   board_read: false,
+  system_access: "none",
   position: 1,
   active_session_id: null,
   created_at: 1,

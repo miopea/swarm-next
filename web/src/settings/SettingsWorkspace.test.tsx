@@ -95,7 +95,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     health: { status: "ok", version: "0.1.0" },
     sessions: [{ session_id: "session-safe-id", running: true }, { session_id: "session-2", running: false }, { session_id: "session-3", running: false }],
-    workers: [{ id: "worker-1", hive_id: "hive-1", name: "Private name", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, board_read: false, position: 1, active_session_id: "session-safe-id", created_at: 1, updated_at: 1, running: true, attention_state: "blocked", runtime_error: "raw provider failure detail" }],
+    workers: [{ id: "worker-1", hive_id: "hive-1", name: "Private name", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, board_read: false, system_access: "none", position: 1, active_session_id: "session-safe-id", created_at: 1, updated_at: 1, running: true, attention_state: "blocked", runtime_error: "raw provider failure detail" }],
     workspaces: [],
     onThemeChange: onThemeChange,
     onPresenceChange: onPresenceChange,
@@ -606,9 +606,9 @@ test("names the work a worker engine update would interrupt, before asking", asy
   render(<SettingsWorkspace {...minimalProps()} section="settings-updates"
     health={{ status: "ok", version: "0.1.0" }}
     workers={[
-      { id: "w1", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/w", autostart: true, board_read: false, position: 1, active_session_id: "s1", created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" },
-      { id: "w2", hive_id: "hive-1", name: "BudgetBug", role: "worker", provider: "claude_code", workspace: "/w", autostart: false, board_read: false, position: 2, active_session_id: "s2", created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" },
-      { id: "w3", hive_id: "hive-1", name: "Sculpt Studio", role: "worker", provider: "claude_code", workspace: "/w", autostart: false, board_read: false, position: 3, active_session_id: null, created_at: 1, updated_at: 1, running: false, attention_state: "resting" },
+      { id: "w1", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/w", autostart: true, board_read: false, system_access: "none", position: 1, active_session_id: "s1", created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" },
+      { id: "w2", hive_id: "hive-1", name: "BudgetBug", role: "worker", provider: "claude_code", workspace: "/w", autostart: false, board_read: false, system_access: "none", position: 2, active_session_id: "s2", created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" },
+      { id: "w3", hive_id: "hive-1", name: "Sculpt Studio", role: "worker", provider: "claude_code", workspace: "/w", autostart: false, board_read: false, system_access: "none", position: 3, active_session_id: null, created_at: 1, updated_at: 1, running: false, attention_state: "resting" },
     ]}
   />);
 

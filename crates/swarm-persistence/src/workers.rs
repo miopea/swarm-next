@@ -5,8 +5,8 @@ use std::{
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, HiveId, PresenceDeviceId, ProviderConversationId, ProviderKind, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    ControlRoomEventKind, HiveId, PresenceDeviceId, ProviderConversationId, ProviderKind,
+    SystemAccess, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use uuid::Uuid;
 
@@ -170,6 +170,15 @@ pub struct WorkerProfileEdit<'a> {
     /// Whether this worker may READ the whole board. Reading only: it confers
     /// no authority over anything it can then see.
     pub board_read: Option<bool>,
+    /// A new system-access level AND who is setting it, which is one field on
+    /// purpose.
+    ///
+    /// ⚠️ THE AUTHOR IS NOT OPTIONAL, so it is not a separate field somebody can
+    /// forget to pass. A privilege change with no account of who made it is the
+    /// record nobody can reconstruct afterwards, and making the pair
+    /// unseparable is cheaper than a runtime check that fires long after the
+    /// caller was written.
+    pub system_access: Option<(SystemAccess, &'a str)>,
 }
 
 impl TaskStore {
@@ -428,12 +437,14 @@ impl TaskStore {
         let (name, description) = (edit.name, edit.description);
         let (provider, autostart) = (edit.provider, edit.autostart);
         let (workspace, board_read) = (edit.workspace, edit.board_read);
+        let system_access = edit.system_access;
         if name.is_none()
             && description.is_none()
             && provider.is_none()
             && autostart.is_none()
             && workspace.is_none()
             && board_read.is_none()
+            && system_access.is_none()
         {
             return Err(TaskStoreError::EmptyWorkerUpdate);
         }
@@ -517,6 +528,7 @@ impl TaskStore {
             )?;
         }
         write_worker_flags(&transaction, worker_id, autostart, board_read)?;
+        write_system_access(&transaction, worker_id, system_access)?;
         move_worker_repository(&transaction, worker_id, workspace, running)?;
         transaction.execute(
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
@@ -958,7 +970,7 @@ impl TaskStore {
                     OR p.provider_conversation_resume = 1),
                    e.expires_at,
                    p.created_at, p.updated_at, p.description, p.ephemeral,
-                   p.mark, p.board_read
+                   p.mark, p.board_read, p.system_access
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -1024,7 +1036,7 @@ impl TaskStore {
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
                        p.created_at, p.updated_at, p.description, p.ephemeral,
-                   p.mark, p.board_read
+                   p.mark, p.board_read, p.system_access
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -2143,7 +2155,7 @@ impl TaskStore {
                         OR p.provider_conversation_resume = 1),
                        e.expires_at,
                        p.created_at, p.updated_at, p.description, p.ephemeral,
-                   p.mark, p.board_read
+                   p.mark, p.board_read, p.system_access
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -2339,6 +2351,10 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         // is why board_read went on the END of every SELECT rather than beside
         // the other flags where it reads better.
         board_read: row.get::<_, i64>(17)? != 0,
+        // 18, appended for the same reason again. Parsed through from_stored,
+        // which treats anything it does not recognise as None: a column written
+        // by a newer build must never read as a WIDER grant than it says.
+        system_access: SystemAccess::from_stored(&row.get::<_, String>(18)?),
     })
 }
 
@@ -2367,6 +2383,44 @@ fn write_worker_flags(
             params![worker_id.to_string(), board_read],
         )?;
     }
+    Ok(())
+}
+
+/// Sets how far into the machine a worker may reach, and records that it changed.
+///
+/// ⚠️ THE WRITE AND THE RECORD COMMIT TOGETHER, inside the caller's transaction.
+/// A privilege that took effect while its audit row was lost is exactly the
+/// state nobody can reason about afterwards — and it is the state you get from
+/// two separate writes the moment anything between them fails.
+///
+/// A change to the level it already holds writes nothing and logs nothing: an
+/// audit trail full of no-ops is one people stop reading.
+fn write_system_access(
+    transaction: &rusqlite::Transaction<'_>,
+    worker_id: WorkerId,
+    change: Option<(SystemAccess, &str)>,
+) -> Result<(), TaskStoreError> {
+    let Some((granted, author)) = change else {
+        return Ok(());
+    };
+    let previous: String = transaction.query_row(
+        "SELECT system_access FROM worker_profiles WHERE id = ?1",
+        [worker_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if SystemAccess::from_stored(&previous) == granted {
+        return Ok(());
+    }
+    transaction.execute(
+        "UPDATE worker_profiles SET system_access = ?2 WHERE id = ?1",
+        params![worker_id.to_string(), granted.as_str()],
+    )?;
+    transaction.execute(
+        "INSERT INTO worker_system_access_changes
+             (worker_id, previous, granted, changed_at, changed_by)
+         VALUES (?1, ?2, ?3, unixepoch(), ?4)",
+        params![worker_id.to_string(), previous, granted.as_str(), author],
+    )?;
     Ok(())
 }
 

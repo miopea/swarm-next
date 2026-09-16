@@ -177,6 +177,7 @@ export type {
   ReleaseVersionNotes,
   UpdateWorkerInput,
   RepositoryState,
+  SystemAccess,
   Worker,
   WorkerAttentionState,
   WorkerRole,

@@ -318,7 +318,8 @@ const APIARY_TASK_LOCAL_ORIGIN_SCHEMA_VERSION: i64 = 174;
 const PROVIDER_USAGE_SCHEMA_VERSION: i64 = 175;
 const COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION: i64 = 176;
 const BOARD_READ_SCHEMA_VERSION: i64 = 177;
-const CURRENT_SCHEMA_VERSION: i64 = BOARD_READ_SCHEMA_VERSION;
+const SYSTEM_ACCESS_SCHEMA_VERSION: i64 = 178;
+const CURRENT_SCHEMA_VERSION: i64 = SYSTEM_ACCESS_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4284,7 +4285,52 @@ fn migrate_engine_history_schema_steps(
     if schema_version < BOARD_READ_SCHEMA_VERSION {
         migrate_board_read(transaction)?;
     }
+    if schema_version < SYSTEM_ACCESS_SCHEMA_VERSION {
+        migrate_system_access(transaction)?;
+    }
     Ok(())
+}
+
+/// How far into the machine each worker may reach, and a record of every time
+/// that changed.
+///
+/// ⚠️ THE LOG IS NOT OPTIONAL BOOKKEEPING. The system journal records what was
+/// RUN; nothing anywhere records who was ALLOWED to run it, or who decided. A
+/// privilege that appears in a settings file with no account of how it got there
+/// is the one thing nobody can reconstruct after the fact, and this is the
+/// operator's own machine — they are the person who will want to ask.
+///
+/// Defaults to 'none', so every worker that existed before this keeps exactly
+/// what it had.
+fn migrate_system_access(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let present: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('worker_profiles') WHERE name = 'system_access'",
+        [],
+        |row| row.get(0),
+    )?;
+    if present == 0 {
+        transaction.execute_batch(
+            "ALTER TABLE worker_profiles
+                 ADD COLUMN system_access TEXT NOT NULL DEFAULT 'none'",
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS worker_system_access_changes (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id) ON DELETE CASCADE,
+             previous TEXT NOT NULL,
+             granted TEXT NOT NULL,
+             changed_at INTEGER NOT NULL,
+             changed_by TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS worker_system_access_changes_worker
+             ON worker_system_access_changes(worker_id, changed_at);",
+    )?;
+    // The last step stamps the ceiling. Omitting it does not fail loudly — the
+    // table appears, everything works here, and a freshly opened database still
+    // reports the previous version, so this runs again on every open and any
+    // step added after it is skipped. Schema 175 shipped that way once.
+    transaction.pragma_update(None, "user_version", SYSTEM_ACCESS_SCHEMA_VERSION)
 }
 
 /// One worker may READ the whole board without gaining any authority over it.
@@ -9870,6 +9916,13 @@ mod tests {
             undo_sql: "ALTER TABLE worker_profiles DROP COLUMN board_read",
             probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('worker_profiles')
                 WHERE name = 'board_read'",
+        },
+        SchemaStep {
+            table: "worker_profiles",
+            artifact: "system_access",
+            undo_sql: "ALTER TABLE worker_profiles DROP COLUMN system_access",
+            probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('worker_profiles')
+                WHERE name = 'system_access'",
         },
     ];
 

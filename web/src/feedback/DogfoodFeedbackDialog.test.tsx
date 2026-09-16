@@ -65,7 +65,7 @@ test("previews an explicit dogfood note with content-free runtime context", asyn
       recentEvents={[{ sequence: 7, hive_id: "hive-1", kind: "workers_changed", occurred_at: 1 }]}
       sessions={[{ session_id: "selected-session-id", running: true }]}
       surface="workers"
-      workers={[{ id: "worker-1", hive_id: "hive-1", name: "Private worker", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, board_read: false, position: 1, active_session_id: "selected-session-id", created_at: 1, updated_at: 1, running: true, attention_state: "blocked", runtime_error: "raw provider failure" }]}
+      workers={[{ id: "worker-1", hive_id: "hive-1", name: "Private worker", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, board_read: false, system_access: "none", position: 1, active_session_id: "selected-session-id", created_at: 1, updated_at: 1, running: true, attention_state: "blocked", runtime_error: "raw provider failure" }]}
     />,
   );
 

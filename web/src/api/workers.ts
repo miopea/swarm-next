@@ -56,6 +56,8 @@ export type Worker = {
   workspace: string;
   autostart: boolean;
   board_read: boolean;
+  /** How far into the machine this worker may reach without being asked. */
+  system_access: SystemAccess;
   position: number;
   active_session_id: string | null;
   created_at: number;
@@ -113,6 +115,18 @@ export type CreateWorkerInput = {
   allow_outside_roots?: boolean;
 };
 
+/**
+ * How far into the machine a worker may reach without stopping to ask.
+ *
+ * ⚠️ WHAT CHANGES BETWEEN THESE IS THE PROMPT, NOT THE MACHINE'S OWN RULES. A
+ * worker without a level still CAN run anything the operator approves when it
+ * asks; what a level buys is not having to ask. "inspect" exists because the
+ * problem people actually hit was being unable to look — a worker that must ask
+ * before running `df` cannot investigate a full disk, and that reads like a
+ * permissions failure while being nothing of the kind.
+ */
+export type SystemAccess = "none" | "inspect" | "services" | "full";
+
 export type UpdateWorkerInput = {
   acknowledge_experimental_provider?: boolean;
   name?: string;
@@ -123,6 +137,7 @@ export type UpdateWorkerInput = {
   allow_outside_roots?: boolean;
   /** The bee this worker wears. An empty string returns it to the derived one. */
   mark?: string;
+  system_access?: SystemAccess;
   /**
    * Whether this worker may READ the whole board.
    *
