@@ -184,6 +184,7 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
+pub use queen_review::RepeatedReview;
 pub use workers::{
     ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts,
     WorkerProfileEdit,
@@ -319,7 +320,8 @@ const PROVIDER_USAGE_SCHEMA_VERSION: i64 = 175;
 const COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION: i64 = 176;
 const BOARD_READ_SCHEMA_VERSION: i64 = 177;
 const SYSTEM_ACCESS_SCHEMA_VERSION: i64 = 178;
-const CURRENT_SCHEMA_VERSION: i64 = SYSTEM_ACCESS_SCHEMA_VERSION;
+const REVIEW_REPETITION_SCHEMA_VERSION: i64 = 179;
+const CURRENT_SCHEMA_VERSION: i64 = REVIEW_REPETITION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4308,7 +4310,49 @@ fn migrate_engine_history_schema_steps(
     if schema_version < SYSTEM_ACCESS_SCHEMA_VERSION {
         migrate_system_access(transaction)?;
     }
+    if schema_version < REVIEW_REPETITION_SCHEMA_VERSION {
+        migrate_review_repetition(transaction)?;
+    }
     Ok(())
+}
+
+/// How many times a review has reached the same conclusion about unchanged work.
+///
+/// ⚠️ THE REPETITION LEFT NO TRACE AT ALL. The receipt is keyed by task and
+/// written ON CONFLICT DO UPDATE, so each pass overwrote the last: 93 rows for
+/// 93 tasks, however many times each was read. Queen described re-reading the
+/// same twelve drafts every few cycles for days and recording prose each time,
+/// and none of that repetition existed anywhere to be noticed — the next cycle
+/// started from the same place because the data said this was the first look.
+///
+/// `first_seen_at` rather than a bare counter, because the question an operator
+/// asks is "how long has this been going round", and a count without a start is
+/// a number nobody can weigh.
+fn migrate_review_repetition(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    for (column, definition) in [
+        ("times_seen", "INTEGER NOT NULL DEFAULT 1"),
+        ("first_seen_at", "INTEGER"),
+    ] {
+        let present: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('queen_task_review_receipts')
+             WHERE name = ?1",
+            [column],
+            |row| row.get(0),
+        )?;
+        if present == 0 {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE queen_task_review_receipts ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
+    // Existing rows have been seen at least once, at the time they were last
+    // recorded. Backfilling the start from that is the honest reading: it says
+    // "no earlier repetition is known", not "this began now".
+    transaction.execute_batch(
+        "UPDATE queen_task_review_receipts SET first_seen_at = recorded_at
+         WHERE first_seen_at IS NULL",
+    )?;
+    transaction.pragma_update(None, "user_version", REVIEW_REPETITION_SCHEMA_VERSION)
 }
 
 /// How far into the machine each worker may reach, and a record of every time
@@ -9943,6 +9987,13 @@ mod tests {
             undo_sql: "ALTER TABLE worker_profiles DROP COLUMN system_access",
             probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('worker_profiles')
                 WHERE name = 'system_access'",
+        },
+        SchemaStep {
+            table: "queen_task_review_receipts",
+            artifact: "times_seen",
+            undo_sql: "ALTER TABLE queen_task_review_receipts DROP COLUMN times_seen",
+            probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('queen_task_review_receipts')
+                WHERE name = 'times_seen'",
         },
     ];
 

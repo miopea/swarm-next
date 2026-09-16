@@ -26,7 +26,15 @@ pub(super) fn migrate_incomplete_assessments(
          input_payload TEXT NOT NULL CHECK(length(input_payload)<=32768),
          recorded_sequence INTEGER NOT NULL REFERENCES task_activity(sequence),
          recorded_at INTEGER NOT NULL);
-         INSERT INTO queen_task_review_receipts_next SELECT * FROM queen_task_review_receipts;
+         -- NAMED COLUMNS, NOT A STAR. This rebuild ran happily against a
+         -- seven-column table and broke the moment a later migration added two
+         -- more: 45 tests failed at once, all reporting 7 columns against 9
+         -- values. A star in a table rebuild silently depends on every future
+         -- migration never adding a column, which is not a promise anyone can keep.
+         INSERT INTO queen_task_review_receipts_next
+             (task_id,run_id,kind,accepted_revision,input_payload,recorded_sequence,recorded_at)
+         SELECT task_id,run_id,kind,accepted_revision,input_payload,recorded_sequence,recorded_at
+         FROM queen_task_review_receipts;
          DROP TABLE queen_task_review_receipts;
          ALTER TABLE queen_task_review_receipts_next RENAME TO queen_task_review_receipts;"
     )?;
@@ -35,6 +43,18 @@ pub(super) fn migrate_incomplete_assessments(
         "user_version",
         crate::QUEEN_INCOMPLETE_ASSESSMENTS_SCHEMA_VERSION,
     )
+}
+
+/// A task the review has re-derived the same answer about, and how long for.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RepeatedReview {
+    pub task_id: String,
+    pub title: String,
+    pub state: String,
+    pub kind: String,
+    pub times_seen: i64,
+    pub first_seen_at: i64,
+    pub last_seen_at: i64,
 }
 
 pub(crate) struct ReviewQueueCache {
@@ -266,7 +286,71 @@ fn task_review_snapshot(
     })
 }
 
+/// Whether this task has actually MOVED since the review last recorded on it.
+///
+/// ⚠️ EXCLUDES THE REVIEW'S OWN ROW. A disposition writes a 'corrected' activity
+/// entry carrying the task's current state, so counting any activity would make
+/// every review look like movement and reset the repetition count forever —
+/// precisely the blindness this change exists to remove. Only a real transition
+/// counts.
+fn moved_since_last_review(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: &str,
+) -> Result<bool, TaskStoreError> {
+    Ok(transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_activity a
+             WHERE a.task_id = ?1 AND a.kind = 'state_changed'
+               AND a.sequence > COALESCE(
+                   (SELECT recorded_sequence FROM queen_task_review_receipts WHERE task_id = ?1),
+                   0))",
+        [task_id],
+        |row| row.get(0),
+    )?)
+}
+
 impl TaskStore {
+    /// Tasks the review keeps reaching the same conclusion about, unchanged.
+    ///
+    /// ⚠️ THIS REPORTS A FACT ABOUT THE REVIEW, NOT A BELIEF ABOUT THE TASK, and
+    /// that is deliberate. Queen's own account of this defect includes two reads
+    /// that were wrong in OPPOSITE directions: a task whose prose said ready
+    /// carried an operator gate in its resolving decision, and a task everyone
+    /// read as parked completed within the hour once actually routed. A surface
+    /// that recorded the review's conclusion would have made both wrong answers
+    /// durable. "Seen four times without converting" cannot be wrong in that
+    /// way — it says only that the same material produced the same answer
+    /// repeatedly, which is true whichever answer was right.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn reviews_repeating_without_conversion(
+        &self,
+        at_least: i64,
+    ) -> Result<Vec<RepeatedReview>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT r.task_id, t.title, t.state, r.kind, r.times_seen,
+                    COALESCE(r.first_seen_at, r.recorded_at), r.recorded_at
+             FROM queen_task_review_receipts r
+             JOIN tasks t ON t.id = r.task_id AND t.removed_at IS NULL
+             WHERE r.times_seen >= ?1
+               AND t.state NOT IN ('completed', 'abandoned')
+             ORDER BY r.times_seen DESC, r.first_seen_at LIMIT 64",
+        )?;
+        let rows = statement.query_map([at_least], |row| {
+            Ok(RepeatedReview {
+                task_id: row.get(0)?,
+                title: row.get(1)?,
+                state: row.get(2)?,
+                kind: row.get(3)?,
+                times_seen: row.get(4)?,
+                first_seen_at: row.get(5)?,
+                last_seen_at: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Record an explicit current assessment, never create authority or resume work.
     ///
     /// # Errors
@@ -291,6 +375,7 @@ impl TaskStore {
             "SELECT EXISTS(SELECT 1 FROM queen_task_review_receipts WHERE task_id=?1 AND input_payload=?2 AND accepted_revision=?3)",
             rusqlite::params![id, payload, current.evidence_revision], |row| row.get(0),
         )?;
+        let moved = moved_since_last_review(&transaction, &id)?;
         if replay {
             transaction.commit()?;
             return Ok(RecordedQueenReviewAssessment {
@@ -355,11 +440,31 @@ impl TaskStore {
         let recorded_sequence = transaction.last_insert_rowid();
         let accepted = task_review_evidence(&transaction, input.task_id)?;
         transaction.execute(
-            "INSERT INTO queen_task_review_receipts (task_id,run_id,kind,accepted_revision,input_payload,recorded_sequence,recorded_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(task_id) DO UPDATE SET
+            // ⚠️ THE COUNT RISES ONLY WHILE THE TASK HAS NOT MOVED, and two
+            // obvious anchors were wrong before this one.
+            //
+            // `accepted_revision` looked exact — same evidence, same answer —
+            // but recording a disposition WRITES an activity row, so the
+            // revision changes every time the review speaks and no two passes
+            // can ever match. A test expecting three found zero.
+            //
+            // The task's STATE was no better: a disposition can only be recorded
+            // on Queen-owned waiting work, so a task that moves leaves the
+            // eligible population entirely and the comparison never fires — and
+            // a task that goes Blocked, Ready, Blocked would read as unchanged
+            // when it had in fact converted and come back.
+            //
+            // `moved_since_last_review` asks the activity log directly: has this
+            // task had a STATE CHANGE since the last receipt. That is what "not
+            // converted" means, and it survives both shapes.
+            "INSERT INTO queen_task_review_receipts (task_id,run_id,kind,accepted_revision,input_payload,recorded_sequence,recorded_at,times_seen,first_seen_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,1,?7) ON CONFLICT(task_id) DO UPDATE SET
              run_id=excluded.run_id,kind=excluded.kind,accepted_revision=excluded.accepted_revision,input_payload=excluded.input_payload,
-             recorded_sequence=excluded.recorded_sequence,recorded_at=excluded.recorded_at",
-            rusqlite::params![id, input.run_id, kind, accepted.evidence_revision, payload, recorded_sequence, now],
+             recorded_sequence=excluded.recorded_sequence,recorded_at=excluded.recorded_at,
+             times_seen = CASE WHEN ?8 THEN 1 ELSE queen_task_review_receipts.times_seen + 1 END,
+             first_seen_at = CASE WHEN ?8 THEN excluded.recorded_at
+                 ELSE COALESCE(queen_task_review_receipts.first_seen_at, excluded.recorded_at) END",
+            rusqlite::params![id, input.run_id, kind, accepted.evidence_revision, payload, recorded_sequence, now, moved],
         )?;
         crate::insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -592,6 +697,101 @@ mod tests {
             operator_activity_sequence: None,
             operator_decision_id: None,
         }
+    }
+
+    /// ⚠️ THE REPETITION USED TO LEAVE NO TRACE. The receipt is keyed by task
+    /// and written ON CONFLICT DO UPDATE, so re-reading the same task overwrote
+    /// the previous row: 93 receipts for 93 tasks however many times each was
+    /// read. Queen re-read the same twelve drafts every few cycles for days and
+    /// nothing anywhere could tell that it had happened more than once.
+    #[test]
+    fn re_deriving_the_same_answer_about_unchanged_work_is_counted() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+
+        // ⚠️ THE PROSE VARIES AND THE VERDICT DOES NOT, which is exactly what
+        // Queen described: a fresh sentence about the same wait, every cycle.
+        // An IDENTICAL payload is short-circuited as a replay — idempotency for
+        // retries — so a test that repeated itself verbatim wrote once and
+        // measured nothing. That is a difference between a retry and a
+        // re-derivation, and only the second is this signal.
+        for (now, condition) in [
+            (101, "External fixture endpoint reports maintenance"),
+            (102, "Still reporting maintenance on the second look"),
+            (103, "Maintenance again; nothing has moved"),
+        ] {
+            input.condition = condition.into();
+            // Each cycle re-reads the evidence before speaking, because the
+            // previous disposition moved the revision. That is the loop's real
+            // shape, and it is also why `accepted_revision` could never serve as
+            // the "unchanged" anchor: it changes every time the review speaks.
+            input.expected_revision = store
+                .queen_task_review_evidence(input.task_id)
+                .unwrap()
+                .evidence_revision;
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), now)
+                .unwrap();
+        }
+
+        let repeating = store.reviews_repeating_without_conversion(3).unwrap();
+        assert_eq!(repeating.len(), 1, "three identical passes is the signal");
+        assert_eq!(repeating[0].times_seen, 3);
+        assert_eq!(
+            repeating[0].first_seen_at, 101,
+            "the operator's question is how long this has been going round, so \
+             the count carries its start"
+        );
+    }
+
+    /// ⚠️ AND IT MUST NOT FIRE ON WORK THAT IS MOVING. Counting every visit
+    /// would make a task under active discussion look as stuck as one nobody
+    /// has touched.
+    ///
+    /// ⚠️ THE FIRST VERSION OF THIS TEST PASSED WITHOUT MEASURING ANYTHING: it
+    /// asserted the repeating list was empty, which was equally true when the
+    /// counter never rose at all. It would have gone green against a completely
+    /// broken counter. It now asserts the count itself, and the reset is driven
+    /// by the task moving — Blocked, out, and back — which is what converting a
+    /// wait and re-encountering it actually looks like.
+    #[test]
+    fn a_task_that_moves_starts_the_count_again() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        let record = |input: &mut QueenReviewDispositionInput, condition: &str, now: i64| {
+            input.condition = condition.into();
+            input.expected_revision = store
+                .queen_task_review_evidence(input.task_id)
+                .unwrap()
+                .evidence_revision;
+            store
+                .record_queen_review_disposition(input, &TaskActivityActor::operator(), now)
+                .unwrap();
+        };
+
+        record(&mut input, "Waiting once", 101);
+        record(&mut input, "Waiting twice", 102);
+        assert_eq!(
+            store.reviews_repeating_without_conversion(2).unwrap()[0].times_seen,
+            2,
+            "two passes over work that has not moved is two"
+        );
+
+        // The wait gets converted: the task moves out of Blocked. Later it comes
+        // back — the shape a state comparison would have read as "unchanged".
+        store
+            .transition_task_with_note(input.task_id, TaskState::Ready, "Unblocked")
+            .unwrap();
+        store
+            .transition_task_with_note(input.task_id, TaskState::Blocked, "Waiting again")
+            .unwrap();
+        record(&mut input, "A fresh wait after a real move", 103);
+
+        let after = store.reviews_repeating_without_conversion(1).unwrap();
+        assert_eq!(
+            after[0].times_seen, 1,
+            "a task that moved is not a task being re-derived: {after:?}"
+        );
     }
 
     #[test]

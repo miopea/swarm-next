@@ -238,6 +238,14 @@ const WAITING_DELIVERY_WAKE_SECONDS: i64 = 10 * 60;
 /// something has waited long enough to be worth starting a worker for, it has
 /// waited long enough to be worth saying out loud.
 pub(crate) const MESSAGE_WAITING_ATTENTION_SECONDS: i64 = 10 * 60;
+/// How many times the review may reach the same conclusion about unchanged work
+/// before that repetition is itself worth reporting.
+///
+/// Three, not two: a second look at unchanged work is ordinary — a cycle that
+/// comes round again before anything has moved. A third says the loop is
+/// re-deriving rather than progressing, which is the pattern Queen described
+/// running for days across twelve tasks.
+pub(crate) const REVIEW_REPETITION_ATTENTION_TIMES: i64 = 3;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 /// What the engine looked like the last time this API asked.

@@ -986,6 +986,18 @@ impl ServerHandler for AgentMcp {
                                     "age_scope": "Elapsed age of saved evidence, not confirmed continuous terminal inactivity",
                                 })).collect::<Vec<_>>(),
                                 "task_message_deliveries": self.tasks.store().task_message_attention(crate::unix_timestamp(), crate::MESSAGE_WAITING_ATTENTION_SECONDS)?,
+                                // ⚠️ WORK THE REVIEW KEEPS RE-DERIVING THE SAME
+                                // ANSWER ABOUT. Queen's own words: her rotating
+                                // review re-read the same twelve drafts every
+                                // few cycles for days, recording prose each
+                                // time and never converting it into a block or
+                                // a prerequisite. None of that repetition was
+                                // visible anywhere — the receipt is keyed by
+                                // task and overwritten, so every cycle looked
+                                // like the first. This says how many times and
+                                // since when, and says nothing about whether
+                                // the conclusion was right.
+                                "reviews_repeating": self.tasks.store().reviews_repeating_without_conversion(crate::REVIEW_REPETITION_ATTENTION_TIMES)?,
                                 // Briefings that are queued and not moving, and
                                 // what each is waiting on. A dispatch that is
                                 // never claimed is never attempted and so never
