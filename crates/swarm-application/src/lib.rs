@@ -3084,6 +3084,56 @@ impl TaskService {
             .map_err(Into::into)
     }
 
+    /// Refuses a Blocked that names neither an owner nor what it waits for.
+    ///
+    /// ⚠️ THE STATE THIS MAKES UNREACHABLE HAD 25 OCCUPANTS IN ONE EVENING.
+    /// Queen converted 22 drafts into blocked tasks in about 25 minutes with the
+    /// verdict `insufficient_evidence` and assigned none of them; 24 of the 25
+    /// had never been assigned to anyone at any point. Nothing objected, and
+    /// nothing could see them afterwards either: `unattended_block_candidates`
+    /// joins on the assignee, so an ownerless block can never become an
+    /// attention record. The board read 32 blocked while Needs You read 0.
+    ///
+    /// ⚠️ AND WIDENING THAT DETECTOR WOULD HAVE BEEN THE WRONG FIX. It would
+    /// have pushed 25 items at the operator — an operator button in place of
+    /// working automation, which this Hive has been burned by before. The bad
+    /// state is refused instead.
+    ///
+    /// Blocked now means one of two things and says which: somebody owes work
+    /// and is waiting on a named thing, or it is not blocked, it is unstarted.
+    /// The blocker must be a LINK — a decision or a prerequisite — because the
+    /// board can compute what unblocks when a link resolves and cannot act on a
+    /// sentence. Only 6 of 32 blocked tasks carried either when this was
+    /// written, which is the measure of how little the old state meant.
+    ///
+    /// # Errors
+    /// Refuses with the missing half named, and how to supply it.
+    fn refuse_a_block_nobody_owns(&self, task_id: TaskId) -> Result<(), ApplicationError> {
+        let task = self.store.get_task(task_id)?;
+        if task.assigned_worker_id.is_none() {
+            return Err(ApplicationError::TransitionNotPermitted(
+                "Blocked work needs somebody who owes it. Assign a worker first with \
+                 swarm_assign_task — an unowned block is invisible to the sweep that \
+                 chases stale work, because that sweep asks whose it is. If the work is \
+                 under-specified rather than waiting on something, assign the scoping \
+                 pass as work instead of parking it."
+                    .into(),
+            ));
+        }
+        if !self.store.task_has_structured_blocker(task_id)? {
+            return Err(ApplicationError::TransitionNotPermitted(
+                "Blocked work has to name what it waits for, as a link rather than a \
+                 sentence. Link the operator decision it needs with \
+                 swarm_set_task_decision_link, or the task it waits on with \
+                 swarm_set_task_prerequisite. A link lets the board notice when the \
+                 blocker resolves; prose does not, and prose is how work comes to rest \
+                 here forever."
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Applies a domain-valid state transition within the caller's authority.
     ///
     /// Workers may report progress only for their own assignment and cannot approve completion.
@@ -3098,6 +3148,9 @@ impl TaskService {
         target: TaskState,
         note: &str,
     ) -> Result<Task, ApplicationError> {
+        if target == TaskState::Blocked {
+            self.refuse_a_block_nobody_owns(task_id)?;
+        }
         if principal.role != WorkerRole::Queen {
             let session_id = principal
                 .active_session_id
@@ -4155,6 +4208,141 @@ mod tests {
         );
     }
 
+    /// ⚠️ THE STATE THAT HAD 25 OCCUPANTS IN ONE EVENING. Queen turned 22 drafts
+    /// into blocked tasks in 25 minutes and assigned none of them; 24 of the 25
+    /// had never been assigned to anyone at any point. Nothing objected, and
+    /// `unattended_block_candidates` joins on the assignee, so nothing could see
+    /// them afterwards either — the board read 32 blocked while Needs You read 0.
+    #[test]
+    fn work_nobody_owns_cannot_be_parked_as_blocked() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Under-specified",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+
+        let refused = service.transition_task(
+            queen_principal,
+            task.id,
+            TaskState::Blocked,
+            "Needs scoping",
+        );
+
+        match refused {
+            Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
+                reason.contains("somebody who owes it"),
+                "the refusal has to name the missing half: {reason}"
+            ),
+            other => panic!("an ownerless block must be refused, got {other:?}"),
+        }
+        assert_ne!(
+            service.store().get_task(task.id).unwrap().state,
+            TaskState::Blocked
+        );
+    }
+
+    /// Blocked has to name what it waits for, as a link the board can act on.
+    /// Only 6 of 32 blocked tasks carried one when this was written.
+    #[test]
+    fn blocked_work_must_name_what_it_waits_for() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Owned",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+
+        let refused = service.transition_task(
+            queen_principal,
+            task.id,
+            TaskState::Blocked,
+            "Waiting on something",
+        );
+
+        match refused {
+            Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
+                reason.contains("link rather than a sentence"),
+                "an owner alone is not enough: {reason}"
+            ),
+            other => panic!("a block naming nothing must be refused, got {other:?}"),
+        }
+    }
+
+    /// ⚠️ THE DEADLOCK THIS NEARLY SHIPPED WITH, and the reason it is a test.
+    /// A prerequisite could only be added to work that was ALREADY blocked,
+    /// while blocking now requires the prerequisite first — so neither could
+    /// happen. In production the only symptom would have been a refusal that
+    /// reads perfectly reasonably on its own.
+    #[test]
+    fn a_prerequisite_can_be_named_before_the_work_is_parked() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Waits",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let blocker = service
+            .create_task(
+                queen_principal,
+                "Waited on",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+
+        // Named while the work is Ready — impossible before this change.
+        service
+            .store()
+            .add_task_prerequisite(
+                task.id,
+                blocker.id,
+                "Cannot start until the other lands",
+                &TaskActivityActor::worker(queen.id),
+                9,
+            )
+            .unwrap();
+
+        let parked = service
+            .transition_task(
+                queen_principal,
+                task.id,
+                TaskState::Blocked,
+                "Waiting on the other task",
+            )
+            .unwrap();
+
+        assert_eq!(parked.state, TaskState::Blocked);
+    }
+
     #[test]
     fn queen_must_wake_the_assigned_worker_before_starting_or_resuming_work() {
         let (service, queen, worker) = setup();
@@ -4194,6 +4382,24 @@ mod tests {
             .unwrap();
         assert_eq!(active.state, TaskState::Active);
 
+        // Blocked now has to name what it waits for, so this setup names one.
+        // The rule exists because 25 tasks were parked in one evening naming
+        // nothing, and this test blocked a task as a step on the way to
+        // something else — exactly the habit the rule is there to stop.
+        let blocker = service
+            .store()
+            .create_task("The thing it waits on", "/workspace")
+            .unwrap();
+        service
+            .store()
+            .add_task_prerequisite(
+                task.id,
+                blocker.id,
+                "Waits on the other task",
+                &TaskActivityActor::worker(queen.id),
+                9,
+            )
+            .unwrap();
         service
             .transition_task(queen_principal, task.id, TaskState::Blocked, "Waiting")
             .unwrap();

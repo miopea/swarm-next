@@ -98,7 +98,7 @@ impl std::fmt::Display for TaskPrerequisiteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidReason => "A prerequisite change needs a nonempty reason of at most 2048 bytes",
-            Self::MustBeBlocked => "Only Blocked or Review work can gain a prerequisite; preserve finished work in Review",
+            Self::MustBeBlocked => "Finished work cannot gain a prerequisite: a completed or abandoned task's record is settled. Any unfinished state may name what it waits on",
             Self::SelfReference => "A task cannot depend on itself",
             Self::Cycle => "This prerequisite would create a dependency cycle",
             Self::Capacity => "The bounded prerequisite graph is full; remove obsolete links before adding more",
@@ -124,7 +124,17 @@ pub fn validate_task_prerequisite(
     edges: &[(TaskId, TaskId)],
 ) -> Result<(), TaskPrerequisiteError> {
     validate_prerequisite_reason(reason)?;
-    if !matches!(state, TaskState::Blocked | TaskState::Review) {
+    // ⚠️ THE RULE IS ABOUT FINISHED WORK, NOT ABOUT BEING BLOCKED, and reading
+    // it the other way produced a deadlock. Blocked work must now name what it
+    // waits for BEFORE it may be parked, while a prerequisite could only be
+    // added AFTER parking — so neither could happen first. A test caught it;
+    // nothing in production would have, because the only symptom is a refusal
+    // that looks reasonable in isolation.
+    //
+    // "This waits on that" is true regardless of which state the work is in.
+    // What must stay protected is work that has FINISHED: a completed or
+    // abandoned task gaining a dependency would rewrite a settled record.
+    if matches!(state, TaskState::Completed | TaskState::Abandoned) {
         return Err(TaskPrerequisiteError::MustBeBlocked);
     }
     if task_id == prerequisite_id {

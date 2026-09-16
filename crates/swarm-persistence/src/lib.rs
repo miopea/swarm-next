@@ -2684,6 +2684,26 @@ impl TaskStore {
         self.check_integrity_result(&connection)
     }
 
+    /// Whether this task names what it is waiting for, in a form the board can act on.
+    ///
+    /// ⚠️ A STRUCTURED LINK, NOT PROSE, and the difference is what makes Blocked
+    /// mean anything. A decision link or a prerequisite lets the board compute
+    /// what unblocks when the other thing resolves; a sentence cannot, and a
+    /// sentence is how 25 tasks came to be parked in one evening with reasons
+    /// nobody could act on. Measured when this was written: only 6 of 32 blocked
+    /// tasks carried either link.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn task_has_structured_blocker(&self, id: TaskId) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_decision_links WHERE task_id = ?1)
+                 OR EXISTS(SELECT 1 FROM task_prerequisites WHERE task_id = ?1)",
+            [id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Applies one permitted task transition without a handoff note.
     ///
     /// # Errors

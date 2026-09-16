@@ -294,6 +294,42 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
+/** What a level is called where there is no room to explain it. */
+const SYSTEM_ACCESS_CHIP: Record<SystemAccess, string | undefined> = {
+  none: undefined,
+  inspect: "can look at the machine",
+  services: "can restart services",
+  full: "runs any command",
+};
+
+/**
+ * What this worker MAY DO, on the roster rather than inside its editor.
+ *
+ * ⚠️ PRIVILEGE YOU CANNOT SEE IS PRIVILEGE YOU CANNOT AUDIT. The editor gained
+ * two capability controls and the roster gained nothing, so the only way to
+ * learn which workers could read the whole board or run commands unasked was to
+ * open each of thirty in turn. Scout held both and its row looked identical to
+ * every other row.
+ *
+ * Renders NOTHING for a worker with no capability, which is almost all of them.
+ * A badge on every row is a badge nobody reads; the point is that the few stand
+ * out from the many.
+ */
+function WorkerCapabilities({ worker }: { worker: Worker }) {
+  const access = SYSTEM_ACCESS_CHIP[worker.system_access] ?? undefined;
+  if (!worker.board_read && !access) return null;
+  return (
+    <span className="worker-capability-chips">
+      {worker.board_read && <span className="worker-capability-chip">reads the whole board</span>}
+      {access && (
+        <span className={`worker-capability-chip${worker.system_access === "full" ? " worker-capability-chip-wide" : ""}`}>
+          {access}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onChooseMark, onRemove, onDraftDescription, onImproveDescription, providers, providerCapabilitiesUnavailable, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const editButton = useRef<HTMLButtonElement>(null);
@@ -539,7 +575,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
         </form>
       ) : (
         <>
-          <div className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}
+          <div className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small><WorkerCapabilities worker={worker} />{worker.description && <small className="worker-routing-summary">{worker.description}</small>}
             {worker.runtime_error && <details className="worker-runtime-explanation"><summary>Why this worker needs attention</summary><p>{worker.runtime_error}</p></details>}
           </div>
           <button ref={editButton} type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>

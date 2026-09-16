@@ -1512,6 +1512,13 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .worker-runtime-explanation { margin-top: 6px; font-size: 0.875rem; overflow-wrap: anywhere; }
 .worker-runtime-explanation summary { cursor: pointer; color: var(--muted); }
 .configured-worker-summary .worker-routing-summary { margin-top: 2px; color: var(--muted); }
+/* Capability on the roster. Rare by design: most workers show nothing here, so
+   the ones that do are the ones an operator should notice while scanning. */
+.worker-capability-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.worker-capability-chip { padding: 1px 7px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 999px; color: var(--text); background: color-mix(in srgb, var(--accent-soft) 46%, var(--panel)); font-size: .68rem; font-weight: 700; white-space: nowrap; }
+/* The widest grant reads as a warning rather than a label: it is the one that
+   lets an agent run anything on the machine without being asked. */
+.worker-capability-chip-wide { border-color: color-mix(in srgb, var(--bad) 46%, var(--line)); background: var(--bad-soft); }
 .worker-edit-button { min-height: 34px; padding: 5px 10px; }
 .worker-preference-form { display: grid; grid-column: 2 / -1; grid-template-columns: minmax(150px, 1fr) auto; align-items: end; gap: 8px 12px; padding: 5px 0; }
 .worker-preference-form > label:not(.worker-autostart), .worker-provider-field { display: grid; gap: 4px; color: var(--muted); font-size: .72rem; font-weight: 700; }

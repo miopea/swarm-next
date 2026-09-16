@@ -285,6 +285,42 @@ test("the operator can let one worker read the whole board, and the label says i
 });
 
 /**
+ * ⚠️ PRIVILEGE YOU CANNOT SEE IS PRIVILEGE YOU CANNOT AUDIT.
+ *
+ * The editor gained two capability controls and the roster gained nothing, so
+ * the only way to learn which workers could read the whole board or run
+ * commands unasked was to open each of thirty in turn. Scout held both and its
+ * row looked exactly like every other row.
+ *
+ * And the silence matters as much as the badge: a chip on every row is a chip
+ * nobody reads, so a worker with no capability shows nothing at all.
+ */
+test("the roster shows which workers hold a capability, and says nothing about the rest", () => {
+  render(
+    <WorkerSettings
+      workers={[
+        { ...budget, name: "Ordinary" },
+        { ...studio, name: "Trusted", board_read: true, system_access: "services" },
+      ]}
+      workspaces={[]} busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()} onUpdate={vi.fn()} onChooseMark={vi.fn()} onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("")} onReorder={vi.fn()}
+    />,
+  );
+
+  // The roster rows are plain divs, so reach them through the worker's name.
+  const trusted = screen.getByText("Trusted").closest(".configured-worker");
+  const ordinary = screen.getByText("Ordinary").closest(".configured-worker");
+
+  expect(within(trusted as HTMLElement).getByText("reads the whole board")).toBeInTheDocument();
+  expect(within(trusted as HTMLElement).getByText("can restart services")).toBeInTheDocument();
+  expect(
+    within(ordinary as HTMLElement).queryByText(/reads the whole board|can restart|runs any command/),
+  ).not.toBeInTheDocument();
+});
+
+/**
  * ⚠️ THE LEVEL THAT SOLVES THE PROBLEM PEOPLE ACTUALLY HAVE.
  *
  * The operator's example was being unable to investigate free space. Every
