@@ -327,6 +327,20 @@ pub struct AppState {
     /// way rather than counting it as fine.
     agent_tool_surfaces: Arc<RwLock<HashMap<String, u32>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
+    /// Latches the one line an engine-drift revival hold gets.
+    ///
+    /// When the terminal host runs a different engine build from this API,
+    /// worker revival is deliberately deferred in two places — and both used to
+    /// return in silence. The visible symptom was "workers are not coming back"
+    /// with nothing anywhere connecting it to the engine, which is the third
+    /// fault of that exact shape found in one day. Both passes run continuously,
+    /// so this says it once when the hold starts and once when it lifts rather
+    /// than every few seconds for as long as the drift lasts.
+    ///
+    /// Shared by both call sites on purpose: the drift is ONE fact about the
+    /// engine, and which internal path happened to notice it is not something
+    /// the journal should have to explain.
+    engine_drift_reported: Arc<std::sync::atomic::AtomicBool>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
     #[cfg(test)]
@@ -474,6 +488,7 @@ impl AppState {
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             agent_tool_surfaces: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
+            engine_drift_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             github_feedback: None,
             central_support: None,
@@ -1386,12 +1401,15 @@ impl AppState {
         // engine gives it back for as long as it takes the swap to finish, and
         // the second stop records nothing, so the worker is lost for real.
         match maintenance::host_status_snapshot(self).await {
-            Ok(status)
-                if maintenance::worker_engine_update_required(&status) || status.draining =>
-            {
-                return;
+            Ok(status) => {
+                // Evaluated BEFORE the `||`: short-circuiting on `draining`
+                // would skip the observation and leave the latch stale, so a
+                // later drift episode would go unreported.
+                let behind = maintenance::note_engine_drift(self, &status);
+                if behind || status.draining {
+                    return;
+                }
             }
-            Ok(_) => {}
             Err(_) => return,
         }
         if !runtime::coordinator_start_admission(self)

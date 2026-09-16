@@ -213,7 +213,10 @@ pub(super) async fn revive_worker_process(
     // Recheck after acquiring ownership: another maintenance run may have
     // started after the supervisor's earlier host observation.
     let host = crate::maintenance::host_status_snapshot(state).await?;
-    if host.draining || crate::maintenance::worker_engine_update_required(&host) {
+    // Evaluated before the `||` so short-circuiting on `draining` cannot skip
+    // the observation and leave the latch stale.
+    let behind = crate::maintenance::note_engine_drift(state, &host);
+    if host.draining || behind {
         return Ok(None);
     }
     let Some(attempt) = store

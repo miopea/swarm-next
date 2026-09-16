@@ -971,6 +971,49 @@ pub(crate) fn worker_engine_update_required(status: &TerminalHostStatus) -> bool
     )
 }
 
+/// Reports, once per episode, that engine drift is holding worker revival back.
+///
+/// Returns whether the engine is behind, so a caller keeps the decision it
+/// already made and gains only the reporting.
+///
+/// ⚠️ THE DEFERRAL IS CORRECT AND IS NOT CHANGED HERE. Reviving a worker onto an
+/// outgoing engine hands it back only until the swap finishes, and the second
+/// stop records nothing, so the worker is lost for real. What was missing is any
+/// record that the deferral happened: both gates returned in silence, so the
+/// operator-visible symptom was "workers are not coming back" with nothing in
+/// the journal tying it to the engine.
+///
+/// Latched because both gates sit in passes that run continuously — an
+/// unguarded line would repeat every few seconds for the whole episode. It
+/// clears on the first observation of a matching engine, so a LATER drift in the
+/// same process is reported again; a latch that only ever sets would reproduce
+/// this same bug one level up.
+pub(crate) fn note_engine_drift(state: &AppState, status: &TerminalHostStatus) -> bool {
+    use std::sync::atomic::Ordering;
+
+    let behind = worker_engine_update_required(status);
+    if behind {
+        if !state.engine_drift_reported.swap(true, Ordering::AcqRel) {
+            tracing::warn!(
+                host_version = %status.host_version,
+                api_version = %build_version(),
+                running_sessions = status.running_sessions,
+                "worker revival is deferred: the terminal host runs a different engine build \
+                 from this API, so a worker that stops will not be brought back until the \
+                 engine is swapped"
+            );
+        }
+    } else if state.engine_drift_reported.swap(false, Ordering::AcqRel) {
+        // Said because a hold with no matching release is half a signal: the
+        // operator needs to know the window closed, not just that it opened.
+        tracing::info!(
+            host_version = %status.host_version,
+            "worker revival resumed: the terminal host and this API agree on the engine build"
+        );
+    }
+    behind
+}
+
 pub(crate) async fn host_status_snapshot(state: &AppState) -> Result<TerminalHostStatus, ApiError> {
     let HostResponse::HostStatus { status } = request_host(state, HostRequest::HostStatus).await?
     else {
@@ -986,6 +1029,81 @@ pub(crate) async fn host_status_snapshot(state: &AppState) -> Result<TerminalHos
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const OTHER_ENGINE: &str = "74b1dfe239bb11a7201cbe85587a6cff1fed5a13e6d94d91952adf53940a30d9";
+
+    fn drift_status(build_id: &str) -> TerminalHostStatus {
+        TerminalHostStatus {
+            protocol_version: swarm_terminal::PROTOCOL_VERSION,
+            host_version: "1.11.0-dev-829476e5e6d3-20260916144913-1583930".to_owned(),
+            host_build_id: Some(build_id.to_owned()),
+            draining: false,
+            running_sessions: 8,
+            retained_sessions: 9,
+            busy_sessions: Some(1),
+            unreadable_sessions: Some(0),
+            resources: None,
+            takeover_relay: true,
+        }
+    }
+
+    #[test]
+    fn an_engine_drift_hold_speaks_once_per_episode_not_once_per_pass() {
+        use std::sync::atomic::Ordering;
+
+        let state = AppState::new(swarm_terminal::JournalLimits::new(2048, 64));
+        let behind = drift_status(OTHER_ENGINE);
+        let agreed = drift_status(crate::worker_engine_build_id());
+
+        // Both gates sit in passes that run every few seconds. The first
+        // observation is the one that speaks; the rest must not, or the journal
+        // is unreadable for as long as the drift lasts.
+        assert!(note_engine_drift(&state, &behind), "the engine is behind");
+        assert!(
+            state.engine_drift_reported.load(Ordering::Acquire),
+            "the hold must be recorded the first time it is seen"
+        );
+        assert!(note_engine_drift(&state, &behind), "still behind");
+        assert!(
+            state.engine_drift_reported.load(Ordering::Acquire),
+            "and the report stays spent on later passes"
+        );
+
+        // A hold that never says it lifted is half a signal.
+        assert!(!note_engine_drift(&state, &agreed), "the engine now agrees");
+        assert!(
+            !state.engine_drift_reported.load(Ordering::Acquire),
+            "the latch must clear so the release is said once"
+        );
+
+        // ⚠️ THE CASE A SET-ONCE LATCH WOULD GET WRONG. A second drift later in
+        // the same process has to be reported again; a latch that only ever sets
+        // would reproduce this very bug one level up.
+        assert!(note_engine_drift(&state, &behind), "a later episode");
+        assert!(
+            state.engine_drift_reported.load(Ordering::Acquire),
+            "a second drift episode must speak again, not inherit the first one's silence"
+        );
+    }
+
+    #[test]
+    fn a_draining_host_does_not_hide_the_drift_underneath_it() {
+        use std::sync::atomic::Ordering;
+
+        // The call sites decide on `draining || behind`. The drift is evaluated
+        // FIRST there precisely so short-circuiting on draining cannot skip the
+        // observation and carry a stale latch into the next episode.
+        let state = AppState::new(swarm_terminal::JournalLimits::new(2048, 64));
+        let mut status = drift_status(OTHER_ENGINE);
+        status.draining = true;
+
+        assert!(note_engine_drift(&state, &status));
+        assert!(
+            state.engine_drift_reported.load(Ordering::Acquire),
+            "a drifting engine is still drifting while the host drains"
+        );
+    }
+
     use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId};
 
     #[tokio::test]
