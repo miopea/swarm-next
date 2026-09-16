@@ -1,7 +1,9 @@
 //! Durable ownership of task-message delivery, separate from message history.
 use crate::{TaskMessageDispatch, TaskStore, TaskStoreError};
 use rusqlite::params;
-use swarm_domain::TaskId;
+use std::str::FromStr;
+
+use swarm_domain::{TaskId, WorkerId};
 
 pub const TASK_MESSAGE_BATCH_LIMIT: usize = 16;
 pub const TASK_MESSAGE_QUEUE_LIMIT: usize = 4_096;
@@ -18,10 +20,28 @@ pub struct TaskMessageAttention {
     pub task_id: String,
     pub task_title: String,
     pub state: String,
-    pub claim_id: String,
-    pub session_id: String,
+    /// Absent until a delivery pass claims the row.
+    ///
+    /// ⚠️ OPTIONAL BECAUSE 'queued' IS NOW IN SCOPE. The old query returned only
+    /// claimed rows, so these were always present and typed as though they
+    /// always would be. The first queued row this surface saw failed to read
+    /// with `InvalidColumnType` — a shape the type had quietly promised could not
+    /// happen.
+    pub claim_id: Option<String>,
+    pub session_id: Option<String>,
     pub updated_at: i64,
     pub superseded: bool,
+    /// How long this has been waiting. The number a reader actually acts on.
+    pub waiting_seconds: i64,
+    /// Delivery attempts so far. One row here reached 1,065 before anybody
+    /// noticed, which is why the count is shown rather than inferred from age.
+    pub attempts: i64,
+    /// Whether the recipient is running at all.
+    ///
+    /// ⚠️ THE FIELD THAT CHANGES WHAT TO DO. "Waiting on Platform" and "waiting
+    /// on a Platform that is asleep" need different actions, and the second was
+    /// indistinguishable from the first for 141 hours.
+    pub recipient_running: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -95,21 +115,49 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns database failures, never an empty healthy result on a failed read.
-    pub fn task_message_attention(&self) -> Result<TaskMessageAttentionPage, TaskStoreError> {
+    pub fn task_message_attention(
+        &self,
+        now: i64,
+        waited_seconds: i64,
+    ) -> Result<TaskMessageAttentionPage, TaskStoreError> {
         let connection = self.connection()?;
+        // ⚠️ THIS QUERY USED TO READ ONLY 'uncertain' AND 'rejected', AND THOSE
+        // TWO STATES HAVE NEVER OCCURRED HERE — zero rows out of 1,701 in this
+        // database's whole history. `uncertain` is written by exactly one
+        // function, crash recovery for rows left mid-write, so the surface Queen
+        // was told catches stuck deliveries was scoped to a case that has not
+        // happened. A message retried 1,065 times over 141 hours sat in
+        // 'queued', where this could not see it, and she checked a dozen times
+        // and read {items:[],total:0} every time. It was empty the way a search
+        // for a colour finds no shapes.
+        //
+        // So a message that has WAITED TOO LONG is an exception too, whatever
+        // state it is in.
+        let filter = "(d.state IN ('uncertain','rejected')
+             OR (d.state IN ('queued','dispatching') AND d.superseded = 0
+                 AND m.delivered_at IS NULL AND m.created_at + ?2 <= ?1))";
         let total: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM task_message_deliveries WHERE state IN ('uncertain','rejected')",
-            [],
+            &format!(
+                "SELECT COUNT(*) FROM task_message_deliveries d
+                 JOIN task_messages m ON m.id = d.message_id WHERE {filter}"
+            ),
+            params![now, waited_seconds],
             |row| row.get(0),
         )?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(&format!(
             "SELECT d.message_id, m.task_id, t.title, d.state, d.claim_id, d.session_id,
-                d.updated_at, d.superseded FROM task_message_deliveries d
+                d.updated_at, d.superseded, ?1 - m.created_at AS waiting, d.attempts,
+                EXISTS(SELECT 1 FROM worker_sessions s
+                    WHERE s.ended_at IS NULL
+                      AND ((m.recipient = 'worker' AND s.worker_id = m.recipient_worker_id)
+                        OR (m.recipient = 'queen' AND s.worker_id IN
+                            (SELECT id FROM worker_profiles WHERE role = 'queen'))))
+             FROM task_message_deliveries d
              JOIN task_messages m ON m.id = d.message_id JOIN tasks t ON t.id = m.task_id
-             WHERE d.state IN ('uncertain','rejected') ORDER BY d.updated_at, d.message_id LIMIT 64",
-        )?;
+             WHERE {filter} ORDER BY waiting DESC, d.message_id LIMIT 64"
+        ))?;
         let items = statement
-            .query_map([], |row| {
+            .query_map(params![now, waited_seconds], |row| {
                 Ok(TaskMessageAttention {
                     message_id: row.get(0)?,
                     task_id: row.get(1)?,
@@ -119,6 +167,9 @@ impl TaskStore {
                     session_id: row.get(5)?,
                     updated_at: row.get(6)?,
                     superseded: row.get(7)?,
+                    waiting_seconds: row.get(8)?,
+                    attempts: row.get(9)?,
+                    recipient_running: row.get(10)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -126,6 +177,57 @@ impl TaskStore {
             items,
             total: usize::try_from(total).unwrap_or(usize::MAX),
         })
+    }
+
+    /// Workers that are asleep while something addressed to them waits.
+    ///
+    /// ⚠️ THE FIVE-DAY SILENCE THIS EXISTS TO END. Delivery requires the
+    /// recipient to have a LIVE SESSION, so a message to a sleeping worker has
+    /// nowhere to go and simply waits. Measured on this Hive: two messages to
+    /// Platform waited 141 HOURS across 1,065 delivery attempts each and were
+    /// then cancelled as superseded — nobody read them, and nothing anywhere
+    /// said they were waiting on a worker that was not running. Two more to
+    /// D365 Solutions waited 34 and 37 hours.
+    ///
+    /// ⚠️ AND IT MUST NOT BE GATED ON autostart. Every worker that produced
+    /// those waits has autostart = 0. `autostart` answers "should this worker
+    /// always be running"; this answers "something is addressed to it" — a
+    /// different question, and gating one on the other would have left exactly
+    /// the affected population unfixed.
+    ///
+    /// Bounded by age so an ordinary send to a running worker is never a reason
+    /// to start anything: a message only counts once it has waited longer than
+    /// a delivery to a live session would ever take.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn workers_owed_a_waiting_delivery(
+        &self,
+        now: i64,
+        waited_seconds: i64,
+    ) -> Result<Vec<WorkerId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT w.id FROM worker_profiles w
+             JOIN task_messages m ON m.recipient_worker_id = w.id
+             JOIN task_message_deliveries d ON d.message_id = m.id
+             WHERE w.archived_at IS NULL
+               AND m.delivered_at IS NULL
+               AND d.state IN ('queued', 'dispatching')
+               AND d.superseded = 0
+               AND m.created_at + ?2 <= ?1
+               AND NOT EXISTS(SELECT 1 FROM worker_sessions s
+                   WHERE s.worker_id = w.id AND s.ended_at IS NULL)",
+        )?;
+        let rows =
+            statement.query_map(params![now, waited_seconds], |row| row.get::<_, String>(0))?;
+        let mut owed = Vec::new();
+        for row in rows {
+            if let Ok(worker) = WorkerId::from_str(&row?) {
+                owed.push(worker);
+            }
+        }
+        Ok(owed)
     }
 
     /// Claims a bounded batch before submission. No other claim can own these rows.
@@ -343,6 +445,139 @@ mod tests {
             .id
     }
 
+    /// ⚠️ A MESSAGE TO A SLEEPING WORKER HAS NOWHERE TO GO, and nothing used to
+    /// say so. Two of these waited 141 hours on this Hive across 1,065 delivery
+    /// attempts each, and were cancelled unread. The recipient was not busy; it
+    /// was not running.
+    #[test]
+    fn a_sleeping_worker_with_a_waiting_message_is_owed_a_return() {
+        let (store, task, worker) = fixture();
+        send(&store, task, worker);
+        // Running: nothing to wake, whatever the message's age.
+        assert!(
+            store
+                .workers_owed_a_waiting_delivery(10_000, 600)
+                .unwrap()
+                .is_empty(),
+            "a running worker is reached by ordinary delivery"
+        );
+
+        let session = store
+            .get_worker_profile(worker)
+            .unwrap()
+            .active_session_id
+            .unwrap();
+        store.release_worker_session(session).unwrap();
+
+        assert_eq!(
+            store.workers_owed_a_waiting_delivery(10_000, 600).unwrap(),
+            vec![worker],
+            "asleep with something waiting is exactly the case nothing reported"
+        );
+    }
+
+    /// ⚠️ AND IT MUST NOT WAIT ON autostart. Every worker that produced a
+    /// multi-day wait here has autostart = 0 — the fixture's worker does too,
+    /// created with `false`. Gating the wake on that flag would have left the
+    /// entire affected population unfixed while looking like a fix.
+    #[test]
+    fn a_worker_that_does_not_autostart_is_still_woken_for_what_is_waiting() {
+        let (store, task, worker) = fixture();
+        let profile = store.get_worker_profile(worker).unwrap();
+        assert!(
+            !profile.autostart,
+            "the fixture models the affected workers"
+        );
+        send(&store, task, worker);
+        let session = store
+            .get_worker_profile(worker)
+            .unwrap()
+            .active_session_id
+            .unwrap();
+        store.release_worker_session(session).unwrap();
+
+        assert_eq!(
+            store.workers_owed_a_waiting_delivery(10_000, 600).unwrap(),
+            vec![worker]
+        );
+    }
+
+    /// An ordinary send must never be a reason to start anything: the message
+    /// has to have waited longer than delivery to a live session ever takes.
+    #[test]
+    fn a_message_sent_moments_ago_wakes_nobody() {
+        let (store, task, worker) = fixture();
+        send(&store, task, worker);
+        let session = store
+            .get_worker_profile(worker)
+            .unwrap()
+            .active_session_id
+            .unwrap();
+        store.release_worker_session(session).unwrap();
+
+        assert!(
+            store
+                .workers_owed_a_waiting_delivery(60, 600)
+                .unwrap()
+                .is_empty(),
+            "sent at 10, read at 60, threshold 600 — far too soon to wake anyone"
+        );
+    }
+
+    /// ⚠️ THE CHECK QUEEN RAN A DOZEN TIMES AND GOT NOTHING FROM. A message
+    /// waiting past the threshold is an exception whatever state it is in — it
+    /// used to be invisible unless it reached 'uncertain' or 'rejected', two
+    /// states this database has never once written.
+    #[test]
+    fn a_message_waiting_too_long_is_an_exception_even_while_queued() {
+        let (store, task, worker) = fixture();
+        let message = send(&store, task, worker);
+
+        // Fresh: nothing to report, or every ordinary send becomes noise.
+        assert_eq!(
+            store.task_message_attention(60, 600).unwrap().total,
+            0,
+            "sent at 10 and read at 60 is not a stuck message"
+        );
+
+        let page = store.task_message_attention(10_000, 600).unwrap();
+        assert_eq!(page.total, 1, "waited 9,990 seconds and said nothing");
+        let item = &page.items[0];
+        assert_eq!(item.message_id, message);
+        assert_eq!(item.state, "queued");
+        assert_eq!(item.waiting_seconds, 9_990);
+    }
+
+    /// ⚠️ "WAITING ON PLATFORM" AND "WAITING ON A PLATFORM THAT IS ASLEEP" NEED
+    /// DIFFERENT ACTIONS. The second is what produced 141 hours of silence, and
+    /// it was indistinguishable from the first.
+    #[test]
+    fn the_exception_says_whether_the_recipient_is_even_running() {
+        let (store, task, worker) = fixture();
+        send(&store, task, worker);
+
+        let running = store.task_message_attention(10_000, 600).unwrap();
+        assert!(
+            running.items[0].recipient_running,
+            "a live recipient is merely busy: {:?}",
+            running.items[0]
+        );
+
+        let session = store
+            .get_worker_profile(worker)
+            .unwrap()
+            .active_session_id
+            .unwrap();
+        store.release_worker_session(session).unwrap();
+
+        let asleep = store.task_message_attention(10_000, 600).unwrap();
+        assert!(
+            !asleep.items[0].recipient_running,
+            "a stopped recipient has nowhere to receive: {:?}",
+            asleep.items[0]
+        );
+    }
+
     #[test]
     fn exclusive_bounded_claims_and_exact_session_fence() {
         let (store, task, worker) = fixture();
@@ -397,7 +632,7 @@ mod tests {
             .finish_task_message(&claim, TaskMessageResult::Uncertain, 21)
             .unwrap();
         assert!(store.claim_task_messages(22).unwrap().is_empty());
-        let attention = store.task_message_attention().unwrap();
+        let attention = store.task_message_attention(i64::MAX, i64::MAX).unwrap();
         assert_eq!(attention.total, 1);
         assert_eq!(attention.items[0].message_id, id);
         assert!(
@@ -437,7 +672,13 @@ mod tests {
                 )
                 .unwrap()
         );
-        assert_eq!(store.task_message_attention().unwrap().total, 0);
+        assert_eq!(
+            store
+                .task_message_attention(i64::MAX, i64::MAX)
+                .unwrap()
+                .total,
+            0
+        );
         let history = store.task_messages(task).unwrap();
         assert_eq!(history[0].delivery_state, "resolved");
         assert!(history[0].delivered_at.is_none());

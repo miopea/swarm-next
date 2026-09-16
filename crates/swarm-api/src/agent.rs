@@ -985,7 +985,7 @@ impl ServerHandler for AgentMcp {
                                     "age_seconds": item.age_seconds,
                                     "age_scope": "Elapsed age of saved evidence, not confirmed continuous terminal inactivity",
                                 })).collect::<Vec<_>>(),
-                                "task_message_deliveries": self.tasks.store().task_message_attention()?,
+                                "task_message_deliveries": self.tasks.store().task_message_attention(crate::unix_timestamp(), crate::MESSAGE_WAITING_ATTENTION_SECONDS)?,
                                 // Briefings that are queued and not moving, and
                                 // what each is waiting on. A dispatch that is
                                 // never claimed is never attempted and so never
@@ -7845,7 +7845,16 @@ mod tests {
         )
         .await;
         assert_eq!(refused["result"]["isError"], true);
-        assert_eq!(store.task_message_attention().unwrap().total, 1);
+        assert_eq!(
+            store
+                .task_message_attention(
+                    crate::unix_timestamp(),
+                    crate::MESSAGE_WAITING_ATTENTION_SECONDS
+                )
+                .unwrap()
+                .total,
+            1
+        );
         let resolved = call_review_test_tool(
             bridge.clone(),
             &queen_token,
@@ -7857,7 +7866,16 @@ mod tests {
         let stale =
             call_review_test_tool(bridge, &queen_token, "swarm_reconcile_task_message", args).await;
         assert_eq!(stale["result"]["structuredContent"]["changed"], false);
-        assert_eq!(store.task_message_attention().unwrap().total, 0);
+        assert_eq!(
+            store
+                .task_message_attention(
+                    crate::unix_timestamp(),
+                    crate::MESSAGE_WAITING_ATTENTION_SECONDS
+                )
+                .unwrap()
+                .total,
+            0
+        );
         assert!(
             store.task_messages(task.id).unwrap()[0]
                 .delivered_at
@@ -7923,7 +7941,13 @@ mod tests {
             .await;
             assert_eq!(response["result"]["isError"], !allowed);
             assert_eq!(
-                store.task_message_attention().unwrap().total,
+                store
+                    .task_message_attention(
+                        crate::unix_timestamp(),
+                        crate::MESSAGE_WAITING_ATTENTION_SECONDS
+                    )
+                    .unwrap()
+                    .total,
                 usize::from(!allowed)
             );
         }

@@ -311,7 +311,10 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
         })
         .collect();
     let messages = crate::task_store(state)?
-        .task_message_attention()
+        .task_message_attention(
+            crate::unix_timestamp(),
+            crate::MESSAGE_WAITING_ATTENTION_SECONDS,
+        )
         .map_err(|error| task_store_error(&error))?;
     held.extend(messages.items.into_iter().map(|message| HeldDeliveryResponse {
         kind: "task_message_reconciliation".into(),

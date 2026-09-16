@@ -223,6 +223,21 @@ const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 /// escalating to Queen is useless when Queen is the bottleneck. That is not
 /// built, and picking it for them would be worse than leaving it visible.
 const UNATTENDED_BLOCK_SECONDS: i64 = 4 * 60 * 60;
+/// How long something addressed to a worker may wait before the worker is
+/// woken to receive it.
+///
+/// Ten minutes, chosen against measurement rather than taste: delivery to a
+/// worker that is RUNNING averages under a minute, and the longest ordinary
+/// wait observed on this Hive was a few minutes behind a busy recipient. Past
+/// ten, the recipient is almost certainly not running at all — the case that
+/// produced waits of 34, 37 and 141 hours.
+const WAITING_DELIVERY_WAKE_SECONDS: i64 = 10 * 60;
+/// How long a message may wait before it is an exception worth reporting.
+///
+/// The same ten minutes as the wake threshold, and deliberately so: if
+/// something has waited long enough to be worth starting a worker for, it has
+/// waited long enough to be worth saying out loud.
+pub(crate) const MESSAGE_WAITING_ATTENTION_SECONDS: i64 = 10 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 /// What the engine looked like the last time this API asked.
@@ -1520,6 +1535,7 @@ impl AppState {
         self.observe_assigned_ready_work_not_started(store).await;
         self.observe_reviewed_work_without_evidence(store);
         self.observe_unattended_blocks(store);
+        self.observe_workers_owed_a_delivery(store);
         self.observe_stale_owned_work(store).await;
         let admission = runtime::coordinator_start_admission(self).await;
         self.coordinator_start_admission
@@ -1972,6 +1988,47 @@ impl AppState {
                 ),
             }
         }
+    }
+
+    /// Wakes a worker that something is waiting to be delivered to.
+    ///
+    /// ⚠️ THE MESSAGE CANNOT ARRIVE WHILE THE RECIPIENT IS ASLEEP. Delivery
+    /// requires a live session, so a message to a stopped worker waits — and
+    /// nothing said so. Two messages to Platform waited 141 hours across 1,065
+    /// attempts each and were cancelled unread; two to D365 Solutions waited 34
+    /// and 37 hours. The operator's instruction on seeing this was direct:
+    /// escalation should include waking the worker, which is what somebody
+    /// would have had to do by hand anyway.
+    ///
+    /// Recording an INTENT rather than starting anything here. The revival path
+    /// already owns the difficult parts — it waits for the engine to settle,
+    /// takes the lifecycle lock, honours start admission, and brings a worker
+    /// back to its own conversation rather than starting it cold. Duplicating
+    /// any of that to save a hop would be the wrong kind of clever.
+    fn observe_workers_owed_a_delivery(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let owed = match store.workers_owed_a_waiting_delivery(now, WAITING_DELIVERY_WAKE_SECONDS) {
+            Ok(owed) => owed,
+            Err(error) => {
+                tracing::warn!(message = %error, "workers owed a waiting delivery could not be read");
+                return;
+            }
+        };
+        if owed.is_empty() {
+            return;
+        }
+        if let Err(error) = store.record_worker_revival_intents(&owed, now) {
+            tracing::warn!(message = %error, "a worker owed a delivery could not be marked for return");
+            return;
+        }
+        for worker_id in owed {
+            tracing::info!(
+                %worker_id,
+                waited_seconds = WAITING_DELIVERY_WAKE_SECONDS,
+                "waking a worker because something addressed to it has been waiting"
+            );
+        }
+        self.control_room_notify.notify_waiters();
     }
 
     /// Surfaces blocked work nobody has come back to.

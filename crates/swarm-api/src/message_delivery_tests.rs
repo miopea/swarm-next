@@ -43,9 +43,12 @@ async fn next_exclusive_delivery_pass_recovers_an_abandoned_claim_without_replay
     );
     drop(owner);
     next_pass.await;
-    let attention = store.task_message_attention().unwrap();
+    let attention = store.task_message_attention(i64::MAX, i64::MAX).unwrap();
     assert_eq!(attention.total, 1);
-    assert_eq!(attention.items[0].claim_id, claim.claim_id);
+    assert_eq!(
+        attention.items[0].claim_id.as_deref(),
+        Some(claim.claim_id.as_str())
+    );
     assert_eq!(attention.items[0].state, "uncertain");
     assert!(
         store.task_messages(task.id).unwrap()[0]
@@ -84,10 +87,13 @@ async fn failed_transport_is_visible_and_only_explicit_reconciliation_retries() 
         changed.now_or_never().is_some(),
         "persisted uncertainty wakes existing feed waiters"
     );
-    let first = store.task_message_attention().unwrap();
+    let first = store.task_message_attention(i64::MAX, i64::MAX).unwrap();
     assert_eq!(first.total, 1);
     assert_eq!(first.items[0].state, "uncertain");
-    let first_claim = first.items[0].claim_id.clone();
+    let first_claim = first.items[0]
+        .claim_id
+        .clone()
+        .expect("an uncertain row was claimed before it became uncertain");
     let unchanged = state.control_room_notify.notified();
     tokio::pin!(unchanged);
     unchanged.as_mut().enable();
@@ -97,8 +103,13 @@ async fn failed_transport_is_visible_and_only_explicit_reconciliation_retries() 
         "an unchanged queue causes no feed wakeup"
     );
     assert_eq!(
-        store.task_message_attention().unwrap().items[0].claim_id,
-        first_claim
+        store
+            .task_message_attention(i64::MAX, i64::MAX)
+            .unwrap()
+            .items[0]
+            .claim_id
+            .as_deref(),
+        Some(first_claim.as_str())
     );
     assert!(
         store
@@ -112,8 +123,11 @@ async fn failed_transport_is_visible_and_only_explicit_reconciliation_retries() 
             .unwrap()
     );
     state.deliver_task_messages(&store, &client).await;
-    let retry = store.task_message_attention().unwrap();
-    assert_ne!(retry.items[0].claim_id, first_claim);
+    let retry = store.task_message_attention(i64::MAX, i64::MAX).unwrap();
+    assert_ne!(
+        retry.items[0].claim_id.as_deref(),
+        Some(first_claim.as_str())
+    );
     assert!(
         store.task_messages(task.id).unwrap()[0]
             .delivered_at
