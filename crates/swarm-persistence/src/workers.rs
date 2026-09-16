@@ -1946,6 +1946,38 @@ impl TaskStore {
             .collect()
     }
 
+    /// Whether this worker is currently COMING UP from a given moment: a session
+    /// that began at or after it and is still live.
+    ///
+    /// ⚠️ THE POSITIVE FORM, AND THE NEGATIVE ONE WAS WRONG. The first attempt
+    /// asked whether the worker had EXITED since the attempt, and skipped the
+    /// circuit when it had not. That handled Queen — started, not yet reported,
+    /// mistaken for a crash loop — and broke the case that matters more: a
+    /// worker that never gets a session AT ALL has not exited either, so the
+    /// circuit would never open, nothing would retry it, and nothing would say
+    /// so. A permanent silent stall, strictly worse than the bug being fixed. An
+    /// existing test caught it.
+    ///
+    /// So the question is not "did it die" but "is it visibly alive". Only a
+    /// live session started since the attempt earns more patience; anything else
+    /// — no session, or one that has ended — is a failure the operator should
+    /// see.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn worker_coming_up_since(
+        &self,
+        worker_id: WorkerId,
+        since: i64,
+    ) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_sessions
+                 WHERE worker_id = ?1 AND started_at >= ?2 AND ended_at IS NULL)",
+            params![worker_id.to_string(), since],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Remembers the workers a worker-engine replacement is about to unload.
     ///
     /// Recorded before anything is stopped and kept in the database rather than
@@ -3595,6 +3627,93 @@ mod tests {
                 .any(|s| s.worker_id == codex.id && s.provider == ProviderKind::Codex)
         );
         assert!(live.iter().all(|s| s.started_at > 0));
+    }
+
+    /// ⚠️ THE DISTINCTION THAT TOOK QUEEN DOWN. She was started and still
+    /// coming up — a live session the host had not reported yet — and the
+    /// circuit read that as a crash loop one second later.
+    #[test]
+    fn a_worker_with_a_live_session_is_coming_up() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Slow starter",
+                ProviderKind::ClaudeCode,
+                "/workspace",
+                true,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        assert!(
+            store.worker_coming_up_since(worker.id, 0).unwrap(),
+            "a live session started since the attempt is exactly what patience is for"
+        );
+    }
+
+    /// ⚠️ AND THE CASE THAT MADE ME INVERT THE QUESTION. A worker that never
+    /// gets a session has not exited either — so asking "did it exit" would have
+    /// left it un-retried and unreported forever. Asking "is it alive" reports
+    /// it.
+    #[test]
+    fn a_worker_with_no_session_at_all_is_not_coming_up() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Never started",
+                ProviderKind::ClaudeCode,
+                "/workspace",
+                true,
+                1,
+            )
+            .unwrap();
+
+        assert!(
+            !store.worker_coming_up_since(worker.id, 0).unwrap(),
+            "nothing ever ran; that is a failure to surface, not a reason to wait"
+        );
+    }
+
+    #[test]
+    fn a_worker_whose_session_ended_is_not_coming_up() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Crash loop",
+                ProviderKind::ClaudeCode,
+                "/workspace",
+                true,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+
+        assert!(
+            !store.worker_coming_up_since(worker.id, 0).unwrap(),
+            "started and died is the crash loop the circuit exists for"
+        );
+    }
+
+    /// A session that predates the attempt says nothing about this recovery.
+    #[test]
+    fn an_older_session_does_not_count_as_coming_up_now() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Returning", ProviderKind::ClaudeCode, "/workspace", true, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        assert!(
+            !store
+                .worker_coming_up_since(worker.id, i64::MAX / 2)
+                .unwrap(),
+            "the circuit asks about life since ITS OWN attempt, not ever"
+        );
     }
 
     #[test]

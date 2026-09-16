@@ -1440,13 +1440,50 @@ impl AppState {
         {
             return false;
         }
-        if self
+        // ⚠️ A SECOND ATTEMPT IS NOT AN EXIT, and treating it as one took Queen
+        // down. This branch used to fire whenever a recovery was attempted while
+        // an earlier attempt was still on record — and the record is kept for
+        // five minutes. One SECOND after she started, a pass found her without a
+        // reported session, called it "exited again", wrote the error and gave
+        // up. She is the largest worker here and the slowest to register, so she
+        // is the likeliest to be mistaken for a crash loop, and the consequence
+        // of the mistake is the whole coordination layer stopping until a person
+        // notices.
+        //
+        // An exit leaves evidence: a session that began at or after the recorded
+        // attempt and has since ended. Without that evidence the worker is still
+        // coming up, so this pass does nothing and — importantly — puts the
+        // ORIGINAL attempt time back, or the stability window would restart on
+        // every pass and never mature.
+        //
+        // ⚠️ THE CIRCUIT MUST STILL OPEN. It exists to stop an unstartable
+        // worker being restarted forever, which is a real failure; the fix is
+        // what it opens ON, not whether it opens.
+        let previous = self
             .worker_recovery_attempts
             .write()
             .await
-            .insert(profile.id, now)
-            .is_some()
-        {
+            .insert(profile.id, now);
+        if let Some(attempted_at) = previous {
+            // Only a worker that is VISIBLY ALIVE earns more patience: a session
+            // begun since the attempt and still running. Asking the opposite —
+            // "has it exited" — looked equivalent and was not: a worker that
+            // never gets a session at all has not exited either, so the circuit
+            // would never open, nothing would retry it, and nothing would say
+            // so. That is a permanent silent stall, and strictly worse than the
+            // bug this fixes. An existing test caught it before it shipped.
+            let coming_up = task_store(self).is_ok_and(|store| {
+                store
+                    .worker_coming_up_since(profile.id, attempted_at)
+                    .unwrap_or(false)
+            });
+            if coming_up {
+                self.worker_recovery_attempts
+                    .write()
+                    .await
+                    .insert(profile.id, attempted_at);
+                return false;
+            }
             self.worker_errors.write().await.insert(
                 profile.id,
                 "Worker exited again before recovery was stable. Retry when ready.".to_owned(),
@@ -18683,6 +18720,98 @@ mod tests {
 
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    /// ⚠️ THE CHAIN, NOT THE QUERY. `worker_exited_since` has its own tests, and
+    /// so did every layer of the last feature that shipped doing nothing. This
+    /// one drives the circuit itself: a second recovery pass over a worker that
+    /// has NOT exited must leave no runtime error, because a runtime error is
+    /// what renders as Blocked and what stops the retrying.
+    ///
+    /// This is the exact state Queen was in at 15:51:19 — started one second
+    /// earlier, no session the host had reported yet, an attempt already on
+    /// record. The old code called that "exited again" and gave up on her.
+    #[tokio::test]
+    async fn a_worker_that_is_still_coming_up_does_not_open_the_circuit() {
+        let store = TaskStore::in_memory().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        // An attempt is already on record, as it would be one second after a
+        // recovery, and the worker has no live session yet.
+        let attempted_at = unix_timestamp();
+        state
+            .worker_recovery_attempts
+            .write()
+            .await
+            .insert(queen.id, attempted_at);
+
+        // She started: a session exists and is live, which is what the host had
+        // not yet reported when the circuit fired on her.
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+
+        let profile = store.get_worker_profile(queen.id).unwrap();
+        let opened = state
+            .try_autostart_recovery(
+                &profile,
+                attempted_at + 1,
+                runtime::CoordinatorStartAdmission::Allowed,
+            )
+            .await;
+
+        assert!(!opened, "nothing was started; this pass simply waits");
+        assert!(
+            !state.worker_errors.read().await.contains_key(&queen.id),
+            "a worker still coming up must not be marked as having exited"
+        );
+        assert_eq!(
+            state.worker_recovery_attempts.read().await.get(&queen.id),
+            Some(&attempted_at),
+            "the ORIGINAL attempt time survives, or the five-minute stability \
+             window restarts on every pass and never matures"
+        );
+    }
+
+    /// ⚠️ AND THE CIRCUIT MUST STILL OPEN ON A REAL ONE. A fix that never fires
+    /// trades a Queen that stays down for a fleet that restarts an unstartable
+    /// worker forever — or, as the first version of this fix would have done,
+    /// for a worker that is never retried and never reported at all.
+    #[tokio::test]
+    async fn a_worker_with_nothing_running_still_opens_the_circuit() {
+        let store = TaskStore::in_memory().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        let attempted_at = unix_timestamp();
+        state
+            .worker_recovery_attempts
+            .write()
+            .await
+            .insert(queen.id, attempted_at);
+
+        // It started after the attempt and then died: an exit, with evidence.
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+
+        let profile = store.get_worker_profile(queen.id).unwrap();
+        state
+            .try_autostart_recovery(
+                &profile,
+                attempted_at + 1,
+                runtime::CoordinatorStartAdmission::Allowed,
+            )
+            .await;
+
+        assert!(
+            state.worker_errors.read().await.contains_key(&queen.id),
+            "a worker that genuinely exited twice is what this circuit is for"
+        );
     }
 
     #[tokio::test]

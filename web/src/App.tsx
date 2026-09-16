@@ -116,6 +116,7 @@ import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
+import WorkerCannotRunCard from "./workers/WorkerCannotRunCard";
 import WorkerReturnAttentionCard from "./workers/WorkerReturnAttentionCard";
 import { isQueuedDeliveryObservation, isRuntimeStartHold } from "./orchestration/deliveryAttention";
 import WorkerStartNotice from "./runtime/WorkerStartNotice";
@@ -1611,6 +1612,10 @@ export function App() {
   const queuedDeliveryObservations = heldDeliveries.filter(isQueuedDeliveryObservation);
   const heldDeliveryAttentionCount = actionableHeldDeliveries.length > 0 ? 1 : 0;
   const workerReturnAttentionCount = workers.some((worker) => worker.return_attention) ? 1 : 0;
+  // A worker whose automatic recovery gave up is stopped until a person acts,
+  // and used to say so only on a roster chip and in the journal. Queen was down
+  // for ten minutes that way, with the coordination layer stopped behind her.
+  const workerCannotRunCount = workers.some((worker) => worker.runtime_error) ? 1 : 0;
   // ONE CARD, ONE COUNT, like held deliveries and blocked escalations above.
   // The card carries the number itself, so the operator sees how much without
   // opening anything; the badge counts things to deal with, not rows.
@@ -1659,6 +1664,7 @@ export function App() {
   const attentionCount = Number(databaseRecoveryRequired) + pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
     + heldDeliveryAttentionCount
     + workerReturnAttentionCount
+    + workerCannotRunCount
     + conversationDriftAttentionCount + awaitingReply.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
@@ -2526,9 +2532,10 @@ export function App() {
               busy={busy || databaseRecoveryRequired}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + workerReturnAttentionCount + conversationDriftAttentionCount + awaitingReply.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length}
               attentionCards={<>
                 {databaseRecoveryRequired && <DatabaseRecoveryCard />}
+                <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
                 <WorkerReturnAttentionCard workers={workers} onReview={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
