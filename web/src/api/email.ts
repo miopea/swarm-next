@@ -3,11 +3,15 @@ import { authenticatedFetch } from "./request";
 import type { Task, TaskPriority } from "./tasks";
 
 export type EmailConnectionState = JiraConnectionState;
+export type EmailLinkedAccount = { id: string; name: string; address: string };
 export type EmailReadiness = {
   configured: boolean;
   connection: EmailConnectionState;
+  /** The default mailbox — the one that answers when nothing names an account. */
   account_name: string | null;
   account_address: string | null;
+  /** Every linked mailbox, default first. Absent from an older API. */
+  accounts?: EmailLinkedAccount[];
 };
 export type EmailOAuthConfiguration = {
   configured: boolean;
@@ -97,6 +101,11 @@ export async function beginEmailAuthorization(operatorToken: string): Promise<st
 
 export async function disconnectEmail(operatorToken: string): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/integrations/email/auth", { method: "DELETE" });
+}
+
+/** Unlinks ONE mailbox and leaves the others connected. */
+export async function disconnectEmailAccount(operatorToken: string, accountId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/integrations/email/auth/${encodeURIComponent(accountId)}`, { method: "DELETE" });
 }
 
 export async function fetchEmailInbox(operatorToken: string, query = ""): Promise<EmailMessageSummary[]> {

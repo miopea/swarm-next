@@ -1174,18 +1174,30 @@ impl AppState {
         // map elsewhere. It meant authenticated, and this exact id is no longer
         // in the mailbox. So look the message up again by the identifier that
         // does not move, and only then believe it is gone.
-        let mut outcome = outlook.reply(&dispatch.message_id, &dispatch.body).await;
+        // ANSWER FROM THE MAILBOX THAT WAS WRITTEN TO. The source account has
+        // always been recorded on the imported message; this used to reply
+        // through whichever mailbox the probe resolved by default, which was
+        // correct only because exactly one was ever linked.
+        let mut outcome = outlook
+            .reply_from(
+                &dispatch.integration_id,
+                &dispatch.message_id,
+                &dispatch.body,
+            )
+            .await;
         if matches!(outcome, Err(outlook::OutlookError::NotFound))
             && let Some(internet_message_id) = dispatch.internet_message_id.as_deref()
             && let Ok(current) = outlook
-                .message_id_for_internet_id(internet_message_id)
+                .message_id_for_internet_id(&dispatch.integration_id, internet_message_id)
                 .await
         {
             tracing::info!(
                 target_id = %dispatch.target_id,
                 "the stored message id had gone stale; found the message again by its internet id"
             );
-            outcome = outlook.reply(&current, &dispatch.body).await;
+            outcome = outlook
+                .reply_from(&dispatch.integration_id, &current, &dispatch.body)
+                .await;
         }
         let result = match outcome {
             Ok(receipt) => store.complete_email_reply(&dispatch.target_id, &receipt),
@@ -4292,6 +4304,10 @@ fn api_router(state: AppState) -> Router {
             post(email_auth_start),
         )
         .route("/api/v1/integrations/email/auth", delete(email_disconnect))
+        .route(
+            "/api/v1/integrations/email/auth/{account_id}",
+            delete(email_disconnect_account),
+        )
         .route("/auth/email/callback", get(email_auth_callback))
         .route("/api/v1/integrations/email/inbox", get(email_inbox))
         .route(
@@ -6899,6 +6915,31 @@ async fn email_disconnect(
         )
     })?;
     oauth.disconnect().await.map_err(email_oauth_error)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Unlinks ONE mailbox and leaves the others connected.
+///
+/// Separate from `email_disconnect`, which still unlinks everything. Quietly
+/// reinterpreting the existing endpoint as "drop one" would change what an
+/// already-shipped control does, so the narrower action gets its own route.
+async fn email_disconnect_account(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(account_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let outlook = state.outlook.read().await.clone();
+    outlook
+        .disconnect_account(&account_id)
+        .await
+        .map_err(|error| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "email_oauth_unavailable",
+                error.to_string(),
+            )
+        })?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

@@ -89,6 +89,14 @@ struct Inner {
     pending: Mutex<VecDeque<PendingState>>,
 }
 
+/// One linked mailbox, as an operator sees it in settings.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct LinkedAccount {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct MicrosoftAccess {
     pub client: Client,
@@ -169,6 +177,11 @@ impl TokenStore {
     ///
     /// Keyed on the Microsoft account id so re-consenting to a mailbox that is
     /// already here replaces its tokens instead of listing it twice.
+    fn remove(&mut self, account_id: &str) {
+        self.accounts
+            .retain(|account| account.account_id != account_id);
+    }
+
     fn upsert(&mut self, tokens: OAuthTokens) {
         if let Some(existing) = self.get_mut(&tokens.account_id) {
             *existing = tokens;
@@ -513,6 +526,40 @@ impl MicrosoftOAuthClient {
             account_name: account.account_name.clone(),
             account_address: account.account_address.clone(),
         })
+    }
+
+    /// Every linked mailbox, in the order they were linked.
+    ///
+    /// The first is the default one, so a caller can show which mailbox answers
+    /// when nothing names an account.
+    pub(crate) async fn linked_accounts(&self) -> Vec<LinkedAccount> {
+        self.inner
+            .tokens
+            .lock()
+            .await
+            .accounts
+            .iter()
+            .map(|account| LinkedAccount {
+                id: account.account_id.clone(),
+                name: account.account_name.clone(),
+                address: account.account_address.clone(),
+            })
+            .collect()
+    }
+
+    /// Unlinks ONE mailbox, leaving the others connected.
+    ///
+    /// Removing the last account deletes the token file rather than leaving an
+    /// empty document behind, so a Hive that unlinks everything looks exactly
+    /// like one that never connected.
+    pub(crate) async fn disconnect_account(&self, account_id: &str) -> Result<(), OAuthError> {
+        let mut tokens = self.inner.tokens.lock().await;
+        tokens.remove(account_id);
+        if tokens.accounts.is_empty() {
+            drop(tokens);
+            return self.disconnect().await;
+        }
+        save_tokens(&self.inner.token_path, &tokens)
     }
 
     /// Unlinks EVERY mailbox and removes the token file.

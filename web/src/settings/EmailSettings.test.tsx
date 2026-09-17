@@ -116,6 +116,94 @@ test("offers a direct retry when Outlook readiness is temporarily unavailable", 
   expect(screen.queryByRole("button", { name: "Sign in with Microsoft" })).not.toBeInTheDocument();
 });
 
+test("every linked mailbox is listed, and only the first is the reply default", () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok(bundled)));
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{
+        configured: true,
+        connection: "ready",
+        account_name: "Work",
+        account_address: "work@example.test",
+        accounts: [
+          { id: "acct-1", name: "Work", address: "work@example.test" },
+          { id: "acct-2", name: "Personal", address: "me@example.test" },
+        ],
+      }}
+      unavailable={false}
+    />,
+  );
+
+  expect(screen.getByText("work@example.test")).toBeInTheDocument();
+  expect(screen.getByText("me@example.test")).toBeInTheDocument();
+  // Which mailbox answers is not cosmetic: a reply leaves from the account its
+  // message arrived on, so only a reply naming no source uses the default.
+  expect(screen.getByText("Default for replies that name no account")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Unlink" })).toHaveLength(2);
+  expect(screen.getByRole("button", { name: "Link another account" })).toBeInTheDocument();
+});
+
+test("unlinking one mailbox leaves the others alone", async () => {
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "DELETE") requests.push(url);
+    return ok(bundled);
+  }));
+  vi.stubGlobal("location", { reload: vi.fn(), assign: vi.fn() });
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{
+        configured: true,
+        connection: "ready",
+        account_name: "Work",
+        account_address: "work@example.test",
+        accounts: [
+          { id: "acct-1", name: "Work", address: "work@example.test" },
+          { id: "acct-2", name: "Personal", address: "me@example.test" },
+        ],
+      }}
+      unavailable={false}
+    />,
+  );
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Unlink" })[1]);
+
+  // ⚠️ THE PER-ACCOUNT ROUTE, NOT THE ONE THAT DROPS EVERYTHING. Unlinking one
+  // mailbox through /auth would disconnect every account, which is the kind of
+  // mistake an operator only discovers after their intake has stopped.
+  await waitFor(() => expect(requests).toEqual([
+    "/api/v1/integrations/email/auth/acct-2",
+  ]));
+});
+
+test("an older API that sends no account list still shows the mailbox it does send", () => {
+  // `accounts` is absent from a Hive running the previous build. Falling back to
+  // the single account keeps the panel truthful instead of claiming nothing is
+  // linked while mail is demonstrably arriving.
+  vi.stubGlobal("fetch", vi.fn(async () => ok(bundled)));
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={{
+        configured: true,
+        connection: "ready",
+        account_name: "Work",
+        account_address: "work@example.test",
+      }}
+      unavailable={false}
+    />,
+  );
+
+  expect(screen.getByText("work@example.test")).toBeInTheDocument();
+  // It cannot be unlinked individually, because the old API never said which
+  // account it is. Disabled is honest; a button that silently drops every
+  // mailbox would not be.
+  expect(screen.getByRole("button", { name: "Unlink" })).toBeDisabled();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

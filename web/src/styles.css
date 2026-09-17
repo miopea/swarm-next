@@ -2859,6 +2859,18 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .jira-auth-action { width: fit-content; min-width: 12rem; }
 .email-settings { grid-column: 1 / -1; }
 .email-callback-field input { color: var(--text); font-family: var(--font-mono); font-size: .75rem; }
+.email-account-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.email-account { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
+.email-account > span { display: grid; gap: 1px; min-width: 0; }
+/* The address is the identity an operator is unlinking, so it must not be the
+   thing that gets truncated away on a narrow screen. */
+.email-account strong { overflow-wrap: anywhere; }
+.email-account small { color: var(--muted); }
+.email-account button { flex: none; }
+@media (max-width: 30rem) {
+  .email-account { flex-direction: column; align-items: stretch; }
+  .email-account button { width: 100%; }
+}
 .jira-binding-list, .jira-project-setup, .jira-workflow-setup, .jira-status-map { display: grid; gap: 10px; }
 /* An expiry that has crept up is advisory, not an error — Jira still works
    today. It earns colour only because the thing it warns about is invisible

@@ -106,6 +106,7 @@ export {
 export {
   beginEmailAuthorization,
   disconnectEmail,
+  disconnectEmailAccount,
   fetchEmailAttachmentPreview,
   fetchEmailConfiguration,
   fetchEmailInbox,
@@ -133,6 +134,7 @@ export type {
   EmailMessage,
   EmailMessageSummary,
   EmailOAuthConfiguration,
+  EmailLinkedAccount,
   EmailReadiness,
   EmailReply,
   EmailReplyState,

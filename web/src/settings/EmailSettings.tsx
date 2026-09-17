@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { beginEmailAuthorization, disconnectEmail, fetchEmailConfiguration, type EmailOAuthConfiguration, type EmailReadiness } from "../api";
+import { beginEmailAuthorization, disconnectEmail, disconnectEmailAccount, fetchEmailConfiguration, type EmailOAuthConfiguration, type EmailReadiness } from "../api";
 
 type Props = {
   operatorToken: string;
@@ -51,20 +51,67 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
     }
   }
 
+  async function unlink(accountId: string, address: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await disconnectEmailAccount(operatorToken, accountId);
+      window.location.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : `${address} could not be unlinked.`);
+      setBusy(false);
+    }
+  }
+
   // Swarm ships with a registered Microsoft application, so a fresh Hive is
   // already configured and the only thing left is consent.
   const connected = readiness?.connection === "ready";
+  // An older API does not send `accounts`. Fall back to the single account it
+  // does send, so this panel never shows "no mailboxes" for a Hive that has one.
+  const accounts = readiness?.accounts
+    ?? (readiness?.account_address
+      ? [{ id: "", name: readiness.account_name ?? "", address: readiness.account_address }]
+      : []);
   return (
     <section id="settings-email" className="settings-card integration-settings email-settings" aria-labelledby="email-integration-heading">
       <div><p className="eyebrow">Email intake</p><h3 id="email-integration-heading">Turn reported issues into finished work</h3></div>
-      <p>Link one Microsoft account. Choose messages from Inbox on the task board; Swarm preserves the readable message, images, attachments, and original thread. Importing is always your choice, and a reply is never sent without you reading it first.</p>
+      <p>Link one or more Microsoft accounts. Choose messages from Inbox on the task board; Swarm preserves the readable message, images, attachments, and original thread. Importing is always your choice, and a reply is never sent without you reading it first.</p>
       <div className="integration-status" role="status">
         <span className={`presence ${connected ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{readinessLabel(readiness, unavailable)}</strong><small>{readinessDetail(readiness, unavailable)}</small></span>
         {unavailable && onRetryReadiness ? <button className="secondary-button" type="button" onClick={onRetryReadiness}>Retry Outlook status</button> : null}
       </div>
+      {accounts.length > 0 ? (
+        <ul className="email-account-list">
+          {accounts.map((account, index) => (
+            <li key={account.id || account.address} className="email-account">
+              <span>
+                <strong>{account.address}</strong>
+                {/* WHICH MAILBOX ANSWERS IS NOT COSMETIC. A reply leaves from
+                    the account its message arrived on, so the default only
+                    decides what a reply with no source uses. Saying so stops an
+                    operator assuming every reply comes from the first one. */}
+                <small>{index === 0 ? "Default for replies that name no account" : "Replies to its own messages come from here"}</small>
+              </span>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy || !account.id}
+                onClick={() => void unlink(account.id, account.address)}
+              >
+                Unlink
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {connected ? (
-        <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>Disconnect Outlook</button>
+        <div className="jira-connect-panel">
+          <button className="primary-action jira-auth-action" type="button" disabled={busy} onClick={() => void connect()}>
+            {busy ? "Opening Microsoft…" : "Link another account"}
+          </button>
+          <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>Disconnect all Outlook accounts</button>
+        </div>
       ) : unavailable ? null : (
         <div className="jira-connect-panel">
           <button className="primary-action jira-auth-action" type="button" disabled={busy} onClick={() => void connect()}>

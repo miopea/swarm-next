@@ -25,8 +25,13 @@ pub(crate) enum OutlookProbe {
 pub(crate) struct OutlookReadiness {
     pub configured: bool,
     pub connection: OutlookConnectionState,
+    /// The DEFAULT mailbox — the one that answers when nothing names an
+    /// account. Kept beside `accounts` rather than replaced by it so an older
+    /// client reading only these two fields still shows a connected Hive.
     pub account_name: Option<String>,
     pub account_address: Option<String>,
+    /// Every linked mailbox, default first. Empty when none is linked.
+    pub accounts: Vec<crate::microsoft_oauth::LinkedAccount>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -196,20 +201,31 @@ impl OutlookProbe {
 
     pub(crate) async fn readiness(&self) -> OutlookReadiness {
         if matches!(self, Self::NotConfigured) {
-            return readiness(false, OutlookConnectionState::NotConnected, None);
+            return readiness(
+                false,
+                OutlookConnectionState::NotConnected,
+                None,
+                Vec::new(),
+            );
         }
+        // Listed even when the default mailbox cannot be reached. A credential
+        // that has gone bad on ONE account must still show the others, or the
+        // operator is told the whole integration is broken when one link is.
+        let accounts = self.linked_accounts().await;
+        let state = |connection| readiness(true, connection, None, accounts.clone());
         match self.access().await {
-            Ok(access) => readiness(true, OutlookConnectionState::Ready, Some(&access)),
-            Err(OutlookError::NotConfigured) => {
-                readiness(true, OutlookConnectionState::NotConnected, None)
-            }
+            Ok(access) => readiness(
+                true,
+                OutlookConnectionState::Ready,
+                Some(&access),
+                accounts.clone(),
+            ),
+            Err(OutlookError::NotConfigured) => state(OutlookConnectionState::NotConnected),
             Err(OutlookError::CredentialsInvalid) => {
-                readiness(true, OutlookConnectionState::CredentialsInvalid, None)
+                state(OutlookConnectionState::CredentialsInvalid)
             }
-            Err(OutlookError::PermissionDenied) => {
-                readiness(true, OutlookConnectionState::PermissionDenied, None)
-            }
-            Err(_) => readiness(true, OutlookConnectionState::NetworkUnavailable, None),
+            Err(OutlookError::PermissionDenied) => state(OutlookConnectionState::PermissionDenied),
+            Err(_) => state(OutlookConnectionState::NetworkUnavailable),
         }
     }
 
@@ -354,8 +370,13 @@ impl OutlookProbe {
     ///
     /// Returns `NotFound` only when the message genuinely is not there, which
     /// is then an honest fact about the mailbox rather than something to retry.
+    /// Finds a moved message again, in the mailbox it belongs to.
+    ///
+    /// Searching the wrong mailbox would report the message gone and cancel a
+    /// deliverable reply, so this takes the account rather than defaulting.
     pub(crate) async fn message_id_for_internet_id(
         &self,
+        account_id: &str,
         internet_message_id: &str,
     ) -> Result<String, OutlookError> {
         if internet_message_id.is_empty()
@@ -365,7 +386,7 @@ impl OutlookProbe {
         {
             return Err(OutlookError::InvalidRequest);
         }
-        let access = self.access().await?;
+        let access = self.access_for(account_id).await?;
         let mut url = endpoint(&access.base_url, &["me", "messages"])?;
         url.query_pairs_mut()
             .append_pair(
@@ -446,14 +467,22 @@ impl OutlookProbe {
         )
     }
 
-    pub(crate) async fn reply(&self, message_id: &str, body: &str) -> Result<String, OutlookError> {
+    /// Answers from the mailbox the message arrived on.
+    ///
+    /// `account_id` is the `integration_id` recorded on the imported message.
+    pub(crate) async fn reply_from(
+        &self,
+        account_id: &str,
+        message_id: &str,
+        body: &str,
+    ) -> Result<String, OutlookError> {
         validate_identifier(message_id)?;
         let body = body.trim();
         if body.is_empty() || body.len() > 10_000 || body.chars().any(|character| character == '\0')
         {
             return Err(OutlookError::InvalidRequest);
         }
-        let access = self.access().await?;
+        let access = self.access_for(account_id).await?;
         let url = endpoint(&access.base_url, &["me", "messages", message_id, "reply"])?;
         let response = access
             .client
@@ -506,18 +535,51 @@ impl OutlookProbe {
             Self::OAuth(client) => client.access().await.map_err(map_oauth_error),
         }
     }
+
+    /// Reaches a NAMED mailbox rather than the default one.
+    ///
+    /// Reading can reasonably use whichever mailbox is linked; answering cannot.
+    /// A reply leaving from a different address than the one the sender wrote to
+    /// is worse than no reply, so every send resolves the account recorded on
+    /// the message it is answering.
+    pub(crate) async fn linked_accounts(&self) -> Vec<crate::microsoft_oauth::LinkedAccount> {
+        match self {
+            Self::NotConfigured => Vec::new(),
+            Self::OAuth(client) => client.linked_accounts().await,
+        }
+    }
+
+    /// Unlinks one mailbox, leaving the rest connected.
+    pub(crate) async fn disconnect_account(&self, account_id: &str) -> Result<(), OutlookError> {
+        match self {
+            Self::NotConfigured => Err(OutlookError::NotConfigured),
+            Self::OAuth(client) => client
+                .disconnect_account(account_id)
+                .await
+                .map_err(map_oauth_error),
+        }
+    }
+
+    async fn access_for(&self, account_id: &str) -> Result<MicrosoftAccess, OutlookError> {
+        match self {
+            Self::NotConfigured => Err(OutlookError::NotConfigured),
+            Self::OAuth(client) => client.access_for(account_id).await.map_err(map_oauth_error),
+        }
+    }
 }
 
 fn readiness(
     configured: bool,
     connection: OutlookConnectionState,
     access: Option<&MicrosoftAccess>,
+    accounts: Vec<crate::microsoft_oauth::LinkedAccount>,
 ) -> OutlookReadiness {
     OutlookReadiness {
         configured,
         connection,
         account_name: access.map(|access| access.account_name.clone()),
         account_address: access.map(|access| access.account_address.clone()),
+        accounts,
     }
 }
 
@@ -852,10 +914,24 @@ mod tests {
         assert!(attachment.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert_eq!(
             probe
-                .reply("message-1", "Shipped and verified")
+                .reply_from("account-1", "message-1", "Shipped and verified")
                 .await
                 .unwrap(),
             "graph:message-1"
+        );
+
+        // ⚠️ A REPLY MUST NOT FALL BACK TO SOME OTHER MAILBOX. Answering from an
+        // address the sender never wrote to is worse than not answering, so an
+        // account this Hive has not linked is refused rather than quietly
+        // served by the default one.
+        assert!(
+            matches!(
+                probe
+                    .reply_from("account-nobody", "message-1", "Shipped and verified")
+                    .await,
+                Err(OutlookError::NotConfigured)
+            ),
+            "an unlinked account must not be silently replaced by the default mailbox"
         );
         drop(probe);
         drop(directory);

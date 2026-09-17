@@ -258,6 +258,13 @@ pub struct EmailReplyTargetDispatch {
     /// changes when a message moves; this does not, so it is what finds the
     /// message again when the stored id has gone stale.
     pub internet_message_id: Option<String>,
+    /// The mailbox this message ARRIVED ON, so the answer leaves from the same
+    /// address it was sent to.
+    ///
+    /// It is the Microsoft account id, recorded NOT NULL on every imported
+    /// message and half the uniqueness key, so the right sender has always been
+    /// knowable here — the dispatcher simply never asked for it.
+    pub integration_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1069,7 +1076,7 @@ impl TaskStore {
         )?;
         let dispatch = transaction.query_row(
             "SELECT target.id, reply.id, reply.task_id, source.message_id, reply.body,
-                    target.attempts, source.internet_message_id
+                    target.attempts, source.internet_message_id, source.integration_id
                FROM email_reply_targets target
                JOIN email_reply_deliveries reply ON reply.id = target.reply_id
                JOIN email_message_links source ON source.id = target.source_id
@@ -1084,6 +1091,7 @@ impl TaskStore {
                     body: row.get(4)?,
                     attempts: row.get(5)?,
                     internet_message_id: row.get(6)?,
+                    integration_id: row.get(7)?,
                 })
             },
         )?;
