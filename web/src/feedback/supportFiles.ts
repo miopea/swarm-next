@@ -66,7 +66,28 @@ export async function prepareSupportFiles(selected: File[]): Promise<SupportFile
   if (selected.reduce((total, file) => total + file.size, 0) > SUPPORT_FILES_LIMIT) throw new Error("Attachments must total 12 MiB or less.");
   const files: SupportFile[] = [];
   for (const file of selected) {
-    if (!file.size || file.size > SUPPORT_FILE_LIMIT || !TYPES.includes(file.type)) throw new Error("Use nonempty PNG, JPEG, WebP or plain text files, up to 5 MiB each.");
+    // ⚠️ THREE CAUSES, THREE MESSAGES, AND THE FILE'S OWN NAME.
+    //
+    // These used to share one line: "Use nonempty PNG, JPEG, WebP or plain text
+    // files, up to 5 MiB each." For a wrong TYPE that is fair — it names what is
+    // accepted. For an oversized PNG it is actively misleading: it answers a
+    // question about SIZE by listing the format the person already used, which
+    // reads as though the product cannot recognise a PNG.
+    //
+    // The name matters because four attachments are allowed. One refusal out of
+    // four, with no name, leaves the person guessing which one to replace.
+    if (!file.size) throw new Error(`${file.name} is empty. Attach a file with something in it.`);
+    if (file.size > SUPPORT_FILE_LIMIT) {
+      throw new Error(`${file.name} is larger than 5 MiB. Attach a smaller copy — the format is fine.`);
+    }
+    if (!TYPES.includes(file.type)) {
+      // Names what arrived as well as what is accepted. A phone camera produces
+      // HEIC by default, so this is the likeliest way to land here, and being
+      // told the accepted list without being told what you actually picked
+      // leaves the person comparing two things they cannot both see.
+      const arrived = file.type || "an unrecognised format";
+      throw new Error(`${file.name} is ${arrived}. Attach a PNG, JPEG, WebP or plain text file — a screenshot works.`);
+    }
     const bytes = await readFileBytes(file);
     files.push({ metadata: { id: crypto.randomUUID(), file_name: file.name, media_type: file.type, size_bytes: bytes.byteLength, sha256: await digest(bytes) }, bytes });
   }

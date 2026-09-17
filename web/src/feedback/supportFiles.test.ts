@@ -12,6 +12,49 @@ async function report(): Promise<SupportFileReport> {
     files: [{ metadata: { id: crypto.randomUUID(), file_name: "fictional.txt", media_type: "text/plain", size_bytes: bytes.byteLength, sha256 }, bytes }] };
 }
 
+/**
+ * ⚠️ THREE DIFFERENT PROBLEMS MUST NOT SHARE ONE SENTENCE.
+ *
+ * They used to. An oversized PNG was answered with "Use nonempty PNG, JPEG,
+ * WebP or plain text files" — naming the person's own format back at them as
+ * the remedy for a problem about SIZE. That reads as though the product cannot
+ * recognise a PNG, and it sends them to the wrong fix.
+ */
+test("an oversized file is told about its size, not about its format", async () => {
+  const big = new File([new Uint8Array(1)], "screenshot.png", { type: "image/png" });
+  Object.defineProperty(big, "size", { value: 6 * 1024 * 1024 });
+
+  await expect(prepareSupportFiles([big])).rejects.toThrow(/larger than 5 MiB/);
+  // The format was never the problem, so it must not be offered as the answer.
+  await expect(prepareSupportFiles([big])).rejects.toThrow(/the format is fine/);
+  await expect(prepareSupportFiles([big])).rejects.toThrow(/screenshot\.png/);
+});
+
+test("a phone photo is told what it actually is, and what would work instead", async () => {
+  // HEIC is what an iPhone camera produces by default, and `accept` is a hint
+  // rather than a guard on a phone — so this is the likeliest way to land here.
+  const photo = new File([new Uint8Array([1, 2, 3])], "IMG_0001.HEIC", { type: "image/heic" });
+
+  await expect(prepareSupportFiles([photo])).rejects.toThrow(/image\/heic/);
+  await expect(prepareSupportFiles([photo])).rejects.toThrow(/PNG, JPEG, WebP or plain text/);
+  await expect(prepareSupportFiles([photo])).rejects.toThrow(/IMG_0001\.HEIC/);
+});
+
+test("a file the browser gives no type for is not described as empty", async () => {
+  // An empty `type` and an empty FILE are different failures, and the message
+  // for one must not be handed to the other.
+  const odd = new File([new Uint8Array([1])], "notes.sketch", { type: "" });
+
+  await expect(prepareSupportFiles([odd])).rejects.toThrow(/unrecognised format/);
+  await expect(prepareSupportFiles([odd])).rejects.not.toThrow(/is empty/);
+});
+
+test("an empty file says so, rather than listing formats", async () => {
+  const empty = new File([], "nothing.png", { type: "image/png" });
+
+  await expect(prepareSupportFiles([empty])).rejects.toThrow(/nothing\.png is empty/);
+});
+
 test("atomic byte copies survive reopen and exact retry without rereading selected files", async () => {
   const original = await report();
   await savePendingSupportFiles(original);
