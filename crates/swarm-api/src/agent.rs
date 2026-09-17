@@ -504,7 +504,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 28;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 29;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -2663,6 +2663,43 @@ impl AgentMcp {
             .collect())
     }
 
+    /// Stamps a listing with the moment it was read.
+    ///
+    /// ⚠️ AN UNDATED LISTING SILENTLY BECOMES A CLAIM ABOUT THE PRESENT. A
+    /// reader takes a snapshot, reasons about it, and reports minutes or hours
+    /// later. The numbers are right for when they were read and wrong for when
+    /// they are said, and nothing in the payload lets either side tell the
+    /// difference.
+    ///
+    /// It happened on 2026-09-17. A board-reading agent reported 44 open tasks
+    /// from a 13:14 read against 41 live at 14:21, and diagnosed the gap as
+    /// deleted rows it could not see. The filtering was correct the whole time
+    /// and its read simply predated a deletion by three minutes. The only real
+    /// defect was that no view could be dated, so a stale reading and a wrong
+    /// one were indistinguishable — including to the agent that made it.
+    ///
+    /// `swarm_read_task_history` already stamps `observed_at` on `current_task`.
+    /// This is that same field on the listing, not a second vocabulary for the
+    /// same idea.
+    ///
+    /// ⚠️ IT MAKES STALENESS VISIBLE; IT DOES NOT MAKE ANYONE CHECK. This
+    /// removes the excuse, not the failure mode.
+    fn stamped(envelope: Value) -> Value {
+        let mut envelope = envelope;
+        if let Some(object) = envelope.as_object_mut() {
+            object.insert("observed_at".into(), json!(crate::unix_timestamp()));
+            object.insert(
+                "observed_at_note".into(),
+                json!(
+                    "Unix seconds when this listing was READ. It is a snapshot, not a live view: \
+report it with its time, or re-read before presenting it as current. Counts from an earlier \
+read are not wrong, they are dated — and this board moves within minutes."
+                ),
+            );
+        }
+        envelope
+    }
+
     /// The visible tasks, and — when there are none — why.
     ///
     /// AN EMPTY LIST IS CORRECT AND READS AS CATASTROPHIC. A worker whose only
@@ -2679,22 +2716,24 @@ impl AgentMcp {
         tasks: &[swarm_domain::Task],
     ) -> Result<CallToolResult, ApplicationError> {
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
-            return structured(json!({ "tasks": self.tasks_with_amendments(tasks)? }));
+            return structured(Self::stamped(
+                json!({ "tasks": self.tasks_with_amendments(tasks)? }),
+            ));
         }
         let finished = self.tasks.tasks_this_worker_finished(self.principal)?;
         let Some(latest) = finished.first() else {
-            return structured(json!({
+            return structured(Self::stamped(json!({
                 "tasks": tasks,
                 "note": "You hold no assignment. This is the ordinary resting state, not an error — Queen assigns work, and nothing here has been taken away from you.",
-            }));
+            })));
         };
-        structured(json!({
+        structured(Self::stamped(json!({
             "tasks": tasks,
             "note": format!(
                 "You hold no assignment because \"{}\" closed. That is completion, not removal: work you finished leaves your list by design. You can still record evidence against it with its id, {}.",
                 latest.title, latest.id
             ),
-        }))
+        })))
     }
 
     /// Appends a correction to a task's record without moving it.
@@ -3562,7 +3601,7 @@ fn request_decision_tool() -> Tool {
 fn list_tasks_tool() -> Tool {
     tool(
         "swarm_list_tasks",
-        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment.",
+        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -4617,6 +4656,85 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), notified.as_mut())
             .await
             .unwrap();
+    }
+
+    /// ⚠️ A LISTING WITH NO TIME ON IT BECOMES A CLAIM ABOUT THE PRESENT.
+    ///
+    /// On 2026-09-17 a board-reading agent reported 44 open tasks from a 13:14
+    /// read while 41 were live at 14:21, and diagnosed the difference as
+    /// deleted rows it could not see. The filtering was correct throughout; the
+    /// read simply predated a deletion by three minutes. Nothing in the reply
+    /// let it date its own view, so a stale reading was indistinguishable from
+    /// a wrong one — and the agent reached for the wrong cause.
+    #[tokio::test]
+    async fn a_listing_says_when_it_was_read() {
+        let (bridge, store, queen_id, _, _) = setup();
+        store
+            .create_task("Something to list", "/workspace")
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let before = crate::unix_timestamp();
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        let after = crate::unix_timestamp();
+
+        let listing = &response["result"]["structuredContent"];
+        assert!(
+            !listing["tasks"]
+                .as_array()
+                .expect("tasks are listed")
+                .is_empty(),
+            "the fixture must exercise the NON-empty branch: {response}"
+        );
+        let observed = listing["observed_at"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("a listing must say when it was read: {response}"));
+        assert!(
+            (before..=after).contains(&observed),
+            "observed_at must be the moment of the read, got {observed} outside {before}..={after}"
+        );
+        assert!(
+            listing["observed_at_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("snapshot")),
+            "the stamp must say what it is FOR, or it reads as decoration: {response}"
+        );
+    }
+
+    /// ⚠️ AND THE EMPTY LISTING NEEDS IT MOST, which is why it gets its own
+    /// test rather than trusting one branch to cover the other.
+    ///
+    /// An empty board already reads as catastrophic — that is why this path
+    /// carries an explanatory note at all. A reader deciding whether "nothing
+    /// is assigned to me" is current or an hour stale has strictly less to go
+    /// on here than on a populated listing, because there is not even a task
+    /// timestamp to infer from.
+    #[tokio::test]
+    async fn even_an_empty_listing_says_when_it_was_read() {
+        let (bridge, _, _, worker_id, _) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let before = crate::unix_timestamp();
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        let after = crate::unix_timestamp();
+
+        let listing = &response["result"]["structuredContent"];
+        assert!(
+            listing["tasks"]
+                .as_array()
+                .expect("tasks are listed")
+                .is_empty(),
+            "the fixture must exercise the EMPTY branch: {response}"
+        );
+        let observed = listing["observed_at"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("an empty listing must say when it was read: {response}"));
+        assert!(
+            (before..=after).contains(&observed),
+            "observed_at must be the moment of the read, got {observed} outside {before}..={after}"
+        );
     }
 
     /// ⚠️ A BRIEF THAT NAMES A RECORD BY PART OF ITS ID SENDS A WORKER SOMEWHERE
