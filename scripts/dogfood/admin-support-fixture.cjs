@@ -61,6 +61,60 @@ function readBody(request) {
 }
 
 /**
+ * ⚠️ WHAT PRODUCTION ACTUALLY ENFORCES, so a green run here means something.
+ *
+ * BFG Admin probed their live route (build 245240d) and returned the implemented
+ * contract, with a warning worth repeating: "If your fixture exercises anything
+ * else it will pass against the loopback and 415 here." A fixture looser than
+ * production is worse than no fixture — it manufactures confidence and moves the
+ * failure to the one environment nobody is testing in.
+ *
+ * Swarm's own validate_support_attachment_set agrees with every one of these
+ * (four types, 4 files, 5 MiB each, 12 MiB total, sha256), checked rather than
+ * assumed, so this is the contract on BOTH sides rather than Admin's alone.
+ */
+const ALLOWED_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "text/plain"]);
+const MAX_FILES = 4;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_FILES_BYTES = 12 * 1024 * 1024;
+const SHA256 = /^[a-f0-9]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A refusal carrying the status production would return. */
+class Refused extends Error {
+  constructor(status, detail) {
+    super(detail);
+    this.status = status;
+  }
+}
+
+/** Splits a multipart body into ordered parts, because ORDER is part of the contract. */
+function parts(body, contentType) {
+  const marker = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType ?? "");
+  if (!marker) throw new Refused(400, "no multipart boundary");
+  const boundary = Buffer.from(`--${marker[1] ?? marker[2]}`);
+  const found = [];
+  let index = body.indexOf(boundary);
+  while (index !== -1) {
+    const start = index + boundary.length;
+    if (body.slice(start, start + 2).toString() === "--") break;
+    const next = body.indexOf(boundary, start);
+    const chunk = body.slice(start, next === -1 ? body.length : next);
+    const split = chunk.indexOf("\r\n\r\n");
+    if (split !== -1) {
+      const headers = chunk.slice(0, split).toString("utf8");
+      found.push({
+        name: /name="([^"]*)"/i.exec(headers)?.[1] ?? "",
+        contentType: /content-type:\s*([^\r\n;]+)/i.exec(headers)?.[1]?.trim() ?? "",
+        body: chunk.slice(split + 4, chunk.length - 2),
+      });
+    }
+    index = next;
+  }
+  return found;
+}
+
+/**
  * The submission key, and a fingerprint of everything that must not change
  * under it.
  *
@@ -69,14 +123,46 @@ function readBody(request) {
  * what a retry may not alter — so the raw manifest bytes are the fingerprint,
  * not a re-serialisation of them.
  */
-function identify(body, isMultipart) {
-  const text = body.toString("utf8");
+function identify(body, isMultipart, contentType) {
   if (!isMultipart) {
-    const submission = JSON.parse(text);
-    return { key: submission.submission_key, fingerprint: text };
+    const text = body.toString("utf8");
+    return { key: JSON.parse(text).submission_key, fingerprint: text };
   }
-  const manifest = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-  return { key: JSON.parse(manifest).submission.submission_key, fingerprint: manifest };
+  const found = parts(body, contentType);
+  // FIRST part must be the manifest. Production answers a body without one with
+  // 400 "Missing manifest", which is how the route was proved registered at all.
+  const [first, ...files] = found;
+  if (!first || first.name !== "manifest") throw new Refused(400, "Missing manifest");
+  if (!first.contentType.startsWith("application/json")) throw new Refused(400, "manifest is not json");
+  const manifestText = first.body.toString("utf8");
+  const manifest = JSON.parse(manifestText);
+  const declared = manifest.attachments ?? [];
+
+  if (declared.length > MAX_FILES) throw new Refused(400, `more than ${MAX_FILES} attachments`);
+  if (files.length !== declared.length) throw new Refused(400, "file parts do not match the manifest");
+
+  let total = 0;
+  for (const [position, entry] of declared.entries()) {
+    if (!UUID.test(entry.id ?? "")) throw new Refused(400, "attachment id is not a uuid");
+    if (!SHA256.test(entry.sha256 ?? "")) throw new Refused(400, "sha256 must be 64 lowercase hex");
+    // ⚠️ THE CLOSED SET. Four types, and nothing else — the single most likely
+    // way a fixture drifts looser than production.
+    if (!ALLOWED_MEDIA_TYPES.has(entry.media_type)) {
+      throw new Refused(415, `media_type ${entry.media_type} is outside the accepted set`);
+    }
+    const part = files[position];
+    if (part.name !== `file:${entry.id}`) throw new Refused(400, "file part is not named for its manifest id");
+    // A part whose ACTUAL mime differs from its manifest entry is 415, not 400:
+    // the manifest is a claim about the bytes and this is where the claim is checked.
+    if (part.contentType !== entry.media_type) {
+      throw new Refused(415, `part says ${part.contentType}, manifest says ${entry.media_type}`);
+    }
+    if (part.body.length > MAX_FILE_BYTES) throw new Refused(413, "attachment over 5 MiB");
+    total += part.body.length;
+  }
+  if (total > MAX_FILES_BYTES) throw new Refused(413, "attachments over 12 MiB in total");
+
+  return { key: manifest.submission.submission_key, fingerprint: manifestText };
 }
 
 const server = http.createServer(async (request, response) => {
@@ -87,9 +173,15 @@ const server = http.createServer(async (request, response) => {
   }
   let identity;
   try {
-    identity = identify(await readBody(request), path === FILES_PATH);
-  } catch {
-    response.writeHead(400).end();
+    identity = identify(
+      await readBody(request),
+      path === FILES_PATH,
+      request.headers["content-type"],
+    );
+  } catch (error) {
+    // The status production would have returned, so a caller sees the same
+    // refusal here as there rather than a generic 400 standing in for all of them.
+    response.writeHead(error instanceof Refused ? error.status : 400).end();
     return;
   }
   if (!identity.key) {
