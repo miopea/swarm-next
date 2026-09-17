@@ -85,7 +85,7 @@ struct Inner {
     token_url: Url,
     graph_base_url: Url,
     token_path: PathBuf,
-    tokens: Mutex<OAuthTokens>,
+    tokens: Mutex<TokenStore>,
     pending: Mutex<VecDeque<PendingState>>,
 }
 
@@ -97,6 +97,85 @@ pub(crate) struct MicrosoftAccess {
     pub integration_id: String,
     pub account_name: String,
     pub account_address: String,
+}
+
+/// Every mailbox this Hive has linked.
+///
+/// ⚠️ READS TWO FILE SHAPES AND WRITES ONE. Before multi-account support the
+/// token file was a single flat account document, and that file holds the
+/// operator's live refresh token: failing to read it does not degrade, it
+/// unlinks their mailbox. So the historical shape is still accepted and is
+/// carried forward into a one-entry store on load, and the first save rewrites
+/// it in the new shape. Nothing asks the operator to re-consent.
+///
+/// The untagged variants are ORDER-DEPENDENT. Every field of `OAuthTokens` has a
+/// default, so the flat variant would match a multi-account document too and
+/// silently yield an empty account; `Accounts` must be tried first because it
+/// is the only one with a required field.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum StoredTokens {
+    Accounts { accounts: Vec<OAuthTokens> },
+    Single(OAuthTokens),
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct TokenStore {
+    accounts: Vec<OAuthTokens>,
+}
+
+impl From<StoredTokens> for TokenStore {
+    fn from(stored: StoredTokens) -> Self {
+        let accounts = match stored {
+            StoredTokens::Accounts { accounts } => accounts,
+            StoredTokens::Single(single) => vec![single],
+        };
+        // A file with no usable credential is NOT one unusable account, it is
+        // no accounts. An empty document deserialises into a default single
+        // entry, and letting that through would make `is_linked` true for a
+        // Hive that has never connected anything.
+        Self {
+            accounts: accounts
+                .into_iter()
+                .filter(OAuthTokens::is_linked)
+                .collect(),
+        }
+    }
+}
+
+impl TokenStore {
+    fn get(&self, account_id: &str) -> Option<&OAuthTokens> {
+        self.accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+    }
+
+    fn get_mut(&mut self, account_id: &str) -> Option<&mut OAuthTokens> {
+        self.accounts
+            .iter_mut()
+            .find(|account| account.account_id == account_id)
+    }
+
+    /// The account used when no particular one is named.
+    ///
+    /// Insertion order, so a Hive with exactly one linked mailbox resolves to
+    /// the same account it always did and nothing about today's behaviour
+    /// changes.
+    fn default_account(&self) -> Option<&OAuthTokens> {
+        self.accounts.first()
+    }
+
+    /// Adds a mailbox, or refreshes the credential of one already linked.
+    ///
+    /// Keyed on the Microsoft account id so re-consenting to a mailbox that is
+    /// already here replaces its tokens instead of listing it twice.
+    fn upsert(&mut self, tokens: OAuthTokens) {
+        if let Some(existing) = self.get_mut(&tokens.account_id) {
+            *existing = tokens;
+        } else {
+            self.accounts.push(tokens);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -113,6 +192,19 @@ struct OAuthTokens {
     account_name: String,
     #[serde(default)]
     account_address: String,
+}
+
+impl OAuthTokens {
+    /// Whether this entry can actually reach a mailbox.
+    ///
+    /// The refresh token is the part that matters: an expired access token is
+    /// recoverable, a missing refresh token means the link is gone and the
+    /// operator has to consent again.
+    fn is_linked(&self) -> bool {
+        !self.account_id.is_empty()
+            && !self.account_address.is_empty()
+            && !self.refresh_token.as_deref().unwrap_or("").is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -352,31 +444,63 @@ impl MicrosoftOAuthClient {
             &token.access_token,
         )
         .await?;
-        let mut tokens = self.inner.tokens.lock().await;
-        tokens.access_token = Some(token.access_token);
-        tokens.refresh_token = token.refresh_token;
-        tokens.expires_at = expiry_after(token.expires_in);
-        tokens.account_id = account.id;
-        tokens.account_name = account.display_name;
-        tokens.account_address = account.mail.unwrap_or(account.user_principal_name);
-        if tokens.account_id.is_empty() || tokens.account_address.is_empty() {
+        let linked = OAuthTokens {
+            access_token: Some(token.access_token),
+            refresh_token: token.refresh_token,
+            expires_at: expiry_after(token.expires_in),
+            account_id: account.id,
+            account_name: account.display_name,
+            account_address: account.mail.unwrap_or(account.user_principal_name),
+        };
+        if !linked.is_linked() {
             return Err(OAuthError::InvalidResponse);
         }
+        // Upsert rather than replace: consenting again to a mailbox that is
+        // already linked must refresh that entry, not list the same account
+        // twice, and must not drop the other mailboxes.
+        let mut tokens = self.inner.tokens.lock().await;
+        tokens.upsert(linked);
         save_tokens(&self.inner.token_path, &tokens)
     }
 
+    /// The default mailbox, for callers that do not name one.
+    ///
+    /// With exactly one linked account this resolves to the same mailbox it
+    /// always did, so nothing about single-account behaviour changes.
     pub(crate) async fn access(&self) -> Result<MicrosoftAccess, OAuthError> {
+        let account_id = {
+            let tokens = self.inner.tokens.lock().await;
+            tokens
+                .default_account()
+                .ok_or(OAuthError::NotConnected)?
+                .account_id
+                .clone()
+        };
+        self.access_for(&account_id).await
+    }
+
+    /// A NAMED mailbox.
+    ///
+    /// This is what a reply must use. Every imported message records the
+    /// account it arrived on, and answering from a different one is worse than
+    /// not answering, so the sender is chosen by that recorded id rather than
+    /// by whichever mailbox happens to be first.
+    pub(crate) async fn access_for(&self, account_id: &str) -> Result<MicrosoftAccess, OAuthError> {
         let mut tokens = self.inner.tokens.lock().await;
-        if tokens.account_id.is_empty()
-            || tokens.account_address.is_empty()
-            || tokens.refresh_token.as_deref().unwrap_or("").is_empty()
-        {
+        let Some(account) = tokens.get(account_id) else {
+            return Err(OAuthError::NotConnected);
+        };
+        if !account.is_linked() {
             return Err(OAuthError::NotConnected);
         }
-        if tokens.expires_at <= expiry_after(60) {
-            refresh(&self.inner, &mut tokens).await?;
+        if account.expires_at <= expiry_after(60) {
+            let mut refreshed = account.clone();
+            refresh(&self.inner, &mut refreshed).await?;
+            tokens.upsert(refreshed);
+            save_tokens(&self.inner.token_path, &tokens)?;
         }
-        let access_token = tokens
+        let account = tokens.get(account_id).ok_or(OAuthError::NotConnected)?;
+        let access_token = account
             .access_token
             .clone()
             .filter(|value| !value.is_empty())
@@ -385,14 +509,20 @@ impl MicrosoftOAuthClient {
             client: self.inner.client.clone(),
             base_url: self.inner.graph_base_url.clone(),
             access_token,
-            integration_id: tokens.account_id.clone(),
-            account_name: tokens.account_name.clone(),
-            account_address: tokens.account_address.clone(),
+            integration_id: account.account_id.clone(),
+            account_name: account.account_name.clone(),
+            account_address: account.account_address.clone(),
         })
     }
 
+    /// Unlinks EVERY mailbox and removes the token file.
+    ///
+    /// Still all-or-nothing, unchanged from before multi-account support. When
+    /// the settings UI can unlink one account it will need a narrower sibling;
+    /// silently reinterpreting "disconnect" as "drop one" would be a surprising
+    /// change to make on the way past.
     pub(crate) async fn disconnect(&self) -> Result<(), OAuthError> {
-        *self.inner.tokens.lock().await = OAuthTokens::default();
+        *self.inner.tokens.lock().await = TokenStore::default();
         match fs::remove_file(&self.inner.token_path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -447,7 +577,10 @@ async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthErr
         tokens.refresh_token = Some(next_refresh);
     }
     tokens.expires_at = expiry_after(next.expires_in);
-    save_tokens(&inner.token_path, tokens)
+    // Persisting is the CALLER's job now. This function renews one account in
+    // isolation and no longer knows the whole store, so writing here would save
+    // that account over every other linked mailbox.
+    Ok(())
 }
 
 async fn discover_account(
@@ -482,16 +615,17 @@ async fn discover_account(
         .map_err(|_| OAuthError::InvalidResponse)
 }
 
-fn load_tokens(path: &Path) -> Result<OAuthTokens, String> {
+fn load_tokens(path: &Path) -> Result<TokenStore, String> {
     match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
+        Ok(bytes) => serde_json::from_slice::<StoredTokens>(&bytes)
+            .map(TokenStore::from)
             .map_err(|_| "Email OAuth token file is invalid JSON".to_owned()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(OAuthTokens::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(TokenStore::default()),
         Err(error) => Err(format!("Email OAuth token file could not be read: {error}")),
     }
 }
 
-fn save_tokens(path: &Path, tokens: &OAuthTokens) -> Result<(), OAuthError> {
+fn save_tokens(path: &Path, tokens: &TokenStore) -> Result<(), OAuthError> {
     let parent = path.parent().ok_or(OAuthError::Storage)?;
     fs::create_dir_all(parent).map_err(|_| OAuthError::Storage)?;
     secure_directory(parent)?;
@@ -574,6 +708,121 @@ fn expiry_after(seconds: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::{OAuthTokens, StoredTokens, TokenStore};
+
+    fn linked(id: &str) -> OAuthTokens {
+        OAuthTokens {
+            access_token: Some("access".to_owned()),
+            refresh_token: Some("refresh".to_owned()),
+            expires_at: 0.0,
+            account_id: id.to_owned(),
+            account_name: format!("Name {id}"),
+            account_address: format!("{id}@example.com"),
+        }
+    }
+
+    fn load(document: &str) -> TokenStore {
+        TokenStore::from(serde_json::from_str::<StoredTokens>(document).expect("valid document"))
+    }
+
+    #[test]
+    fn the_old_single_account_file_still_links_the_same_mailbox() {
+        // ⚠️ THE FILE THIS READS HOLDS A LIVE REFRESH TOKEN. Failing to parse
+        // the pre-multi-account shape does not degrade to a lesser feature, it
+        // unlinks the operator's mailbox and makes them consent again. The flat
+        // document must keep working untouched, and it must NOT need the file
+        // rewritten first.
+        let store = load(
+            r#"{"access_token":"a","refresh_token":"r","expires_at":123.0,
+                "account_id":"acct-1","account_name":"Work","account_address":"work@example.com"}"#,
+        );
+
+        assert_eq!(store.accounts.len(), 1, "the existing mailbox survives");
+        let account = store.default_account().expect("a default mailbox");
+        assert_eq!(account.account_id, "acct-1");
+        assert_eq!(account.account_address, "work@example.com");
+        assert_eq!(
+            account.refresh_token.as_deref(),
+            Some("r"),
+            "the refresh token is what makes the link real; losing it is the unrecoverable half"
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_usable_credential_is_no_accounts_not_one_broken_one() {
+        // Every field of OAuthTokens defaults, so an empty or half-written
+        // document deserialises into a single blank entry. Letting that through
+        // would report a Hive as linked when it has never connected anything.
+        assert!(load("{}").accounts.is_empty(), "an empty document");
+        assert!(
+            load(r#"{"account_id":"acct-1","account_address":"a@example.com"}"#)
+                .accounts
+                .is_empty(),
+            "an account with no refresh token cannot reach a mailbox"
+        );
+        assert!(
+            load(r#"{"accounts":[]}"#).accounts.is_empty(),
+            "an explicitly empty account list"
+        );
+    }
+
+    #[test]
+    fn the_multi_account_shape_is_preferred_over_the_flat_one() {
+        // ⚠️ ORDER-DEPENDENT UNTAGGED VARIANTS. Because every OAuthTokens field
+        // has a default, the flat variant matches a multi-account document too
+        // and yields ZERO accounts. If `Accounts` is not tried first, linking a
+        // second mailbox silently unlinks both.
+        let store = load(
+            r#"{"accounts":[
+                {"access_token":"a","refresh_token":"r","account_id":"acct-1",
+                 "account_name":"Work","account_address":"work@example.com"},
+                {"access_token":"b","refresh_token":"s","account_id":"acct-2",
+                 "account_name":"Personal","account_address":"me@example.com"}]}"#,
+        );
+
+        assert_eq!(store.accounts.len(), 2, "both mailboxes load");
+        assert_eq!(
+            store.default_account().expect("a default").account_id,
+            "acct-1",
+            "the default stays the first-linked mailbox, so single-account behaviour is unchanged"
+        );
+        assert_eq!(
+            store.get("acct-2").expect("the second").account_address,
+            "me@example.com"
+        );
+    }
+
+    #[test]
+    fn consenting_again_to_a_linked_mailbox_refreshes_it_rather_than_duplicating_it() {
+        let mut store = TokenStore::default();
+        store.upsert(linked("acct-1"));
+        store.upsert(linked("acct-2"));
+
+        let mut renewed = linked("acct-1");
+        renewed.refresh_token = Some("rotated".to_owned());
+        store.upsert(renewed);
+
+        assert_eq!(
+            store.accounts.len(),
+            2,
+            "re-consent must not list the mailbox twice"
+        );
+        assert_eq!(
+            store
+                .get("acct-1")
+                .expect("still linked")
+                .refresh_token
+                .as_deref(),
+            Some("rotated"),
+            "and it must carry the new credential"
+        );
+        assert_eq!(
+            store.default_account().expect("a default").account_id,
+            "acct-1",
+            "re-consent must not reorder the mailboxes and change which one is default"
+        );
+    }
+
     use axum::{
         Json, Router,
         routing::{get, post},
