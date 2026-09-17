@@ -2807,6 +2807,18 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || Boolean(target.closest("[role='menu'], .xterm")));
 }
 
-function shouldFocusTerminalInput(): boolean {
+/**
+ * Whether opening a terminal should also take keyboard focus.
+ *
+ * ⚠️ THE ONLY BEHAVIOURAL DEVICE BRANCH IN THIS APP. A coarse pointer means a
+ * touch device, where focusing an input summons the on-screen keyboard over
+ * half the terminal the operator just asked to look at. On a mouse it costs
+ * nothing and saves a click.
+ *
+ * Exported for test: it was the one device-dependent path with no coverage, and
+ * it was reached only through a `matchMedia` call that no desktop run exercises
+ * in its true branch.
+ */
+export function shouldFocusTerminalInput(): boolean {
   return !window.matchMedia?.("(pointer: coarse)").matches;
 }

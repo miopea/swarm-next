@@ -24,7 +24,7 @@ vi.mock("./notifications/NotificationController", () => ({
     async test() {}
   },
 }));
-import { App } from "./App";
+import { App, shouldFocusTerminalInput } from "./App";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 
 afterEach(() => {
@@ -2184,4 +2184,59 @@ test("the phone navigation chevron points the way the navigation will move", asy
   const shown = await screen.findByRole("button", { name: "Hide navigation" });
   expect(shown).toHaveAttribute("aria-expanded", "true");
   expect(chevronDirection(shown)).toBe("up");
+});
+
+/**
+ * ⚠️ THE ONE DEVICE BRANCH, EXERCISED BOTH WAYS.
+ *
+ * A grep for device conditionals across this app — ontouchstart, matchMedia,
+ * maxTouchPoints, coarse — finds exactly one that changes behaviour, and until
+ * now every test run took the same side of it, because a headless run has no
+ * coarse pointer. A branch only ever executed one way is not covered by the
+ * suite passing; it is merely never taken.
+ */
+test("a touch device does not get keyboard focus that would cover the terminal", () => {
+  // Focusing an input on a phone summons the on-screen keyboard over half the
+  // view the operator just asked to look at.
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+    matches: query === "(pointer: coarse)",
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }) as MediaQueryList);
+
+  expect(shouldFocusTerminalInput()).toBe(false);
+  media.mockRestore();
+});
+
+test("a pointer device still gets focus, so the terminal is typeable at once", () => {
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }) as MediaQueryList);
+
+  expect(shouldFocusTerminalInput()).toBe(true);
+  media.mockRestore();
+});
+
+test("a browser without matchMedia is treated as a pointer device, not a touch one", () => {
+  // The optional call returns undefined where matchMedia is absent, and
+  // `!undefined?.matches` is true. Guessing touch instead would silently stop
+  // focusing the terminal everywhere the API is missing.
+  const original = window.matchMedia;
+  Reflect.deleteProperty(window, "matchMedia");
+
+  expect(shouldFocusTerminalInput()).toBe(true);
+
+  Object.defineProperty(window, "matchMedia", { value: original, configurable: true, writable: true });
 });

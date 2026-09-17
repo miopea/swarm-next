@@ -436,6 +436,48 @@ test("video is not a special case: a small one is accepted like any other file",
   expect(picked.kind).toBe("file");
 });
 
+/**
+ * ⚠️ WHAT A REAL CAMERA ACTUALLY HANDS OVER.
+ *
+ * An iPhone photo is HEIC, and the extension map here knows png/jpg/jpeg/webp/gif
+ * and nothing else. That looks like a rejection waiting to happen, and it is
+ * not: type is deliberately unrestricted, so the browser's own `image/heic`
+ * passes through untouched. This test exists so the next person who notices the
+ * gap in the map finds the answer already written down instead of "fixing" it
+ * into a refusal — and so that adding a type rule later fails here loudly.
+ */
+test("a photo from a real camera is accepted with its own type, HEIC included", () => {
+  const photo = new File([new Uint8Array([1, 2, 3])], "IMG_0001.HEIC", { type: "image/heic" });
+
+  const picked = chosenAttachment(photo);
+
+  expect(picked.kind).toBe("file");
+  expect(picked.kind === "file" && picked.file.type).toBe("image/heic");
+  expect(picked.kind === "file" && picked.file.name).toBe("IMG_0001.HEIC");
+});
+
+test("a file the browser gives no type for is named by its extension, not refused", () => {
+  // Android pickers have handed over files with an empty `type`. Falling back
+  // to the extension is what keeps such a pick usable rather than opaque.
+  const photo = new File([new Uint8Array([1, 2, 3])], "PXL_20260917.jpg", { type: "" });
+
+  const picked = chosenAttachment(photo);
+
+  expect(picked.kind).toBe("file");
+  expect(picked.kind === "file" && picked.file.type).toBe("image/jpeg");
+});
+
+test("an unknown, untyped file is stored opaquely rather than refused", () => {
+  // The settled policy is most file types. Unrecognised means octet-stream, and
+  // a picker that offers something odd must not dead-end the operator.
+  const odd = new File([new Uint8Array([1])], "notes.sketchpad", { type: "" });
+
+  const picked = chosenAttachment(odd);
+
+  expect(picked.kind).toBe("file");
+  expect(picked.kind === "file" && picked.file.type).toBe("application/octet-stream");
+});
+
 test("the picker asks for the families this product carries, and not video", () => {
   // `accept` has no negation, so the only way to leave video out is to name
   // what is in. This must keep the families the drop path was widened to take.

@@ -8,10 +8,71 @@ import {
   MOBILE_TERMINAL_KEYS,
   MobileTerminalComposer,
 } from "./MobileTerminalComposer";
-import { terminalDraft } from "./TerminalDraft";
+import { TerminalDraftStore, terminalDraft } from "./TerminalDraft";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => { terminalDraft.clear(); localStorage.clear(); sessionStorage.clear(); });
+
+/**
+ * ⚠️ THE MOBILE EVICTION JOURNEY, WITHOUT A PHONE.
+ *
+ * The real failure is an OS killing a backgrounded tab while a message is
+ * half-written. That was treated as needing physical hardware, and it does not:
+ * the OS drives `visibilitychange` and `pagehide`, the composer listens for
+ * exactly those, and both are scriptable. What a real device still decides is
+ * WHETHER it backgrounds the tab — not what happens when it does, which is this.
+ *
+ * Deliberately asserts the intermediate state too. Drafts are NOT written per
+ * keystroke (that is the documented design — sessionStorage writes on every
+ * character would be the bug), so a test that only checked the end state would
+ * pass just as well if the draft had been persisted all along and the lifecycle
+ * listeners did nothing.
+ */
+test("a draft survives the tab being backgrounded and evicted", () => {
+  render(<MobileTerminalComposer sessionId="session-1" connectionState="connected" onInput={() => true} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "half-written thought" } });
+
+  expect(sessionStorage.getItem("swarm.terminal-draft.v1")).toBeNull();
+
+  const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  fireEvent(document, new Event("visibilitychange"));
+  hidden.mockRestore();
+
+  // Written now, because this is the last moment the page is guaranteed to run.
+  expect(sessionStorage.getItem("swarm.terminal-draft.v1")).toContain("half-written thought");
+
+  // The tab is killed and the operator comes back: a FRESH store over the same
+  // storage is what a restored tab actually constructs.
+  const recovered = new TerminalDraftStore(() => sessionStorage).snapshot();
+  expect(recovered.draft?.text).toBe("half-written thought");
+  expect(recovered.draft?.sessionId).toBe("session-1");
+});
+
+test("pagehide persists the draft too, for the platforms that never report hidden", () => {
+  // iOS has historically fired pagehide without a usable visibilitychange.
+  // Listening for one and not the other loses the draft on whichever platform
+  // picks the other event, and no desktop fixture would show that.
+  render(<MobileTerminalComposer sessionId="session-1" connectionState="connected" onInput={() => true} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "sent from a train" } });
+
+  expect(sessionStorage.getItem("swarm.terminal-draft.v1")).toBeNull();
+  fireEvent(window, new Event("pagehide"));
+
+  expect(new TerminalDraftStore(() => sessionStorage).snapshot().draft?.text).toBe("sent from a train");
+});
+
+test("a tab merely becoming visible again does not write a draft", () => {
+  // `visibilitychange` fires in BOTH directions. Flushing on the visible edge
+  // would write on every app-switch back, which is noise on a phone.
+  render(<MobileTerminalComposer sessionId="session-1" connectionState="connected" onInput={() => true} />);
+  fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "still typing" } });
+
+  const visible = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  fireEvent(document, new Event("visibilitychange"));
+  visible.mockRestore();
+
+  expect(sessionStorage.getItem("swarm.terminal-draft.v1")).toBeNull();
+});
 
 test("holds terminal geometry while focus remains inside mobile controls", () => {
   const hold = vi.fn();
