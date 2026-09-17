@@ -53,3 +53,21 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+
+# ⚠️ DEPENDENCIES ARE OPTIMISED; OUR OWN CRATES ARE NOT.
+#
+# Measured 2026-09-17: `cargo test --workspace --all-features` took 1129s with
+# EVERYTHING ALREADY COMPILED — compiling the workspace is only 84s, so test
+# EXECUTION was the whole of the ~19 minute verify. swarm-persistence alone ran
+# 833 tests in 670s and swarm-api 663 in 260s.
+#
+# The cause is that `rusqlite` is pulled in with `bundled`, so SQLite's C source
+# is compiled into the test binaries — and with no profile override it built at
+# opt-level 0. Every in-memory database in every test ran unoptimised C, and the
+# persistence suite stands up a database and builds the whole schema per test.
+#
+# `package."*"` is dependencies ONLY. Our crates stay at opt-level 0 so an
+# incremental rebuild of code being edited is unchanged; dependencies are cached
+# after one rebuild, so the cost is paid once rather than per run.
+[profile.dev.package."*"]
+opt-level = 2
