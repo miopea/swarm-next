@@ -2708,6 +2708,17 @@ impl TaskService {
         {
             return Ok(());
         }
+        // A task the board has NAMED as this worker's own blocker is readable.
+        // Seeing that you are blocked, being told which task you wait on, and
+        // then being refused that task is the prerequisite primitive working
+        // against the worker it exists to inform.
+        if self
+            .store
+            .worker_waits_on_task(principal.worker_id, task_id)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         self.task_this_worker_finished(principal, task_id)?;
         Ok(())
     }
@@ -4401,6 +4412,133 @@ mod tests {
             ),
             other => panic!("a block naming nothing must be refused, got {other:?}"),
         }
+    }
+
+    /// ⚠️ THE BOARD NAMES YOUR BLOCKER AND THEN REFUSES TO SHOW IT TO YOU.
+    ///
+    /// A blocked worker sees THAT it is blocked and by which task — the
+    /// prerequisite arrives on its own task with a title and a state — and could
+    /// not read the task it was waiting on. Hit first-hand on 01a091a1-4b43,
+    /// where the prerequisite's answer had to be read out of the database
+    /// directly because `swarm_read_task_history` refused it.
+    ///
+    /// Narrow on purpose: a prerequisite RECORDED on a task this worker holds,
+    /// and a read only. Nothing about tasks the board has not already named to
+    /// this worker as its own blocker.
+    #[test]
+    fn a_worker_may_read_the_task_its_own_work_waits_on() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let waits_on = service
+            .create_task(
+                queen_principal,
+                "The thing it waits on",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let mine = service
+            .create_task(
+                queen_principal,
+                "Waiting",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, mine.id, worker.id)
+            .unwrap();
+        let worker_principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+
+        // Before the link exists it is somebody else's task and stays refused.
+        assert!(
+            service
+                .may_read_task(worker_principal, waits_on.id)
+                .is_err(),
+            "an unrelated task must not become readable just by existing"
+        );
+
+        service
+            .store
+            .add_task_prerequisite(
+                mine.id,
+                waits_on.id,
+                "Named by the worker",
+                &TaskActivityActor::worker(worker.id),
+                1,
+            )
+            .unwrap();
+
+        service
+            .may_read_task(worker_principal, waits_on.id)
+            .expect("the task the board says you are waiting on must be readable");
+    }
+
+    /// ⚠️ AND IT MUST NOT WIDEN INTO A GENERAL BOARD READ. The link is what
+    /// grants the read; another worker's prerequisite grants nothing.
+    #[test]
+    fn a_prerequisite_of_somebody_elses_task_stays_refused() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let waits_on = service
+            .create_task(
+                queen_principal,
+                "Somebody else's blocker",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        // Assigned to NOBODY, so the prerequisite below is not this worker's.
+        let theirs = service
+            .create_task(
+                queen_principal,
+                "Not mine",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .store
+            .add_task_prerequisite(
+                theirs.id,
+                waits_on.id,
+                "Named by Queen",
+                &TaskActivityActor::worker(queen.id),
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+
+        assert!(
+            service
+                .may_read_task(
+                    AgentPrincipal {
+                        worker_id: worker.id,
+                        role: WorkerRole::Worker,
+                        active_session_id: Some(session),
+                    },
+                    waits_on.id
+                )
+                .is_err(),
+            "a prerequisite recorded on work this worker does not hold grants nothing"
+        );
     }
 
     /// ⚠️ THE AFFORDANCE THIS CONTROL SHIPPED WITHOUT, for one working day.

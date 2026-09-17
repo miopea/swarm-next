@@ -3,7 +3,7 @@ use std::str::FromStr;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use swarm_domain::{
     ControlRoomEventKind, MAX_HIVE_PREREQUISITES, MAX_TASK_PREREQUISITES, TaskActivityActor,
-    TaskActivityActorKind, TaskId, TaskPrerequisite, TaskPrerequisiteError, TaskState,
+    TaskActivityActorKind, TaskId, TaskPrerequisite, TaskPrerequisiteError, TaskState, WorkerId,
     validate_prerequisite_reason, validate_task_prerequisite,
 };
 
@@ -348,6 +348,38 @@ impl TaskStore {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Whether this worker holds a task that WAITS ON the given one.
+    ///
+    /// ⚠️ THE CASE THIS EXISTS FOR. A blocked worker can see THAT it is blocked
+    /// and by which task id — the prerequisite appears on its own task with a
+    /// title and a state — and could not read the task it was waiting on. The
+    /// board names the reason and then refuses to show it, which is the spirit
+    /// of the prerequisite primitive being broken. Hit first-hand on
+    /// 01a091a1-4b43, whose prerequisite had to be read out of the database
+    /// directly because the tool refused.
+    ///
+    /// Deliberately narrow: only a prerequisite RECORDED on a task this worker
+    /// is assigned, and only a read. It grants nothing about tasks the board has
+    /// not already named to this worker as its own blocker.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn worker_waits_on_task(
+        &self,
+        worker: WorkerId,
+        prerequisite: TaskId,
+    ) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_prerequisites p
+                 JOIN tasks t ON t.id = p.task_id
+                 WHERE p.prerequisite_id = ?1
+                   AND t.assigned_worker_id = ?2
+                   AND t.removed_at IS NULL)",
+            params![prerequisite.to_string(), worker.to_string()],
+            |row| row.get(0),
+        )?)
     }
 
     /// Read current prerequisite facts, including removed upstream work.
