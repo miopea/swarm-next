@@ -35,6 +35,21 @@ pub(super) fn authorize(
     tx: &Transaction<'_>,
     actor: &TaskActivityActor,
 ) -> Result<(), TaskStoreError> {
+    authorize_for(tx, actor, None)
+}
+
+/// ⚠️ ADD AND REMOVE ARE NOT THE SAME PERMISSION, and collapsing them would be
+/// a real hole. `naming_blocker_on` passes the task an assigned worker is
+/// blocking, which lets that worker RECORD what its own work waits on — the
+/// affordance the Blocked guard demanded and did not supply. It is never passed
+/// on the remove path: a worker that could delete its own prerequisite could
+/// walk itself out of the gate it was parked behind, which is worse than the
+/// stall this fixes. Naming a blocker is safe; unnaming one is not.
+pub(super) fn authorize_for(
+    tx: &Transaction<'_>,
+    actor: &TaskActivityActor,
+    naming_blocker_on: Option<TaskId>,
+) -> Result<(), TaskStoreError> {
     if actor.kind == TaskActivityActorKind::Operator {
         return Ok(());
     }
@@ -47,6 +62,17 @@ pub(super) fn authorize(
         )?;
         if queen {
             return Ok(());
+        }
+        if let Some(task) = naming_blocker_on {
+            let owns: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM tasks
+                 WHERE id = ?1 AND assigned_worker_id = ?2)",
+                params![task.to_string(), actor.id.as_deref()],
+                |row| row.get(0),
+            )?;
+            if owns {
+                return Ok(());
+            }
         }
     }
     Err(TaskPrerequisiteError::Unauthorized.into())
@@ -240,7 +266,7 @@ impl TaskStore {
         let reason = reason.trim();
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
-        authorize(&tx, actor)?;
+        authorize_for(&tx, actor, Some(task))?;
         let state = local_task(&tx, task)?;
         local_task(&tx, prerequisite)?;
         let existing: Option<String> = tx

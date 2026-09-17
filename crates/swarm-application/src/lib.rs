@@ -3083,6 +3083,87 @@ impl TaskService {
             )
             .map_err(Into::into)
     }
+}
+
+/// What a blocking task waits on, named on the transition that blocks it.
+///
+/// Both kinds are here because the gap was hit twice in one day and the two
+/// cases needed different ones: a worker waiting on an operator ruling, and a
+/// worker waiting on another task. Supporting only one would have left half the
+/// hole open.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockerLink {
+    Prerequisite(TaskId),
+    Decision(swarm_domain::DecisionRequestId),
+}
+
+impl TaskService {
+    /// Records the blocker a worker names while blocking its OWN task.
+    ///
+    /// ⚠️ WHY THIS EXISTS AT ALL. The guard below demands a structured blocker,
+    /// and named two tools to record one — both Queen-only. A worker with a real
+    /// blocker was told to do something it had no way to do, and the refusal
+    /// read like a malformed call rather than a permission boundary, so the
+    /// honest response was to retry and eventually leave the task Active. That
+    /// is the silent stall the guard exists to prevent, reached from the other
+    /// side. Recording it here keeps the requirement and supplies the missing
+    /// affordance, without putting a freestanding linking tool on a worker's
+    /// surface.
+    ///
+    /// ⚠️ AUTHORITY IS THE CALLER'S TO ESTABLISH FIRST. This writes a link and
+    /// does not check who is asking; `transition_task` proves the task is the
+    /// caller's own before calling it. Moving this call above that check would
+    /// let a worker annotate somebody else's work.
+    fn record_named_blocker(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        blocker: BlockerLink,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        let actor = TaskActivityActor::worker(principal.worker_id);
+        let reason = "Named by the assigned worker while blocking its own task.";
+        match blocker {
+            BlockerLink::Prerequisite(prerequisite_id) => {
+                self.apply_prerequisite_change(
+                    &actor,
+                    &swarm_domain::TaskPrerequisiteChange {
+                        task_id,
+                        prerequisite_id,
+                        operation: swarm_domain::PrerequisiteOperation::Add,
+                        reason: reason.to_owned(),
+                    },
+                    now,
+                )?;
+            }
+            BlockerLink::Decision(decision_id) => {
+                // The stale-evidence guard compares against the revision the
+                // CALLER last read. Queen links a decision after reading review
+                // evidence and forming a judgement, so a revision that moved
+                // underneath her means she is acting on a stale picture. A worker
+                // naming what its own task waits on has no prior read to go
+                // stale, so the current revision is read here rather than
+                // demanded from a caller that never held one. This satisfies the
+                // guard for this path; it does not disable it for Queen's.
+                let expected_evidence_revision = self
+                    .store
+                    .queen_task_review_evidence(task_id)?
+                    .evidence_revision;
+                self.apply_decision_link_change(
+                    &actor,
+                    &swarm_domain::TaskDecisionLinkChange {
+                        task_id,
+                        decision_id,
+                        operation: swarm_domain::TaskDecisionLinkOperation::Add,
+                        reason: reason.to_owned(),
+                        expected_evidence_revision,
+                    },
+                    now,
+                )?;
+            }
+        }
+        Ok(())
+    }
 
     /// Refuses a Blocked that names neither an owner nor what it waits for.
     ///
@@ -3123,11 +3204,12 @@ impl TaskService {
         if !self.store.task_has_structured_blocker(task_id)? {
             return Err(ApplicationError::TransitionNotPermitted(
                 "Blocked work has to name what it waits for, as a link rather than a \
-                 sentence. Link the operator decision it needs with \
-                 swarm_set_task_decision_link, or the task it waits on with \
-                 swarm_set_task_prerequisite. A link lets the board notice when the \
-                 blocker resolves; prose does not, and prose is how work comes to rest \
-                 here forever."
+                 sentence. Name it on this same call: pass prerequisite_id for the task \
+                 it waits on, or decision_id for the operator decision it needs. A link \
+                 lets the board notice when the blocker resolves; prose does not, and \
+                 prose is how work comes to rest here forever. If you have no id to \
+                 name, the work is under-specified rather than waiting on something — \
+                 say so in Review instead of parking it."
                     .into(),
             ));
         }
@@ -3148,9 +3230,28 @@ impl TaskService {
         target: TaskState,
         note: &str,
     ) -> Result<Task, ApplicationError> {
-        if target == TaskState::Blocked {
-            self.refuse_a_block_nobody_owns(task_id)?;
-        }
+        self.transition_task_naming_blocker(principal, task_id, target, note, None, 0)
+    }
+
+    /// A transition that may NAME what it waits on, in the same call that blocks.
+    ///
+    /// One call on purpose. A block and its reason recorded separately can drift
+    /// apart — the block lands, the link fails, and the task rests with a
+    /// blocker nobody can act on, which is the state this whole control exists
+    /// to prevent. `now` is only read when a link is supplied.
+    ///
+    /// # Errors
+    /// Refuses a caller that does not own the task, a move outside a worker's
+    /// lifecycle, an unrecordable link, and a block that still names nothing.
+    pub fn transition_task_naming_blocker(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        target: TaskState,
+        note: &str,
+        blocker: Option<BlockerLink>,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
         if principal.role != WorkerRole::Queen {
             let session_id = principal
                 .active_session_id
@@ -3169,10 +3270,27 @@ impl TaskService {
                     worker_transition_refusal(target),
                 ));
             }
+            // ⚠️ ORDER IS THE SECURITY PROPERTY HERE. Ownership is proven above
+            // before anything is written, so a worker cannot record a blocker on
+            // work that is not its own. The guard runs AFTER the link so that a
+            // named blocker satisfies it, and still refuses when nothing was
+            // named — the requirement is unchanged, only its affordance.
+            if target == TaskState::Blocked {
+                if let Some(blocker) = blocker {
+                    self.record_named_blocker(principal, task_id, blocker, now)?;
+                }
+                self.refuse_a_block_nobody_owns(task_id)?;
+            }
             return self
                 .store
                 .transition_worker_task(task_id, target, note, session_id)
                 .map_err(Into::into);
+        }
+        if target == TaskState::Blocked {
+            if let Some(blocker) = blocker {
+                self.record_named_blocker(principal, task_id, blocker, now)?;
+            }
+            self.refuse_a_block_nobody_owns(task_id)?;
         }
         require_completion_evidence(&self.store, target, task_id, note)?;
         if target == TaskState::Active {
@@ -4283,6 +4401,248 @@ mod tests {
             ),
             other => panic!("a block naming nothing must be refused, got {other:?}"),
         }
+    }
+
+    /// ⚠️ THE AFFORDANCE THIS CONTROL SHIPPED WITHOUT, for one working day.
+    ///
+    /// The guard above demanded a structured blocker and the refusal named two
+    /// tools to record one — both Queen-only. A worker with a real, evidenced
+    /// blocker was told to do something it had no way to do, and because the
+    /// message named specific tools it read as a malformed call rather than a
+    /// permission boundary. The honest response is to retry, reword, and leave
+    /// the task Active: the exact silent stall the guard exists to prevent,
+    /// reached from the other side. Hit twice in one day before it was found.
+    #[test]
+    fn a_worker_can_name_its_own_blocker_on_the_call_that_blocks() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let waits_on = service
+            .create_task(
+                queen_principal,
+                "The thing it waits on",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let task = service
+            .create_task(
+                queen_principal,
+                "Waiting",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        let worker_principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        service
+            .transition_task(worker_principal, task.id, TaskState::Active, "")
+            .unwrap();
+
+        let blocked = service
+            .transition_task_naming_blocker(
+                worker_principal,
+                task.id,
+                TaskState::Blocked,
+                "Waiting on the other task",
+                Some(BlockerLink::Prerequisite(waits_on.id)),
+                1,
+            )
+            .expect("a worker naming its blocker must be able to park its own work");
+
+        assert_eq!(blocked.state, TaskState::Blocked);
+        assert!(
+            service.store.task_has_structured_blocker(task.id).unwrap(),
+            "the link must actually be recorded, not merely accepted"
+        );
+    }
+
+    /// ⚠️ THE REQUIREMENT IS UNCHANGED; ONLY ITS AFFORDANCE MOVED.
+    /// Supplying the link inline must not become a way to block without one.
+    #[test]
+    fn a_worker_still_cannot_block_while_naming_nothing() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Waiting",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        let worker_principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        service
+            .transition_task(worker_principal, task.id, TaskState::Active, "")
+            .unwrap();
+
+        match service.transition_task_naming_blocker(
+            worker_principal,
+            task.id,
+            TaskState::Blocked,
+            "Waiting on something",
+            None,
+            1,
+        ) {
+            Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
+                reason.contains("link rather than a sentence"),
+                "the guard must still bite: {reason}"
+            ),
+            other => panic!("a block naming nothing must still be refused, got {other:?}"),
+        }
+    }
+
+    /// ⚠️ NAMING A BLOCKER IS SAFE; UNNAMING ONE IS NOT.
+    ///
+    /// The add path was widened so an assigned worker can record what its own
+    /// work waits on. The remove path must NOT follow it: a worker that could
+    /// delete its own prerequisite could walk itself out of the gate it was
+    /// parked behind, which is a worse failure than the stall this fixed.
+    #[test]
+    fn a_worker_cannot_unname_the_blocker_it_is_parked_behind() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let waits_on = service
+            .create_task(
+                queen_principal,
+                "The thing it waits on",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let task = service
+            .create_task(
+                queen_principal,
+                "Waiting",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        service
+            .store
+            .add_task_prerequisite(
+                task.id,
+                waits_on.id,
+                "Named by the worker",
+                &TaskActivityActor::worker(worker.id),
+                1,
+            )
+            .unwrap();
+
+        let refused = service.store.remove_task_prerequisite(
+            task.id,
+            waits_on.id,
+            "Trying to let myself out",
+            &TaskActivityActor::worker(worker.id),
+            2,
+        );
+
+        assert!(
+            refused.is_err(),
+            "a worker removing its own prerequisite must be refused, got {refused:?}"
+        );
+        assert!(
+            service.store.task_has_structured_blocker(task.id).unwrap(),
+            "and the blocker must survive the attempt"
+        );
+    }
+
+    /// ⚠️ ORDER IS THE SECURITY PROPERTY. Ownership is proven BEFORE any link is
+    /// written, so a worker cannot annotate work that is not its own by
+    /// attaching a blocker to somebody else's task on the way past.
+    #[test]
+    fn naming_a_blocker_on_a_task_that_is_not_yours_writes_nothing() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let waits_on = service
+            .create_task(
+                queen_principal,
+                "The thing it waits on",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        // Never assigned to this worker.
+        let other = service
+            .create_task(
+                queen_principal,
+                "Somebody else's",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        // A RUNNING worker, so the refusal is about ownership rather than
+        // liveness — otherwise this would pass for the wrong reason.
+        let refused = service.transition_task_naming_blocker(
+            AgentPrincipal {
+                worker_id: worker.id,
+                role: WorkerRole::Worker,
+                active_session_id: Some(session),
+            },
+            other.id,
+            TaskState::Blocked,
+            "Not mine",
+            Some(BlockerLink::Prerequisite(waits_on.id)),
+            1,
+        );
+
+        assert!(
+            matches!(refused, Err(ApplicationError::NotAuthorized)),
+            "a worker must not touch a task it does not hold, got {refused:?}"
+        );
+        assert!(
+            !service.store.task_has_structured_blocker(other.id).unwrap(),
+            "and the refusal must leave NOTHING written behind"
+        );
     }
 
     /// ⚠️ THE DEADLOCK THIS NEARLY SHIPPED WITH, and the reason it is a test.

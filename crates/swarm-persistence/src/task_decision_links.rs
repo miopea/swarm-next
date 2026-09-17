@@ -59,11 +59,23 @@ fn local_states(
 }
 
 fn authorize(tx: &Transaction<'_>, actor: &TaskActivityActor) -> Result<(), TaskStoreError> {
-    crate::task_prerequisites::authorize(tx, actor).map_err(|error| match error {
-        TaskStoreError::TaskPrerequisite(swarm_domain::TaskPrerequisiteError::Unauthorized) => {
-            TaskDecisionLinkError::Unauthorized.into()
+    authorize_for(tx, actor, None)
+}
+
+/// Same asymmetry as prerequisites: an assigned worker may NAME the decision its
+/// own task waits on, and may never unname it. See `task_prerequisites::authorize_for`.
+fn authorize_for(
+    tx: &Transaction<'_>,
+    actor: &TaskActivityActor,
+    naming_blocker_on: Option<TaskId>,
+) -> Result<(), TaskStoreError> {
+    crate::task_prerequisites::authorize_for(tx, actor, naming_blocker_on).map_err(|error| {
+        match error {
+            TaskStoreError::TaskPrerequisite(swarm_domain::TaskPrerequisiteError::Unauthorized) => {
+                TaskDecisionLinkError::Unauthorized.into()
+            }
+            other => other,
         }
-        other => other,
     })
 }
 
@@ -107,7 +119,7 @@ impl TaskStore {
         validate_decision_link_reason(reason)?;
         let mut connection = self.connection()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        authorize(&tx, actor)?;
+        authorize_for(&tx, actor, Some(task))?;
         let (task_state, decision_state, primary) = local_states(&tx, task, decision)?;
         let saved: Option<String> = tx
             .query_row(

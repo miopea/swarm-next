@@ -504,7 +504,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 27;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 28;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -516,7 +516,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 27;
 #[cfg(test)]
 /// The served surface as of revision 25. Update this and the revision together.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "91cbdb6dceadd31fc3c110ac39cc0e27e567e0e862921ecd0b7ab49147d42037";
+    "2cd8e0d5a1e30d392e9076de5e2650fa82b693655bc3d4007861a04ef41bdbbf";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -2267,9 +2267,36 @@ impl AgentMcp {
             ));
         }
         let store = self.tasks.store();
-        let task = self
-            .tasks
-            .transition_task(self.principal, task_id, input.state, &input.note)?;
+        // Exactly one kind, because "waiting on both" is almost always a worker
+        // that has not decided which one actually gates it, and a block naming
+        // two things is no clearer than one naming none.
+        let blocker = match (&input.prerequisite_id, &input.decision_id) {
+            (Some(_), Some(_)) => {
+                return Err(ApplicationError::TransitionNotPermitted(
+                    "Name ONE blocker: prerequisite_id for a task, or decision_id for an \
+                     operator decision. If both genuinely gate this work, block on the one \
+                     that must clear first."
+                        .into(),
+                ));
+            }
+            (Some(prerequisite), None) => Some(swarm_application::BlockerLink::Prerequisite(
+                TaskId::from_str(prerequisite)
+                    .map_err(|_| ApplicationError::MalformedIdentifier("prerequisite id"))?,
+            )),
+            (None, Some(decision)) => Some(swarm_application::BlockerLink::Decision(
+                swarm_domain::DecisionRequestId::from_str(decision)
+                    .map_err(|_| ApplicationError::MalformedIdentifier("decision id"))?,
+            )),
+            (None, None) => None,
+        };
+        let task = self.tasks.transition_task_naming_blocker(
+            self.principal,
+            task_id,
+            input.state,
+            &input.note,
+            blocker,
+            crate::unix_timestamp(),
+        )?;
         crate::deliver_jira_transition_batch(store, &self.jira, self.changed.as_ref()).await;
         let next_step =
             review_evidence_next_step(input.state, &store.completion_evidence(task_id)?);
@@ -3304,6 +3331,12 @@ struct TransitionTaskInput {
     state: TaskState,
     #[serde(default)]
     note: String,
+    /// The task this one waits on, named on the same call that blocks it.
+    #[serde(default)]
+    prerequisite_id: Option<String>,
+    /// The operator decision this one waits on, named the same way.
+    #[serde(default)]
+    decision_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4184,6 +4217,8 @@ fn transition_task_tool() -> Tool {
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
                 "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "awaiting_release", "completed", "abandoned"] },
+                "prerequisite_id": { "type": "string", "format": "uuid", "description": "WHEN BLOCKING: the task this one waits on. Blocked has to name what it waits for as a link rather than a sentence, and this is how you name it in the same call that blocks — the board can compute what unblocks when a link resolves and can do nothing with prose. Use this or decision_id, whichever the blocker actually is. If you have neither, the work is under-specified rather than waiting on something: send it to Review and say so instead of parking it." },
+                "decision_id": { "type": "string", "format": "uuid", "description": "WHEN BLOCKING: the operator decision this one waits on, as an alternative to prerequisite_id. Name the decision you are actually waiting on; a link the board cannot resolve is prose with extra steps." },
                 "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed. THIS GOES TO THE RECORD, NOT TO A WORKER: it lands in the task history and is never part of the brief a worker is handed, so an instruction written here reaches nobody unless they call swarm_read_task_history. To steer the worker that picks this up, correct the task with swarm_amend_task_facts — an amendment travels beside the task and is delivered by swarm_list_tasks. If the work itself needs to change rather than a fact about it, say so in a new task or ask the operator; nothing an agent can write redirects work that is already described." }
             },
             "required": ["task_id", "state"],
