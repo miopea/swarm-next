@@ -3142,6 +3142,91 @@ mod settlement_tests {
             .expect("a workspace with no repository must not be refused");
     }
 
+    /// ⚠️ A DOCS-ONLY TASK MAY SAY SO THROUGH THE TOOL IT IS TOLD TO USE.
+    ///
+    /// Ticket 01a07373 reports the opposite — that `swarm_record_no_deployment`
+    /// refuses docs/investigation claims with "completed work requires concise
+    /// verification evidence" regardless of how the reason is phrased, observed
+    /// by Member Services on 01a07339 and 01a06dc8. Reproducing it on today's
+    /// build, that is NOT what the control does, and the reason shape has
+    /// nothing to do with it: `claim_completion_exemption` inspects the reason
+    /// only for EMPTINESS, then refuses solely on `CommitSettlement::NotReported`.
+    /// `DocumentationOnly` falls through and claims.
+    ///
+    /// The splits that made it narrow landed 2026-09-04 — `CommitsNotReported`
+    /// in bae408dc and `NoCompletionExemptionToApprove` in cca78152 — one day
+    /// before the ticket was filed, so the handoffs it aggregates describe a
+    /// control that had already changed under them.
+    ///
+    /// ⚠️ THE DOCS-ONLY CASE WAS THE ONE NOTHING PINNED. `NothingBuilt` and
+    /// `Unestablished` each have a test above; the automatic sweep covers
+    /// `DocumentationOnly` on its own path. The EXPLICIT claim — a worker doing
+    /// what the instructions tell it to — had no test, which is how a ticket
+    /// could assert it was refused for twelve days without contradiction.
+    #[test]
+    fn a_documentation_only_task_can_claim_that_nothing_was_deployed() {
+        let store = TaskStore::in_memory().unwrap();
+        let docs = reviewed_task(&store, "Wrote the runbook");
+        store
+            .record_task_commits(
+                docs,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[commit(&["docs/standards/cd-deploy-verification.md"])],
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(
+            commit_settlement(store.task_commit_report(docs).unwrap().as_ref()),
+            CommitSettlement::DocumentationOnly,
+            "the fixture must exercise DocumentationOnly, not some other settlement"
+        );
+
+        store
+            .claim_completion_exemption(docs, "Documentation only; nothing to deploy.", None, 2_000)
+            .expect("a docs-only task must be able to record that it shipped nothing");
+        assert_eq!(
+            store.completion_evidence(docs).unwrap(),
+            CompletionEvidence::ExemptionClaimed,
+            "the claim must leave a record for Queen to countersign"
+        );
+    }
+
+    /// ⚠️ AND THE REASON IS NEVER READ FOR SHAPE — ONLY FOR EMPTINESS.
+    ///
+    /// The ticket's central claim is that the refusal could not be escaped "by
+    /// rewording", which implies the control judges prose. It does not. A bare
+    /// list of commands and a narrative sentence are accepted identically, and
+    /// the ONLY reason that refuses is one with nothing in it.
+    ///
+    /// This is the half of the ticket worth keeping: if a future change ever
+    /// does start reading the reason, this fails and says so.
+    #[test]
+    fn the_no_deployment_reason_is_judged_only_on_being_empty() {
+        let store = TaskStore::in_memory().unwrap();
+        for reason in [
+            "Investigation only. No code changed.",
+            "$ cargo test\n2002 passed\n$ git log --oneline -1\nabc1234",
+            "n/a",
+        ] {
+            let task = claimable_task(&store, reason);
+            store
+                .claim_completion_exemption(task, reason, None, 2_000)
+                .unwrap_or_else(|error| {
+                    panic!("reason shape must not decide acceptance, refused {reason:?}: {error:?}")
+                });
+        }
+
+        let empty = claimable_task(&store, "Nothing said at all");
+        assert!(
+            matches!(
+                store.claim_completion_exemption(empty, "   ", None, 2_000),
+                Err(TaskStoreError::CompletionEvidenceRequired)
+            ),
+            "an EMPTY reason is the one case this refusal is for, and it must keep refusing"
+        );
+    }
+
     /// ⚠️ THE INCENTIVE RAN BACKWARDS AND THIS IS WHERE IT IS TURNED ROUND.
     ///
     /// Measured on two tasks that made the SAME comment-only `.ts` change
