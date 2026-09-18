@@ -10,8 +10,8 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
-    Apiary, ApiaryId, ApiaryMemberSummary, ControlRoomEventKind, Hive, HiveId, HiveIdentity,
-    LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
+    Apiary, ApiaryId, ApiaryMemberSummary, ControlRoomEventKind, DecisionRequestId, Hive, HiveId,
+    HiveIdentity, LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
     StewardCapability, Stewardship, StewardshipId, Task, TaskActivity, TaskActivityActor,
     TaskActivityActorKind, TaskActivityKind, TaskActivityPage, TaskAmendment, TaskDetailsUpdate,
     TaskDispatchState, TaskId, TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId,
@@ -2720,11 +2720,85 @@ impl TaskStore {
     /// Returns database failures.
     pub fn task_has_structured_blocker(&self, id: TaskId) -> Result<bool, TaskStoreError> {
         Ok(self.connection()?.query_row(
+            // ⚠️ PRIMARY MEMBERSHIP COUNTS, and leaving it out told a worker to
+            // name a blocker it had ALREADY named. A decision carries its own
+            // task_id, and swarm_request_decision raises one that way from the
+            // task it concerns -- so the commonest gating in the system leaves
+            // NO row in task_decision_links. Reading only that table, this guard
+            // refused a block whose gate was recorded, and the refusal said the
+            // work was under-specified. Measured on the live board: 6 of the 13
+            // blocked tasks that looked link-less were gated exactly this way.
             "SELECT EXISTS(SELECT 1 FROM task_decision_links WHERE task_id = ?1)
-                 OR EXISTS(SELECT 1 FROM task_prerequisites WHERE task_id = ?1)",
+                 OR EXISTS(SELECT 1 FROM task_prerequisites WHERE task_id = ?1)
+                 OR EXISTS(SELECT 1 FROM decision_requests WHERE task_id = ?1)",
             [id.to_string()],
             |row| row.get(0),
         )?)
+    }
+
+    /// Blocked work this decision's answer has just left with no way back.
+    ///
+    /// ⚠️ NOTHING ABOUT THESE TASKS CHANGES AT THIS INSTANT, WHICH IS WHY
+    /// NOTHING NOTICES. A task blocked on a PENDING decision is waiting
+    /// correctly: the board can see exactly what will end the wait. The moment
+    /// the operator answers, that stops being true — the event it waited for has
+    /// happened — and the task is now parked on an answer rather than waiting on
+    /// a question. Its row is untouched. Its state is untouched. Only the
+    /// meaning changed.
+    ///
+    /// Measured on this Hive: five tasks were linked to 01a08715-9309 at
+    /// 2026-09-09 12:52 while it was PENDING, and it resolved at 20:06 — seven
+    /// hours later. A check at the moment of blocking had already run and could
+    /// never fire again. This is the moment it has to be asked instead.
+    ///
+    /// NARROW BY CONSTRUCTION. A task is returned only when this decision is its
+    /// SOLE remaining terminating condition: no unfinished prerequisite, no
+    /// other pending decision, and no date already recorded. Work that still
+    /// knows how it ends is not returned, because it does not need anything.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn blocks_left_parked_by_resolving(
+        &self,
+        decision: DecisionRequestId,
+    ) -> Result<Vec<TaskId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            // ⚠️ TWO WAYS TO BE GATED, AND ONLY ONE OF THEM IS A LINK ROW. A
+            // decision carries its own task_id -- PRIMARY membership -- and
+            // add_task_decision_link deliberately returns Ok WITHOUT inserting
+            // when the task is already that primary. So a task gated the
+            // commonest way has no row in task_decision_links at all, and a
+            // query that reads only that table sees nothing and reports health.
+            "SELECT t.id FROM tasks t
+              WHERE (EXISTS (SELECT 1 FROM task_decision_links l
+                              WHERE l.task_id = t.id AND l.decision_id = ?1)
+                     OR EXISTS (SELECT 1 FROM decision_requests d
+                                 WHERE d.id = ?1 AND d.task_id = t.id))
+                AND t.state = 'blocked'
+                AND t.removed_at IS NULL
+                -- A date already says when to look again; nothing is owed.
+                AND t.blocked_until IS NULL
+                AND NOT EXISTS (SELECT 1 FROM task_decision_links o
+                                  JOIN decision_requests d ON d.id = o.decision_id
+                                 WHERE o.task_id = t.id AND d.state = 'pending')
+                AND NOT EXISTS (SELECT 1 FROM decision_requests d
+                                 WHERE d.task_id = t.id AND d.state = 'pending')
+                AND NOT EXISTS (SELECT 1 FROM task_prerequisites p
+                                  JOIN tasks pt ON pt.id = p.prerequisite_id
+                                 WHERE p.task_id = t.id
+                                   AND pt.removed_at IS NULL
+                                   AND pt.state NOT IN ('completed', 'abandoned'))
+              ORDER BY t.id",
+        )?;
+        let rows = statement.query_map([decision.to_string()], |row| row.get::<_, String>(0))?;
+        let mut parked = Vec::new();
+        for row in rows {
+            parked.push(TaskId::from_str(&row?).map_err(|_| {
+                TaskStoreError::IntegrityFailure("unreadable task id on a parked block".into())
+            })?);
+        }
+        Ok(parked)
     }
 
     /// Applies one permitted task transition without a handoff note.

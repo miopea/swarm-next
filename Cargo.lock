@@ -3008,6 +3008,7 @@ dependencies = [
  "swarm-domain",
  "swarm-persistence",
  "thiserror 2.0.20",
+ "tracing",
  "url",
  "uuid",
 ]

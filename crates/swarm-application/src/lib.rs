@@ -3439,9 +3439,95 @@ impl TaskService {
         note: &str,
         surface: &str,
     ) -> Result<DecisionRequest, ApplicationError> {
-        self.store
-            .resolve_decision_request(id, action, note, surface)
-            .map_err(Into::into)
+        let resolved = self
+            .store
+            .resolve_decision_request(id, action, note, surface)?;
+        self.ask_about_blocks_this_answer_left_parked(&resolved);
+        Ok(resolved)
+    }
+
+    /// Asks the operator about work their answer has just left with no way back.
+    ///
+    /// ⚠️ THE MOMENT AN ANSWER ARRIVES IS WHEN A BLOCK CAN STOP BEING A WAIT.
+    /// A task blocked on a PENDING decision is waiting correctly — the board can
+    /// see what will end it. The instant the operator replies, the event it
+    /// waited for has happened and the task is parked on an answer instead. Its
+    /// row does not change, its state does not change, and so nothing notices.
+    /// Measured: five tasks linked to a decision at 12:52 while it was pending,
+    /// which resolved at 20:06 seven hours later, and sat invisible afterwards.
+    ///
+    /// ⚠️ A FAILURE HERE MUST NEVER FAIL THE OPERATOR'S ANSWER. Their resolution
+    /// is already committed before this runs, and every outcome below is
+    /// swallowed with a warning. Refusing to record an answer because some third
+    /// task's bookkeeping is incomplete would be a far worse defect than the one
+    /// this fixes.
+    ///
+    /// ONE QUESTION FOR THE BATCH, not one per task. The failure this addresses
+    /// is work nobody can see; replacing it with a queue of near-identical cards
+    /// would be the same silence wearing a different coat.
+    fn ask_about_blocks_this_answer_left_parked(&self, resolved: &DecisionRequest) {
+        let parked = match self.store.blocks_left_parked_by_resolving(resolved.id) {
+            Ok(parked) if !parked.is_empty() => parked,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(
+                    message = %error,
+                    decision = %resolved.id,
+                    "could not check whether this answer left work parked"
+                );
+                return;
+            }
+        };
+        let Ok(Some(queen)) = self.store.queen_worker_id() else {
+            tracing::warn!(
+                decision = %resolved.id,
+                parked = parked.len(),
+                "an answer left work parked and there is no Queen to raise it to"
+            );
+            return;
+        };
+        let titles = parked
+            .iter()
+            .filter_map(|task| self.store.get_task(*task).ok())
+            .map(|task| format!("- {} ({})", task.title, task.id))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let summary = format!(
+            "Answering \"{}\" left {} blocked task(s) with nothing left to wait for. \
+             The decision they were gated on is now resolved, so no event will \
+             bring them back. Give them a date or release them.\n{titles}",
+            resolved.title,
+            parked.len()
+        );
+        let actions = vec![
+            "Release them to the queue".to_owned(),
+            "Keep them parked and set a revisit date".to_owned(),
+        ];
+        if let Err(error) = self.store.create_decision_request(&NewDecisionRequest {
+            requesting_worker_id: queen,
+            task_id: parked.first().copied(),
+            kind: swarm_domain::DecisionRequestKind::Input,
+            urgency: swarm_domain::DecisionUrgency::Normal,
+            title: "Work left parked by an answer",
+            summary: &summary,
+            reason: "A block whose only recorded gate was this decision has no terminating \
+                     condition now that it is answered. Nothing will fire to raise it again.",
+            risk: "Left as is, these tasks are invisible until somebody happens to remember \
+                   them, which is the failure this check exists to prevent.",
+            evidence: &summary,
+            suggested_action: "Release them to the queue",
+            allowed_actions: &actions,
+            questions: &[],
+            deadline: None,
+            requested_command: None,
+        }) {
+            tracing::warn!(
+                message = %error,
+                decision = %resolved.id,
+                parked = parked.len(),
+                "an answer left work parked and the follow-up question could not be raised"
+            );
+        }
     }
 
     /// Withdraws an obsolete request without exercising operator authority.
@@ -4440,6 +4526,277 @@ mod tests {
             ),
             other => panic!("a block naming nothing must be refused, got {other:?}"),
         }
+    }
+
+    /// Parks `task` on a decision that is PENDING at the moment it blocks.
+    ///
+    /// Built at the store level on purpose: the unit under test is what happens
+    /// when the ANSWER arrives, and driving the block through the transition
+    /// guard would test that guard instead. A decision link attaches to Blocked
+    /// or Review work, so the link is recorded after the task is parked, which
+    /// is also the order the real board produced.
+    fn park_on_a_pending_decision(
+        service: &TaskService,
+        queen: &WorkerProfile,
+        worker: &WorkerProfile,
+        task: TaskId,
+    ) -> swarm_domain::DecisionRequestId {
+        let actions = vec!["Keep parked".to_owned(), "Release it".to_owned()];
+        let decision = service
+            .store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: Some(task),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Park or release?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Keep parked",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        service
+            .store
+            .transition_task(task, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .transition_task(task, TaskState::Active)
+            .unwrap();
+        service
+            .store
+            .transition_task(task, TaskState::Blocked)
+            .unwrap();
+        let revision = service
+            .store
+            .queen_task_review_evidence(task)
+            .unwrap()
+            .evidence_revision;
+        service
+            .store
+            .add_task_decision_link(
+                task,
+                decision.id,
+                "Waiting on the operator.",
+                &revision,
+                // Recording a decision link is Queen's, not a worker's.
+                &TaskActivityActor::worker(queen.id),
+                2_000,
+            )
+            .unwrap();
+        decision.id
+    }
+
+    /// ⚠️ THE GUARD TOLD A WORKER TO NAME A BLOCKER IT HAD ALREADY NAMED.
+    ///
+    /// `swarm_request_decision` raises a decision FROM a task, which records the
+    /// gate as `decision_requests.task_id` — primary membership — and writes no
+    /// row in `task_decision_links`. `task_has_structured_blocker` read only the
+    /// link table, so the commonest gating in the system was invisible to it and
+    /// the block was refused as "under-specified".
+    ///
+    /// This is a LIVE instance, not a shape: on the board the day it was found,
+    /// 6 of the 13 blocked tasks that appeared link-less were gated this way.
+    /// Whoever hit it would have been told to pass an id for something already
+    /// recorded, with nothing to pass that would have satisfied the check.
+    #[test]
+    fn a_block_gated_by_the_decision_raised_from_it_is_not_called_under_specified() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Gated by its own decision",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let actions = vec!["Go".to_owned(), "Stop".to_owned()];
+        service
+            .store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Which way?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Go",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        assert!(
+            service
+                .store
+                .task_decision_links(task.id)
+                .unwrap()
+                .is_empty(),
+            "the fixture must exercise PRIMARY membership, with no link row at all"
+        );
+
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        service
+            .transition_task_naming_blocker(
+                principal,
+                task.id,
+                TaskState::Active,
+                "Starting",
+                None,
+                1_000,
+            )
+            .unwrap();
+
+        service
+            .transition_task_naming_blocker(
+                principal,
+                task.id,
+                TaskState::Blocked,
+                "Waiting on the decision this task raised.",
+                None,
+                2_000,
+            )
+            .expect("a gate recorded as primary membership IS a named blocker");
+    }
+
+    /// ⚠️ THE ANSWER IS WHAT TURNS A WAIT INTO A PARK, AND NOTHING NOTICED.
+    ///
+    /// This is the case a check at BLOCK time can never catch, and the reason
+    /// that version was abandoned. The task blocks on a PENDING decision, which
+    /// is correct and needs no date — the board can see exactly what will end
+    /// it. Seven hours later on the real board, the operator answered, and at
+    /// that instant the task stopped having anything to wait for. Its row did
+    /// not change. Its state did not change. Only the meaning did.
+    ///
+    /// Measured: five tasks linked to 01a08715-9309 at 2026-09-09 12:52 while
+    /// pending; it resolved at 20:06 and they sat invisible afterwards.
+    #[test]
+    fn answering_a_decision_asks_about_the_work_it_leaves_parked() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Parked by an answer",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let decision = park_on_a_pending_decision(&service, &queen, &worker, task.id);
+        let before = service.store.list_decision_requests().unwrap().len();
+
+        service
+            .resolve_operator_decision(decision, "Keep parked", "", "test")
+            .unwrap();
+
+        // ⚠️ NOT ASSERTED BY RE-RUNNING THE DETECTION HERE. That read would be
+        // confounded by this very feature: the question it raises is itself a
+        // PENDING decision on the same task, which the detection then correctly
+        // excludes. Asserting on the raised question is the only uncontaminated
+        // observation available after the fact.
+        let after = service.store.list_decision_requests().unwrap();
+        assert_eq!(
+            after.len(),
+            before + 1,
+            "answering must raise ONE question about the work it left with no way back"
+        );
+        let raised = after
+            .iter()
+            .find(|request| request.title == "Work left parked by an answer")
+            .expect("the follow-up question exists");
+        assert!(
+            raised.summary.contains(&task.id.to_string()),
+            "it must name the task it is about: {}",
+            raised.summary
+        );
+        assert_eq!(
+            service.store.get_task(task.id).unwrap().state,
+            TaskState::Blocked,
+            "the task STAYS PARKED — only the question comes back"
+        );
+    }
+
+    /// ⚠️ AND IT MUST STAY SILENT WHEN SOMETHING ELSE STILL ENDS THE WAIT.
+    ///
+    /// A task that also waits on unfinished work has a terminating condition
+    /// after this answer, so there is nothing to ask about. Without this the
+    /// rule would raise a card every time any decision resolved anywhere near a
+    /// blocked task, which is the "queue of near-identical cards" failure the
+    /// operator explicitly rejected.
+    #[test]
+    fn answering_asks_nothing_when_the_task_still_waits_on_real_work() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let still_open = service
+            .create_task(
+                queen_principal,
+                "Still open",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let task = service
+            .create_task(
+                queen_principal,
+                "Waits on both",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let decision = park_on_a_pending_decision(&service, &queen, &worker, task.id);
+        service
+            .store
+            .add_task_prerequisite(
+                task.id,
+                still_open.id,
+                "Also waiting on this",
+                // Recording a prerequisite is Queen's, like a decision link.
+                &TaskActivityActor::worker(queen.id),
+                2_500,
+            )
+            .unwrap();
+        let before = service.store.list_decision_requests().unwrap().len();
+
+        service
+            .resolve_operator_decision(decision, "Keep parked", "", "test")
+            .unwrap();
+
+        assert_eq!(
+            service.store.list_decision_requests().unwrap().len(),
+            before,
+            "work that still waits on an unfinished task needs no question asked"
+        );
     }
 
     /// ⚠️ THE BOARD NAMES YOUR BLOCKER AND THEN REFUSES TO SHOW IT TO YOU.

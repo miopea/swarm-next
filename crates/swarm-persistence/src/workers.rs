@@ -1781,10 +1781,28 @@ impl TaskStore {
         Ok(!engaged && !takeover)
     }
 
+    /// The Hive's Queen, for records that must name an asker rather than nobody.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or holds an invalid id.
+    pub fn queen_worker_id(&self) -> Result<Option<WorkerId>, TaskStoreError> {
+        self.connection()?
+            .query_row(
+                "SELECT p.id FROM worker_profiles p
+                 WHERE p.role = 'queen' AND p.archived_at IS NULL LIMIT 1",
+                [],
+                |row| {
+                    WorkerId::from_str(&row.get::<_, String>(0)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     /// Returns the currently bound Queen session, if Queen is running.
     ///
     /// # Errors
-    ///
     /// Returns an error when persistence contains an invalid session identity.
     pub fn active_queen_session_id(&self) -> Result<Option<WorkerSessionId>, TaskStoreError> {
         self.connection()?
