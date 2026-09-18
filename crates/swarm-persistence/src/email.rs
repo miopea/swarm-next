@@ -2251,6 +2251,61 @@ mod tests {
     /// work on a claim that was false. Parking work is only worth doing if
     /// nothing then has to remember to come back for it, so this is the
     /// assertion the whole state stands on.
+    /// ⚠️ A PARTIAL DEPLOYMENT MUST NOT CLOSE WORK THAT IS AWAITING RELEASE.
+    ///
+    /// The transition tool told workers that `awaiting_release` "completes ITSELF
+    /// when a deployment is recorded", full stop. A worker on C20 read that,
+    /// correctly concluded the state would close its ticket over two DONE-WHEN
+    /// lines that were still genuinely unmet, avoided the state, and used
+    /// Blocked instead — which the operator then called a mis-statement, because
+    /// nothing was externally blocked. The worker reasoned soundly from text
+    /// that was incomplete.
+    ///
+    /// It closes on a WHOLE-TASK deployment. `record_partial_task_deployment`
+    /// records the evidence and leaves the task exactly where it is. That
+    /// mechanism already existed — it was built after 2026-09-02, when a worker
+    /// moved B7 to Review saying in capitals that two of three acceptance lines
+    /// were unmet and the sweep closed the ticket one second later — but nothing
+    /// pinned it on the AWAITING RELEASE path, and nothing said so in the tool.
+    ///
+    /// Both halves are asserted on one task so the claim is that the FLAG decides
+    /// it, not something else about the fixture.
+    #[test]
+    fn a_partial_deployment_holds_awaiting_release_and_a_whole_one_closes_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Ships in increments", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::AwaitingRelease)
+            .unwrap();
+
+        store
+            .record_partial_task_deployment(task.id, "production", "first-increment", 1_000)
+            .unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::AwaitingRelease,
+            "an increment that ships while acceptance lines remain unmet must leave \
+             the task where it is — this is the case a worker avoided the state over"
+        );
+
+        // A SECOND deployment on a ticket that already carries one. The ticket
+        // that prompted this believed a prior record changed the behaviour; the
+        // condition never reads prior deployments, only this flag.
+        store
+            .record_task_deployment(task.id, "production", "final-increment", 2_000)
+            .unwrap();
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::Completed,
+            "and the whole-task deployment still closes it, prior record or not"
+        );
+    }
+
     #[test]
     fn release_evidence_survives_a_removed_prerequisite_and_settles_after_reconciliation() {
         let store = TaskStore::in_memory().unwrap();
