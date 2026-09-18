@@ -1,6 +1,6 @@
 //! Authoritative evidence identity for Queen's task-scoped review receipts.
 
-use rusqlite::{Connection, OptionalExtension, types::ValueRef};
+use rusqlite::{Connection, OptionalExtension, params, types::ValueRef};
 use sha2::{Digest, Sha256};
 use swarm_domain::{
     ControlRoomEventKind, MAX_QUEEN_REVIEW_OBLIGATIONS, NextMoveOwner, QueenReviewCoverage,
@@ -80,6 +80,17 @@ pub struct RepeatedReview {
     pub times_seen: i64,
     pub first_seen_at: i64,
     pub last_seen_at: i64,
+}
+
+/// Work that reached Ready and has been waiting for somebody to own it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnroutedReadyWork {
+    pub task_id: String,
+    pub title: String,
+    pub workspace: String,
+    pub priority: String,
+    pub ready_since: i64,
+    pub waiting_seconds: i64,
 }
 
 pub(crate) struct ReviewQueueCache {
@@ -340,6 +351,64 @@ fn moved_since_last_review(
 }
 
 impl TaskStore {
+    /// Ready work nobody owns, once it has waited longer than routing takes.
+    ///
+    /// ⚠️ OWNERLESS READY IS INVISIBLE TO THE DETECTOR THAT WATCHES READY WORK.
+    /// `UNSTARTED_WORK_CANDIDATES_SQL` opens with an INNER join on
+    /// `assigned_worker_id`, so a task with no owner is excluded before any age
+    /// test runs. That detector has fired 265 times and cannot once have been
+    /// about ownerless work. It is the same blindness the Blocked enforcement
+    /// was built for — 24 of 25 blocked tasks were ownerless and therefore
+    /// unwatched — reproduced one state over.
+    ///
+    /// ⚠️ THIS IS A SEPARATE QUERY ON PURPOSE, NOT A LOOSENED JOIN. Relaxing
+    /// that INNER join to a LEFT join would silently change what the EXISTING
+    /// detector reports, because every field it selects downstream — worker id,
+    /// session id, the dispatch join — assumes an owner exists.
+    ///
+    /// ⚠️ AND IT SURFACES RATHER THAN REFUSES. Ownerless Ready is the ordinary
+    /// transient between promotion and routing: six tasks were legitimately in
+    /// that state when this was written, all under twelve hours old, and a guard
+    /// at the transition would have refused every one of them.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn unrouted_ready_work(
+        &self,
+        now: i64,
+        waiting_at_least_seconds: i64,
+    ) -> Result<Vec<UnroutedReadyWork>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            // `ready_since` is the LATEST entry into Ready, not the earliest:
+            // work that went Ready, was routed, came back and lost its owner has
+            // been waiting since it came back, not since it first arrived.
+            "SELECT t.id, t.title, t.workspace, t.priority, ready.at
+             FROM tasks t
+             JOIN (SELECT task_id, MAX(occurred_at) AS at FROM task_activity
+                    WHERE kind = 'state_changed' AND to_state = 'ready'
+                    GROUP BY task_id) ready ON ready.task_id = t.id
+             WHERE t.state = 'ready'
+               AND t.assigned_worker_id IS NULL
+               AND t.removed_at IS NULL
+               AND t.hive_id = (SELECT hive_id FROM local_hive_identity WHERE singleton = 1)
+               AND ready.at + ?2 <= ?1
+             ORDER BY ready.at LIMIT 64",
+        )?;
+        let rows = statement.query_map(params![now, waiting_at_least_seconds], |row| {
+            let ready_since: i64 = row.get(4)?;
+            Ok(UnroutedReadyWork {
+                task_id: row.get(0)?,
+                title: row.get(1)?,
+                workspace: row.get(2)?,
+                priority: row.get(3)?,
+                ready_since,
+                waiting_seconds: (now - ready_since).max(0),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Tasks the review keeps reaching the same conclusion about, unchanged.
     ///
     /// ⚠️ THIS REPORTS A FACT ABOUT THE REVIEW, NOT A BELIEF ABOUT THE TASK, and
@@ -793,6 +862,93 @@ mod tests {
                 .record_queen_review_disposition(input, &TaskActivityActor::operator(), 200 + pass)
                 .unwrap();
         }
+    }
+
+    /// Puts `title` into Ready with no owner, `ready_at` seconds on the clock.
+    fn unowned_ready(store: &TaskStore, title: &str) -> TaskId {
+        let task = store.create_task(title, "/workspace/demo").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        task.id
+    }
+
+    /// ⚠️ OWNERLESS READY IS INVISIBLE TO THE DETECTOR THAT WATCHES READY WORK.
+    ///
+    /// `UNSTARTED_WORK_CANDIDATES_SQL` opens with an INNER join on
+    /// `assigned_worker_id`, so work with no owner is excluded before any age test
+    /// runs. That detector has fired 265 times and cannot once have been about
+    /// ownerless work — the same blindness the Blocked enforcement was built
+    /// for, where 24 of 25 blocked tasks were ownerless and therefore unwatched,
+    /// reproduced one state over.
+    ///
+    /// The boundary is asserted on BOTH sides. Under the bound this must stay
+    /// silent, because ownerless Ready is the ordinary transient between
+    /// promotion and routing — six tasks were legitimately in it when this was
+    /// written, all under twelve hours old, and a rule that fired on them would
+    /// be punishing normal work.
+    #[test]
+    fn ready_work_nobody_owns_surfaces_only_after_routing_has_had_its_chance() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = unowned_ready(&store, "Nobody has routed this");
+        let ready_at = store
+            .list_task_activity(task, 50)
+            .unwrap()
+            .events
+            .iter()
+            .filter(|entry| entry.to_state == Some(TaskState::Ready))
+            .map(|entry| entry.occurred_at)
+            .next_back()
+            .expect("it entered Ready");
+        let day = 24 * 60 * 60;
+
+        assert!(
+            store
+                .unrouted_ready_work(ready_at + day - 1, day)
+                .unwrap()
+                .is_empty(),
+            "one second under the bound is ordinary routing and must stay silent"
+        );
+
+        let surfaced = store.unrouted_ready_work(ready_at + day, day).unwrap();
+        assert_eq!(
+            surfaced.len(),
+            1,
+            "at the bound, work nobody has taken must be surfaced for routing"
+        );
+        assert_eq!(surfaced[0].task_id, task.to_string());
+        assert_eq!(
+            surfaced[0].waiting_seconds, day,
+            "it has to say HOW LONG, or the reader cannot tell a day from a week"
+        );
+    }
+
+    /// ⚠️ AND IT MUST NOT REPORT WORK THAT HAS AN OWNER, WHICH IS THE WHOLE
+    /// DISTINCTION. A task assigned and simply not started yet is already
+    /// covered by `assigned_ready_work_not_started_attention`; reporting it here
+    /// too would duplicate that surface and make this one noise.
+    #[test]
+    fn ready_work_that_has_an_owner_is_somebody_elses_problem() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = unowned_ready(&store, "Routed promptly");
+        let worker = store
+            .create_worker(
+                "Petal",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/demo",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.assign_task(task, session).unwrap();
+
+        assert!(
+            store
+                .unrouted_ready_work(i64::MAX / 2, 24 * 60 * 60)
+                .unwrap()
+                .is_empty(),
+            "owned work is watched elsewhere, however long it sits"
+        );
     }
 
     /// ⚠️ THE ROTATION HAS TO STOP ASKING A QUESTION IT HAS ALREADY ANSWERED.

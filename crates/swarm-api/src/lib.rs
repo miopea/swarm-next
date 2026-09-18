@@ -246,6 +246,26 @@ pub(crate) const MESSAGE_WAITING_ATTENTION_SECONDS: i64 = 10 * 60;
 /// re-deriving rather than progressing, which is the pattern Queen described
 /// running for days across twelve tasks.
 pub(crate) const REVIEW_REPETITION_ATTENTION_TIMES: i64 = 3;
+
+/// How long Ready work may sit with no owner before it is surfaced for routing.
+///
+/// ⚠️ TWENTY-FOUR HOURS IS MEASURED, NOT CHOSEN. Across all 825 tasks in this
+/// Hive with both events recorded, the gap from entering Ready to first
+/// assignment was: under 1h 698 (84.6%), 1-6h 29, 6-24h 67 (96.2% cumulative),
+/// 1-3 days 12, over 3 days 19. This bound sits above the 96th percentile, so it
+/// names the 31 that genuinely stalled and stays silent on the 794 that routed
+/// normally.
+///
+/// ⚠️ SIX HOURS IS THE TEMPTING ERROR. It would flag 11.9% — but 8.1% of tasks
+/// legitimately take between six and twenty-four hours, so it would fire on
+/// normal work about three times as often as on stalled work, and a surface
+/// wrong twice for every once it is right teaches its reader to skim it.
+///
+/// ⚠️ DO NOT HARMONISE THIS WITH THE CONSTANTS ABOVE IT. Those are 5 and 10
+/// minutes because they watch a LIVE SESSION that should be acting right now.
+/// This watches a ROUTING QUEUE waiting on a person's attention, which moves on
+/// a human timescale. The data says one hour would flag 15% of all tasks.
+pub(crate) const UNROUTED_READY_ATTENTION_SECONDS: i64 = 24 * 60 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 /// What the engine looked like the last time this API asked.

@@ -1007,6 +1007,24 @@ impl ServerHandler for AgentMcp {
                                 // since when, and says nothing about whether
                                 // the conclusion was right.
                                 "reviews_repeating": self.tasks.store().reviews_repeating_without_conversion(crate::REVIEW_REPETITION_ATTENTION_TIMES)?,
+                                // ⚠️ READY WORK NOBODY OWNS, WHICH NOTHING ELSE
+                                // WATCHES. UNSTARTED_WORK_CANDIDATES_SQL opens
+                                // with an INNER join on assigned_worker_id, so
+                                // ownerless work is excluded before any age test
+                                // runs -- assigned_ready_work_not_started has
+                                // fired 265 times and cannot once have been
+                                // about it. Same blindness the Blocked
+                                // enforcement was built for, one state over.
+                                //
+                                // Surfaced rather than refused at the
+                                // transition: ownerless Ready is the ordinary
+                                // transient between promotion and routing, and
+                                // six tasks were legitimately in it when this
+                                // was written.
+                                "unrouted_ready_work": self.tasks.store().unrouted_ready_work(
+                                    crate::unix_timestamp(),
+                                    crate::UNROUTED_READY_ATTENTION_SECONDS,
+                                )?,
                                 // Briefings that are queued and not moving, and
                                 // what each is waiting on. A dispatch that is
                                 // never claimed is never attempted and so never
