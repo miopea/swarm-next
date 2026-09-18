@@ -14,6 +14,31 @@ use crate::{TaskStore, TaskStoreError};
 const MAX_REVIEW_SOURCE_ROWS: usize = 256;
 const MAX_QUEUE_ASSESSMENTS: usize = 64;
 
+/// How many times the rotation will re-derive the same answer about work that
+/// has not moved, before it stops offering it.
+///
+/// ⚠️ COUNTING THE REPETITION WAS NEVER THE PROBLEM. `times_seen` has been
+/// recorded since schema 179 and IS read in production — swarm-api serves it as
+/// `reviews_repeating` at a threshold of 3, with a comment describing this exact
+/// failure in Queen's own words. Measured 2026-09-17: 31 receipts sat at or
+/// above that threshold, 15 of them at twenty or more, and one at FIFTY-EIGHT.
+/// Every one was served on every read and the count kept climbing. She was told,
+/// accurately and repeatedly, and told does not mean stopped.
+///
+/// The rotation never consulted the number. A task re-read fifty-eight times was
+/// offered again exactly as though it were new.
+///
+/// SIX, not three, and the gap is the point: the attention surface fires at 3,
+/// so this leaves three further passes in which Queen can act on being told
+/// before the work stops being offered. Dropping it at the same threshold would
+/// take the work away in the same breath as mentioning it.
+///
+/// ⚠️ NOTHING IS HIDDEN. Skipped work stays in `reviews_repeating`, which exists
+/// to say "you keep seeing this", and returns to the rotation the moment the
+/// task MOVES — `times_seen` resets to 1 on a state change, so the skip cannot
+/// outlive the condition that caused it.
+const MAX_UNCHANGED_REVIEW_PASSES: i64 = 6;
+
 pub(super) fn migrate_incomplete_assessments(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -194,13 +219,19 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let ids = {
             let mut statement = transaction.prepare(
+                // ⚠️ THE TERMINATING CONDITION, and it is the whole of this
+                // change: stop offering work whose answer has not changed in
+                // MAX_UNCHANGED_REVIEW_PASSES passes. times_seen rises only
+                // while the task has NOT moved state, so this skips repetition
+                // and never skips progress.
                 "SELECT r.task_id FROM queen_task_review_receipts r JOIN tasks t ON t.id=r.task_id
                  WHERE t.removed_at IS NULL AND t.state NOT IN ('completed','abandoned')
                    AND t.hive_id=(SELECT hive_id FROM local_hive_identity WHERE singleton=1)
+                   AND r.times_seen < ?1
                  ORDER BY r.task_id LIMIT 65",
             )?;
             statement
-                .query_map([], |row| row.get::<_, String>(0))?
+                .query_map([MAX_UNCHANGED_REVIEW_PASSES], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?
         };
         let next_deadline = transaction.query_row(
@@ -741,6 +772,111 @@ mod tests {
             repeating[0].first_seen_at, 101,
             "the operator's question is how long this has been going round, so \
              the count carries its start"
+        );
+    }
+
+    /// Re-reads `task` `passes` times without ever letting it move.
+    fn re_read_without_moving(
+        store: &TaskStore,
+        input: &mut QueenReviewDispositionInput,
+        passes: i64,
+    ) {
+        for pass in 0..passes {
+            input.condition = format!("Still waiting, pass {pass}");
+            // Re-read each cycle: recording a disposition moves the revision,
+            // which is why accepted_revision could never anchor "unchanged".
+            input.expected_revision = store
+                .queen_task_review_evidence(input.task_id)
+                .unwrap()
+                .evidence_revision;
+            store
+                .record_queen_review_disposition(input, &TaskActivityActor::operator(), 200 + pass)
+                .unwrap();
+        }
+    }
+
+    /// ⚠️ THE ROTATION HAS TO STOP ASKING A QUESTION IT HAS ALREADY ANSWERED.
+    ///
+    /// Counting the repetition was never the gap. `times_seen` has been recorded
+    /// since schema 179 and is served to Queen as `reviews_repeating` at a
+    /// threshold of 3. Measured on the live board 2026-09-17: 31 receipts at or
+    /// above it, 15 at twenty or more, one at FIFTY-EIGHT — every one served on
+    /// every read, and the count still climbing. Being told is not stopping.
+    ///
+    /// The rotation never consulted the number, so a task re-read fifty-eight
+    /// times was offered again as though it were new. This is the terminating
+    /// condition, and the assertion is on the boundary rather than on "some
+    /// large number", because an off-by-one here either drops work a pass early
+    /// or never drops it at all.
+    #[test]
+    fn the_rotation_stops_offering_work_whose_answer_has_not_changed() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES - 1);
+        assert!(
+            store
+                .queen_review_queue_snapshot()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| item.task.id == input.task_id),
+            "one pass below the limit it is still offered — the rotation must not \
+             give up while Queen may still act on being told"
+        );
+
+        re_read_without_moving(&store, &mut input, 1);
+        assert!(
+            !store
+                .queen_review_queue_snapshot()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| item.task.id == input.task_id),
+            "at the limit the rotation stops re-deriving the same answer"
+        );
+    }
+
+    /// ⚠️ AND THE SKIP MUST NOT OUTLIVE THE CONDITION THAT CAUSED IT.
+    ///
+    /// Work dropped from the rotation and never returned would be worse than the
+    /// repetition it replaced: the repetition at least kept the task in front of
+    /// somebody. `times_seen` resets to 1 when the task MOVES, so movement is
+    /// what brings it back — and this asserts that end to end rather than
+    /// trusting the reset in isolation.
+    #[test]
+    fn work_that_moves_is_offered_again_after_being_skipped() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES);
+        assert!(
+            !store
+                .queen_review_queue_snapshot()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| item.task.id == input.task_id),
+            "precondition: it must actually be skipped before the return means anything"
+        );
+
+        // The task moves: Blocked -> Ready -> Blocked, which is what converting
+        // a wait and re-encountering it looks like.
+        store
+            .transition_task(input.task_id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task_with_note(input.task_id, TaskState::Blocked, "Waiting again")
+            .unwrap();
+        re_read_without_moving(&store, &mut input, 1);
+
+        assert!(
+            store
+                .queen_review_queue_snapshot()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| item.task.id == input.task_id),
+            "a task that moved is genuinely new work and must return to the rotation"
         );
     }
 
