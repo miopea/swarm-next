@@ -229,13 +229,48 @@ pub(super) async fn tool_surface_status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let sessions = task_store(&state)?
+    let tally = tally_tool_surfaces(&state).await?;
+    Ok(Json(serde_json::json!({
+        "serving_revision": crate::agent::AGENT_TOOL_SURFACE_REVISION,
+        "live_sessions": tally.live_sessions,
+        "current": tally.current,
+        "stale": tally.stale,
+        "unknown": tally.unknown,
+    }))
+    .into_response())
+}
+
+/// How many live sessions hold the current tools, an older set, or nothing known.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ToolSurfaceTally {
+    pub live_sessions: usize,
+    pub current: usize,
+    pub stale: usize,
+    pub unknown: usize,
+}
+
+/// Classifies every live session's cached tool list against what is served.
+///
+/// ⚠️ ONE IMPLEMENTATION, CALLED TWICE, AND THAT IS THE POINT. This used to live
+/// inline here while `swarm_reload_app` computed its own answer from the raw map
+/// — which is how the reload came to report a number that could only ever be
+/// zero. The last time this codebase held two implementations of one signal they
+/// disagreed, so the tally is computed in exactly one place and both surfaces
+/// read it.
+///
+/// # Errors
+/// Returns an error when the task store is unavailable.
+pub(crate) async fn tally_tool_surfaces(state: &AppState) -> Result<ToolSurfaceTally, ApiError> {
+    let store = task_store(state)?;
+    let sessions = store
         .active_worker_sessions()
         .map_err(|error| task_store_error(&error))?;
-    let store = task_store(&state)?;
     let recorded = state.agent_tool_surfaces.read().await;
     let serving = crate::agent::AGENT_TOOL_SURFACE_REVISION;
-    let (mut matching, mut behind, mut unconfirmed) = (0_usize, 0_usize, 0_usize);
+    let mut tally = ToolSurfaceTally {
+        live_sessions: sessions.len(),
+        ..ToolSurfaceTally::default()
+    };
     for session in &sessions {
         // Keyed the way the agent surface records it: by SESSION, falling back
         // to the worker id when a session is not yet bound.
@@ -248,21 +283,14 @@ pub(super) async fn tool_surface_status(
                 |session_id| session_id.to_string(),
             );
         match classify_tool_surface(recorded.get(&key).copied(), serving) {
-            SessionToolSurface::Current => matching += 1,
-            SessionToolSurface::Stale => behind += 1,
+            SessionToolSurface::Current => tally.current += 1,
+            SessionToolSurface::Stale => tally.stale += 1,
             // Never asked this build for its tools, so what it holds is not
             // knowable from here. Counted as its own thing.
-            SessionToolSurface::Unknown => unconfirmed += 1,
+            SessionToolSurface::Unknown => tally.unknown += 1,
         }
     }
-    Ok(Json(serde_json::json!({
-        "serving_revision": serving,
-        "live_sessions": sessions.len(),
-        "current": matching,
-        "stale": behind,
-        "unknown": unconfirmed,
-    }))
-    .into_response())
+    Ok(tally)
 }
 
 /// What one live session's cached tool list is, relative to what is served.

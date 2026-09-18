@@ -1555,22 +1555,6 @@ impl AgentMcp {
     /// worker asks again — which is also the only version of this that proves
     /// anything, since the running build is read after the swap rather than
     /// predicted before it.
-    /// How many connected agent sessions hold a tool list this build has moved past.
-    ///
-    /// The code being live and the session being able to call it are different
-    /// facts, and only the first was observable. A worker -- or Queen, who is
-    /// stranded by this identically -- would ask for a tool that exists, be told
-    /// it does not, and read that as an unbuilt feature.
-    async fn stale_tool_surfaces(&self) -> usize {
-        self.state
-            .agent_tool_surfaces
-            .read()
-            .await
-            .values()
-            .filter(|recorded| **recorded != AGENT_TOOL_SURFACE_REVISION)
-            .count()
-    }
-
     async fn reload_app(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<ReloadAppInput>(arguments)?;
         if !self.may_reload_this_hive() {
@@ -1579,6 +1563,10 @@ impl AgentMcp {
         let source = crate::runtime::development_source_status(&self.state);
         if input.action == ReloadAppAction::Status {
             let running_revision = crate::runtime::build_source_revision();
+            // One tally, shared with the HTTP surface, so the two cannot drift.
+            let surfaces = crate::maintenance::tally_tool_surfaces(&self.state)
+                .await
+                .unwrap_or_default();
             return structured(json!({
                 "running_version": crate::build_version(),
                 "running_revision": running_revision,
@@ -1621,7 +1609,23 @@ impl AgentMcp {
                 // Counted rather than named, because the useful answer is "some
                 // sessions cannot see the new tool" and naming them invites
                 // acting on a list that changes as sessions come and go.
-                "stale_agent_tool_surfaces": self.stale_tool_surfaces().await,
+                //
+                // ⚠️ AND `unconfirmed` IS REPORTED BESIDE IT, BECAUSE ALONE THE
+                // STALE COUNT IS ZERO EXACTLY WHEN IT IS ASKED. The recorded map
+                // lives in memory on AppState and a reload REPLACES the process,
+                // so immediately afterwards no session has re-announced and every
+                // one classifies as Unknown, not Stale. This number was therefore
+                // structurally 0 at the only moment the surface ever changes.
+                //
+                // Measured 2026-09-17 across four reloads, and on one of them the
+                // reader could prove a stale session existed because it WAS one:
+                // it had just shipped a new tool, bumped the revision, and could
+                // not call the tool it shipped -- while this field said 0.
+                //
+                // Unknown does not mean fine. It means nobody has asked yet.
+                "stale_agent_tool_surfaces": surfaces.stale,
+                "unconfirmed_agent_tool_surfaces": surfaces.unknown,
+                "live_agent_sessions": surfaces.live_sessions,
             }));
         }
         // Ruling, 2026-08-25, superseding ADR-0051 and recorded as ADR-0055.
@@ -7464,6 +7468,59 @@ mod tests {
             .await,
         )
         .await
+    }
+
+    /// ⚠️ A RELOAD REPORTING ZERO STALE SESSIONS IS NOT REPORTING GOOD NEWS.
+    ///
+    /// The record of who holds which tool list lives IN MEMORY on `AppState`, and
+    /// a reload REPLACES THE PROCESS. So immediately afterwards the map is empty,
+    /// every live session classifies as Unknown rather than Stale, and the stale
+    /// count is 0 by construction — at the only moment the tool surface ever
+    /// changes, which is the only moment anyone asks.
+    ///
+    /// Lived through it on 2026-09-17: a session shipped a new tool, bumped
+    /// `AGENT_TOOL_SURFACE_REVISION`, reloaded, could not call the tool it had just
+    /// shipped — and read `stale_agent_tool_surfaces: 0` from the same status
+    /// call. The same shape was measured once before, on 2026-09-02, when 13
+    /// sessions held the previous list and the count read zero.
+    ///
+    /// So the status must carry the UNCONFIRMED bucket beside the stale one.
+    /// Asserted on a session with NOTHING recorded, because that is the state a
+    /// reload actually produces.
+    #[tokio::test]
+    async fn a_reload_status_says_how_many_sessions_it_cannot_vouch_for() {
+        let (bridge, _store, state, developer_token, _outsider_token, _keep) = reloadable_hive();
+
+        let status = response_json(
+            handle(
+                bridge,
+                state,
+                mcp_request(
+                    Some(&developer_token),
+                    "tools/call",
+                    &json!({"name": "swarm_reload_app", "arguments": {"action": "status"}}),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let reported = &status["result"]["structuredContent"];
+
+        assert_eq!(
+            reported["stale_agent_tool_surfaces"], 0,
+            "precondition: nothing is RECORDED as stale, which is exactly the \
+             reading that used to stand alone and mean nothing: {status}"
+        );
+        assert!(
+            reported["unconfirmed_agent_tool_surfaces"].is_number(),
+            "the status must say how many sessions it cannot vouch for, or a 0 \
+             stale count reads as an all-clear it did not earn: {status}"
+        );
+        assert!(
+            reported["live_agent_sessions"].is_number(),
+            "and how many there are to vouch for, since 0 unconfirmed means \
+             something very different with 0 sessions than with 13: {status}"
+        );
     }
 
     /// Restarting this Hive is for the worker that builds it, nobody else. A
