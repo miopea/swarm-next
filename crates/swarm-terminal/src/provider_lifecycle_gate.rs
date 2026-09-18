@@ -62,6 +62,44 @@ impl ProviderLifecycleGate {
         {
             return ProviderLifecycleAcceptance::Denied;
         }
+        /*
+          A FORK OR A COMPACT IS A CONVERSATION CHANGE, NOT NOISE.
+
+          These two were dropped here as uninteresting lifecycle chatter. They
+          are the opposite: both mint a NEW conversation id, and Claude reports
+          it over this same authenticated capability. Discarding them left
+          Swarm's saved marker pointing at the conversation the worker had
+          ABANDONED, so every later start would resume the wrong thread and the
+          drift card reported the worker's own work as a newer stranger.
+
+          Measured on two workers: one resumed its pinned conversation, forked
+          three seconds later, and did the next two hours of work in a
+          conversation Swarm never recorded.
+
+          They are handled as a SELECTION CHANGE rather than a startup. A
+          startup settles identity once and a retry must not overwrite it with
+          different facts — that rule is untouched below. A fork is the live
+          session telling us where it went, which is what `ConversationChanged`
+          already exists to carry.
+        */
+        if matches!(
+            observation.kind,
+            ProviderSessionStartKind::Forked | ProviderSessionStartKind::Compacted
+        ) {
+            return match self.selection.as_mut() {
+                // Before any startup has settled there is nothing to move, and
+                // a fork cannot establish identity on its own.
+                None => ProviderLifecycleAcceptance::IgnoredLifecycle,
+                Some(selection) => {
+                    if selection.switch(observation.conversation).is_some() {
+                        ProviderLifecycleAcceptance::ConversationChanged
+                    } else {
+                        // Already there. Reporting it twice changes nothing.
+                        ProviderLifecycleAcceptance::Duplicate
+                    }
+                }
+            };
+        }
         if !matches!(
             observation.kind,
             ProviderSessionStartKind::New | ProviderSessionStartKind::Resumed
@@ -315,5 +353,136 @@ mod tests {
             );
             assert_eq!(gate.observation(), None);
         }
+    }
+
+    #[test]
+    fn a_fork_after_startup_moves_the_selection_to_the_new_conversation() {
+        // THE DEFECT THIS CLOSES. Claude forks, reports a SessionStart carrying
+        // a NEW conversation id, and the gate used to drop it as uninteresting
+        // lifecycle chatter. The worker then did all its work in a conversation
+        // Swarm had never recorded, the saved marker stayed on the abandoned
+        // one, and the drift card reported the worker's own work as newer.
+        let session = WorkerSessionId::new();
+        let started = ProviderConversationId::new();
+        let forked = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [9; 32]);
+        assert_eq!(
+            gate.observe(
+                session,
+                &[9; 32],
+                ProviderSessionStartObservation {
+                    conversation: started,
+                    kind: ProviderSessionStartKind::New,
+                },
+            ),
+            ProviderLifecycleAcceptance::Accepted
+        );
+        assert_eq!(
+            gate.observe(
+                session,
+                &[9; 32],
+                ProviderSessionStartObservation {
+                    conversation: forked,
+                    kind: ProviderSessionStartKind::Forked,
+                },
+            ),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        let selection = gate.selection().expect("a settled startup has a selection");
+        assert_eq!(selection.conversation, forked);
+        // The revision MUST exceed 1: the persistence path that advances the
+        // saved marker refuses anything at revision 1 or below, so without this
+        // the gate would move and the marker still would not.
+        assert!(selection.revision > 1);
+    }
+
+    #[test]
+    fn a_compact_moves_the_selection_the_same_way_a_fork_does() {
+        // Compacting also mints a new conversation id. It was dropped by the
+        // same filter and for the same wrong reason.
+        let session = WorkerSessionId::new();
+        let started = ProviderConversationId::new();
+        let compacted = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [9; 32]);
+        gate.observe(
+            session,
+            &[9; 32],
+            ProviderSessionStartObservation {
+                conversation: started,
+                kind: ProviderSessionStartKind::New,
+            },
+        );
+        assert_eq!(
+            gate.observe(
+                session,
+                &[9; 32],
+                ProviderSessionStartObservation {
+                    conversation: compacted,
+                    kind: ProviderSessionStartKind::Compacted,
+                },
+            ),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        assert_eq!(gate.selection().unwrap().conversation, compacted);
+    }
+
+    #[test]
+    fn a_fork_reported_twice_does_not_advance_the_revision_again() {
+        // The revision is what downstream reads as "something moved". A repeat
+        // report must not manufacture a second move.
+        let session = WorkerSessionId::new();
+        let started = ProviderConversationId::new();
+        let forked = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [9; 32]);
+        gate.observe(
+            session,
+            &[9; 32],
+            ProviderSessionStartObservation {
+                conversation: started,
+                kind: ProviderSessionStartKind::New,
+            },
+        );
+        let fork = ProviderSessionStartObservation {
+            conversation: forked,
+            kind: ProviderSessionStartKind::Forked,
+        };
+        assert_eq!(
+            gate.observe(session, &[9; 32], fork),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        let after_first = gate.selection().unwrap().revision;
+        assert_eq!(
+            gate.observe(session, &[9; 32], fork),
+            ProviderLifecycleAcceptance::Duplicate
+        );
+        assert_eq!(gate.selection().unwrap().revision, after_first);
+    }
+
+    #[test]
+    fn a_fork_from_a_wrong_capability_is_still_denied() {
+        // Accepting a new KIND must not widen who may report it.
+        let session = WorkerSessionId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [9; 32]);
+        gate.observe(
+            session,
+            &[9; 32],
+            ProviderSessionStartObservation {
+                conversation: ProviderConversationId::new(),
+                kind: ProviderSessionStartKind::New,
+            },
+        );
+        let before = gate.selection().unwrap().conversation;
+        assert_eq!(
+            gate.observe(
+                session,
+                &[1; 32],
+                ProviderSessionStartObservation {
+                    conversation: ProviderConversationId::new(),
+                    kind: ProviderSessionStartKind::Forked,
+                },
+            ),
+            ProviderLifecycleAcceptance::Denied
+        );
+        assert_eq!(gate.selection().unwrap().conversation, before);
     }
 }

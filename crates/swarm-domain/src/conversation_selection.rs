@@ -66,6 +66,43 @@ impl ConversationSelection {
         Some(self.current)
     }
 
+    /// Records a conversation change the PROVIDER reported, with no resume pair.
+    ///
+    /// `complete_resume` exists for a switch Swarm asked for: a SessionEnd
+    /// (reason=resume) fences the old conversation and the matching
+    /// SessionStart (source=resume) completes it. A fork or a compact produces
+    /// no such pair — Claude simply reports a SessionStart carrying a NEW
+    /// conversation id — so the paired path can never settle one.
+    ///
+    /// ⚠️ THIS IS WHY MARKERS WENT STALE. Without it, a forked or compacted
+    /// conversation was observed, found to be neither New nor Resumed, and
+    /// dropped. The worker went on doing all its work in a conversation Swarm
+    /// did not know about; the saved marker stayed on the abandoned one, and
+    /// every later start would have resumed the wrong thread while the drift
+    /// card reported the worker's own work as a stranger's.
+    ///
+    /// Returning to the conversation already current is NOT a switch: it
+    /// advances nothing and reports nothing, so a duplicate report cannot
+    /// inflate the revision.
+    pub fn switch(
+        &mut self,
+        conversation: ProviderConversationId,
+    ) -> Option<ProviderConversationSelection> {
+        if conversation == self.current.conversation {
+            return None;
+        }
+        let revision = self.revision.checked_add(1)?;
+        self.revision = revision;
+        self.current = ProviderConversationSelection {
+            revision,
+            conversation,
+        };
+        // A pending resume is abandoned by a fork: the boundary it was waiting
+        // for can no longer arrive for the conversation it fenced.
+        self.resume_pending = false;
+        Some(self.current)
+    }
+
     #[must_use]
     pub const fn current(&self) -> ProviderConversationSelection {
         self.current
@@ -80,6 +117,51 @@ impl ConversationSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_provider_reported_switch_advances_without_a_resume_pair() {
+        // A fork produces no SessionEnd(resume)/SessionStart(resume) pair, so
+        // `complete_resume` can never settle one. Before `switch` existed the
+        // worker's real conversation was simply lost.
+        let first = ProviderConversationId::new();
+        let forked = ProviderConversationId::new();
+        let mut selection = ConversationSelection::new(first);
+        assert_eq!(selection.current().revision, 1);
+        let moved = selection.switch(forked).expect("a fork is a switch");
+        assert_eq!(moved.conversation, forked);
+        assert_eq!(moved.revision, 2);
+        assert_eq!(selection.current().conversation, forked);
+        // Revision must exceed 1, or the persistence path that advances the
+        // saved marker refuses it and the fix accomplishes nothing.
+        assert!(selection.current().revision > 1);
+    }
+
+    #[test]
+    fn switching_to_the_conversation_already_current_changes_nothing() {
+        // A duplicate report must not inflate the revision: the revision is
+        // what downstream treats as "something moved".
+        let only = ProviderConversationId::new();
+        let mut selection = ConversationSelection::new(only);
+        assert_eq!(selection.switch(only), None);
+        assert_eq!(selection.current().revision, 1);
+    }
+
+    #[test]
+    fn a_switch_abandons_a_pending_resume() {
+        // The fenced conversation is gone; the boundary it waited for cannot
+        // arrive. Leaving it pending would let a later unrelated SessionStart
+        // complete a resume for a conversation nobody is in.
+        let first = ProviderConversationId::new();
+        let forked = ProviderConversationId::new();
+        let stale = ProviderConversationId::new();
+        let mut selection = ConversationSelection::new(first);
+        assert!(selection.begin_resume(first));
+        assert!(selection.resume_pending());
+        assert!(selection.switch(forked).is_some());
+        assert!(!selection.resume_pending());
+        assert_eq!(selection.complete_resume(stale), None);
+        assert_eq!(selection.current().conversation, forked);
+    }
 
     #[test]
     fn fence_is_not_a_selection_and_requires_a_new_resume_pair() {
