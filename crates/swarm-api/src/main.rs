@@ -86,14 +86,42 @@ fn configure_github_feedback(state: AppState) -> AppState {
 /// `SWARM_GITHUB_REPOSITORY` so that a maintainer can triage a repository they do
 /// not file feedback into, and so that reading this file tells you which repo
 /// arrives on this board.
+/// Where support reports go when an install has not said otherwise.
+///
+/// ⚠️ A PUBLIC HOSTNAME, NOT A SECRET AND NOT PER-INSTALL. Operator-confirmed
+/// first-party on 2026-09-18, and confirmed separately by BFG Admin, who checked
+/// rather than assumed: the app has three hostnames bound and
+/// `bfg-ops-console.azurewebsites.net` is Azure's assigned name, an
+/// infrastructure detail that moves if the app is renamed or relocated. This is
+/// the branded one, and it is the address that stays true.
+///
+/// ⚠️ THIS DOES NOT TURN ANYTHING ON BY ITSELF. `SWARM_SUPPORT_ATTACHMENTS`
+/// remains opt-in and defaults off, deliberately: a default that silently began
+/// uploading FILES rather than text would be a different risk class from a
+/// default destination for reports the operator already chose to send.
+const DEFAULT_SUPPORT_ORIGIN: &str = "https://admin.bfgsolutions.net";
+
 fn configure_central_support(mut state: AppState) -> AppState {
-    state = match env::var("SWARM_SUPPORT_ORIGIN") {
-        Ok(origin) => match state.clone().with_central_support(&origin) {
+    let origin = match env::var("SWARM_SUPPORT_ORIGIN") {
+        Ok(origin) => Some(origin),
+        // ⚠️ THE DEFAULT IS WHAT MAKES THIS FEATURE EXIST FOR ANYONE BUT US.
+        //
+        // This used to be required configuration with no fallback, so an install
+        // that did not set it got `central_support: None` and fell through to the
+        // diagnostic workflow instead of the private support one. The value is a
+        // PUBLIC HOSTNAME the vendor already knows — not a secret, not
+        // per-install — so requiring every operator to discover and set it meant
+        // the feature effectively did not ship. Anyone self-hosting a different
+        // destination still overrides it with the variable.
+        Err(env::VarError::NotPresent) => Some(DEFAULT_SUPPORT_ORIGIN.to_owned()),
+        Err(_) => None,
+    };
+    state = match origin {
+        Some(origin) => match state.clone().with_central_support(&origin) {
             Ok(configured) => configured,
             Err(error) => state.with_degraded_subsystem("Central support", error),
         },
-        Err(env::VarError::NotPresent) => state,
-        Err(_) => {
+        None => {
             state.with_degraded_subsystem("Central support", "Support origin is not valid Unicode")
         }
     };
@@ -849,6 +877,41 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠️ A TYPO IN THE DEFAULT ORIGIN DEGRADES EVERY INSTALL AT ONCE.
+    ///
+    /// Before this default existed, an unset `SWARM_SUPPORT_ORIGIN` left
+    /// `central_support` as None and the product fell through to the diagnostic
+    /// workflow — so the private support path shipped to nobody who had not read
+    /// the source. Now the constant IS the destination for every install that
+    /// says nothing, which moves the failure: one unparseable character here and
+    /// they all land in `with_degraded_subsystem` together.
+    ///
+    /// So the constant is parsed by the same parser `configure_central_support`
+    /// hands it to, rather than eyeballed. `SupportDestination::parse` requires
+    /// https, which is the property most worth pinning: an http default would
+    /// send support reports in clear text from every Hive.
+    #[test]
+    fn the_default_support_origin_is_one_the_configured_parser_accepts() {
+        assert!(
+            swarm_application::SupportDestination::parse(DEFAULT_SUPPORT_ORIGIN).is_ok(),
+            "every install that sets nothing depends on this constant parsing: \
+             {DEFAULT_SUPPORT_ORIGIN}"
+        );
+        assert!(
+            DEFAULT_SUPPORT_ORIGIN.starts_with("https://"),
+            "an http default would send support reports in clear text from every Hive"
+        );
+        // ⚠️ THE BRANDED HOSTNAME, NOT AZURE'S ASSIGNED ONE. Both serve the same
+        // app today — BFG Admin checked rather than assumed — but
+        // bfg-ops-console.azurewebsites.net moves if the app is renamed or
+        // relocated, and a default that moves is worse than one that is wrong,
+        // because it works until it silently does not.
+        assert!(
+            !DEFAULT_SUPPORT_ORIGIN.contains("azurewebsites.net"),
+            "the default must be the address that stays true, not Azure's assigned name"
+        );
+    }
 
     #[test]
     fn scout_owns_the_single_configured_projects_root() {
