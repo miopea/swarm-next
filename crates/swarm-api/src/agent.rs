@@ -3083,6 +3083,7 @@ read are not wrong, they are dated — and this board moves within minutes."
                 assignee_account_id: issue.assignee_account_id.as_deref(),
                 assignee_name: issue.assignee_name.as_deref(),
                 remote_updated_at: &issue.updated_at,
+                priority: issue.priority,
             })
             .collect::<Vec<_>>();
         let tasks = store.sync_jira_issues(binding_id, &snapshots)?;
@@ -3124,6 +3125,7 @@ read are not wrong, they are dated — and this board moves within minutes."
                 assignee_account_id: issue.assignee_account_id.as_deref(),
                 assignee_name: issue.assignee_name.as_deref(),
                 remote_updated_at: &issue.updated_at,
+                priority: issue.priority,
             })
             .collect::<Vec<_>>();
         let tasks = store.sync_jira_issues(binding_id, &snapshots)?;

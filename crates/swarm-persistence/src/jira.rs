@@ -6,7 +6,7 @@ use std::{
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ControlRoomEventKind, JiraIssueLink, JiraProjectBinding, JiraProjectBindingId,
-    JiraProjectScope, JiraStatusMapping, Task, TaskId, TaskState,
+    JiraProjectScope, JiraStatusMapping, Task, TaskId, TaskPriority, TaskState,
 };
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event, parse_domain_id};
@@ -71,6 +71,8 @@ pub struct JiraIssueSnapshot<'a> {
     pub assignee_account_id: Option<&'a str>,
     pub assignee_name: Option<&'a str>,
     pub remote_updated_at: &'a str,
+    /// Applied on FIRST IMPORT ONLY; see the insert below.
+    pub priority: TaskPriority,
 }
 
 impl TaskStore {
@@ -441,9 +443,16 @@ impl TaskStore {
             } else {
                 let task_id = TaskId::new();
                 transaction.execute(
+                    // ⚠️ PRIORITY IS WRITTEN HERE AND NOWHERE ELSE. A re-sync
+                    // of an issue we already hold must NOT touch it: if Queen
+                    // or the operator has re-ranked an imported task locally,
+                    // letting an upstream default overwrite that would destroy
+                    // a deliberate judgement, which is the same class of error
+                    // as an agent editing an operator's answer. The update path
+                    // above deliberately leaves priority alone.
                     "INSERT INTO tasks (
                          id, hive_id, title, description, priority, workspace, state, position
-                     ) VALUES (?1, ?2, ?3, ?4, 'normal', ?5, ?6,
+                     ) VALUES (?1, ?2, ?3, ?4, ?7, ?5, ?6,
                          COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
                     params![
                         task_id.to_string(),
@@ -452,6 +461,7 @@ impl TaskStore {
                         issue.description.trim(),
                         unassigned_scope,
                         target_state.to_string(),
+                        issue.priority.to_string(),
                     ],
                 )?;
                 transaction.execute(
@@ -1296,6 +1306,90 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
 #[cfg(test)]
 mod tests {
 
+    /// ⚠️ A RE-SYNC MUST NOT OVERWRITE A PRIORITY SOMEBODY SET DELIBERATELY.
+    ///
+    /// Jira's value is applied on FIRST IMPORT only. If Queen or the operator
+    /// re-ranks an imported task locally, a later sync carrying the upstream
+    /// default would destroy a deliberate human judgement and replace it with a
+    /// value nobody chose — the same class of error as an agent editing an
+    /// operator's answer, and it would be invisible because the task would still
+    /// read as having *a* priority.
+    ///
+    /// BOTH HALVES ARE ASSERTED ON ONE TASK on purpose: that the import applies
+    /// the mapped value, and that the identical snapshot re-synced afterwards
+    /// leaves the local change alone. Testing only the first would pass on an
+    /// implementation that overwrites on every sync.
+    #[test]
+    fn a_resync_leaves_a_locally_changed_priority_alone() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10009",
+                project_key: "WWD",
+                project_name: "WS: Website Development",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "10040".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let snapshot = |priority| JiraIssueSnapshot {
+            issue_id: "20009",
+            issue_key: "WWD-1",
+            summary: "Contribution new D/CW",
+            description: "",
+            status_id: "10040",
+            status_name: "To Do",
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at: "2026-08-13T13:00:00.000+0000",
+            priority,
+        };
+
+        let imported = store
+            .sync_jira_issues(binding.id, &[snapshot(TaskPriority::High)])
+            .unwrap();
+        let task = imported.first().expect("the issue imported");
+        assert_eq!(
+            task.priority,
+            TaskPriority::High,
+            "first import must carry what the reporting side considered important"
+        );
+
+        // Somebody re-ranks it on this board.
+        store
+            .update_task_details(
+                task.id,
+                &TaskDetailsUpdate {
+                    title: None,
+                    description: None,
+                    priority: Some(TaskPriority::Urgent),
+                    workspace: None,
+                    operator_instruction: None,
+                },
+            )
+            .unwrap();
+
+        // Jira re-sends the SAME issue, still claiming High.
+        store
+            .sync_jira_issues(binding.id, &[snapshot(TaskPriority::High)])
+            .unwrap();
+
+        assert_eq!(
+            store.get_task(task.id).unwrap().priority,
+            TaskPriority::Urgent,
+            "a re-sync must not overwrite a priority somebody set on this board"
+        );
+    }
+
     /// The operator's ruling, 2026-08-23: when a Jira write is held, the local
     /// task still moves.
     ///
@@ -1337,6 +1431,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1422,6 +1517,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1611,6 +1707,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1647,6 +1744,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1684,6 +1782,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap();
@@ -1734,6 +1833,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1758,6 +1858,7 @@ mod tests {
             assignee_account_id: None,
             assignee_name: None,
             remote_updated_at: "2026-08-19T12:00:00.000+0000",
+            priority: TaskPriority::Normal,
         };
         let available = JiraIssueSnapshot {
             issue_id: "20004",
@@ -1857,6 +1958,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1876,6 +1978,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1902,6 +2005,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T12:05:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1928,6 +2032,7 @@ mod tests {
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
                     remote_updated_at: "2026-08-13T12:10:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -1979,6 +2084,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -2022,6 +2128,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T12:01:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -2107,6 +2214,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -2151,6 +2259,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T12:02:00.000+0000",
+                    priority: TaskPriority::Normal,
                 }],
             )
             .unwrap()

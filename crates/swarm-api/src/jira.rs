@@ -7,7 +7,7 @@ use std::{
 use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
-use swarm_domain::{JiraConnectionState, TaskState};
+use swarm_domain::{JiraConnectionState, TaskPriority, TaskState};
 use swarm_persistence::MAX_TASK_DESCRIPTION_BYTES as MAX_ISSUE_DESCRIPTION_BYTES;
 
 const PAGE_SIZE: usize = 50;
@@ -115,6 +115,16 @@ pub(crate) struct JiraIssue {
     pub assignee_account_id: Option<String>,
     pub assignee_name: Option<String>,
     pub updated_at: String,
+    /// What the reporting side considered important, mapped onto our four.
+    ///
+    /// ⚠️ ABSENT AND "MEDIUM" BOTH LAND ON Normal, AND THAT IS THE POINT. Jira
+    /// priority is often unset, and depending on project configuration the API
+    /// returns either null or an auto-applied default, usually Medium. Normal is
+    /// already what every imported task got, so an auto-default cannot
+    /// manufacture a judgement nobody made. The honest limit is that a
+    /// DELIBERATE Medium and an auto-applied one are indistinguishable here —
+    /// which is exactly the information the board had before, not a new loss.
+    pub priority: TaskPriority,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -245,6 +255,10 @@ struct JiraIssueFields {
     updated: String,
     #[serde(default)]
     attachment: Vec<JiraIssueAttachmentResponse>,
+    /// Defaulted, because a project that does not use priorities omits the
+    /// field entirely and an issue with none set returns null.
+    #[serde(default)]
+    priority: Option<JiraIssuePriority>,
 }
 
 #[derive(Deserialize)]
@@ -254,6 +268,11 @@ struct JiraIssueAttachmentResponse {
     #[serde(rename = "mimeType")]
     media_type: String,
     size: usize,
+}
+
+#[derive(Deserialize)]
+struct JiraIssuePriority {
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -689,7 +708,10 @@ impl JiraReadinessProbe {
                 let mut pairs = url.query_pairs_mut();
                 pairs.append_pair("jql", jql);
                 pairs.append_pair("maxResults", &PAGE_SIZE.to_string());
-                pairs.append_pair("fields", "summary,description,status,assignee,updated");
+                pairs.append_pair(
+                    "fields",
+                    "summary,description,status,assignee,updated,priority",
+                );
                 if let Some(token) = next_page_token.as_deref() {
                     pairs.append_pair("nextPageToken", token);
                 }
@@ -854,7 +876,7 @@ impl JiraReadinessProbe {
             .push(issue);
         url.query_pairs_mut().append_pair(
             "fields",
-            "summary,description,attachment,status,assignee,updated",
+            "summary,description,attachment,status,assignee,updated,priority",
         );
         let response = authorize(access.client.get(url), &access.authorization)
             .header(reqwest::header::ACCEPT, "application/json")
@@ -1318,7 +1340,104 @@ fn jira_issue(issue: JiraIssueResponse) -> Option<JiraIssue> {
             .assignee
             .and_then(|assignee| assignee.display_name),
         updated_at: issue.fields.updated,
+        priority: task_priority_from_jira(
+            issue
+                .fields
+                .priority
+                .as_ref()
+                .and_then(|priority| priority.name.as_deref()),
+        ),
     })
+}
+
+/// Jira's five default levels onto our four.
+///
+/// ⚠️ EVERY UNKNOWN NAME FALLS TO Normal ON PURPOSE. A priority SCHEME is
+/// configurable, so the names here are the default set and nothing guarantees a
+/// project uses them. Guessing at an unrecognised label would invent a ranking
+/// from a string we do not understand; landing on Normal leaves the task exactly
+/// where it lands today, so an unfamiliar scheme degrades to current behaviour
+/// rather than to a wrong answer.
+///
+/// Lowest and Low both become Low because there is no fifth level to hold them
+/// apart, and collapsing downward is the direction that cannot overstate
+/// importance.
+fn task_priority_from_jira(name: Option<&str>) -> TaskPriority {
+    match name
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "highest" => TaskPriority::Urgent,
+        "high" => TaskPriority::High,
+        "low" | "lowest" => TaskPriority::Low,
+        _ => TaskPriority::Normal,
+    }
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+
+    /// ⚠️ AN AUTO-APPLIED DEFAULT MUST NOT READ AS A JUDGEMENT.
+    ///
+    /// The ticket's own design note is the reason this mapping is safe: Jira
+    /// priority is often unset, and depending on project configuration the API
+    /// returns either null or an auto-applied default, usually "Medium". Both
+    /// land on Normal — which is exactly where every imported task already
+    /// landed — so switching this on cannot invent a ranking nobody chose.
+    ///
+    /// The three cases are asserted together because the claim is that they are
+    /// INDISTINGUISHABLE by design, not that each happens to work.
+    #[test]
+    fn an_absent_or_default_jira_priority_lands_where_todays_imports_already_land() {
+        assert_eq!(task_priority_from_jira(None), TaskPriority::Normal);
+        assert_eq!(
+            task_priority_from_jira(Some("Medium")),
+            TaskPriority::Normal
+        );
+        assert_eq!(task_priority_from_jira(Some("")), TaskPriority::Normal);
+    }
+
+    /// The levels a default Jira scheme actually sends, case and padding as the
+    /// API has been seen to return them.
+    #[test]
+    fn the_default_jira_levels_map_onto_our_four() {
+        for (name, expected) in [
+            ("Highest", TaskPriority::Urgent),
+            ("High", TaskPriority::High),
+            ("Medium", TaskPriority::Normal),
+            ("Low", TaskPriority::Low),
+            ("Lowest", TaskPriority::Low),
+            ("  high  ", TaskPriority::High),
+            ("HIGHEST", TaskPriority::Urgent),
+        ] {
+            assert_eq!(
+                task_priority_from_jira(Some(name)),
+                expected,
+                "{name} mapped wrong"
+            );
+        }
+    }
+
+    /// ⚠️ AN UNRECOGNISED SCHEME DEGRADES TO TODAY, NOT TO A GUESS.
+    ///
+    /// A Jira priority scheme is configurable, so nothing guarantees the default
+    /// names. Inventing a ranking from a label we do not understand would be
+    /// worse than the absence this ticket is about: it would be a judgement
+    /// nobody made, wearing the authority of one that was. Normal is where these
+    /// tasks land today, so an unfamiliar scheme is no worse off than before.
+    #[test]
+    fn an_unrecognised_priority_name_does_not_invent_a_ranking() {
+        for name in ["P0", "Blocker", "Critical", "Trivial", "Severity 1", "🔥"] {
+            assert_eq!(
+                task_priority_from_jira(Some(name)),
+                TaskPriority::Normal,
+                "{name} must not be guessed at"
+            );
+        }
+    }
 }
 
 fn jira_document_text(value: &serde_json::Value) -> String {
@@ -1756,7 +1875,8 @@ mod tests {
                                 },
                                 "status": { "id": "3", "name": "In Progress" },
                                 "assignee": { "accountId": "account-1", "displayName": "Bea" },
-                                "updated": "2026-08-13T13:00:00.000+0000"
+                                "updated": "2026-08-13T13:00:00.000+0000",
+                                "priority": { "id": "2", "name": "High" }
                             }
                         }]
                     }))
@@ -1787,6 +1907,12 @@ mod tests {
         assert_eq!(issues[0].key, "WEB-42");
         assert_eq!(issues[0].description, "Verify desktop\nand mobile.");
         assert_eq!(issues[0].assignee_name.as_deref(), Some("Bea"));
+        // ⚠️ OVER THE WIRE, not through the mapping function. The mapping tests
+        // above call task_priority_from_jira directly, so every one of them
+        // would still pass if the serde field were misnamed and `priority`
+        // silently deserialised to None on every issue forever. This is the
+        // assertion that catches that, and it is the only one that can.
+        assert_eq!(issues[0].priority, TaskPriority::High);
     }
 
     #[test]

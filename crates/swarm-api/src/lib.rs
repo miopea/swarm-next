@@ -7592,6 +7592,7 @@ fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
         assignee_account_id: issue.assignee_account_id.as_deref(),
         assignee_name: issue.assignee_name.as_deref(),
         remote_updated_at: &issue.updated_at,
+        priority: issue.priority,
     }
 }
 
@@ -14799,6 +14800,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
+                    priority: swarm_domain::TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -15039,6 +15041,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: swarm_domain::TaskPriority::Normal,
                 }],
             )
             .unwrap()
@@ -15132,6 +15135,7 @@ mod tests {
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                    priority: swarm_domain::TaskPriority::Normal,
                 }],
             )
             .unwrap()
