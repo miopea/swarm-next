@@ -321,7 +321,8 @@ const COMMIT_FOUND_ELSEWHERE_SCHEMA_VERSION: i64 = 176;
 const BOARD_READ_SCHEMA_VERSION: i64 = 177;
 const SYSTEM_ACCESS_SCHEMA_VERSION: i64 = 178;
 const REVIEW_REPETITION_SCHEMA_VERSION: i64 = 179;
-const CURRENT_SCHEMA_VERSION: i64 = REVIEW_REPETITION_SCHEMA_VERSION;
+const DECISION_SUPERSESSION_SCHEMA_VERSION: i64 = 180;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_SUPERSESSION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -553,6 +554,26 @@ pub enum TaskStoreError {
     TaskDecisionLink(#[from] swarm_domain::TaskDecisionLinkError),
     #[error(transparent)]
     DecisionClarification(#[from] swarm_domain::DecisionClarificationError),
+    // ⚠️ SUPERSESSION IS FOR ANSWERED CARDS. A pending one is withdrawn, which
+    // already exists and already says the right thing. Sending a pending card
+    // down this path would record a replacement for a question nobody answered.
+    #[error("only a resolved decision can be superseded; an unanswered one is withdrawn instead")]
+    DecisionNotResolved,
+    // NAMES THE LOOP, not the rule. A cycle means following the chain would
+    // return to where it started, and a reader walking it would never reach a
+    // live card.
+    #[error(
+        "that would make the supersession chain loop back on itself, so no reader could reach a live decision"
+    )]
+    DecisionSupersessionCycle,
+    // ⚠️ THE OPERATOR HAS ALREADY ANSWERED THE REPLACEMENT. Un-marking now would
+    // resurrect authority they have superseded, which is the erasure risk this
+    // whole mechanism exists to avoid, arriving from the other direction. The
+    // way back is a fresh card.
+    #[error(
+        "the replacement has been answered, so this supersession can no longer be undone; file a new decision instead"
+    )]
+    DecisionSupersessionEffective,
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
     #[error(
@@ -4312,6 +4333,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < REVIEW_REPETITION_SCHEMA_VERSION {
         migrate_review_repetition(transaction)?;
+    }
+    if schema_version < DECISION_SUPERSESSION_SCHEMA_VERSION {
+        crate::decisions::migrate_decision_supersession(transaction)?;
     }
     Ok(())
 }
@@ -9994,6 +10018,17 @@ mod tests {
             undo_sql: "ALTER TABLE queen_task_review_receipts DROP COLUMN times_seen",
             probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('queen_task_review_receipts')
                 WHERE name = 'times_seen'",
+        },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "superseded_by",
+            undo_sql: "ALTER TABLE decision_requests DROP COLUMN superseded_by;
+                 ALTER TABLE decision_requests DROP COLUMN superseded_at;
+                 ALTER TABLE decision_requests DROP COLUMN superseded_by_worker_id;
+                 ALTER TABLE decision_requests DROP COLUMN supersession_reason",
+            probe_sql: "SELECT COUNT(*) = 4 FROM pragma_table_info('decision_requests')
+                WHERE name IN ('superseded_by','superseded_at',
+                               'superseded_by_worker_id','supersession_reason')",
         },
     ];
 

@@ -3465,6 +3465,34 @@ impl TaskService {
             .withdraw_decision_request(id, principal.worker_id, reason)
             .map_err(Into::into)
     }
+
+    /// Records that a RESOLVED decision was replaced, without rewriting it.
+    ///
+    /// ⚠️ NOT A WIDENED WITHDRAWAL. Withdrawal would set the record's state and
+    /// make it stop reading as resolved; a resolved decision read from the store
+    /// IS the operator, and someone may already have acted on it. This only adds
+    /// a pointer and a reason. The store enforces the rest.
+    ///
+    /// # Errors
+    /// Rejects stale agent sessions and anything the store refuses.
+    pub fn supersede_agent_decision(
+        &self,
+        principal: AgentPrincipal,
+        id: DecisionRequestId,
+        superseding: DecisionRequestId,
+        reason: &str,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        let session = principal
+            .active_session_id
+            .ok_or(ApplicationError::WorkerNotRunning)?;
+        let worker = self.store.get_worker_profile(principal.worker_id)?;
+        if worker.active_session_id != Some(session) {
+            return Err(ApplicationError::WorkerNotRunning);
+        }
+        self.store
+            .supersede_decision_request(id, superseding, principal.worker_id, reason)
+            .map_err(Into::into)
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionRequestInput {

@@ -504,7 +504,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 29;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 30;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -514,9 +514,16 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 29;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 25. Update this and the revision together.
+/// The served surface as of revision 30. Update this and the revision together.
+///
+/// ⚠️ IT LAST MOVED AT REVISION 25, and the gap is not neglect. This covers tool
+/// NAMES and ARGUMENT SCHEMAS; descriptions are stripped before hashing. So 26
+/// through 29 changed what tools SAY without changing what a session can CALL,
+/// and this value correctly stayed put through all of them. A revision bump with
+/// no fingerprint change means the wording moved; a fingerprint change always
+/// means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "2cd8e0d5a1e30d392e9076de5e2650fa82b693655bc3d4007861a04ef41bdbbf";
+    "73887a784a21610e006933dc0769c9dbfc77c610254ac8f3833cee1d29729517";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -717,6 +724,7 @@ impl ServerHandler for AgentMcp {
             operator_submissions_tool(),
             request_decision_tool(),
             withdraw_decision_tool(),
+            supersede_decision_tool(),
             clarification_history_tool(),
             reply_clarification_tool(),
             message_queen_tool(),
@@ -845,6 +853,7 @@ impl ServerHandler for AgentMcp {
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_withdraw_no_deployment" => self.withdraw_no_deployment(arguments),
             "swarm_withdraw_decision" => self.withdraw_decision(arguments),
+            "swarm_supersede_decision" => self.supersede_decision(arguments),
             "swarm_read_clarifications" => parse::<ClarificationHistoryInput>(arguments).and_then(|input| {
                 let history = self.tasks.clarification_history(Some(self.principal), input.decision_id)?;
                 structured(json!({"clarifications": history, "operator_approval": false}))
@@ -2457,6 +2466,37 @@ impl AgentMcp {
         structured(json!({"decision_id":decision.id, "state":decision.state,
             "withdrawal_reason":decision.withdrawal_reason, "withdrawn_at":decision.withdrawn_at,
             "operator_approval":false}))
+    }
+
+    /// Records that a resolved decision was replaced by a better-framed one.
+    ///
+    /// ⚠️ THIS IS NOT A WITHDRAWAL AND MUST NOT BECOME ONE. The reply reports
+    /// `state` unchanged on purpose, so a caller can see for itself that the
+    /// operator's answer survived. If that ever starts coming back "withdrawn",
+    /// something has begun editing the record the Hive verifies against.
+    fn supersede_decision(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<SupersedeDecisionInput>(arguments)?;
+        let id = DecisionRequestId::from_str(&input.decision_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("decision id"))?;
+        let superseding = DecisionRequestId::from_str(&input.superseded_by)
+            .map_err(|_| ApplicationError::MalformedIdentifier("superseding decision id"))?;
+        let decision =
+            self.tasks
+                .supersede_agent_decision(self.principal, id, superseding, &input.reason)?;
+        structured(json!({
+            "decision_id": decision.id,
+            "state": decision.state,
+            "superseded_by": decision.superseded_by,
+            "superseded_by_terminal": decision.superseded_by_terminal,
+            "supersession_effective": decision.supersession_effective,
+            "supersession_reason": decision.supersession_reason,
+            "operator_approval": false,
+            "note": if decision.supersession_effective {
+                "The replacement is already answered, so this decision no longer authorises anything. Read the terminal card."
+            } else {
+                "The replacement is NOT yet answered, so this decision STILL AUTHORISES until it is. Nothing has changed hands."
+            },
+        }))
     }
 
     /// Takes back a no-deployment claim that has stopped being true.
@@ -4428,6 +4468,14 @@ struct WithdrawDecisionInput {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SupersedeDecisionInput {
+    decision_id: String,
+    superseded_by: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClarificationHistoryInput {
     decision_id: DecisionRequestId,
 }
@@ -4465,6 +4513,19 @@ fn withdraw_decision_tool() -> Tool {
             "decision_id":{"type":"string","format":"uuid"},
             "reason":{"type":"string","minLength":1,"maxLength":4000}},
             "required":["decision_id","reason"],"additionalProperties":false}),
+        false,
+    )
+}
+
+fn supersede_decision_tool() -> Tool {
+    tool(
+        "swarm_supersede_decision",
+        "Record that a RESOLVED decision was answered on a premise that turned out false, and name the decision that replaces it. The operator's answer is NOT erased: state stays resolved and resolution_action is untouched, because a resolved decision read from this store is first-party operator evidence and somebody may already have acted on it. Authority transfers only when the REPLACEMENT is answered -- until then the superseded decision still authorises, so nothing is ever left with no authority at all. Reading a superseded decision points you at the END of the chain, not the next hop. Requester or Queen may record it. Use swarm_withdraw_decision for a decision nobody has answered yet; this refuses one. It can be undone only while the replacement is still unanswered.",
+        &json!({"type":"object","properties":{
+            "decision_id":{"type":"string","format":"uuid","description":"The resolved decision being replaced. A full id; a prefix is refused."},
+            "superseded_by":{"type":"string","format":"uuid","description":"The decision that replaces it. It must already exist, and it may sit on a different task -- a mis-framed card is often replaced by one scoped differently."},
+            "reason":{"type":"string","minLength":1,"maxLength":4000,"description":"What was established that made the original premise false. Evidence, not a preference."}},
+            "required":["decision_id","superseded_by","reason"],"additionalProperties":false}),
         false,
     )
 }
@@ -7057,6 +7118,11 @@ mod tests {
                 "swarm_operator_submissions",
                 "swarm_request_decision",
                 "swarm_withdraw_decision",
+                // A WORKER MAY RETIRE ITS OWN MIS-FRAMED CARD, deliberately.
+                // The store still gates it to the requester or Queen; offering
+                // it here is what lets the worker that SPOTTED the false premise
+                // say so, instead of routing a correction through Queen.
+                "swarm_supersede_decision",
                 "swarm_read_clarifications",
                 "swarm_reply_clarification",
                 "swarm_message_queen"

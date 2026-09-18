@@ -9014,6 +9014,26 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::DecisionAlreadyResolved | TaskStoreError::DecisionInboxFull => {
             ApiError::new(StatusCode::CONFLICT, "decision_conflict", error.to_string())
         }
+        // THREE CODES, NOT ONE, and deliberately not folded into
+        // decision_conflict above. Each names a different remedy: withdraw it
+        // instead; point somewhere that does not loop; file a fresh card. A
+        // caller told only "conflict" has to guess which, and guessing at a
+        // refusal is what two separate tickets in this repository are about.
+        TaskStoreError::DecisionNotResolved => ApiError::new(
+            StatusCode::CONFLICT,
+            "decision_not_resolved",
+            error.to_string(),
+        ),
+        TaskStoreError::DecisionSupersessionCycle => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "supersession_would_loop",
+            error.to_string(),
+        ),
+        TaskStoreError::DecisionSupersessionEffective => ApiError::new(
+            StatusCode::CONFLICT,
+            "supersession_already_effective",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidTitle
         | TaskStoreError::InvalidDescription
         | TaskStoreError::InvalidWorkspace

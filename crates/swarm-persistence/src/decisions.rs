@@ -78,6 +78,56 @@ pub(super) fn migrate_decision_withdrawal(
     )
 }
 
+/// Records that a RESOLVED decision has been replaced, without rewriting it.
+///
+/// ⚠️ THE OPERATOR'S ANSWER IS NEVER TOUCHED. `state` stays `resolved`, and
+/// `resolution_action` and `resolution_answers` keep exactly what they held.
+/// A resolved decision read from this store is first-party operator evidence —
+/// that is the contract the whole Hive verifies against — so an agent must not
+/// be able to make one stop reading as resolved. Withdrawal would have done
+/// precisely that, which is why supersession is additive instead.
+///
+/// The case: a card is answered, and the premise it was answered ON later turns
+/// out false. Measured on 01a07349, resolved "Hub is done, re-scope A6/A8",
+/// where live verification then showed the premise false. Withdrawal is gated
+/// to `pending`, so there was no way to say so, and the stale ruling kept being
+/// served as live authority to every later reader.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_decision_supersession(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    for (column, definition) in [
+        ("superseded_by", "TEXT REFERENCES decision_requests(id)"),
+        ("superseded_at", "INTEGER"),
+        (
+            "superseded_by_worker_id",
+            "TEXT REFERENCES worker_profiles(id)",
+        ),
+        ("supersession_reason", "TEXT"),
+    ] {
+        let present: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('decision_requests') WHERE name = ?1",
+            [column],
+            |row| row.get(0),
+        )?;
+        if present == 0 {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE decision_requests ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
+    // NO BACKFILL, deliberately. Every existing decision is un-superseded, and
+    // NULL already says that. Inventing a value here would assert something
+    // about records nobody has looked at.
+    transaction.pragma_update(
+        None,
+        "user_version",
+        super::DECISION_SUPERSESSION_SCHEMA_VERSION,
+    )
+}
+
 /// Carries the questions an interview asks and the answers it collects.
 ///
 /// Both default to empty, which is exactly what a ruling holds, so every record
@@ -547,6 +597,157 @@ impl TaskStore {
             insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         }
+        transaction.commit()?;
+        drop(connection);
+        self.get_decision_request(id)
+    }
+
+    /// Records that a resolved decision was replaced, leaving its answer intact.
+    ///
+    /// ⚠️ NOTHING THE OPERATOR WROTE IS TOUCHED. `state` stays `resolved`;
+    /// `resolution_action` and `resolution_answers` are not in the UPDATE at
+    /// all. That is the whole difference between this and withdrawal, and it is
+    /// the reason withdrawal was not simply un-gated: a resolved decision read
+    /// from this store is first-party operator evidence, and an agent must not
+    /// be able to make one stop reading as resolved. Someone may already have
+    /// acted on it, and their authority has to remain auditable afterwards.
+    ///
+    /// Authority to record it is the SAME rule as withdrawal — the requesting
+    /// worker or Queen — rather than a new surface. The accepted tradeoff is
+    /// that Queen can declare the operator's own answer stale without asking;
+    /// the alternative costs the operator a round-trip on every mis-framed card.
+    ///
+    /// # Errors
+    /// Rejects foreign actors, unresolved subjects, absent replacements, and
+    /// any pointer that would make the chain loop.
+    pub fn supersede_decision_request(
+        &self,
+        id: DecisionRequestId,
+        superseding: DecisionRequestId,
+        actor: WorkerId,
+        reason: &str,
+    ) -> Result<DecisionRequest, TaskStoreError> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > MAX_RESOLUTION_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidDecisionResolution);
+        }
+        // A POINTER TO NOTHING IS THE PROSE WORKAROUND WITH EXTRA STEPS, which
+        // is the complaint this exists to answer. Self-reference is the
+        // degenerate cycle and is caught here rather than by the walk below.
+        if id == superseding {
+            return Err(TaskStoreError::DecisionSupersessionCycle);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let allowed: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             JOIN worker_profiles w ON w.id = ?2 AND w.hive_id = d.hive_id
+             WHERE d.id = ?1 AND (w.id = d.requesting_worker_id OR w.role = 'queen'))",
+            params![id.to_string(), actor.to_string()],
+            |row| row.get(0),
+        )?;
+        if !allowed {
+            return Err(TaskStoreError::DecisionNotFound);
+        }
+        let replacement_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             WHERE d.id = ?1)",
+            params![superseding.to_string()],
+            |row| row.get(0),
+        )?;
+        if !replacement_exists {
+            return Err(TaskStoreError::DecisionNotFound);
+        }
+        let state: String = transaction.query_row(
+            "SELECT state FROM decision_requests WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?;
+        if state != "resolved" {
+            return Err(TaskStoreError::DecisionNotResolved);
+        }
+        // WALK FROM THE REPLACEMENT AND SEE WHETHER IT COMES BACK. Checking the
+        // direct pointer alone would admit Z->Y->X->Z, which reads as a chain
+        // and terminates nowhere.
+        let loops: bool = transaction.query_row(
+            "WITH RECURSIVE chain(node, depth) AS (
+                 SELECT ?2, 1
+                 UNION ALL
+                 SELECT s.superseded_by, chain.depth + 1
+                   FROM decision_requests s JOIN chain ON s.id = chain.node
+                  WHERE s.superseded_by IS NOT NULL AND chain.depth < 64)
+             SELECT EXISTS(SELECT 1 FROM chain WHERE node = ?1)",
+            params![id.to_string(), superseding.to_string()],
+            |row| row.get(0),
+        )?;
+        if loops {
+            return Err(TaskStoreError::DecisionSupersessionCycle);
+        }
+        transaction.execute(
+            "UPDATE decision_requests
+                SET superseded_by = ?2, superseded_at = unixepoch(),
+                    superseded_by_worker_id = ?3, supersession_reason = ?4,
+                    updated_at = unixepoch()
+              WHERE id = ?1",
+            params![
+                id.to_string(),
+                superseding.to_string(),
+                actor.to_string(),
+                reason
+            ],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_decision_request(id)
+    }
+
+    /// Undoes a supersession recorded in error, while that is still honest.
+    ///
+    /// ⚠️ ONLY WHILE THE REPLACEMENT IS UNANSWERED. Until then the superseded
+    /// card is still authorising and nothing has changed hands, so removing the
+    /// pointer costs nobody anything. Once the operator answers the
+    /// replacement, un-marking would restore authority they have already
+    /// replaced — so it is refused and the way back is a fresh card.
+    ///
+    /// # Errors
+    /// Rejects foreign actors and any card whose replacement has resolved.
+    pub fn clear_decision_supersession(
+        &self,
+        id: DecisionRequestId,
+        actor: WorkerId,
+    ) -> Result<DecisionRequest, TaskStoreError> {
+        let current = self.get_decision_request(id)?;
+        if current.superseded_by.is_none() {
+            return Ok(current);
+        }
+        if current.supersession_effective {
+            return Err(TaskStoreError::DecisionSupersessionEffective);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let allowed: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             JOIN worker_profiles w ON w.id = ?2 AND w.hive_id = d.hive_id
+             WHERE d.id = ?1 AND (w.id = d.requesting_worker_id OR w.role = 'queen'))",
+            params![id.to_string(), actor.to_string()],
+            |row| row.get(0),
+        )?;
+        if !allowed {
+            return Err(TaskStoreError::DecisionNotFound);
+        }
+        transaction.execute(
+            "UPDATE decision_requests
+                SET superseded_by = NULL, superseded_at = NULL,
+                    superseded_by_worker_id = NULL, supersession_reason = NULL,
+                    updated_at = unixepoch()
+              WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_decision_request(id)
@@ -1258,7 +1459,36 @@ const DECISION_COLUMNS: &str =
                      (SELECT reason FROM decision_native_answer_refusals
                        WHERE decision_id = d.id),
                      (SELECT seen_at FROM decision_native_answer_refusals
-                       WHERE decision_id = d.id)";
+                       WHERE decision_id = d.id),
+                     -- SUPERSESSION, APPENDED AT THE END like everything before
+                     -- it, because every field above is read BY POSITION.
+                     d.superseded_by, d.superseded_at, d.superseded_by_worker_id,
+                     d.supersession_reason,
+                     -- THE TERMINUS, not the next hop. Walking to the end here
+                     -- means a reader of X is handed Z rather than another dead
+                     -- card. Bounded at 32 so a cycle that slipped past the
+                     -- write-side check cannot spin the read side.
+                     (WITH RECURSIVE chain(node, depth) AS (
+                          SELECT d.superseded_by, 1
+                          UNION ALL
+                          SELECT s.superseded_by, chain.depth + 1
+                            FROM decision_requests s JOIN chain ON s.id = chain.node
+                           WHERE s.superseded_by IS NOT NULL AND chain.depth < 32)
+                      SELECT node FROM chain WHERE node IS NOT NULL
+                       ORDER BY depth DESC LIMIT 1),
+                     -- EFFECTIVE only once the REPLACEMENT IS ANSWERED. Until
+                     -- then this record still authorises, so that work gated on
+                     -- it is never left with no authority at all.
+                     (WITH RECURSIVE chain(node, depth) AS (
+                          SELECT d.superseded_by, 1
+                          UNION ALL
+                          SELECT s.superseded_by, chain.depth + 1
+                            FROM decision_requests s JOIN chain ON s.id = chain.node
+                           WHERE s.superseded_by IS NOT NULL AND chain.depth < 32)
+                      SELECT EXISTS(SELECT 1 FROM decision_requests t
+                          WHERE t.id = (SELECT node FROM chain WHERE node IS NOT NULL
+                                         ORDER BY depth DESC LIMIT 1)
+                            AND t.state = 'resolved'))";
 
 pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let linked_tasks: Vec<swarm_domain::TaskDecisionLink> =
@@ -1336,6 +1566,21 @@ pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dec
         // — the kind of change that compiles, passes, and returns the wrong
         // field in production.
         requested_command: row.get(25)?,
+        superseded_by: row
+            .get::<_, Option<String>>(33)?
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        superseded_at: row.get(34)?,
+        superseded_by_worker_id: row
+            .get::<_, Option<String>>(35)?
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        supersession_reason: row.get(36)?,
+        superseded_by_terminal: row
+            .get::<_, Option<String>>(37)?
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        supersession_effective: row.get::<_, Option<bool>>(38)?.unwrap_or(false),
         discharge: row
             .get::<_, Option<String>>(26)?
             .map(|value| match value.as_str() {
@@ -1355,6 +1600,240 @@ mod tests {
     use swarm_domain::CommitRepositoryState;
     use swarm_domain::{NextMoveOwner, TaskState};
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskPriority};
+
+    /// Files a card, optionally answered, for the supersession tests below.
+    fn card(store: &TaskStore, worker: WorkerId, title: &str, resolve: bool) -> DecisionRequestId {
+        let actions = vec!["Do the thing".to_owned(), "Do not".to_owned()];
+        let request = store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker,
+                task_id: None,
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title,
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Do the thing",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        if resolve {
+            store
+                .resolve_decision_request(request.id, "Do the thing", "", "test")
+                .unwrap();
+        }
+        request.id
+    }
+
+    /// ⚠️ THE OPERATOR'S ANSWER SURVIVES SUPERSESSION COMPLETELY.
+    ///
+    /// This is the property that made supersession additive rather than a
+    /// widened withdrawal. A resolved decision read from this store IS the
+    /// operator — the whole Hive verifies authorisation against it — so an
+    /// agent must never be able to make one stop reading as resolved. Somebody
+    /// may already have acted on it, and their authority has to stay auditable
+    /// after the fact.
+    ///
+    /// Withdrawal would set `state = 'withdrawn'`. That is the thing this test
+    /// exists to prevent anyone quietly reintroducing.
+    #[test]
+    fn superseding_a_decision_never_touches_what_the_operator_answered() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let mis_framed = card(&store, queen.id, "Answered on a false premise", true);
+        let corrected = card(&store, queen.id, "The re-scoped question", false);
+        let before = store.get_decision_request(mis_framed).unwrap();
+
+        let after = store
+            .supersede_decision_request(
+                mis_framed,
+                corrected,
+                queen.id,
+                "Live verification showed the premise false.",
+            )
+            .unwrap();
+
+        assert_eq!(
+            after.state,
+            DecisionRequestState::Resolved,
+            "a superseded card MUST still read as resolved"
+        );
+        assert_eq!(after.resolution_action, before.resolution_action);
+        assert_eq!(after.resolution_answers, before.resolution_answers);
+        assert_eq!(after.resolution_note, before.resolution_note);
+        assert_eq!(after.resolved_at, before.resolved_at);
+        assert_eq!(after.superseded_by, Some(corrected));
+        assert_eq!(
+            after.supersession_reason.as_deref(),
+            Some("Live verification showed the premise false.")
+        );
+    }
+
+    /// ⚠️ AUTHORITY MOVES WHEN THE OPERATOR ANSWERS, NOT WHEN AN AGENT FILES.
+    ///
+    /// Marking X superseded by an UNANSWERED Y must leave X authorising. The
+    /// alternative opens a window where the old ruling is dead and the new one
+    /// unanswered, so work gated on either has no authority at all — which is
+    /// worse than the stale ruling this mechanism exists to retire.
+    ///
+    /// Both halves are asserted on ONE chain, because the interesting claim is
+    /// that the same record changes verdict at the moment Y resolves and at no
+    /// other time.
+    #[test]
+    fn a_superseded_card_keeps_its_authority_until_the_replacement_is_answered() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let old = card(&store, queen.id, "The old ruling", true);
+        let replacement = card(&store, queen.id, "The replacement", false);
+        store
+            .supersede_decision_request(old, replacement, queen.id, "Re-scoped.")
+            .unwrap();
+
+        assert!(
+            !store
+                .get_decision_request(old)
+                .unwrap()
+                .supersession_effective,
+            "while the replacement is UNANSWERED the old card must still authorise"
+        );
+
+        store
+            .resolve_decision_request(replacement, "Do not", "", "test")
+            .unwrap();
+
+        assert!(
+            store
+                .get_decision_request(old)
+                .unwrap()
+                .supersession_effective,
+            "once the operator answers the replacement the old card stops authorising"
+        );
+    }
+
+    /// ⚠️ AN EDGE IS NOT A TERMINUS.
+    ///
+    /// Z supersedes Y supersedes X. A reader of X handed the direct pointer Y
+    /// receives another dead card and is trusted to keep walking — which is the
+    /// same failure one level down, and the exact mistake a prerequisite
+    /// traversal made on this board the day this was built.
+    #[test]
+    fn a_chain_points_the_reader_at_the_end_rather_than_the_next_hop() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let first = card(&store, queen.id, "First", true);
+        let second = card(&store, queen.id, "Second", true);
+        let third = card(&store, queen.id, "Third", false);
+        store
+            .supersede_decision_request(first, second, queen.id, "Replaced once.")
+            .unwrap();
+        store
+            .supersede_decision_request(second, third, queen.id, "Replaced again.")
+            .unwrap();
+
+        let read = store.get_decision_request(first).unwrap();
+        assert_eq!(
+            read.superseded_by,
+            Some(second),
+            "the direct pointer is still the next hop, unchanged"
+        );
+        assert_eq!(
+            read.superseded_by_terminal,
+            Some(third),
+            "but the reader is pointed at the END of the chain"
+        );
+    }
+
+    /// ⚠️ A CHAIN THAT LOOPS TERMINATES NOWHERE, so a reader walking it never
+    /// reaches a live card. Refused at the write, checked by walking from the
+    /// REPLACEMENT rather than by comparing the direct pointer — a direct-only
+    /// check would happily admit the three-card loop this asserts.
+    #[test]
+    fn a_supersession_that_would_loop_is_refused() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let first = card(&store, queen.id, "First", true);
+        let second = card(&store, queen.id, "Second", true);
+        store
+            .supersede_decision_request(first, second, queen.id, "Replaced.")
+            .unwrap();
+
+        assert!(
+            matches!(
+                store.supersede_decision_request(second, first, queen.id, "Back again."),
+                Err(TaskStoreError::DecisionSupersessionCycle)
+            ),
+            "a two-card loop must be refused"
+        );
+        assert!(
+            matches!(
+                store.supersede_decision_request(first, first, queen.id, "Itself."),
+                Err(TaskStoreError::DecisionSupersessionCycle)
+            ),
+            "and so must the degenerate self-reference"
+        );
+    }
+
+    /// ⚠️ UNDOING IS HONEST ONLY WHILE NOTHING HAS CHANGED HANDS.
+    ///
+    /// Before the replacement is answered the old card is still authorising, so
+    /// removing the pointer costs nobody anything. Afterwards, un-marking would
+    /// restore authority the operator has already replaced — the erasure risk
+    /// this whole mechanism avoids, arriving from the other side.
+    #[test]
+    fn a_supersession_can_be_undone_only_until_the_replacement_is_answered() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let old = card(&store, queen.id, "Filed by mistake", true);
+        let replacement = card(&store, queen.id, "The replacement", false);
+        store
+            .supersede_decision_request(old, replacement, queen.id, "Wrong pointer.")
+            .unwrap();
+
+        let cleared = store.clear_decision_supersession(old, queen.id).unwrap();
+        assert_eq!(
+            cleared.superseded_by, None,
+            "while the replacement is unanswered the mark comes straight off"
+        );
+
+        store
+            .supersede_decision_request(old, replacement, queen.id, "Right this time.")
+            .unwrap();
+        store
+            .resolve_decision_request(replacement, "Do not", "", "test")
+            .unwrap();
+
+        assert!(
+            matches!(
+                store.clear_decision_supersession(old, queen.id),
+                Err(TaskStoreError::DecisionSupersessionEffective)
+            ),
+            "once the operator has answered the replacement, un-marking is refused"
+        );
+    }
+
+    /// ⚠️ AN UNANSWERED CARD IS WITHDRAWN, NOT SUPERSEDED. Withdrawal already
+    /// exists for that and already says the right thing; routing a pending card
+    /// down this path would record a replacement for a question nobody answered.
+    #[test]
+    fn only_an_answered_decision_can_be_superseded() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let pending = card(&store, queen.id, "Nobody has answered this", false);
+        let replacement = card(&store, queen.id, "The replacement", false);
+
+        assert!(
+            matches!(
+                store.supersede_decision_request(pending, replacement, queen.id, "Replaced."),
+                Err(TaskStoreError::DecisionNotResolved)
+            ),
+            "a pending card belongs on the withdrawal path"
+        );
+    }
 
     /// A grant exists only when the operator pressed the button naming the command.
     ///

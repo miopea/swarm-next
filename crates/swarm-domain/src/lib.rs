@@ -750,6 +750,39 @@ pub struct DecisionRequest {
     pub withdrawn_by_worker_id: Option<WorkerId>,
     #[serde(default)]
     pub withdrawal_reason: Option<String>,
+    /// The decision that replaced this one, when the card turned out mis-framed.
+    ///
+    /// ⚠️ THIS DOES NOT CHANGE `state`, `resolution_action` OR
+    /// `resolution_answers`. A resolved decision read from the store IS the
+    /// operator, and an agent must not be able to make one stop reading as
+    /// resolved — someone may already have acted on it, and their authority has
+    /// to stay auditable afterwards. Supersession is additive: the record gains
+    /// a pointer and a reason, and is never rewritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<DecisionRequestId>,
+    /// The END of the supersession chain, which is what a reader should follow.
+    ///
+    /// ⚠️ AN EDGE IS NOT A TERMINUS. If Z superseded Y which superseded X, then
+    /// handing a reader of X the direct pointer Y gives them another dead card
+    /// and trusts them to keep walking. This is Z.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by_terminal: Option<DecisionRequestId>,
+    /// Whether the replacement has been ANSWERED, and so whether this record has
+    /// actually stopped authorising anything.
+    ///
+    /// ⚠️ FALSE IS THE INTERESTING CASE. A card marked superseded whose
+    /// replacement is still pending KEEPS its authority — otherwise there is a
+    /// window where the old ruling is dead and the new one unanswered, and work
+    /// gated on either has no authority at all. Authority transfers when the
+    /// operator answers, not when an agent files the replacement.
+    #[serde(default)]
+    pub supersession_effective: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by_worker_id: Option<WorkerId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersession_reason: Option<String>,
     /// Present when this record is an interview rather than a ruling. Empty
     /// means a ruling, and such records behave exactly as they did before
     /// interviews existed.
