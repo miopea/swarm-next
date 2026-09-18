@@ -68,10 +68,10 @@ impl ConversationSelection {
 
     /// Records a conversation change the PROVIDER reported, with no resume pair.
     ///
-    /// `complete_resume` exists for a switch Swarm asked for: a SessionEnd
+    /// `complete_resume` exists for a switch Swarm asked for: a `SessionEnd`
     /// (reason=resume) fences the old conversation and the matching
-    /// SessionStart (source=resume) completes it. A fork or a compact produces
-    /// no such pair — Claude simply reports a SessionStart carrying a NEW
+    /// `SessionStart` (source=resume) completes it. A fork or a compact produces
+    /// no such pair — Claude simply reports a `SessionStart` carrying a NEW
     /// conversation id — so the paired path can never settle one.
     ///
     /// ⚠️ THIS IS WHY MARKERS WENT STALE. Without it, a forked or compacted
