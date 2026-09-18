@@ -39,6 +39,15 @@ const MAX_QUEUE_ASSESSMENTS: usize = 64;
 /// outlive the condition that caused it.
 const MAX_UNCHANGED_REVIEW_PASSES: i64 = 6;
 
+/// How long work may stand still, unasked, before another assessment is REFUSED.
+///
+/// ⚠️ THE ONE CONSTANT, shared with the surface that reports the same condition.
+/// swarm-api re-exports this rather than declaring its own: the last time this
+/// codebase held two numbers for one idea they diverged, and a surface that
+/// reports at three days beside a guard that refuses at four would be a rule
+/// nobody could predict.
+pub const MAX_UNASKED_STILL_SECONDS: i64 = 3 * 24 * 60 * 60;
+
 pub(super) fn migrate_incomplete_assessments(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -159,6 +168,33 @@ pub(super) fn migrate(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Resu
         "user_version",
         crate::QUEEN_REVIEW_RECEIPTS_SCHEMA_VERSION,
     )
+}
+
+/// Whether this task has stood still past the bound with no question raised.
+///
+/// ⚠️ THE SAME CONDITION THE BOARD REPORTS, so the guard and the surface cannot
+/// disagree about what a stall is. A decision counts whether it is the task's
+/// OWN — primary membership, which `swarm_request_decision` writes as
+/// `decision_requests.task_id` with no link row — or an additional link.
+fn stalled_with_nobody_asked(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: &str,
+    now: i64,
+) -> Result<bool, TaskStoreError> {
+    Ok(transaction.query_row(
+        "SELECT COALESCE(
+                    (SELECT MAX(occurred_at) FROM task_activity
+                      WHERE task_id = ?1 AND kind = 'state_changed'),
+                    (SELECT created_at FROM tasks WHERE id = ?1)
+                ) + ?3 <= ?2
+            AND NOT EXISTS (SELECT 1 FROM decision_requests d
+                             WHERE d.task_id = ?1 AND d.state = 'pending')
+            AND NOT EXISTS (SELECT 1 FROM task_decision_links l
+                              JOIN decision_requests d ON d.id = l.decision_id
+                             WHERE l.task_id = ?1 AND d.state = 'pending')",
+        params![task_id, now, MAX_UNASKED_STILL_SECONDS],
+        |row| row.get(0),
+    )?)
 }
 
 impl TaskStore {
@@ -566,6 +602,24 @@ impl TaskStore {
                 covers_wait: input.kind != QueenReviewDispositionKind::InsufficientEvidence,
             });
         }
+        // ⚠️ RE-READING IS REFUSED ONCE WORK HAS STOOD STILL AND NOBODY HAS
+        // ASKED. This is the one control in the review path that REFUSES rather
+        // than reports, and it exists because reporting was not enough: the
+        // repetition was already counted, already surfaced to Queen at a
+        // threshold of three, and already showing one task at fifty-eight
+        // re-reads — and the count kept climbing. Being told is not being
+        // stopped.
+        //
+        // Placed AFTER the replay check on purpose: an exact replay is
+        // idempotent and already returns early, so this only refuses a NEW
+        // assessment of work that is going nowhere.
+        //
+        // Every exit is in the caller's own hands — raise the question, move the
+        // task, or abandon it — and any of them clears the condition, so this
+        // cannot strand work it refuses.
+        if stalled_with_nobody_asked(&transaction, &id, now)? {
+            return Err(TaskStoreError::ReviewNeedsEscalationNotRepetition);
+        }
         let active: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1
              AND delivery_session_id IS NOT NULL
@@ -951,6 +1005,156 @@ mod tests {
         let task = store.create_task(title, "/workspace/demo").unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
         task.id
+    }
+
+    /// ⚠️ RE-READING STALLED WORK IS REFUSED, NOT MERELY REPORTED.
+    ///
+    /// Reporting was tried first and was not enough. The repetition was already
+    /// counted by `times_seen`, already served to Queen at a threshold of three,
+    /// and already showing one task re-read FIFTY-EIGHT times — and the count
+    /// kept climbing. Measured the day this shipped: 741 corrections against 23
+    /// state changes in a single day. Being told is not being stopped.
+    ///
+    /// Boundary asserted on both sides, because this REFUSES and an off-by-one
+    /// either blocks ordinary review or never fires at all.
+    #[test]
+    fn re_reading_work_nobody_asked_about_is_refused_once_it_has_stood_still() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        let moved = store
+            .list_task_activity(input.task_id, 50)
+            .unwrap()
+            .events
+            .iter()
+            .filter(|entry| entry.kind == swarm_domain::TaskActivityKind::StateChanged)
+            .map(|entry| entry.occurred_at)
+            .next_back()
+            .expect("it moved into Blocked");
+
+        input.condition = "Still waiting, just under the bound".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .record_queen_review_disposition(
+                &input,
+                &TaskActivityActor::operator(),
+                moved + MAX_UNASKED_STILL_SECONDS - 1,
+            )
+            .expect("under the bound this is ordinary review and must be allowed");
+
+        input.condition = "Still waiting, at the bound".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        let refused = store.record_queen_review_disposition(
+            &input,
+            &TaskActivityActor::operator(),
+            moved + MAX_UNASKED_STILL_SECONDS,
+        );
+        assert!(
+            matches!(
+                refused,
+                Err(TaskStoreError::ReviewNeedsEscalationNotRepetition)
+            ),
+            "at the bound another assessment must be refused: {refused:?}"
+        );
+    }
+
+    /// ⚠️ AND ASKING CLEARS IT — WITHOUT THIS THE REFUSAL IS A TRAP.
+    ///
+    /// A control with no exit does not force escalation, it strands work and
+    /// teaches people to route around the tool. Every named way out is in the
+    /// caller's own hands; this asserts the first of them actually works, end to
+    /// end, through the same guard that refused a moment earlier.
+    ///
+    /// The decision is raised FROM the task — primary membership, which writes
+    /// `decision_requests.task_id` and NO `task_decision_links` row — so a guard
+    /// reading only the link table would keep refusing after the question had
+    /// been asked, which is the worst version of this control.
+    #[test]
+    fn raising_the_question_lets_the_review_speak_again() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let mut input = external_wait(&store);
+        let moved = store
+            .list_task_activity(input.task_id, 50)
+            .unwrap()
+            .events
+            .iter()
+            .filter(|entry| entry.kind == swarm_domain::TaskActivityKind::StateChanged)
+            .map(|entry| entry.occurred_at)
+            .next_back()
+            .expect("it moved into Blocked");
+        let past_bound = moved + MAX_UNASKED_STILL_SECONDS;
+
+        input.condition = "Still waiting".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        assert!(
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), past_bound)
+                .is_err(),
+            "precondition: it must actually be refused before asking can clear it"
+        );
+
+        let actions = vec!["Release it".to_owned(), "Keep waiting".to_owned()];
+        store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(input.task_id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "This has not moved in days -- release or keep waiting?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Release it",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+
+        input.condition = "Waiting on the operator's answer now".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        let after = store.record_queen_review_disposition(
+            &input,
+            &TaskActivityActor::operator(),
+            past_bound,
+        );
+
+        // ⚠️ THE OUTCOME IS BETTER THAN "ALLOWED AGAIN", AND THE TEST SAYS SO
+        // RATHER THAN OVERSTATING IT. Raising the question makes the task the
+        // OPERATOR's — NextMoveOwner::derive returns Operator whenever a decision
+        // is pending — and a pre-existing rule then refuses Queen a disposition
+        // on work that is not hers to wait on. So the escalation does not merely
+        // unblock re-reading; it takes the task out of her review loop entirely,
+        // which is the outcome this control exists to produce.
+        //
+        // What is asserted is exactly what this guard is responsible for: it is
+        // no longer the one refusing.
+        assert!(
+            !matches!(
+                after,
+                Err(TaskStoreError::ReviewNeedsEscalationNotRepetition)
+            ),
+            "asking must clear THIS refusal, whatever other rules then apply: {after:?}"
+        );
+        assert!(
+            matches!(after, Err(TaskStoreError::IntegrityFailure(ref reason))
+                if reason.contains("not Queen-owned waiting work")),
+            "and the task should now be the operator's, out of the review loop: {after:?}"
+        );
     }
 
     /// ⚠️ THE BOARD CANNOT SEE THE ONE FAILURE THAT MATTERS: NOBODY ASKING.

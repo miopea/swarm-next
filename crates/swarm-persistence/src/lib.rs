@@ -184,7 +184,9 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
-pub use queen_review::RepeatedReview;
+pub use queen_review::{
+    MAX_UNASKED_STILL_SECONDS, RepeatedReview, UnaskedStalledWork, UnroutedReadyWork,
+};
 pub use workers::{
     ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts,
     WorkerProfileEdit,
@@ -574,6 +576,18 @@ pub enum TaskStoreError {
         "the replacement has been answered, so this supersession can no longer be undone; file a new decision instead"
     )]
     DecisionSupersessionEffective,
+    // ⚠️ THE REFUSAL THAT STOPS WORK SITTING FOR DAYS. Re-assessing is how a
+    // review says "I looked"; on work that has not moved and that nobody has
+    // asked about, saying it again IS the failure. Measured: 741 corrections
+    // against 23 state changes in one day, and three tasks waiting 67, 72 and 78
+    // hours on a person nobody had raised a question to.
+    //
+    // NAMES EVERY WAY OUT, because a refusal with no exit is a trap rather than a
+    // control, and all three are already in the caller's hands.
+    #[error(
+        "this work has not moved in days and nobody has been asked about it, so another assessment cannot be recorded. Raise the question with swarm_request_decision, move the task, or abandon it -- re-reading it again is the one thing that changes nothing"
+    )]
+    ReviewNeedsEscalationNotRepetition,
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
     #[error(

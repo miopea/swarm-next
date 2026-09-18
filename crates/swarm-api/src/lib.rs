@@ -284,7 +284,11 @@ pub(crate) const UNROUTED_READY_ATTENTION_SECONDS: i64 = 24 * 60 * 60;
 /// ⚠️ IT WILL FIRE ON A BACKLOG THE FIRST TIME, and that is the point rather than
 /// a reason to raise it. Roughly nineteen tasks qualify today. Afterwards it
 /// should sit near zero, and a number that climbs again is the signal.
-pub(crate) const UNASKED_STALL_ATTENTION_SECONDS: i64 = 3 * 24 * 60 * 60;
+///
+/// ⚠️ RE-EXPORTED, NOT REDECLARED. The refusal in swarm-persistence and this
+/// surface must be the same number: a board that reports a stall at three days
+/// while the guard refuses at four is a rule nobody can predict.
+pub(crate) use swarm_persistence::MAX_UNASKED_STILL_SECONDS as UNASKED_STALL_ATTENTION_SECONDS;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 /// What the engine looked like the last time this API asked.
@@ -9059,6 +9063,15 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         // instead; point somewhere that does not loop; file a fresh card. A
         // caller told only "conflict" has to guess which, and guessing at a
         // refusal is what two separate tickets in this repository are about.
+        // ITS OWN CODE, not lumped with invalid_task: the caller did nothing
+        // malformed. The request was well-formed and the answer is that this
+        // work needs escalating rather than re-reading, which is a different
+        // instruction from "you sent something wrong".
+        TaskStoreError::ReviewNeedsEscalationNotRepetition => ApiError::new(
+            StatusCode::CONFLICT,
+            "review_needs_escalation_not_repetition",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotResolved => ApiError::new(
             StatusCode::CONFLICT,
             "decision_not_resolved",
