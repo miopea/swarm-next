@@ -63,10 +63,16 @@ function readBody(request) {
 /**
  * ⚠️ WHAT PRODUCTION ACTUALLY ENFORCES, so a green run here means something.
  *
- * BFG Admin probed their live route (build 245240d) and returned the implemented
- * contract, with a warning worth repeating: "If your fixture exercises anything
- * else it will pass against the loopback and 415 here." A fixture looser than
- * production is worse than no fixture — it manufactures confidence and moves the
+ * ⚠️ AND THE FIRST VERSION OF THIS COMMENT WAS WRONG IN THE EXACT WAY IT WARNS
+ * ABOUT. It said BFG Admin "probed their live route (build 245240d)". They did
+ * not: that answer came from READING THEIR SHIPPED CODE, under a heading saying
+ * "the contract, as implemented", and I upgraded it to "probed" in my own
+ * retelling. They retracted it themselves on 2026-09-18 and probed properly
+ * against build 7180274. A code-read repeated as a probe is the same defect as a
+ * loose fixture — confidence without the measurement that would earn it.
+ *
+ * Their warning is still worth repeating: a fixture looser than production is
+ * worse than no fixture, because it manufactures confidence and moves the
  * failure to the one environment nobody is testing in.
  *
  * Swarm's own validate_support_attachment_set agrees with every one of these
@@ -141,19 +147,38 @@ function identify(body, isMultipart, contentType) {
   if (declared.length > MAX_FILES) throw new Refused(400, `more than ${MAX_FILES} attachments`);
   if (files.length !== declared.length) throw new Refused(400, "file parts do not match the manifest");
 
+  // ⚠️ THE CLOSED SET IS CHECKED HERE, WITH THE MANIFEST, AND ANSWERS 400.
+  //
+  // This fixture said 415 and that was WRONG. Corrected 2026-09-18 from BFG
+  // Admin's own probe of production build 7180274, after they retracted their
+  // earlier answer: that one came from READING THEIR SHIPPED CODE, and I
+  // upgraded it to "probed" in my own retelling. It was never a probe.
+  //
+  // Probed, both cases, production:
+  //   manifest declares image/heic  -> 400 {"error":"Invalid attachment submission"}
+  //   manifest says png, part is text/plain
+  //                                 -> 415 {"error":"File media type differs from manifest"}
+  //
+  // The reason is structural and is why the ORDER matters as much as the code:
+  // media_type is a zod enum INSIDE the manifest, so an unknown value fails the
+  // manifest parse and lands in the generic ZodError branch BEFORE any part is
+  // examined. Checking it per-part, as this fixture did, could answer 415 for a
+  // submission production rejects at 400 without ever looking at the parts.
+  for (const entry of declared) {
+    if (!ALLOWED_MEDIA_TYPES.has(entry.media_type)) {
+      throw new Refused(400, `media_type ${entry.media_type} is outside the accepted set`);
+    }
+  }
+
   let total = 0;
   for (const [position, entry] of declared.entries()) {
     if (!UUID.test(entry.id ?? "")) throw new Refused(400, "attachment id is not a uuid");
     if (!SHA256.test(entry.sha256 ?? "")) throw new Refused(400, "sha256 must be 64 lowercase hex");
-    // ⚠️ THE CLOSED SET. Four types, and nothing else — the single most likely
-    // way a fixture drifts looser than production.
-    if (!ALLOWED_MEDIA_TYPES.has(entry.media_type)) {
-      throw new Refused(415, `media_type ${entry.media_type} is outside the accepted set`);
-    }
     const part = files[position];
     if (part.name !== `file:${entry.id}`) throw new Refused(400, "file part is not named for its manifest id");
-    // A part whose ACTUAL mime differs from its manifest entry is 415, not 400:
-    // the manifest is a claim about the bytes and this is where the claim is checked.
+    // ⚠️ 415 IS EXCLUSIVELY THIS CASE — the manifest's claim about the bytes
+    // versus what actually arrived. Production checks it twice, at the part
+    // header and by sniffing the bytes. It is NOT the unsupported-type code.
     if (part.contentType !== entry.media_type) {
       throw new Refused(415, `part says ${part.contentType}, manifest says ${entry.media_type}`);
     }
