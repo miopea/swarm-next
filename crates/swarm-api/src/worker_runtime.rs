@@ -722,7 +722,20 @@ impl ConversationScanBudget {
 
 /// Reads entry time from a bounded tail, not mtime: provider cost-state updates
 /// can touch an old transcript without advancing its conversation.
-fn last_entry_timestamp(path: &Path, budget: &mut ConversationScanBudget) -> Option<String> {
+/// What a transcript's tail reveals: when it last moved, and whether it holds
+/// any conversation at all.
+struct TranscriptTail {
+    last_entry: String,
+    /// False ONLY when the whole file was read and it holds no assistant turn.
+    /// A file larger than the tail window is assumed substantive, because the
+    /// window cannot prove a negative about the part it did not read.
+    substantive: bool,
+}
+
+fn read_transcript_tail(
+    path: &Path,
+    budget: &mut ConversationScanBudget,
+) -> Option<TranscriptTail> {
     use std::io::{Read as _, Seek as _, SeekFrom};
     use std::os::unix::fs::OpenOptionsExt as _;
     const TAIL: u64 = 256 * 1024;
@@ -746,15 +759,96 @@ fn last_entry_timestamp(path: &Path, budget: &mut ConversationScanBudget) -> Opt
     file.take(read_limit).read_to_string(&mut tail).ok()?;
     // The last well-formed timestamp wins. A partial first line from seeking
     // mid-file is simply skipped rather than guessed at.
-    tail.lines()
+    let mut last_entry: Option<String> = None;
+    let mut saw_assistant = false;
+    for entry in tail
+        .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter_map(|entry| {
-            entry
-                .get("timestamp")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .next_back()
+    {
+        if entry.get("type").and_then(serde_json::Value::as_str) == Some("assistant") {
+            saw_assistant = true;
+        }
+        if let Some(stamp) = entry.get("timestamp").and_then(serde_json::Value::as_str) {
+            last_entry = Some(stamp.to_owned());
+        }
+    }
+    Some(TranscriptTail {
+        last_entry: last_entry?,
+        substantive: saw_assistant || length > TAIL,
+    })
+}
+
+/// What one pass over a project directory established.
+struct TranscriptScan {
+    /// The newest transcript that holds a conversation, as (id, last entry).
+    newest: Option<(String, String)>,
+    pinned_last: Option<String>,
+    /// Counted so that "found nothing" can be told from "found transcripts and
+    /// could not read one of them".
+    transcripts_seen: usize,
+    /// Counted apart from `transcripts_seen` so "every transcript is
+    /// contentless" is not reported as the file-permission fault it is not.
+    readable_seen: usize,
+}
+
+/// Reads every transcript in one directory under the SHARED budget, so fault
+/// classification cannot restore the unbounded scan it follows.
+fn scan_transcripts(
+    entries: std::fs::ReadDir,
+    pinned: &str,
+    budget: &mut ConversationScanBudget,
+) -> TranscriptScan {
+    let mut scan = TranscriptScan {
+        newest: None,
+        pinned_last: None,
+        transcripts_seen: 0,
+        readable_seen: 0,
+    };
+    for entry in entries {
+        if !budget.reserve(1, 0) {
+            break;
+        }
+        let Ok(entry) = entry else { continue };
+        // A transcript is a regular file. Never open a pipe/device or follow a
+        // symlink while performing a best-effort diagnostic scan.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        scan.transcripts_seen += 1;
+        let Some(tail) = read_transcript_tail(&path, budget) else {
+            if budget.exhausted {
+                break;
+            }
+            continue;
+        };
+        scan.readable_seen += 1;
+        if id == pinned {
+            scan.pinned_last = Some(tail.last_entry.clone());
+        }
+        // ⚠️ A TRANSCRIPT WITH NO ASSISTANT TURN CANNOT OUTRANK A REAL ONE.
+        // `/clear` writes exactly this: a file holding the command and nothing
+        // else, stamped now. Ranking on timestamp alone let that stub beat a
+        // conversation of hundreds of turns, and the notice it raised could
+        // never be cleared, because the stub stays newest forever.
+        if !tail.substantive {
+            continue;
+        }
+        if scan
+            .newest
+            .as_ref()
+            .is_none_or(|(_, best)| tail.last_entry.as_str() > best.as_str())
+        {
+            scan.newest = Some((id.to_owned(), tail.last_entry));
+        }
+    }
+    scan
 }
 
 pub(crate) fn conversation_freshness(
@@ -806,46 +900,13 @@ pub(crate) fn conversation_freshness(
             reason: "the Claude project directory could not be read".to_owned(),
         };
     };
-    let mut newest: Option<(String, String)> = None;
-    let mut pinned_last: Option<String> = None;
-    // Counted so that "found nothing" can be told from "found transcripts and
-    // could not read one of them". Keep the shared entry/byte/deadline budget:
-    // fault classification must not restore the unbounded scan it follows.
-    let mut transcripts_seen = 0_usize;
-    for entry in entries {
-        if !budget.reserve(1, 0) {
-            break;
-        }
-        let Ok(entry) = entry else { continue };
-        // A transcript is a regular file. Never open a pipe/device or follow a
-        // symlink while performing a best-effort diagnostic scan.
-        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-            continue;
-        }
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        transcripts_seen += 1;
-        let Some(timestamp) = last_entry_timestamp(&path, budget) else {
-            if budget.exhausted {
-                break;
-            }
-            continue;
-        };
-        if id == pinned.to_string() {
-            pinned_last = Some(timestamp.clone());
-        }
-        if newest
-            .as_ref()
-            .is_none_or(|(_, best)| timestamp.as_str() > best.as_str())
-        {
-            newest = Some((id.to_owned(), timestamp));
-        }
-    }
+    let scan = scan_transcripts(entries, &pinned.to_string(), budget);
+    let TranscriptScan {
+        newest,
+        pinned_last,
+        transcripts_seen,
+        readable_seen,
+    } = scan;
     if !budget.reserve(0, 0) {
         return ConversationFreshness::Unknown {
             cause: UnknownCause::ScanLimitReached,
@@ -858,13 +919,17 @@ pub(crate) fn conversation_freshness(
                 cause: UnknownCause::NoTranscripts,
                 reason: "this workspace has no Claude conversations yet".to_owned(),
             }
-        } else {
+        } else if readable_seen == 0 {
             ConversationFreshness::Unknown {
                 cause: UnknownCause::TranscriptsUnreadable,
                 reason: format!(
                     "none of the {transcripts_seen} conversations in this workspace could be read"
                 ),
             }
+        } else {
+            // Read cleanly, and not one holds a conversation. Nothing real can
+            // be newer than the pin, so there is nothing to tell the operator.
+            ConversationFreshness::Current
         };
     };
     if newest_id == pinned.to_string() {
@@ -2658,6 +2723,145 @@ mod tests {
         std::fs::write(directory.join(format!("{id}.jsonl")), body).unwrap();
     }
 
+    /// Writes what `/clear` leaves behind: the command and nothing else. No
+    /// assistant turn ever lands in it, and it is stamped at the moment the
+    /// operator cleared.
+    fn clear_stub(directory: &Path, id: &str, last: &str) {
+        std::fs::create_dir_all(directory).unwrap();
+        let body = format!(
+            "{{\"type\":\"mode\",\"sessionId\":\"{id}\"}}\n\
+             {{\"type\":\"user\",\"timestamp\":\"{last}\"}}\n\
+             {{\"type\":\"system\",\"timestamp\":\"{last}\"}}\n"
+        );
+        std::fs::write(directory.join(format!("{id}.jsonl")), body).unwrap();
+    }
+
+    /// ⚠️ THE OPERATOR TYPED `/clear` AND COULD NEVER CLEAR THE NOTICE.
+    ///
+    /// Measured on the operator's Hive 2026-09-18. The D365 worker's pin was
+    /// correct — 328 user turns — and `/clear` wrote a second transcript
+    /// holding the command alone, stamped 23 hours later. Ranking on the last
+    /// entry alone, the stub won, so Swarm reported newer history that did not
+    /// exist. Retrying the check could not help: the stub stays newest forever,
+    /// and every `/clear` mints another one.
+    #[test]
+    fn a_clear_stub_does_not_outrank_the_conversation_it_followed() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/d365-solutions");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        transcript(
+            &projects.join(&slug),
+            "11111111-1111-4111-8111-111111111111",
+            "2026-09-17T20:14:23.417Z",
+        );
+        clear_stub(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-18T19:26:28.245Z",
+        );
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            matches!(freshness, ConversationFreshness::Current),
+            "a transcript with no assistant turn is not newer history: {freshness:?}"
+        );
+    }
+
+    /// A real conversation started after the pin STILL reports stale. Asserted
+    /// beside the stub case on purpose: a guard that silenced both would read
+    /// as a pass on the test above while destroying the feature.
+    #[test]
+    fn a_real_conversation_newer_than_the_pin_is_still_stale() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/sculpt-studio");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        transcript(
+            &projects.join(&slug),
+            "11111111-1111-4111-8111-111111111111",
+            "2026-09-18T18:21:27.149Z",
+        );
+        // Cleared, and then WORKED IN, which is what makes it real.
+        transcript(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-18T20:27:33.284Z",
+        );
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+
+        match freshness {
+            ConversationFreshness::Stale {
+                newest_conversation,
+                ..
+            } => assert_eq!(newest_conversation, "22222222-2222-4222-8222-222222222222"),
+            other => panic!("a worked-in conversation is genuinely newer history: {other:?}"),
+        }
+    }
+
+    /// Every transcript is a stub. That is not the file-permission fault, and
+    /// reporting it as one would send the operator after a problem they do not
+    /// have.
+    #[test]
+    fn a_workspace_holding_only_stubs_is_current_not_unreadable() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/only-stubs");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        clear_stub(
+            &projects.join(&slug),
+            "11111111-1111-4111-8111-111111111111",
+            "2026-09-18T19:26:28.245Z",
+        );
+        clear_stub(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-18T19:27:00.000Z",
+        );
+
+        let profile = worker_profile(
+            &workspace,
+            Some("11111111-1111-4111-8111-111111111111"),
+            true,
+        );
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            matches!(freshness, ConversationFreshness::Current),
+            "stubs read cleanly; they are not unreadable transcripts: {freshness:?}"
+        );
+    }
+
     /// THE PINNED CONVERSATION GOING STALE IS THE DEFECT, and it regresses a
     /// worker's state silently: Swarm resumes an older thread and nothing says
     /// so. Measured on the operator's Hive 2026-09-02, 3 of 39 Claude workers
@@ -2823,8 +3027,8 @@ mod tests {
         let fifo = directory.path().join("fifo.jsonl");
         nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
         let mut budget = ConversationScanBudget::new();
-        assert!(last_entry_timestamp(&link, &mut budget).is_none());
-        assert!(last_entry_timestamp(&fifo, &mut budget).is_none());
+        assert!(read_transcript_tail(&link, &mut budget).is_none());
+        assert!(read_transcript_tail(&fifo, &mut budget).is_none());
         assert!(!budget.exhausted);
     }
 
