@@ -1025,6 +1025,23 @@ impl ServerHandler for AgentMcp {
                                     crate::unix_timestamp(),
                                     crate::UNROUTED_READY_ATTENTION_SECONDS,
                                 )?,
+                                // ⚠️ WORK THAT STOPPED AND NOBODY RAISED IT.
+                                //
+                                // NextMoveOwner derives Operator ONLY when a
+                                // decision already exists, so a task genuinely
+                                // waiting on a person with none filed reads as
+                                // Queen, Blocked or Release and is invisible as
+                                // theirs. Asking is what makes it visible, which
+                                // means the one failure the board cannot show is
+                                // NOBODY HAVING ASKED.
+                                //
+                                // Measured the day this shipped: 19 of 33 live
+                                // non-terminal tasks with no pending decision had
+                                // not moved in over two days; six had sat a week.
+                                "unasked_stalled_work": self.tasks.store().unasked_stalled_work(
+                                    crate::unix_timestamp(),
+                                    crate::UNASKED_STALL_ATTENTION_SECONDS,
+                                )?,
                                 // Briefings that are queued and not moving, and
                                 // what each is waiting on. A dispatch that is
                                 // never claimed is never attempted and so never

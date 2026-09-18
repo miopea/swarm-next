@@ -266,6 +266,25 @@ pub(crate) const REVIEW_REPETITION_ATTENTION_TIMES: i64 = 3;
 /// This watches a ROUTING QUEUE waiting on a person's attention, which moves on
 /// a human timescale. The data says one hour would flag 15% of all tasks.
 pub(crate) const UNROUTED_READY_ATTENTION_SECONDS: i64 = 24 * 60 * 60;
+
+/// How long any work may stop moving with nobody asked about it.
+///
+/// ⚠️ THREE DAYS BECAUSE THAT IS WHAT WENT WRONG. The operator's complaint named
+/// tasks sitting 67, 72 and 78 hours: a capability nobody had been granted, a
+/// design answer nobody had been asked for, and a config value nobody had
+/// requested. A bound above those would not have caught the thing being
+/// complained about.
+///
+/// Measured 2026-09-18 across 33 live non-terminal tasks with no pending
+/// decision: 10 under a day, 4 at one to two days, 12 at two to four, 1 at four
+/// to seven, and 6 over a week. Work that moves at all moves inside a day, so
+/// three days is comfortably past every healthy cycle and still inside the
+/// window where somebody remembers the context.
+///
+/// ⚠️ IT WILL FIRE ON A BACKLOG THE FIRST TIME, and that is the point rather than
+/// a reason to raise it. Roughly nineteen tasks qualify today. Afterwards it
+/// should sit near zero, and a number that climbs again is the signal.
+pub(crate) const UNASKED_STALL_ATTENTION_SECONDS: i64 = 3 * 24 * 60 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 /// What the engine looked like the last time this API asked.

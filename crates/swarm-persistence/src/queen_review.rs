@@ -93,6 +93,18 @@ pub struct UnroutedReadyWork {
     pub waiting_seconds: i64,
 }
 
+/// Work that has stopped moving and that nobody has been asked about.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnaskedStalledWork {
+    pub task_id: String,
+    pub title: String,
+    pub state: String,
+    pub workspace: String,
+    pub assigned_worker_id: Option<String>,
+    pub last_moved_at: i64,
+    pub still_seconds: i64,
+}
+
 pub(crate) struct ReviewQueueCache {
     local_changes: u64,
     data_version: i64,
@@ -351,6 +363,76 @@ fn moved_since_last_review(
 }
 
 impl TaskStore {
+    /// Work that has not moved in days and that NOBODY HAS BEEN ASKED ABOUT.
+    ///
+    /// ⚠️ THE SYSTEM CANNOT SEE ITS OWN OPERATOR-GATED WORK. `NextMoveOwner`
+    /// derives `Operator` ONLY when `awaiting_operator_decision` is true — that
+    /// is, only when a decision already exists. So a task genuinely waiting on a
+    /// person, with no decision filed, reads as Queen, Blocked or Release and is
+    /// invisible as theirs. Asking is what makes it visible, which means the one
+    /// failure the board cannot show is nobody having asked.
+    ///
+    /// Measured 2026-09-18: of 33 live non-terminal tasks with no pending
+    /// decision, NINETEEN had gone more than two days without moving and six had
+    /// sat over a week. Three of them were waiting on the operator — a capability
+    /// nobody had been granted, a design answer nobody had been asked for, and a
+    /// config value nobody had requested — and one of those carried a block note
+    /// explicitly reasoning that it was "not a crisply fileable operator
+    /// decision", so the choice not to ask was deliberate and then invisible.
+    ///
+    /// ⚠️ IT DELIBERATELY DOES NOT SAY WHO TO ASK. A task this old with no
+    /// decision may need the operator, or Queen, or simply to be abandoned. The
+    /// honest claim is "this stopped and nobody raised it", and inventing an
+    /// owner would be the same guess that produced a wrong `Blocked` label on
+    /// work that was merely unfinished.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn unasked_stalled_work(
+        &self,
+        now: i64,
+        still_for_seconds: i64,
+    ) -> Result<Vec<UnaskedStalledWork>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            // A decision counts whether it is this task's OWN (primary
+            // membership, what swarm_request_decision writes) or an additional
+            // link. Reading only the link table would call a task unasked while
+            // an operator question about it sits pending — the same
+            // primary-versus-link blindness that made a guard refuse blocks it
+            // should have allowed.
+            "SELECT t.id, t.title, t.state, t.workspace, t.assigned_worker_id,
+                    COALESCE(moved.at, t.created_at)
+             FROM tasks t
+             LEFT JOIN (SELECT task_id, MAX(occurred_at) AS at FROM task_activity
+                         WHERE kind = 'state_changed' GROUP BY task_id) moved
+               ON moved.task_id = t.id
+             WHERE t.removed_at IS NULL
+               AND t.state NOT IN ('completed', 'abandoned')
+               AND t.hive_id = (SELECT hive_id FROM local_hive_identity WHERE singleton = 1)
+               AND COALESCE(moved.at, t.created_at) + ?2 <= ?1
+               AND NOT EXISTS (SELECT 1 FROM decision_requests d
+                                WHERE d.task_id = t.id AND d.state = 'pending')
+               AND NOT EXISTS (SELECT 1 FROM task_decision_links l
+                                 JOIN decision_requests d ON d.id = l.decision_id
+                                WHERE l.task_id = t.id AND d.state = 'pending')
+             ORDER BY COALESCE(moved.at, t.created_at) LIMIT 64",
+        )?;
+        let rows = statement.query_map(params![now, still_for_seconds], |row| {
+            let last_moved_at: i64 = row.get(5)?;
+            Ok(UnaskedStalledWork {
+                task_id: row.get(0)?,
+                title: row.get(1)?,
+                state: row.get(2)?,
+                workspace: row.get(3)?,
+                assigned_worker_id: row.get(4)?,
+                last_moved_at,
+                still_seconds: (now - last_moved_at).max(0),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Ready work nobody owns, once it has waited longer than routing takes.
     ///
     /// ⚠️ OWNERLESS READY IS INVISIBLE TO THE DETECTOR THAT WATCHES READY WORK.
@@ -871,6 +953,119 @@ mod tests {
         task.id
     }
 
+    /// ⚠️ THE BOARD CANNOT SEE THE ONE FAILURE THAT MATTERS: NOBODY ASKING.
+    ///
+    /// `NextMoveOwner` derives Operator ONLY when a decision already exists. So a
+    /// task genuinely waiting on a person, with none filed, reads as Queen or
+    /// Blocked and is invisible as theirs — and the act that would make it
+    /// visible is the very act nobody performed.
+    ///
+    /// Measured the day this shipped: 19 of 33 live non-terminal tasks with no
+    /// pending decision had not moved in over two days, six for more than a week,
+    /// and three of those were waiting on the operator.
+    ///
+    /// Boundary asserted on both sides: a task one second under the bound is
+    /// ordinary work in progress and must stay silent.
+    #[test]
+    fn work_that_stopped_and_nobody_raised_it_is_surfaced_after_the_bound() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Nobody asked about this", "/workspace/demo")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let moved = store
+            .list_task_activity(task.id, 50)
+            .unwrap()
+            .events
+            .iter()
+            .filter(|entry| entry.kind == swarm_domain::TaskActivityKind::StateChanged)
+            .map(|entry| entry.occurred_at)
+            .next_back()
+            .expect("it moved at least once");
+        let three_days = 3 * 24 * 60 * 60;
+
+        assert!(
+            store
+                .unasked_stalled_work(moved + three_days - 1, three_days)
+                .unwrap()
+                .is_empty(),
+            "one second under the bound is work in progress, not a stall"
+        );
+
+        let stalled = store
+            .unasked_stalled_work(moved + three_days, three_days)
+            .unwrap();
+        assert_eq!(
+            stalled.len(),
+            1,
+            "at the bound, work nobody raised must be surfaced"
+        );
+        assert_eq!(stalled[0].task_id, task.id.to_string());
+        assert_eq!(
+            stalled[0].still_seconds, three_days,
+            "it must say HOW LONG, or a three-day stall reads like a three-week one"
+        );
+    }
+
+    /// ⚠️ AND ASKING MUST TAKE IT OFF THE LIST. This is the property the whole
+    /// framework rests on: the surface exists to provoke a question, so a task
+    /// with one already pending is not a failure and must go quiet. Without this
+    /// the list grows monotonically, every raised decision keeps shouting, and it
+    /// is ignored within a week.
+    ///
+    /// A decision raised FROM the task is primary membership —
+    /// `swarm_request_decision` writes `decision_requests.task_id` and NO
+    /// `task_decision_links` row — so a query reading only the link table would
+    /// call this task unasked while an operator question about it sat pending.
+    #[test]
+    fn asking_about_stalled_work_takes_it_off_the_list() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let task = store
+            .create_task("Someone did ask", "/workspace/demo")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let three_days = 3 * 24 * 60 * 60;
+        // Far past any plausible clock, so the bound is what decides, not the date.
+        let far_future = i64::MAX / 4;
+
+        assert_eq!(
+            store
+                .unasked_stalled_work(far_future, three_days)
+                .unwrap()
+                .len(),
+            1,
+            "precondition: it must actually be stalled before asking can matter"
+        );
+
+        let actions = vec!["Grant it".to_owned(), "Leave it".to_owned()];
+        store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Does this need you?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Grant it",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+
+        assert!(
+            store
+                .unasked_stalled_work(far_future, three_days)
+                .unwrap()
+                .is_empty(),
+            "a task with a question pending has been raised, and must stop being reported"
+        );
+    }
     /// ⚠️ OWNERLESS READY IS INVISIBLE TO THE DETECTOR THAT WATCHES READY WORK.
     ///
     /// `UNSTARTED_WORK_CANDIDATES_SQL` opens with an INNER join on
