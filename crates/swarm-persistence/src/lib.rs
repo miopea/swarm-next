@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{
         Arc, Mutex, MutexGuard,
@@ -965,6 +965,43 @@ fn parse_rfc3339_seconds(value: &str) -> Option<i64> {
     Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
+/// A fully migrated database, built once per process and copied per store.
+///
+/// ⚠️ IT IS A FILE, not a shared `Connection`, deliberately. Tests run on many
+/// threads and a `Connection` is not shareable between them; a path is, and
+/// `restore` reads it without holding a handle open. The temporary directory is
+/// leaked into the static so the file outlives every store that copies it.
+///
+/// Built by the ordinary migration path, so the template is exactly what
+/// migrating would have produced — this changes when the work happens, never
+/// what the result is.
+fn migrated_template() -> Result<&'static Path, TaskStoreError> {
+    static TEMPLATE: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    TEMPLATE
+        .get_or_init(|| {
+            let directory = std::env::temp_dir().join(format!(
+                "swarm-schema-template-{}-{}",
+                std::process::id(),
+                CURRENT_SCHEMA_VERSION
+            ));
+            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let path = directory.join("template.sqlite3");
+            // Rebuilt rather than reused: a leftover file from a crashed run
+            // could hold a different schema, and silently restoring THAT is a
+            // worse failure than paying the migration again.
+            let _ = std::fs::remove_file(&path);
+            let connection = Connection::open(&path).map_err(|error| error.to_string())?;
+            connection
+                .pragma_update(None, "foreign_keys", "ON")
+                .map_err(|error| error.to_string())?;
+            TaskStore::from_connection(connection).map_err(|error| error.to_string())?;
+            Ok(path)
+        })
+        .as_ref()
+        .map(PathBuf::as_path)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.clone()))
+}
+
 impl TaskStore {
     /// Opens, migrates, and integrity-checks a file-backed task database.
     ///
@@ -993,7 +1030,58 @@ impl TaskStore {
     /// # Errors
     /// Returns an error when `SQLite` initialization or migration fails.
     pub fn in_memory() -> Result<Self, TaskStoreError> {
-        let connection = Connection::open_in_memory()?;
+        let mut connection = Connection::open_in_memory()?;
+        // ⚠️ RESTORED FROM A TEMPLATE RATHER THAN MIGRATED FROM NOTHING.
+        //
+        // A fresh database is at user_version 0, so `from_connection` used to
+        // replay the WHOLE chain here: 162 version branches, 156 migration
+        // functions and 22 full table rebuilds, plus a foreign_key_check scan,
+        // on every single construction. Measured 2026-09-19: ~0.30s each,
+        // serial, with a test body doing microseconds of actual work.
+        //
+        // That made the cost scale with SCHEMA HISTORY instead of test count —
+        // every migration anyone added made all 833 call sites slower for ever.
+        //
+        // The template is migrated ONCE per process and copied per store, so a
+        // construction costs a page copy of an empty database. It is built by
+        // the same `from_connection` path, so what a caller gets is
+        // byte-identical to what migrating would have produced.
+        // A template that cannot be built must not take the store with it: fall
+        // through to migrating in place, which is what this always did.
+        if let Ok(template) = migrated_template() {
+            connection.restore("main", template, None::<fn(rusqlite::backup::Progress)>)?;
+            // ⚠️ THE TEMPLATE FROZE ONE IDENTITY AND EVERY STORE WOULD SHARE IT.
+            //
+            // `migrate_hive_identity` generates an operator and a hive with
+            // `OperatorId::new()` / `HiveId::new()`, so the template captured
+            // one pair. Restoring it unchanged gave every in-memory store the
+            // SAME hive, and federation tests that build a member and a keeper
+            // then found two stores claiming to be one hive —
+            // `InvalidFederationConnectionCard`, on eight tests.
+            //
+            // Re-minted here so a restored store is distinct exactly as a
+            // migrated one was. Safe as an unqualified UPDATE because a fresh
+            // store holds precisely one row in each; foreign keys are still off
+            // at this point, which is why hives can be repointed in any order.
+            //
+            // The template's other non-empty tables were checked rather than
+            // assumed: `queen_automation` and `local_public_hive_profile` are
+            // deterministic singletons and carry nothing generated.
+            // ⚠️ TURNED OFF EXPLICITLY RATHER THAN ASSUMED OFF. I assumed a
+            // fresh connection had foreign keys disabled; the re-mint below
+            // then tripped `FOREIGN KEY constraint failed` on five tests,
+            // because repointing `operators.id` momentarily orphans
+            // `hives.operator_id` however the statements are ordered.
+            connection.pragma_update(None, "foreign_keys", "OFF")?;
+            let operator = OperatorId::new().to_string();
+            let hive = HiveId::new().to_string();
+            connection.execute("UPDATE operators SET id = ?1", [&operator])?;
+            connection.execute(
+                "UPDATE hives SET id = ?1, operator_id = ?2",
+                [&hive, &operator],
+            )?;
+            connection.execute("UPDATE local_hive_identity SET hive_id = ?1", [&hive])?;
+        }
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Self::from_connection(connection)
     }
@@ -11002,6 +11090,42 @@ mod the_task_projection_stays_singular {
             "a task projection column is read with unwrap_or again. A missing \
              column then reads as `false`, which is indistinguishable from the \
              task genuinely not being in that state."
+        );
+    }
+}
+
+#[cfg(test)]
+mod a_restored_store_is_not_a_shared_store {
+    use super::TaskStore;
+
+    /// ⚠️ THE TEMPLATE FROZE ONE IDENTITY AND EVERY STORE INHERITED IT.
+    ///
+    /// `in_memory` restores from a database migrated once per process, which is
+    /// what makes it fast. `migrate_hive_identity` mints an operator and a hive
+    /// while migrating, so the template captured ONE pair and every restored
+    /// store claimed to be the same hive. Federation tests that build a member
+    /// and a keeper then had two stores insisting they were one Hive, and eight
+    /// of them failed with `InvalidFederationConnectionCard`.
+    ///
+    /// The four tests being timed while that change was written all passed. Only
+    /// the full suite showed it, which is why this assertion exists at all.
+    #[test]
+    fn two_in_memory_stores_are_different_hives() {
+        let first = TaskStore::in_memory().unwrap();
+        let second = TaskStore::in_memory().unwrap();
+
+        let one = first.local_hive_identity().unwrap();
+        let two = second.local_hive_identity().unwrap();
+
+        assert_ne!(
+            one.hive.id, two.hive.id,
+            "a restored store must be a NEW hive; sharing one silently couples \
+             every test that builds two stores"
+        );
+        assert_ne!(
+            one.operator.id, two.operator.id,
+            "the operator is minted while migrating too, so it shares the same \
+             way the hive did"
         );
     }
 }
