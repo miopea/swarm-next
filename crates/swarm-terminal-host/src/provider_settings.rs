@@ -29,8 +29,23 @@ fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .ok_or("SessionStart is not an array")?;
-    let entry =
-        json!({"matcher": "startup|resume", "hooks": [{"type": "command", "command": command}]});
+    // ⚠️ EVERY SOURCE THAT MINTS A CONVERSATION, NOT JUST THE TWO THAT START A
+    // SESSION. `startup|resume` excluded exactly the three that change the
+    // conversation MID-SESSION — clear, compact and fork — so the gate that
+    // handles them could never be reached and the saved marker froze at
+    // whatever the first start chose.
+    //
+    // This is the same shape as the interview-hook defect asserted below, and it
+    // recurred: two fixes were written, reviewed and shipped for the gate
+    // (8e75b1d9 for fork/compact, 10a5150f for clear) while the hook that feeds
+    // it subscribed to neither. Both were correct code in a path nothing fed.
+    // Measured on the operator's Hive 2026-09-19: 29 of 30 worker startup
+    // contexts sat at selection_revision 0 — the gate had never published a
+    // selection for any of them.
+    let entry = json!({
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [{"type": "command", "command": command}],
+    });
     if !starts.contains(&entry) {
         starts.push(entry);
     }
@@ -176,6 +191,43 @@ pub(super) fn startup_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠️ THE HOOK MUST SUBSCRIBE TO EVERY SOURCE THAT MINTS A CONVERSATION,
+    /// AND NOTHING ELSE IN THIS FILE ASSERTED THE MATCHER AT ALL.
+    ///
+    /// `startup|resume` covered only the two sources that BEGIN a session. The
+    /// three that change the conversation mid-session — clear, compact, fork —
+    /// never fired, so `ProviderLifecycleGate` could not see them and the saved
+    /// marker froze at whatever the first start chose. The operator saw this as
+    /// "Newer conversation history" on workers they had just worked in.
+    ///
+    /// ⚠️ IT RECURRED AFTER BEING DOCUMENTED ONCE. Two gate fixes shipped —
+    /// 8e75b1d9 for fork/compact, 10a5150f for clear — both correct, both
+    /// unreachable, because the hook feeding them subscribed to neither. Every
+    /// test passed throughout. Measured 2026-09-19: 29 of 30 worker startup
+    /// contexts sat at `selection_revision` 0.
+    ///
+    /// This asserts the COUPLING, not a string: these are exactly the sources
+    /// `read_claude_session_start` projects onto a kind, so adding a kind there
+    /// without adding it here reintroduces the same silence.
+    #[test]
+    fn the_session_start_hook_subscribes_to_every_conversation_minting_source() {
+        let mut document = json!({});
+        add_hook(&mut document, Path::new("/opt/hive/host")).unwrap();
+        let starts = document["hooks"]["SessionStart"]
+            .as_array()
+            .expect("SessionStart is an array");
+        let matcher = starts
+            .iter()
+            .find_map(|entry| entry.get("matcher").and_then(|m| m.as_str()))
+            .expect("the installed entry carries a matcher");
+        for source in ["startup", "resume", "clear", "compact", "fork"] {
+            assert!(
+                matcher.split('|').any(|alt| alt == source),
+                "the hook must subscribe to {source:?}, or the gate never sees it: {matcher:?}"
+            );
+        }
+    }
 
     /// The interview hooks are installed, and BOTH of them.
     ///
