@@ -447,7 +447,7 @@ pub(super) async fn usage_report(
     let last_scan = store
         .provider_usage_last_scan()
         .map_err(|error| task_store_error(&error))?;
-    let needs_refresh = last_scan.is_none_or(|at| now - at >= MIN_SECONDS_BETWEEN_SCANS);
+    let needs_refresh = scan_is_due(last_scan, now);
     let workspaces: Vec<String> = workers_by_workspace.keys().cloned().collect();
     let scanning = needs_refresh && start_scan(&state, store, workspaces, now);
 
@@ -473,6 +473,59 @@ pub(super) async fn usage_report(
     .into_response())
 }
 
+/// Whether a pass is due, owned in ONE place.
+///
+/// The panel and the background refresh both ask this. Two copies of the same
+/// floor is how a background pass and a viewed page come to disagree about
+/// whether the numbers are current.
+const fn scan_is_due(last_scan: Option<i64>, now: i64) -> bool {
+    match last_scan {
+        None => true,
+        Some(at) => now - at >= MIN_SECONDS_BETWEEN_SCANS,
+    }
+}
+
+/// Keeps the usage figures current WITHOUT anyone opening the usage panel.
+///
+/// ⚠️ THE PANEL WAS THE ONLY TRIGGER, and that made the numbers a side effect
+/// of somebody looking at them. `start_scan` had exactly one caller —
+/// `usage_report` — so the data refreshed only when the page was viewed.
+/// Measured on the operator's Hive 2026-09-19: `last_completed_at` was 41 HOURS
+/// stale, every workspace appeared to collapse to a fraction of its traffic on
+/// the same day, and a ticket whose acceptance reads "use the usage panel after
+/// a fortnight" would have measured the SCANNER rather than the fleet.
+///
+/// Anything reading `provider_usage_daily` programmatically gets no warning: a
+/// stale row looks exactly like a quiet day.
+///
+/// Cheap to run often, which is why this is safe on every supervisor pass: the
+/// scan is incremental against `provider_usage_cursor` (path + offset), so a
+/// regular pass reads only the new bytes. Letting it lag is the expensive
+/// state, not running it. The existing five-minute floor and the single-flight
+/// flag are reused rather than duplicated, so the panel and this cannot both
+/// start a pass.
+pub(super) fn refresh_if_stale(state: &AppState, store: &swarm_persistence::TaskStore, now: i64) {
+    let Ok(last) = store.provider_usage_last_scan() else {
+        return;
+    };
+    if !scan_is_due(last, now) {
+        return;
+    }
+    let Ok(profiles) = store.list_worker_profiles() else {
+        return;
+    };
+    let workspaces: Vec<String> = profiles
+        .into_iter()
+        .map(|profile| profile.workspace)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if workspaces.is_empty() {
+        return;
+    }
+    start_scan(state, store, workspaces, now);
+}
+
 /// Starts a pass unless one is already running. Returns whether one is now in
 /// flight, which is what the panel prints.
 ///
@@ -480,7 +533,7 @@ pub(super) async fn usage_report(
 /// a second request arriving mid-pass should be told "a scan is running" and
 /// given the stored numbers, not made to wait for minutes of file reading.
 fn start_scan(
-    state: &Arc<AppState>,
+    state: &AppState,
     store: &swarm_persistence::TaskStore,
     workspaces: Vec<String>,
     now: i64,
@@ -620,6 +673,35 @@ mod tests {
         assert_eq!(weigh(1000, 0, 0, 0, "claude-haiku-4-5"), 55);
         // An unknown model is assumed expensive rather than flattering the bill.
         assert_eq!(weigh(1000, 0, 0, 0, "something-new"), 1000);
+    }
+
+    /// ⚠️ THE PANEL WAS THE ONLY THING THAT EVER REFRESHED THESE NUMBERS, so
+    /// they were a side effect of somebody looking. Measured on the operator's
+    /// Hive 2026-09-19: 41 hours stale, every workspace apparently collapsing
+    /// to a fraction of its traffic on the same day, and a ticket whose
+    /// acceptance reads "use the usage panel after a fortnight" would have
+    /// measured the scanner instead of the fleet.
+    ///
+    /// Asserted on both sides of the floor, because this now runs on every
+    /// supervisor pass and an off-by-one either scans continuously or never.
+    #[test]
+    fn a_pass_is_due_only_once_the_floor_has_elapsed() {
+        assert!(
+            scan_is_due(None, 10_000),
+            "never scanned means the figures do not exist yet"
+        );
+        assert!(
+            !scan_is_due(Some(10_000 - MIN_SECONDS_BETWEEN_SCANS + 1), 10_000),
+            "one second inside the floor must not start a pass"
+        );
+        assert!(
+            scan_is_due(Some(10_000 - MIN_SECONDS_BETWEEN_SCANS), 10_000),
+            "exactly at the floor is due"
+        );
+        assert!(
+            scan_is_due(Some(10_000 - 41 * 3_600), 10_000),
+            "the 41-hour staleness this was written for is emphatically due"
+        );
     }
 
     #[test]

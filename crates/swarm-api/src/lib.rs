@@ -1335,6 +1335,15 @@ impl AppState {
             .copied()
             .collect::<std::collections::HashSet<_>>();
         provider_activity::refresh(self, &profiles, &live_ids).await;
+        // ⚠️ THE USAGE FIGURES USED TO REFRESH ONLY WHEN SOMEBODY OPENED THE
+        // PANEL, which made them a side effect of being looked at. Measured
+        // 2026-09-19: 41 hours stale, and a stale row is indistinguishable from
+        // a quiet day to anything reading the table programmatically. The pass
+        // is incremental and single-flighted behind a five-minute floor, so
+        // calling it every supervisor pass costs the new bytes and nothing more.
+        if let Ok(store) = task_store(self) {
+            provider_usage::refresh_if_stale(self, store, unix_timestamp());
+        }
         if let Err(error) = worker_runtime::recover_worker_returns_if_idle(self) {
             tracing::warn!(message = %error.message, "interrupted worker returns could not be recovered");
             return;
