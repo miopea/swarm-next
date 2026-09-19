@@ -1323,7 +1323,7 @@ pub(super) async fn update_worker(
             .map_err(|error| task_store_error(&error))?
     };
     if request.autostart.is_some() {
-        state.worker_errors.write().await.remove(&worker_id);
+        crate::worker_runtime::forget_worker_failure(&state, worker_id).await;
         state
             .worker_recovery_attempts
             .write()
@@ -1465,7 +1465,7 @@ pub(super) async fn remove_worker(
     task_store(&state)?
         .archive_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    state.worker_errors.write().await.remove(&worker_id);
+    crate::worker_runtime::forget_worker_failure(&state, worker_id).await;
     state
         .worker_recovery_attempts
         .write()
@@ -1767,7 +1767,7 @@ pub(super) async fn start_worker(
     authorize(&state, &headers)?;
     require_valid_size(request.rows, request.columns)?;
     let worker_id = parse_worker_id(&worker_id)?;
-    state.worker_errors.write().await.remove(&worker_id);
+    crate::worker_runtime::forget_worker_failure(&state, worker_id).await;
     state
         .worker_recovery_attempts
         .write()
@@ -1877,7 +1877,7 @@ pub(super) async fn stand_worker_down(
             Err(error) => tracing::warn!(%error, "could not spend approved-command grants"),
         }
     }
-    state.worker_errors.write().await.remove(&worker_id);
+    crate::worker_runtime::forget_worker_failure(state, worker_id).await;
     state
         .worker_recovery_attempts
         .write()

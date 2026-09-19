@@ -90,7 +90,7 @@ pub(super) async fn start_worker_process(
         task_store(state)?
             .clear_worker_return_attention(worker_id)
             .map_err(|error| task_store_error(&error))?;
-        state.worker_errors.write().await.remove(&worker_id);
+        forget_worker_failure(state, worker_id).await;
     }
     result
 }
@@ -329,7 +329,7 @@ pub(super) async fn start_worker_process_unlocked(
         let _ = request_host(state, HostRequest::Stop { session_id }).await;
         return Err(task_store_error(&error));
     }
-    state.worker_errors.write().await.remove(&worker_id);
+    forget_worker_failure(state, worker_id).await;
     state.control_room_notify.notify_waiters();
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
@@ -851,6 +851,29 @@ fn scan_transcripts(
     scan
 }
 
+/// Forgets a recorded worker failure, in memory AND on the durable record.
+///
+/// ⚠️ IT DOES NOT RETURN THE SPENT RECOVERY ATTEMPT, deliberately. The
+/// stability window is what stops a worker that starts and dies a second later
+/// from earning attempt after attempt. Clearing the attempt here -- which reads
+/// as the generous thing to do -- would hand exactly that back.
+///
+/// ⚠️ AND CLEARING THE RECORD IS NOT OPTIONAL. The supervisor reconciles memory
+/// FROM the record on every pass, so an error cleared only in memory comes
+/// straight back on the next one.
+pub(super) async fn forget_worker_failure(state: &AppState, worker_id: WorkerId) {
+    state.worker_errors.write().await.remove(&worker_id);
+    if let Ok(store) = task_store(state)
+        && let Err(error) = store.clear_worker_recovery_failure(worker_id)
+    {
+        tracing::warn!(
+            worker_id = %worker_id,
+            message = %error,
+            "a cleared worker failure could not be cleared durably"
+        );
+    }
+}
+
 pub(crate) fn conversation_freshness(
     profile: &WorkerProfile,
     projects_root: &Path,
@@ -1161,7 +1184,7 @@ async fn reconcile_recovery_successors(
             .map_err(|error| task_store_error(&error))?
         {
             if let Some(owner) = owner {
-                state.worker_errors.write().await.remove(&owner);
+                forget_worker_failure(state, owner).await;
             }
             state.control_room_notify.notify_waiters();
         }
@@ -1342,7 +1365,7 @@ async fn advance_failed_continuations(
     };
     match tokio::time::timeout_at(deadline, operation).await {
         Ok(Ok(HostResponse::SessionStarted { .. })) => {
-            state.worker_errors.write().await.remove(&owner);
+            forget_worker_failure(state, owner).await;
         }
         Ok(Err(error)) => {
             state

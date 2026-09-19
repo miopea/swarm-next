@@ -39,6 +39,7 @@ mod queen_run_history;
 mod review_return_history;
 mod worker_engine_returns;
 mod worker_engine_updates;
+mod worker_recovery;
 pub use worker_engine_returns::WorkerEngineReturnSession;
 mod task_block;
 mod task_decision_links;
@@ -187,6 +188,7 @@ use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
 pub use queen_review::{
     MAX_UNASKED_STILL_SECONDS, RepeatedReview, UnaskedStalledWork, UnroutedReadyWork,
 };
+pub use worker_recovery::WorkerRecoveryCircuit;
 pub use workers::{
     ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts,
     WorkerProfileEdit,
@@ -324,7 +326,9 @@ const BOARD_READ_SCHEMA_VERSION: i64 = 177;
 const SYSTEM_ACCESS_SCHEMA_VERSION: i64 = 178;
 const REVIEW_REPETITION_SCHEMA_VERSION: i64 = 179;
 const DECISION_SUPERSESSION_SCHEMA_VERSION: i64 = 180;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_SUPERSESSION_SCHEMA_VERSION;
+/// The recovery circuit stops living only in process memory.
+const WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION: i64 = 181;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4424,6 +4428,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < DECISION_SUPERSESSION_SCHEMA_VERSION {
         crate::decisions::migrate_decision_supersession(transaction)?;
+    }
+    if schema_version < WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION {
+        crate::worker_recovery::migrate_worker_recovery_circuit(transaction)?;
     }
     Ok(())
 }
@@ -10117,6 +10124,17 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 4 FROM pragma_table_info('decision_requests')
                 WHERE name IN ('superseded_by','superseded_at',
                                'superseded_by_worker_id','supersession_reason')",
+        },
+        // ⚠️ THE LAST ENTRY MUST DESCRIBE THE NEWEST MIGRATION. The ceiling test
+        // rewinds exactly this one; an entry filed anywhere else leaves the list
+        // ending below the ceiling and the failure then names the step it DID
+        // rewind, not the one that is missing.
+        SchemaStep {
+            table: "worker_recovery_circuit",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_recovery_circuit",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'worker_recovery_circuit'",
         },
     ];
 

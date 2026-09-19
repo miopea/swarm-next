@@ -1340,16 +1340,8 @@ impl AppState {
             return;
         }
         let now = unix_timestamp();
-        {
-            let mut attempts = self.worker_recovery_attempts.write().await;
-            attempts.retain(|worker_id, attempted_at| {
-                !profiles.iter().any(|profile| {
-                    profile.id == *worker_id
-                        && profile.active_session_id.is_some()
-                        && now.saturating_sub(*attempted_at) >= WORKER_RECOVERY_STABILITY_SECONDS
-                })
-            });
-        }
+        self.reconcile_recovery_circuit(&profiles, now).await;
+
         let mut recovery_started = false;
         for profile in profiles
             .into_iter()
@@ -1498,6 +1490,90 @@ impl AppState {
         }
     }
 
+    /// Brings the in-memory circuit back in step with the durable record, then
+    /// retires the entries that have earned it.
+    async fn reconcile_recovery_circuit(&self, profiles: &[WorkerProfile], now: i64) {
+        // ⚠️ MEMORY CATCHES UP WITH THE DURABLE CIRCUIT BEFORE ANYTHING READS IT.
+        // These maps are process memory and were built empty at startup with
+        // nothing to rehydrate them, so a restart used to hand every worker a
+        // fresh "one safe attempt" and erase the failure the operator had been
+        // shown -- the circuit was bounded inside one process and unbounded
+        // across two.
+        //
+        // Reading also RECONCILES: a record written by a different build is
+        // dropped, which is how a new build grants its one fresh attempt.
+        // Operator decision 01a0b749-5def -- a restart on the same build tells
+        // you nothing new about whether a worker can start, so it buys nothing,
+        // while shipping different code is the one event that might change the
+        // answer. `or_insert` on purpose: a live process always knows better
+        // than the record it wrote.
+        let build_revision = Self::recovery_build_revision();
+        if let Ok(store) = task_store(self) {
+            match store.reconcile_worker_recovery_circuits(&build_revision) {
+                Ok(circuits) => {
+                    let mut attempts = self.worker_recovery_attempts.write().await;
+                    let mut errors = self.worker_errors.write().await;
+                    for circuit in circuits {
+                        let Ok(worker_id) = circuit.worker_id.parse::<WorkerId>() else {
+                            continue;
+                        };
+                        attempts.entry(worker_id).or_insert(circuit.attempted_at);
+                        if let Some(failure) = circuit.failure {
+                            errors.entry(worker_id).or_insert(failure);
+                        }
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    message = %error,
+                    "the durable recovery circuit could not be read"
+                ),
+            }
+        }
+        {
+            let mut attempts = self.worker_recovery_attempts.write().await;
+            let mut settled = Vec::new();
+            attempts.retain(|worker_id, attempted_at| {
+                let stable = profiles.iter().any(|profile| {
+                    profile.id == *worker_id
+                        && profile.active_session_id.is_some()
+                        && now.saturating_sub(*attempted_at) >= WORKER_RECOVERY_STABILITY_SECONDS
+                });
+                if stable {
+                    settled.push(*worker_id);
+                }
+                !stable
+            });
+            // The durable record has to forget what memory just forgot, or the
+            // next pass would read the attempt straight back in and the worker
+            // would never earn another.
+            if let Ok(store) = task_store(self) {
+                for worker_id in settled {
+                    if let Err(error) = store.clear_worker_recovery_circuit(worker_id) {
+                        tracing::warn!(
+                            worker_id = %worker_id,
+                            message = %error,
+                            "a settled recovery circuit could not be cleared"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The build the circuit's records belong to.
+    ///
+    /// A build that cannot name itself falls back to a constant rather than a
+    /// fresh value: an unknown revision that CHANGED every read would grant an
+    /// endless run of fresh attempts, which is the unbounded retry this whole
+    /// mechanism exists to prevent.
+    fn recovery_build_revision() -> String {
+        runtime::build_source_revision().unwrap_or_else(|| "unknown".to_owned())
+    }
+
+    /// What the operator is told when the circuit opens.
+    const CIRCUIT_OPEN: &'static str =
+        "Worker exited again before recovery was stable. Retry when ready.";
+
     async fn try_autostart_recovery(
         &self,
         profile: &WorkerProfile,
@@ -1537,6 +1613,19 @@ impl AppState {
             .write()
             .await
             .insert(profile.id, now);
+        // Spend the attempt on the RECORD as well as in memory, or a restart
+        // would hand it straight back.
+        let build_revision = Self::recovery_build_revision();
+        if let Ok(store) = task_store(self)
+            && let Err(error) =
+                store.record_worker_recovery_attempt(profile.id, now, &build_revision)
+        {
+            tracing::warn!(
+                worker_id = %profile.id,
+                message = %error,
+                "a recovery attempt could not be recorded durably"
+            );
+        }
         if let Some(attempted_at) = previous {
             // Only a worker that is VISIBLY ALIVE earns more patience: a session
             // begun since the attempt and still running. Asking the opposite —
@@ -1555,12 +1644,39 @@ impl AppState {
                     .write()
                     .await
                     .insert(profile.id, attempted_at);
+                if let Ok(store) = task_store(self)
+                    && let Err(error) =
+                        store.restore_worker_recovery_attempt(profile.id, attempted_at)
+                {
+                    tracing::warn!(
+                        worker_id = %profile.id,
+                        message = %error,
+                        "the original recovery attempt time could not be restored durably"
+                    );
+                }
                 return false;
             }
-            self.worker_errors.write().await.insert(
-                profile.id,
-                "Worker exited again before recovery was stable. Retry when ready.".to_owned(),
-            );
+            self.worker_errors
+                .write()
+                .await
+                .insert(profile.id, Self::CIRCUIT_OPEN.to_owned());
+            // ⚠️ THE ESCALATION OUTLIVES THE PROCESS NOW. This string used to
+            // live only in memory, so the one signal saying why a worker was
+            // down vanished on the next restart.
+            if let Ok(store) = task_store(self)
+                && let Err(error) = store.open_worker_recovery_circuit(
+                    profile.id,
+                    now,
+                    Self::CIRCUIT_OPEN,
+                    &build_revision,
+                )
+            {
+                tracing::warn!(
+                    worker_id = %profile.id,
+                    message = %error,
+                    "an opened recovery circuit could not be recorded durably"
+                );
+            }
             self.control_room_notify.notify_waiters();
             tracing::warn!(worker_id = %profile.id, "autostart worker recovery circuit opened");
             return false;
