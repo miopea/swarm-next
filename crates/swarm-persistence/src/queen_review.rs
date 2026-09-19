@@ -741,9 +741,29 @@ impl TaskStore {
     }
 }
 
+/// ⚠️ COVERAGE NO LONGER DEPENDS ON THE RUN, and `_run_id` is kept only because
+/// every caller still legitimately names the run it is asking about.
+///
+/// Until 2026-09-18 an `external_condition` receipt counted only inside the run
+/// that recorded it, so the next run found the obligation uncovered and
+/// `queen_conductor` marked the run Incomplete unless Queen re-reviewed a wait
+/// whose evidence had not moved. That is what "Queen still shows external waits
+/// between review runs" meant, measured at 177 re-review passes across 8
+/// receipts, one of them 86 times.
+///
+/// The operator answered it on 2026-09-18 (ADR0082's presentation, doc 09,
+/// after decision 01a0b73f-1263 asked for an interview): show a checked external
+/// wait as a HOLD with Last checked wording rather than re-raising it.
+///
+/// ⚠️ WHAT STILL RE-RAISES, and it is the reason this is presentation and not
+/// permission: coverage matches a receipt against the task's CURRENT evidence
+/// revision. Changed evidence does not match, so it reads uncovered and returns
+/// to Queen exactly as before. `insufficient_evidence` receipts are still never
+/// selected here at all. Fresh evidence remains required before acting; what
+/// stops is paying a full review pass to re-derive an unchanged answer.
 pub(super) fn review_coverage(
     connection: &Connection,
-    run_id: &str,
+    _run_id: &str,
 ) -> Result<QueenReviewCoverage, TaskStoreError> {
     let sql = format!(
         "{} WHERE t.removed_at IS NULL AND t.hive_id=(SELECT hive_id FROM local_hive_identity WHERE singleton=1) AND NOT {}",
@@ -763,8 +783,8 @@ pub(super) fn review_coverage(
         }
         let current = task_review_evidence(connection, task.id)?;
         let saved: Option<String> = connection.query_row(
-            "SELECT accepted_revision FROM queen_task_review_receipts WHERE task_id=?1 AND (kind='operator_deferral' OR (kind='external_condition' AND run_id=?2))",
-            rusqlite::params![task.id.to_string(), run_id], |row| row.get(0),
+            "SELECT accepted_revision FROM queen_task_review_receipts WHERE task_id=?1 AND kind IN ('operator_deferral','external_condition')",
+            rusqlite::params![task.id.to_string()], |row| row.get(0),
         ).optional()?;
         if let Some(evidence_revision) = saved {
             receipts.push(VerifiedQueenReviewReceipt {
@@ -2027,8 +2047,13 @@ mod tests {
         );
     }
 
+    /// ⚠️ THE PAIR TO THE TEST BELOW, AND THE REASON THIS IS PRESENTATION RATHER
+    /// THAN PERMISSION. Carrying a wait across runs is only safe because changed
+    /// evidence still breaks it, and it has to be asserted IN A LATER RUN — the
+    /// older test checks that within the recording run, which a change scoped to
+    /// runs could satisfy while leaving this broken.
     #[test]
-    fn external_claims_need_a_new_check_each_run_and_new_facts_invalidate() {
+    fn changed_evidence_re_raises_an_external_wait_in_a_later_run() {
         let store = TaskStore::in_memory().unwrap();
         let input = external_wait(&store);
         store
@@ -2040,8 +2065,49 @@ mod tests {
         let next = start_review(&store, 103);
         assert!(matches!(
             store.queen_run_review_coverage(&next).unwrap(),
-            QueenReviewCoverage::Missing { .. }
+            QueenReviewCoverage::Covered { .. }
         ));
+
+        store
+            .append_task_correction(
+                input.task_id,
+                "Changed external evidence",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+
+        assert!(
+            matches!(
+                store.queen_run_review_coverage(&next).unwrap(),
+                QueenReviewCoverage::Missing { .. }
+            ),
+            "a wait whose evidence moved is Queen's work again, run or no run"
+        );
+    }
+
+    #[test]
+    fn an_external_claim_survives_a_new_run_but_never_new_facts() {
+        let store = TaskStore::in_memory().unwrap();
+        let input = external_wait(&store);
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        store
+            .finish_queen_automation_run(&input.run_id, QueenAutomationOutcome::NoAction, 102)
+            .unwrap();
+        let next = start_review(&store, 103);
+        // ⚠️ THIS ASSERTION IS INVERTED FROM WHAT IT WAS, and the rename says so.
+        // It used to require a fresh check every run, which is what made Queen
+        // re-review unchanged external waits -- 177 passes across 8 receipts,
+        // one of them 86 times. The operator answered on 2026-09-18: show it as
+        // a hold with Last checked instead. An unchanged wait now carries.
+        assert!(
+            matches!(
+                store.queen_run_review_coverage(&next).unwrap(),
+                QueenReviewCoverage::Covered { .. }
+            ),
+            "an external wait whose evidence has not moved is a hold, not new work"
+        );
         store
             .append_task_correction(
                 input.task_id,
