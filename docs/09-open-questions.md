@@ -18,15 +18,26 @@ only in details, not as a quick action; that branch was not exercised.
 
 ## External-wait presentation between Queen reviews — September 11, 2026
 
-Awaiting operator direction, asked asynchronously. ADR0082 currently returns a
-previous external condition to Queen's visible queue immediately between review
-runs, even when its local evidence still matches. Live Watchfaces rows show this
-despite a recent check. Proposed presentation: keep these under Dependencies /
-holds with explicit Last checked wording between runs; still require fresh
-evidence before action. Missing/changed evidence and insufficient-evidence
-investigations would remain Queen work. This changes no task owner, permission,
-review coverage or execution rule. Do not implement or amend the accepted
-presentation boundary until answered. Continue other maturity work meanwhile.
+**Resolved by the operator, 2026-09-18: adopt the proposed presentation** —
+move these under Dependencies / holds with explicit Last checked wording.
+
+Provenance: a direct in-session operator instruction, not a decision card. It
+answers exactly the proposal below and nothing wider.
+
+ADR0082 currently returns a previous external condition to Queen's visible queue
+immediately between review runs, even when its local evidence still matches.
+Live Watchfaces rows show this despite a recent check. The accepted
+presentation: keep these under Dependencies / holds with explicit Last checked
+wording between runs; still require fresh evidence before action.
+Missing/changed evidence and insufficient-evidence investigations remain Queen
+work. This changes no task owner, permission, review coverage or execution rule.
+
+⚠️ WHAT THE ANSWER DOES NOT DO. It settles PRESENTATION only. It does not grant
+permission to act on stale evidence, does not move an external wait out of
+Queen's ownership, and does not alter ADR0082's boundary on when fresh evidence
+is required — a hold shown under Dependencies is still a hold. Anyone reading
+this as licence to skip the evidence check has read more into it than was asked
+or given.
 
 ## Keeper management authority — September 10, 2026
 
