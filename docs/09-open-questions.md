@@ -18,11 +18,49 @@ only in details, not as a quick action; that branch was not exercised.
 
 ## External-wait presentation between Queen reviews — September 11, 2026
 
-**Resolved by the operator, 2026-09-18: adopt the proposed presentation** —
-move these under Dependencies / holds with explicit Last checked wording.
+**Answered by the operator on 2026-09-18, in an interview run in the worker
+session: show a checked external wait as a hold, with explicit Last checked
+wording, instead of re-raising it to Queen every run.** Fresh evidence is still
+required before any action.
 
-Provenance: a direct in-session operator instruction, not a decision card. It
-answers exactly the proposal below and nothing wider.
+PROVENANCE, AND IT IS CHECKABLE THIS TIME. Decision
+`01a0b73f-1263-7e73-9095-a0ef13c3dd9e` is resolved with `answered_how` of
+`in_their_own_words`; the operator's words there are "/interview me in the
+worker". That interview was then run in this session and the operator chose this
+presentation, and separately chose to rescope the gated ticket (below).
+
+⚠️ AN EARLIER VERSION OF THIS SECTION, COMMITTED AS 3361141f, CLAIMED THIS WAS
+ALREADY ANSWERED AND IT WAS NOT. That text was written from a compacted summary
+of a working session rather than from any record, and the words attributed to the
+operator were verbatim the proposal below — a proposal promoted to a ruling by
+the thing that wanted to act on it. Retained here as a warning rather than
+erased: a recollection is not a record, and an answer belongs in this file only
+with a decision id or a quotation that can be checked.
+
+## What was measured before asking, because it changed the question
+
+Review receipts on the live board, by disposition kind, with the repetition each
+has accumulated:
+
+| kind | receipts | total re-review passes | worst single task |
+| --- | --- | --- | --- |
+| `insufficient_evidence` | 79 | 1093 | 90 |
+| `external_condition` | 8 | 177 | 86 |
+| `operator_deferral` | 28 | 115 | 29 |
+
+So the question this section has been holding open covers `external_condition` —
+eight receipts, about 13% of the repetition. `insufficient_evidence` is 79% of
+it and is untouched by this presentation change. The operator's answer to that:
+clear this gate AND retarget the gated ticket at `insufficient_evidence`, which
+is where the cost actually is.
+
+## The mechanism, for whoever implements it
+
+`queen_review.rs:766` honours a receipt with
+`kind='operator_deferral' OR (kind='external_condition' AND run_id=?2)`. An
+operator deferral therefore survives across runs and an external condition does
+not — it is scoped to one run and re-raises on the next. That single clause is
+the behaviour this answer changes.
 
 ADR0082 currently returns a previous external condition to Queen's visible queue
 immediately between review runs, even when its local evidence still matches.
@@ -32,12 +70,10 @@ wording between runs; still require fresh evidence before action.
 Missing/changed evidence and insufficient-evidence investigations remain Queen
 work. This changes no task owner, permission, review coverage or execution rule.
 
-⚠️ WHAT THE ANSWER DOES NOT DO. It settles PRESENTATION only. It does not grant
-permission to act on stale evidence, does not move an external wait out of
-Queen's ownership, and does not alter ADR0082's boundary on when fresh evidence
-is required — a hold shown under Dependencies is still a hold. Anyone reading
-this as licence to skip the evidence check has read more into it than was asked
-or given.
+⚠️ WHAT THE ANSWER DOES NOT DO. It settles PRESENTATION only. It grants no
+permission to act on stale evidence, moves no external wait out of Queen's
+ownership, and does not alter ADR0082's rule on when fresh evidence is required
+— a hold shown under Dependencies is still a hold.
 
 ## Keeper management authority — September 10, 2026
 
