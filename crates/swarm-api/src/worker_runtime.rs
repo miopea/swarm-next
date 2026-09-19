@@ -958,6 +958,27 @@ pub(crate) fn conversation_freshness(
     if newest_id == pinned.to_string() {
         return ConversationFreshness::Current;
     }
+    // ⚠️ THE PIN CANNOT LOSE TO SOMETHING OLDER THAN ITSELF, and it did.
+    //
+    // The substantive filter above exists to stop an empty STRANGER outranking
+    // a real pinned thread. It must not make the PIN itself ineligible. Once
+    // the marker began following a `/clear` (10a5150f, operator decision
+    // 01a0b8dc), the pin legitimately points at a conversation with no
+    // assistant turn yet — so the filter skipped it, chose an OLDER transcript
+    // as "newest", and reported Stale for ever after every clear.
+    //
+    // Observed on the operator's own worker: pinned last entry 18:11:51Z
+    // against a "newest" of 14:12:32Z. The pin was four hours NEWER than the
+    // thing said to supersede it, and the card still fired.
+    //
+    // A pin at least as recent as every other transcript is CURRENT whatever
+    // it contains. Nothing newer exists, so there is nothing to report.
+    if pinned_last
+        .as_ref()
+        .is_some_and(|pinned_at| pinned_at.as_str() >= newest_timestamp.as_str())
+    {
+        return ConversationFreshness::Current;
+    }
     ConversationFreshness::Stale {
         newest_conversation: newest_id,
         pinned_last_entry: pinned_last,
@@ -2800,6 +2821,58 @@ mod tests {
         assert!(
             matches!(freshness, ConversationFreshness::Current),
             "a transcript with no assistant turn is not newer history: {freshness:?}"
+        );
+    }
+
+    /// ⚠️ THE REGRESSION THE OPERATOR CAUGHT, and it was two of my own fixes
+    /// colliding rather than either being wrong alone.
+    ///
+    /// One fix stopped a contentless transcript being "newest", so a `/clear`
+    /// stub could not outrank a real thread. A later one made the marker FOLLOW
+    /// a clear (operator decision 01a0b8dc). Together they meant the pin
+    /// legitimately pointed at a conversation with no assistant turn yet, the
+    /// filter skipped it, an OLDER transcript was chosen as newest, and the card
+    /// fired for ever after every clear.
+    ///
+    /// Measured on the operator's own worker 2026-09-19: pinned last entry
+    /// 18:11:51Z against a "newest" of 14:12:32Z. The pin was four hours NEWER
+    /// than the thing said to supersede it.
+    #[test]
+    fn a_pin_newer_than_every_other_transcript_is_current_even_when_empty() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects/d365-solutions");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        // The real thread the worker used before the clear.
+        transcript(
+            &projects.join(&slug),
+            "11111111-1111-4111-8111-111111111111",
+            "2026-09-19T14:12:32.232Z",
+        );
+        // The post-clear conversation the marker now points at: newer, empty.
+        clear_stub(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-09-19T18:11:51.946Z",
+        );
+
+        let profile = worker_profile(
+            &workspace,
+            Some("22222222-2222-4222-8222-222222222222"),
+            true,
+        );
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            matches!(freshness, ConversationFreshness::Current),
+            "a pin newer than everything else cannot be superseded by something \
+             older: {freshness:?}"
         );
     }
 
