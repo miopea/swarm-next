@@ -9188,6 +9188,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "review_needs_escalation_not_repetition",
             error.to_string(),
         ),
+        // ⚠️ ITS OWN CODE, NOT THE SIBLING'S. The two refusals share a remedy
+        // and not a cause: that one is work that has not MOVED in days, this is
+        // a missing FACT re-derived past the bound while nobody was asked. A
+        // task trips this one while moving briskly, so a caller keying on the
+        // other code would chase the wrong condition.
+        TaskStoreError::EvidenceNeedsAskingNotRechecking { .. } => ApiError::new(
+            StatusCode::CONFLICT,
+            "evidence_needs_asking_not_rechecking",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotResolved => ApiError::new(
             StatusCode::CONFLICT,
             "decision_not_resolved",

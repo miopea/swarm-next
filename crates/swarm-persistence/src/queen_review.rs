@@ -170,6 +170,79 @@ pub(super) fn migrate(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Resu
     )
 }
 
+/// The two refusals that stop a review repeating instead of escalating.
+///
+/// Both are placed AFTER the replay check by their caller, so an exact replay
+/// stays idempotent and only a NEW assessment is refused. They are separate
+/// causes with separate errors on purpose: one is work that has not MOVED in
+/// days, the other a missing FACT re-derived past a count. A task trips the
+/// second while moving briskly — of the twenty worst offenders measured on
+/// 2026-09-19, exactly one was also stalled three days.
+fn refuse_repetition_without_escalation(
+    transaction: &rusqlite::Transaction<'_>,
+    input: &QueenReviewDispositionInput,
+    id: &str,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    if stalled_with_nobody_asked(transaction, id, now)? {
+        return Err(TaskStoreError::ReviewNeedsEscalationNotRepetition);
+    }
+    if input.kind == QueenReviewDispositionKind::InsufficientEvidence
+        && let Some(times) = evidence_rechecked_without_asking(transaction, id)?
+    {
+        return Err(TaskStoreError::EvidenceNeedsAskingNotRechecking { times });
+    }
+    Ok(())
+}
+
+/// How many times this task's missing fact has been re-derived, when nobody has
+/// been asked for it.
+///
+/// ⚠️ AN INSUFFICIENT-EVIDENCE FINDING CANNOT DISCHARGE ITS OWN OBLIGATION, and
+/// that is the whole reason this exists. `review_coverage` counts every live
+/// task owned by Queen as an obligation and accepts only `operator_deferral` or
+/// `external_condition` receipts as cover; `queen_conductor` then forces a run
+/// Incomplete while any obligation is uncovered. So a task judged
+/// insufficient-evidence is re-reviewed, judged the same way, and is still
+/// uncovered — with no exit through the review path at all. Measured on
+/// 2026-09-19: one task at 90 re-derivations, 15 live receipts carrying 425 of
+/// 533 live passes.
+///
+/// The only exits leave her queue rather than satisfy it: the task moves, or a
+/// decision is raised, which makes `NextMoveOwner::derive` return `Operator`.
+/// Both are in the caller's hands, so refusing here cannot strand the work.
+///
+/// ⚠️ DELIBERATELY NOT KEYED ON ELAPSED TIME. The sibling guard
+/// `stalled_with_nobody_asked` refuses work that has not moved in days, and it
+/// does not reach this: of the twenty worst offenders exactly one was stalled
+/// three days. Repetition here is a COUNT, not a duration.
+fn evidence_rechecked_without_asking(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: &str,
+) -> Result<Option<i64>, TaskStoreError> {
+    let asked: bool = transaction.query_row(
+        "SELECT EXISTS (SELECT 1 FROM decision_requests d
+                         WHERE d.task_id = ?1 AND d.state = 'pending')
+             OR EXISTS (SELECT 1 FROM task_decision_links l
+                          JOIN decision_requests d2 ON d2.id = l.decision_id
+                         WHERE l.task_id = ?1 AND d2.state = 'pending')",
+        params![task_id],
+        |row| row.get(0),
+    )?;
+    if asked {
+        return Ok(None);
+    }
+    let times: Option<i64> = transaction
+        .query_row(
+            "SELECT times_seen FROM queen_task_review_receipts
+              WHERE task_id = ?1 AND kind = 'insufficient_evidence'",
+            params![task_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(times.filter(|seen| *seen >= MAX_UNCHANGED_REVIEW_PASSES))
+}
+
 /// Whether this task has stood still past the bound with no question raised.
 ///
 /// ⚠️ THE SAME CONDITION THE BOARD REPORTS, so the guard and the surface cannot
@@ -617,9 +690,7 @@ impl TaskStore {
         // Every exit is in the caller's own hands — raise the question, move the
         // task, or abandon it — and any of them clears the condition, so this
         // cannot strand work it refuses.
-        if stalled_with_nobody_asked(&transaction, &id, now)? {
-            return Err(TaskStoreError::ReviewNeedsEscalationNotRepetition);
-        }
+        refuse_repetition_without_escalation(&transaction, input, &id, now)?;
         let active: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM queen_automation WHERE id=1 AND run_id=?1
              AND delivery_session_id IS NOT NULL
@@ -1018,6 +1089,125 @@ mod tests {
                 .record_queen_review_disposition(input, &TaskActivityActor::operator(), 200 + pass)
                 .unwrap();
         }
+    }
+
+    /// ⚠️ AN INSUFFICIENT-EVIDENCE FINDING CANNOT DISCHARGE ITS OWN OBLIGATION,
+    /// so re-deriving it is the one move that can never end the loop.
+    ///
+    /// `review_coverage` counts every live Queen-owned task as an obligation and
+    /// accepts only `operator_deferral` or `external_condition` as cover;
+    /// `queen_conductor` forces a run Incomplete while any obligation is
+    /// uncovered. A task judged insufficient-evidence is therefore re-reviewed,
+    /// judged identically, and still uncovered — for ever.
+    ///
+    /// Measured 2026-09-19 before building: one task at 90 re-derivations, and
+    /// 15 live receipts carrying 425 of 533 live passes. The sibling guard does
+    /// NOT reach this population — of the twenty worst offenders exactly one had
+    /// stood still for three days; the rest had moved within two.
+    ///
+    /// Boundary asserted on both sides, because this REFUSES and an off-by-one
+    /// either blocks ordinary review or never fires.
+    #[test]
+    fn a_missing_fact_re_checked_past_the_bound_is_refused() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        input.kind = QueenReviewDispositionKind::InsufficientEvidence;
+
+        // One short of the bound: still ordinary review, and it must stay silent.
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES - 1);
+        input.condition = "One short of the bound".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        assert!(
+            store
+                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 400)
+                .is_ok(),
+            "a task under the bound is ordinary work and must not be refused"
+        );
+
+        // Now at the bound, and the next assessment is refused.
+        input.condition = "And again, with nobody asked".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        let refused =
+            store.record_queen_review_disposition(&input, &TaskActivityActor::operator(), 401);
+        assert!(
+            matches!(
+                refused,
+                Err(TaskStoreError::EvidenceNeedsAskingNotRechecking { times })
+                    if times == MAX_UNCHANGED_REVIEW_PASSES
+            ),
+            "at the bound with nobody asked, re-checking must be refused: {refused:?}"
+        );
+    }
+
+    /// Asking clears THIS refusal, which is the exit the error names. Asserted
+    /// separately because a guard that refuses without a working exit strands
+    /// the work it refuses.
+    #[test]
+    fn asking_for_the_missing_fact_clears_the_evidence_refusal() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let mut input = external_wait(&store);
+        input.kind = QueenReviewDispositionKind::InsufficientEvidence;
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES);
+
+        input.condition = "Refused before asking".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        assert!(
+            matches!(
+                store.record_queen_review_disposition(&input, &TaskActivityActor::operator(), 500),
+                Err(TaskStoreError::EvidenceNeedsAskingNotRechecking { .. })
+            ),
+            "precondition: it must be refused before asking can clear it"
+        );
+
+        let actions = vec!["Supply the fact".to_owned(), "Abandon it".to_owned()];
+        store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(input.task_id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "The missing fact has been re-checked past the bound",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Supply the fact",
+                allowed_actions: &actions,
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+
+        input.condition = "Now the question is pending".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        let after =
+            store.record_queen_review_disposition(&input, &TaskActivityActor::operator(), 501);
+
+        // As with the sibling guard, the outcome is stronger than "allowed
+        // again": a pending decision makes the task the OPERATOR's, and a
+        // pre-existing rule then bars Queen from dispositioning it at all. What
+        // is asserted is only what THIS guard owns — it is no longer the refuser.
+        assert!(
+            !matches!(
+                after,
+                Err(TaskStoreError::EvidenceNeedsAskingNotRechecking { .. })
+            ),
+            "asking must clear THIS refusal, whatever other rules then apply: {after:?}"
+        );
     }
 
     /// Puts `title` into Ready with no owner, `ready_at` seconds on the clock.

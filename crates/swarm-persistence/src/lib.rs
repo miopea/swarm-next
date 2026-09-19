@@ -592,6 +592,17 @@ pub enum TaskStoreError {
         "this work has not moved in days and nobody has been asked about it, so another assessment cannot be recorded. Raise the question with swarm_request_decision, move the task, or abandon it -- re-reading it again is the one thing that changes nothing"
     )]
     ReviewNeedsEscalationNotRepetition,
+    // ⚠️ SEPARATE FROM THE VARIANT ABOVE ON PURPOSE. That one is about work that
+    // has not MOVED in days; this one is about a missing FACT that has been
+    // re-derived past the bound while nobody was asked for it. A task can trip
+    // this one while moving briskly, which is exactly the population measured:
+    // of the twenty worst offenders, one was stalled three days and the rest had
+    // moved within two. One message covering both causes would send the reader
+    // after the wrong condition.
+    #[error(
+        "the same missing fact has been re-checked {times} times and nobody has been asked for it, so another insufficient-evidence assessment cannot be recorded. An insufficient-evidence finding NEVER discharges the obligation that produced it, so re-checking is the one move that cannot end this. Raise the question with swarm_request_decision, move the task, or abandon it"
+    )]
+    EvidenceNeedsAskingNotRechecking { times: i64 },
     #[error("completed work requires concise verification evidence")]
     CompletionEvidenceRequired,
     #[error(
