@@ -81,10 +81,27 @@ impl ProviderLifecycleGate {
           different facts — that rule is untouched below. A fork is the live
           session telling us where it went, which is what `ConversationChanged`
           already exists to carry.
+
+          ⚠️ RESET (`/clear`) IS HERE TOO, ON THE OPERATOR'S ANSWER of
+          2026-09-19, decision 01a0b8dc-3a73. It was excluded at first and that
+          was wrong for the very case that produced the report: BOTH workers the
+          operator saw had been CLEARED, not forked — `provider_lifecycle.rs:47`
+          maps "clear" to Reset — so the fork fix alone left the symptom intact
+          and the marker was only moved by hand.
+
+          ⚠️ AND THE COST IS REAL, NOT HIDDEN: immediately after a clear the new
+          conversation is EMPTY, so the marker briefly points at nothing and a
+          resume taken right then starts blank. That is what clearing asked for.
+          The alternative considered and rejected was advancing only once the new
+          conversation has content, which this gate cannot see — SessionStart is
+          always empty — and which would mean Swarm choosing a conversation on
+          the operator's behalf, the thing ADR 0101 declines to do.
         */
         if matches!(
             observation.kind,
-            ProviderSessionStartKind::Forked | ProviderSessionStartKind::Compacted
+            ProviderSessionStartKind::Forked
+                | ProviderSessionStartKind::Compacted
+                | ProviderSessionStartKind::Reset
         ) {
             return match self.selection.as_mut() {
                 // Before any startup has settled there is nothing to move, and
@@ -394,6 +411,98 @@ mod tests {
         // saved marker refuses anything at revision 1 or below, so without this
         // the gate would move and the marker still would not.
         assert!(selection.revision > 1);
+    }
+
+    /// ⚠️ THE CASE THAT ACTUALLY PRODUCED THE OPERATOR'S REPORT, and the one
+    /// the fork fix did NOT cover. Both workers they saw had been CLEARED, not
+    /// forked: `provider_lifecycle.rs:47` maps "clear" to Reset, which this
+    /// branch originally excluded. So the marker stayed on the abandoned thread
+    /// and was only moved by hand.
+    ///
+    /// Measured: Sculpt Studio resumed its pinned conversation, cleared three
+    /// seconds in, and then did 89 user and 159 assistant turns of real work in
+    /// a conversation Swarm never recorded.
+    ///
+    /// Operator's answer, decision 01a0b8dc-3a73, 2026-09-19: the marker follows
+    /// the clear immediately. The empty-conversation cost is accepted and named
+    /// beside the branch.
+    #[test]
+    fn a_clear_after_startup_moves_the_selection_like_a_fork() {
+        let session = WorkerSessionId::new();
+        let started = ProviderConversationId::new();
+        let cleared = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [9; 32]);
+        assert_eq!(
+            gate.observe(
+                session,
+                &[9; 32],
+                ProviderSessionStartObservation {
+                    conversation: started,
+                    kind: ProviderSessionStartKind::New,
+                },
+            ),
+            ProviderLifecycleAcceptance::Accepted
+        );
+        assert_eq!(
+            gate.observe(
+                session,
+                &[9; 32],
+                ProviderSessionStartObservation {
+                    conversation: cleared,
+                    kind: ProviderSessionStartKind::Reset,
+                },
+            ),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        let selection = gate.selection().expect("a settled startup has a selection");
+        assert_eq!(selection.conversation, cleared);
+        // Same bound as the fork case: the persistence path refuses revision 1
+        // or below, so the gate moving is not enough on its own.
+        assert!(selection.revision > 1);
+    }
+
+    /// A clear reported twice does not advance the revision again — the same
+    /// idempotence the fork case has, asserted separately because Reset reaches
+    /// the branch by a different arm of the match.
+    #[test]
+    fn a_clear_reported_twice_does_not_advance_the_revision_again() {
+        let session = WorkerSessionId::new();
+        let started = ProviderConversationId::new();
+        let cleared = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [9; 32]);
+        gate.observe(
+            session,
+            &[9; 32],
+            ProviderSessionStartObservation {
+                conversation: started,
+                kind: ProviderSessionStartKind::New,
+            },
+        );
+        gate.observe(
+            session,
+            &[9; 32],
+            ProviderSessionStartObservation {
+                conversation: cleared,
+                kind: ProviderSessionStartKind::Reset,
+            },
+        );
+        let first = gate.selection().expect("settled").revision;
+        assert_eq!(
+            gate.observe(
+                session,
+                &[9; 32],
+                ProviderSessionStartObservation {
+                    conversation: cleared,
+                    kind: ProviderSessionStartKind::Reset,
+                },
+            ),
+            ProviderLifecycleAcceptance::Duplicate
+        );
+        assert_eq!(
+            gate.selection().expect("settled").revision,
+            first,
+            "reporting the same clear twice must not move the revision"
+        );
     }
 
     #[test]

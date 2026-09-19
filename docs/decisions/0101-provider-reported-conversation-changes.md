@@ -52,3 +52,39 @@ reports change nothing; a fork with no settled startup changes nothing.
 Not covered: a conversation change the provider never reports. Nothing here
 scans transcripts to infer one, and a marker can still go stale if Claude
 changes conversation without a `SessionStart`.
+
+## Amendment, 2026-09-19: `Reset` joins them, and it was the reported case
+
+⚠️ THE LINE ABOVE SAYING "`Reset` AND `Unknown` REMAIN IGNORED" IS SUPERSEDED FOR
+`Reset`. Excluding it left this ADR fixing a defect the operator had not hit
+while leaving the one they reported intact.
+
+Both workers in the original report had been **cleared, not forked**.
+`provider_lifecycle.rs:47` maps the SessionStart source `"clear"` to `Reset`, so
+the fork branch never saw them. Measured: Sculpt Studio resumed its pinned
+conversation, cleared three seconds in, then did 89 user and 159 assistant turns
+in a conversation Swarm never recorded. The marker moved only because somebody
+repointed it by hand through `PUT /api/v1/workers/{id}/conversation`.
+
+Operator decision `01a0b8dc-3a73`, answered in session: **the marker follows the
+clear immediately.**
+
+⚠️ THE COST IS ACCEPTED, NOT OVERLOOKED. Right after a clear the new conversation
+is EMPTY, so the marker briefly points at nothing and a resume taken at that
+moment starts blank. That is what clearing asked for, and the previous thread
+remains on disk and repointable — but nothing announces it.
+
+Rejected: advancing only once the new conversation has content. It is the most
+accurate trigger and the gate cannot see it — `SessionStart` is always empty —
+so it needs something watching transcripts and writing the marker afterwards.
+That is Swarm choosing a conversation on the operator's behalf, which the section
+above declines to do. Rejected: leaving `Reset` ignored, which is the behaviour
+that produced the report.
+
+Bounds unchanged and re-asserted for the new arm: a clear before any startup
+settles changes nothing, and a clear reported twice does not advance the revision
+again. Both ablate cleanly — removing `Reset` from the branch fails exactly the
+two clear tests and leaves all eight others passing, including both fork tests
+and capability denial.
+
+`Unknown` stays ignored.
