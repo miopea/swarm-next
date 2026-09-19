@@ -5621,7 +5621,7 @@ mod tests {
             .iter()
             .find(|item| item.kind == "worker_filed_draft_attention")
             .expect("Queen is told a worker filed work it cannot route");
-        assert_eq!(notice.task_id, filed.id);
+        assert_eq!(notice.task_id, Some(filed.id));
         assert_eq!(notice.worker_id, worker.id);
 
         // Once Queen routes it, the notice has done its job and stops asking.

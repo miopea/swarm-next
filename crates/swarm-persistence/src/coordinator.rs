@@ -498,6 +498,17 @@ pub struct ReviewedWorkWithoutEvidenceCandidate {
     pub age_seconds: i64,
 }
 
+/// A worker whose recovery circuit is open, named without a task.
+#[derive(Debug, Clone)]
+pub struct WorkerCannotStartCandidate {
+    pub worker_id: WorkerId,
+    pub worker_name: String,
+    /// What the operator should be told, as the circuit recorded it.
+    pub failure: String,
+    pub opened_at: i64,
+    pub age_seconds: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorAttention {
     pub action_id: String,
@@ -505,8 +516,12 @@ pub struct CoordinatorAttention {
     pub kind: String,
     pub worker_id: WorkerId,
     pub worker_name: String,
-    pub task_id: TaskId,
-    pub task_title: String,
+    /// ⚠️ ABSENT FOR A WORKER-SCOPED ATTENTION, and that is the whole point of
+    /// schema 182. A worker that cannot START owns no task, so requiring one
+    /// meant the condition could not be expressed at all. Operator decision
+    /// 01a0b8da-c8f9: make it nullable and extend every reader.
+    pub task_id: Option<TaskId>,
+    pub task_title: Option<String>,
     pub reason: String,
     pub observed_at: i64,
     /// How long this has been standing, computed when the row is read.
@@ -1041,6 +1056,109 @@ impl TaskStore {
             )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(candidates)
+    }
+
+    /// Workers whose recovery circuit is OPEN, so nobody has been asked.
+    ///
+    /// ⚠️ THE ONE ATTENTION THAT NAMES NO TASK. A worker that cannot START owns
+    /// nothing, which is why `coordinator_actions.task_id` had to become
+    /// nullable (schema 182, operator decision 01a0b8da-c8f9). Every other kind
+    /// hangs off a task; this hangs off the worker alone.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn worker_cannot_start_candidates(
+        &self,
+        now: i64,
+    ) -> Result<Vec<WorkerCannotStartCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT circuit.worker_id, worker.name, circuit.failure, circuit.opened_at,
+                    MAX(0, ?1 - circuit.opened_at)
+             FROM worker_recovery_circuit circuit
+             JOIN worker_profiles worker ON worker.id = circuit.worker_id
+             WHERE circuit.failure IS NOT NULL AND circuit.opened_at IS NOT NULL
+               AND worker.archived_at IS NULL
+             ORDER BY circuit.opened_at, circuit.worker_id LIMIT 64",
+        )?;
+        let rows = statement
+            .query_map([now], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .map(|row| {
+                let (worker_id, worker_name, failure, opened_at, age_seconds) = row?;
+                Ok::<_, rusqlite::Error>(WorkerCannotStartCandidate {
+                    worker_id: worker_id
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    worker_name,
+                    failure,
+                    opened_at,
+                    age_seconds,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Records one worker-scoped attention, rechecking the circuit atomically.
+    ///
+    /// ⚠️ KEYED ON `opened_at`, so a NEW opening raises a new attention and a
+    /// repeated supervisor pass over the SAME opening raises nothing. Without
+    /// that this would fire on every pass, which is the repetition three other
+    /// controls on this board exist to stop.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn record_worker_cannot_start_attention(
+        &self,
+        candidate: &WorkerCannotStartCandidate,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let still_open: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM worker_recovery_circuit circuit
+                 JOIN worker_profiles worker ON worker.id = circuit.worker_id
+                 WHERE circuit.worker_id = ?1 AND circuit.opened_at = ?2
+                   AND circuit.failure IS NOT NULL AND worker.archived_at IS NULL
+             )",
+            params![candidate.worker_id.to_string(), candidate.opened_at],
+            |row| row.get(0),
+        )?;
+        if !still_open {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        let idempotency_key = format!(
+            "worker-cannot-start:{}:{}",
+            candidate.worker_id, candidate.opened_at
+        );
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, 'worker_cannot_start_attention', ?3, NULL, NULL, NULL, ?4,
+                     'completed', ?5, ?6, ?6)",
+            params![
+                Uuid::now_v7().to_string(),
+                idempotency_key,
+                candidate.worker_id.to_string(),
+                candidate.age_seconds,
+                candidate.failure,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(changed == 1)
     }
 
     /// Records that a blocked task has waited without anyone acting on it.
@@ -1709,8 +1827,8 @@ impl TaskStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, i64>(7)?,
                     row.get::<_, i64>(8)?,
@@ -1740,7 +1858,9 @@ impl TaskStore {
                         .parse()
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
                     worker_name,
-                    task_id: task_id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    task_id: task_id
+                        .map(|id| id.parse().map_err(|_| rusqlite::Error::InvalidQuery))
+                        .transpose()?,
                     task_title,
                     reason,
                     observed_at,
@@ -2006,6 +2126,80 @@ pub(super) fn migrate_coordinator(transaction: &rusqlite::Transaction<'_>) -> ru
          CREATE INDEX IF NOT EXISTS coordinator_actions_queue
              ON coordinator_actions(state, created_at, id);
          PRAGMA user_version = 62;",
+    )
+}
+
+/// A worker-scoped attention needs a row that names no task.
+///
+/// ⚠️ `task_id` WAS NOT NULL, so every attention was task-scoped and a worker
+/// that cannot START could not be expressed in this table at all. The recovery
+/// circuit records its failure durably (schema 181, ADR 0103) and nothing could
+/// raise it, because the only surface for raising things required a task the
+/// worker does not have.
+///
+/// Operator decision 01a0b8da-c8f9, in their own words: "Make
+/// `coordinator_actions.task_id` nullable, extending every attention reader."
+///
+/// `SQLite` cannot drop NOT NULL in place, so this rebuilds the table the same way
+/// every previous widening of this CHECK did.
+pub(super) fn migrate_worker_scoped_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let prerequisite_tables = transaction.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'table' AND name IN ('tasks', 'worker_profiles')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if prerequisite_tables != 2 {
+        // Same reasoning as the earlier rebuilds: a narrow historical fixture
+        // holds only the table its own step exercises and cannot contain real
+        // coordinator actions, so advancing the version is safe and avoids
+        // making SQLite validate absent foreign tables.
+        transaction.pragma_update(
+            None,
+            "user_version",
+            super::WORKER_SCOPED_ATTENTION_SCHEMA_VERSION,
+        )?;
+        return Ok(());
+    }
+    transaction.execute_batch(
+        "PRAGMA legacy_alter_table = ON;
+         ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v181;
+         CREATE TABLE coordinator_actions (
+             id TEXT PRIMARY KEY,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention','worker_cannot_start_attention')),
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+             session_id TEXT,
+             evidence_revision INTEGER,
+             observed_age_seconds INTEGER,
+             state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+             reason TEXT NOT NULL,
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+             attempted_at INTEGER,
+             finished_at INTEGER,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             -- ⚠️ ONLY the worker-scoped kind may omit a task. Without this a
+             -- task-scoped attention could silently lose its task and read as a
+             -- worker-level condition, which is the opposite of the fix.
+             CHECK (task_id IS NOT NULL OR kind = 'worker_cannot_start_attention')
+         );
+         INSERT INTO coordinator_actions (
+             id, idempotency_key, kind, worker_id, task_id, session_id,
+             evidence_revision, observed_age_seconds, state, reason,
+             attempts, attempted_at, finished_at, created_at, updated_at
+         ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  attempts, attempted_at, finished_at, created_at, updated_at
+           FROM coordinator_actions_v181;
+         DROP TABLE coordinator_actions_v181;
+         CREATE INDEX coordinator_actions_queue
+             ON coordinator_actions(state, created_at, id);
+         PRAGMA legacy_alter_table = OFF;
+         PRAGMA user_version = 182;",
     )
 }
 
@@ -2613,6 +2807,125 @@ mod unattended_block_tests {
     /// The negative half is the point: this must stay quiet for work that is
     /// merely claimed (that is the other detector's job, and firing here too
     /// would double-report every honest handoff) and for work that closed.
+    /// ⚠️ THE FIRST ATTENTION THAT NAMES NO TASK, and the reason schema 182
+    /// exists. A worker that cannot START owns nothing, so while
+    /// `coordinator_actions.task_id` was NOT NULL the condition could not be
+    /// written down at all — the recovery circuit recorded a failure (schema
+    /// 181) that nothing could ever raise. Operator decision 01a0b8da-c8f9.
+    #[test]
+    fn a_worker_that_cannot_start_is_surfaced_without_any_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Stuck Worker",
+                ProviderKind::ClaudeCode,
+                "/workspace/stuck",
+                true,
+                1,
+            )
+            .unwrap();
+        store
+            .open_worker_recovery_circuit(worker.id, 500, "Worker exited again", "buildrev")
+            .unwrap();
+
+        let candidates = store.worker_cannot_start_candidates(900).unwrap();
+        assert_eq!(candidates.len(), 1, "the open circuit is a candidate");
+        assert_eq!(candidates[0].worker_id, worker.id);
+        assert_eq!(candidates[0].age_seconds, 400);
+
+        assert!(
+            store
+                .record_worker_cannot_start_attention(&candidates[0], 900)
+                .unwrap(),
+            "it is raised the first time"
+        );
+
+        let attention = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT task_id IS NULL, session_id IS NULL, worker_id, reason
+                 FROM coordinator_actions WHERE kind = 'worker_cannot_start_attention'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert!(attention.0, "it names no task, which is the whole point");
+        assert!(attention.1, "and no session: it never started one");
+        assert_eq!(attention.2, worker.id.to_string());
+        assert_eq!(attention.3, "Worker exited again");
+    }
+
+    /// ⚠️ KEYED ON THE OPENING, so a supervisor pass that sees the same open
+    /// circuit again raises nothing. Without this it would fire every pass,
+    /// which is the repetition three other controls on this board exist to stop.
+    #[test]
+    fn the_same_open_circuit_is_not_raised_twice() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Stuck Worker",
+                ProviderKind::ClaudeCode,
+                "/workspace/stuck",
+                true,
+                1,
+            )
+            .unwrap();
+        store
+            .open_worker_recovery_circuit(worker.id, 500, "Worker exited again", "buildrev")
+            .unwrap();
+        let candidates = store.worker_cannot_start_candidates(900).unwrap();
+        assert!(
+            store
+                .record_worker_cannot_start_attention(&candidates[0], 900)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .record_worker_cannot_start_attention(&candidates[0], 1000)
+                .unwrap(),
+            "the same opening must not raise a second attention"
+        );
+    }
+
+    /// Clearing the failure stops it being a candidate, so the condition ends
+    /// itself rather than needing anything to dismiss it — the same self-
+    /// clearing property every other kind in this table has.
+    #[test]
+    fn a_cleared_failure_is_no_longer_a_candidate() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Stuck Worker",
+                ProviderKind::ClaudeCode,
+                "/workspace/stuck",
+                true,
+                1,
+            )
+            .unwrap();
+        store
+            .open_worker_recovery_circuit(worker.id, 500, "Worker exited again", "buildrev")
+            .unwrap();
+        assert_eq!(store.worker_cannot_start_candidates(900).unwrap().len(), 1);
+
+        store.clear_worker_recovery_failure(worker.id).unwrap();
+
+        assert!(
+            store
+                .worker_cannot_start_candidates(900)
+                .unwrap()
+                .is_empty(),
+            "a cleared failure ends the condition without anything dismissing it"
+        );
+    }
+
     #[test]
     fn evidence_approved_but_never_closed_is_surfaced_and_clears_when_queen_closes_it() {
         let store = TaskStore::in_memory().unwrap();
@@ -4001,7 +4314,9 @@ mod tests {
             .queen_recovery_identity(
                 &attention
                     .iter()
-                    .find(|row| row.task_id == task && row.kind == "stale_owned_work_attention")
+                    .find(|row| {
+                        row.task_id == Some(task) && row.kind == "stale_owned_work_attention"
+                    })
                     .unwrap()
                     .action_id,
             )
@@ -4011,7 +4326,7 @@ mod tests {
         assert!(
             attention
                 .iter()
-                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention")
+                .any(|row| row.task_id == Some(task) && row.kind == "stale_owned_work_attention")
         );
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
         assert!(
@@ -4046,7 +4361,7 @@ mod tests {
                 .current_coordinator_attention(now)
                 .unwrap()
                 .iter()
-                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention"),
+                .any(|row| row.task_id == Some(task) && row.kind == "stale_owned_work_attention"),
             "old request observation cannot describe its replacement"
         );
         let fresh = store.stale_owned_work_candidates(now, 600).unwrap();
@@ -4094,7 +4409,7 @@ mod tests {
                 .current_coordinator_attention(now)
                 .unwrap()
                 .iter()
-                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention")
+                .any(|row| row.task_id == Some(task) && row.kind == "stale_owned_work_attention")
         );
     }
 
@@ -4889,7 +5204,7 @@ mod tests {
                 .current_coordinator_attention(now)
                 .unwrap()
                 .iter()
-                .any(|row| row.task_id == task && row.kind == "stale_owned_work_attention"),
+                .any(|row| row.task_id == Some(task) && row.kind == "stale_owned_work_attention"),
             "an existing idle observation must yield to the new operator decision"
         );
         assert!(
@@ -5923,7 +6238,10 @@ mod tests {
         let attention = store.current_coordinator_attention(0).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_name, "Clover");
-        assert_eq!(attention[0].task_title, "Keep the release moving");
+        assert_eq!(
+            attention[0].task_title.as_deref(),
+            Some("Keep the release moving")
+        );
         assert_eq!(attention[0].age_seconds, 900);
         let status = store.coordinator_status().unwrap();
         assert_eq!(status.completed_actions, 1);

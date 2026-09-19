@@ -2115,7 +2115,7 @@ mod tests {
                 .current_coordinator_attention(unix_timestamp())
                 .unwrap();
             assert_eq!(
-                attention.iter().any(|item| item.task_id == task.id),
+                attention.iter().any(|item| item.task_id == Some(task.id)),
                 scenario == "idle",
                 "{scenario}: {attention:?}"
             );

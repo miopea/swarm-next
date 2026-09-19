@@ -49,7 +49,7 @@ pub use coordinator::{
     CoordinatorAttention, CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake,
     ExitedWorkerOwnedWorkCandidate, OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD,
     REFUSAL_DELIVERY_HELD_UNSENT_TEXT, REFUSAL_WAKE_NOT_ADMITTED, REFUSAL_WAKE_UNCERTAIN,
-    StaleOwnedWorkCandidate, UnreachableAssignment,
+    StaleOwnedWorkCandidate, UnreachableAssignment, WorkerCannotStartCandidate,
 };
 pub use passkeys::RegisteredPasskey;
 pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
@@ -328,7 +328,9 @@ const REVIEW_REPETITION_SCHEMA_VERSION: i64 = 179;
 const DECISION_SUPERSESSION_SCHEMA_VERSION: i64 = 180;
 /// The recovery circuit stops living only in process memory.
 const WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION: i64 = 181;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION;
+/// An attention may name a worker without naming a task.
+const WORKER_SCOPED_ATTENTION_SCHEMA_VERSION: i64 = 182;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_SCOPED_ATTENTION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4442,6 +4444,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION {
         crate::worker_recovery::migrate_worker_recovery_circuit(transaction)?;
+    }
+    if schema_version < WORKER_SCOPED_ATTENTION_SCHEMA_VERSION {
+        crate::coordinator::migrate_worker_scoped_attention(transaction)?;
     }
     Ok(())
 }
@@ -10146,6 +10151,49 @@ mod tests {
             undo_sql: "DROP TABLE worker_recovery_circuit",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
                 WHERE type = 'table' AND name = 'worker_recovery_circuit'",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "coordinator_actions",
+            artifact: "worker_cannot_start_attention",
+            // ⚠️ EXPLICIT, because the generated undo assumes the artifact is a
+            // COLUMN and emits DROP COLUMN. This one is a CHECK value and a
+            // dropped NOT NULL, so rewinding means rebuilding the 181 table.
+            undo_sql: "PRAGMA legacy_alter_table = ON;
+                ALTER TABLE coordinator_actions RENAME TO coordinator_actions_undo;
+                CREATE TABLE coordinator_actions (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention')),
+                    worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    session_id TEXT,
+                    evidence_revision INTEGER,
+                    observed_age_seconds INTEGER,
+                    state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                    reason TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                    attempted_at INTEGER,
+                    finished_at INTEGER,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                );
+                INSERT INTO coordinator_actions (
+                    id, idempotency_key, kind, worker_id, task_id, session_id,
+                    evidence_revision, observed_age_seconds, state, reason,
+                    attempts, attempted_at, finished_at, created_at, updated_at
+                ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                         evidence_revision, observed_age_seconds, state, reason,
+                         attempts, attempted_at, finished_at, created_at, updated_at
+                  FROM coordinator_actions_undo WHERE task_id IS NOT NULL;
+                DROP TABLE coordinator_actions_undo;
+                CREATE INDEX coordinator_actions_queue
+                    ON coordinator_actions(state, created_at, id);
+                PRAGMA legacy_alter_table = OFF",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'coordinator_actions'
+                  AND sql LIKE '%worker_cannot_start_attention%'",
         },
     ];
 

@@ -717,7 +717,7 @@ mod tests {
             .current_coordinator_attention(NOW)
             .unwrap()
             .into_iter()
-            .find(|a| a.task_id == task.id)
+            .find(|a| a.task_id == Some(task.id))
             .unwrap();
         let mut identity = store
             .queen_recovery_identity(&attention.action_id)

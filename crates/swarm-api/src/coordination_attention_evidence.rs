@@ -79,7 +79,13 @@ pub(super) async fn observe(
             {
                 observation["resting_terminal_excerpt"] = excerpt;
             }
-            observation["latest_queen_request"] = match store.latest_queen_request(item.task_id, item.worker_id) {
+            // ⚠️ TASK-SCOPED ENRICHMENT IS SKIPPED, NOT FAKED, when the
+            // attention names no task. A worker that cannot START owns none
+            // (schema 182), and there is no "latest request about nothing" —
+            // reporting none_recorded would read as "we looked and found none".
+            observation["latest_queen_request"] = match item.task_id {
+                None => json!({"observation":"not_task_scoped"}),
+                Some(task_id) => match store.latest_queen_request(task_id, item.worker_id) {
                 Ok(Some(message)) => json!({
                     "observation": "recorded",
                     "message_id": message.id,
@@ -92,9 +98,10 @@ pub(super) async fn observe(
                 }),
                 Ok(None) => json!({"observation":"none_recorded"}),
                 Err(_) => json!({"observation":"unavailable"}),
+                },
             };
             match store.queen_recovery_identity(&item.action_id) {
-                Ok(Some(mut identity)) if identity.task_id == item.task_id
+                Ok(Some(mut identity)) if Some(identity.task_id) == item.task_id
                     && identity.worker_id == item.worker_id
                     && identity.session_id == item.session_id => {
                     if let Some((_, snapshot)) = &signals && !snapshot.truncated {
@@ -486,12 +493,12 @@ mod tests {
         let facts = recovery_fact_for(&state, &store, &target.action_id)
             .await
             .unwrap();
-        assert_eq!(facts.identity.task_id, target.task_id);
+        assert_eq!(Some(facts.identity.task_id), target.task_id);
         assert_eq!(facts.identity.session_id, expected_session);
         assert!(facts.terminal_is_current);
         assert!(recovery_fact_for(&state, &store, "missing").await.is_none());
         store
-            .transition_task(target.task_id, swarm_domain::TaskState::Review)
+            .transition_task(target.task_id.unwrap(), swarm_domain::TaskState::Review)
             .unwrap();
         assert!(
             recovery_fact_for(&state, &store, &target.action_id)
@@ -787,8 +794,8 @@ mod tests {
             kind: "stale_owned_work_attention".into(),
             worker_id: "019ff136-7a90-7631-bbc0-f95efd1df577".parse().unwrap(),
             worker_name: "Fictional worker".into(),
-            task_id: "019ff136-7a90-7631-bbc0-f95efd1df578".parse().unwrap(),
-            task_title: "Continue the same fictional task".into(),
+            task_id: Some("019ff136-7a90-7631-bbc0-f95efd1df578".parse().unwrap()),
+            task_title: Some("Continue the same fictional task".into()),
             reason: "Historical terminal could not be read".into(),
             observed_at: 1,
             age_seconds: 1000,
@@ -852,7 +859,10 @@ mod tests {
         )]);
         let result = active_work_recovery(std::slice::from_ref(&row), &observations);
         assert_eq!(result["tasks"].as_array().unwrap().len(), 1);
-        assert_eq!(result["tasks"][0]["task_id"], row.task_id.to_string());
+        assert_eq!(
+            result["tasks"][0]["task_id"],
+            row.task_id.unwrap().to_string()
+        );
         assert_eq!(result["tasks"][0]["session_id"], row.session_id.to_string());
         assert_eq!(result["tasks"][0]["checked_at"], 42);
         assert!(!result["tasks"][0].to_string().contains("could not be read"));
@@ -971,8 +981,8 @@ mod tests {
             kind: "stale_owned_work_attention".into(),
             worker_id: worker.id,
             worker_name: worker.name,
-            task_id: task.id,
-            task_title: task.title,
+            task_id: Some(task.id),
+            task_title: Some(task.title),
             reason: "Worker was resting".into(),
             observed_at: 1,
             age_seconds: 200,
@@ -1104,8 +1114,8 @@ mod tests {
                 kind: "stale_owned_work_attention".into(),
                 worker_id: worker.id,
                 worker_name: worker.name.clone(),
-                task_id: task.id,
-                task_title: task.title.clone(),
+                task_id: Some(task.id),
+                task_title: Some(task.title.clone()),
                 reason: "Historical resting observation".into(),
                 observed_at: 1,
                 age_seconds: 100,

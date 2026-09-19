@@ -1769,6 +1769,7 @@ impl AppState {
         self.observe_assigned_ready_work_not_started(store).await;
         self.observe_reviewed_work_without_evidence(store);
         self.observe_unattended_blocks(store);
+        self.observe_workers_that_cannot_start(store);
         self.observe_workers_owed_a_delivery(store);
         self.observe_stale_owned_work(store).await;
         let admission = runtime::coordinator_start_admission(self).await;
@@ -2263,6 +2264,47 @@ impl AppState {
             );
         }
         self.control_room_notify.notify_waiters();
+    }
+
+    /// Surfaces a worker that cannot start, which owns no task to hang off.
+    ///
+    /// ⚠️ THE CIRCUIT COULD ONLY RECORD, NEVER RAISE. Schema 181 made the
+    /// failure durable and nothing asked anybody about it, because every
+    /// attention was task-scoped and a worker that cannot start owns nothing.
+    /// Schema 182 made `task_id` nullable on the operator's ruling; this is the
+    /// caller that finally uses it.
+    ///
+    /// ⚠️ WIRED HERE ON PURPOSE. This repository has documented three separate
+    /// detectors whose only callers sat in `#[cfg(test)]`, so their silence read
+    /// as health. `run_deterministic_coordinator` is reached from
+    /// `deliver_coordination`, which production calls; that chain was traced
+    /// rather than assumed before this was added to it.
+    fn observe_workers_that_cannot_start(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store.worker_cannot_start_candidates(now) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect stopped workers");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_worker_cannot_start_attention(&candidate, now) {
+                Ok(true) => {
+                    tracing::info!(
+                        worker_id = %candidate.worker_id,
+                        worker_name = %candidate.worker_name,
+                        open_for_seconds = candidate.age_seconds,
+                        "a worker cannot start and nobody has been asked about it"
+                    );
+                    self.control_room_notify.notify_waiters();
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(message = %error, "stopped-worker attention could not be recorded");
+                }
+            }
+        }
     }
 
     /// Surfaces blocked work nobody has come back to.
@@ -14029,7 +14071,7 @@ mod tests {
             .unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_id, worker.id);
-        assert_eq!(attention[0].task_id, task.id);
+        assert_eq!(attention[0].task_id, Some(task.id));
         assert_eq!(attention[0].kind, "owned_work_worker_exited_attention");
     }
 
@@ -14083,7 +14125,7 @@ mod tests {
             .unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_id, worker.id);
-        assert_eq!(attention[0].task_id, task.id);
+        assert_eq!(attention[0].task_id, Some(task.id));
         assert_eq!(
             attention[0].kind,
             "assigned_ready_work_not_started_attention"

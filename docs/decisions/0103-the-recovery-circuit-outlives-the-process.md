@@ -96,3 +96,44 @@ expressed in that table. The nearest detector,
 `exited_worker_owned_work_candidates`, requires `task.state = 'active'`. Closing
 it means a nullable `task_id` or a different surface, and that is its own
 decision rather than something to smuggle in beside a persistence change.
+
+## Closed, 2026-09-19: the escalation reaches the board
+
+⚠️ THE SECTION ABOVE IS SUPERSEDED. "It is still not ON THE BOARD" was true when
+written and is not any more.
+
+Operator decision `01a0b8da-c8f9-7c01-947f-6271f5b5caff`, answered in their own
+words: **"Make `coordinator_actions.task_id` nullable, extending every attention
+reader."** Schema 182 does exactly that, and `worker_cannot_start_attention` is
+the first attention that names a worker without naming a task.
+
+What the section above got right is why it could not simply be bolted on: every
+attention was task-scoped, so a worker that cannot START — owning nothing — could
+not be written down at all. The circuit recorded a failure that nothing could
+raise.
+
+Three things worth keeping in view:
+
+**Only that one kind may omit a task.** The rebuilt table carries
+`CHECK (task_id IS NOT NULL OR kind = 'worker_cannot_start_attention')`. Without
+it a task-scoped attention could silently lose its task and read as a
+worker-level condition, which is the inverse of this fix.
+
+**`LIVE_ATTENTION_SOURCE` is deliberately untouched.** It has six consumers
+across the coordinator, conductor and recovery paths, and its freshness test is
+`task.updated_at = action.evidence_revision` — meaningless for a condition with
+no task. Destabilising six coordination queries for a gap with zero live
+instances is the wrong trade, so the worker-scoped kind gets its own source and
+the existing six stay byte-identical.
+
+**It self-clears.** The condition is "the circuit is still open", so clearing the
+failure ends the attention without anything having to dismiss it — the same
+property every other kind in that table has.
+
+Wired into `run_deterministic_coordinator`, reached from `deliver_coordination`,
+which production calls. That chain was traced rather than assumed, because this
+repository has documented three separate detectors whose only callers sat in
+`#[cfg(test)]` and whose silence therefore read as health.
+
+Still measured at zero: no worker is in this state today. Latent coverage, now
+reachable.
