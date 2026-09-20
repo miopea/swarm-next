@@ -209,6 +209,22 @@ const ASSIGNED_READY_START_GRACE_SECONDS: i64 = 5 * 60;
 /// straight after reporting is the normal path, and this only exists for the
 /// case where that did not happen.
 const REVIEWED_WORK_EVIDENCE_GRACE_SECONDS: i64 = 15 * 60;
+/// How long finished work may sit in review carrying evidence that does not
+/// close it.
+///
+/// ⚠️ THIS IS THE OTHER HALF OF THE GRACE ABOVE, and between them they must
+/// leave no gap. `reviewed_work_without_evidence` fires when NO deployment
+/// exists; this fires when one does and the work is still in review anyway.
+/// A PARTIAL deployment satisfies the first detector's "has evidence" test
+/// while failing the closer's `delivers_whole_task` test, so before this was
+/// wired the honest act of recording partial evidence bought silence without
+/// buying a close. Measured 2026-09-19: two tasks sat 56 hours that way, one of
+/// them with zero attentions in its entire life.
+///
+/// An hour, matching the grace this detector's own tests were written against.
+/// Longer than the fifteen minutes above because a whole-task deployment closes
+/// in seconds, while partial evidence legitimately waits on a human.
+const EVIDENCED_WORK_NOT_CLOSED_SECONDS: i64 = 60 * 60;
 const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 /// How long a task may sit Blocked before nobody is coming for it.
 ///
@@ -1777,6 +1793,7 @@ impl AppState {
         self.observe_exited_worker_owned_work(store);
         self.observe_assigned_ready_work_not_started(store).await;
         self.observe_reviewed_work_without_evidence(store);
+        self.observe_evidenced_work_not_closed(store);
         self.observe_unattended_blocks(store);
         self.observe_workers_that_cannot_start(store);
         self.observe_workers_owed_a_delivery(store);
@@ -2422,6 +2439,35 @@ impl AppState {
                     worker_id = %candidate.worker_id,
                     message = %error,
                     "reviewed work attention could not be recorded"
+                ),
+            }
+        }
+    }
+
+    /// Chases work in review whose evidence never closed it.
+    ///
+    /// The complement of `observe_reviewed_work_without_evidence`: that one asks
+    /// whether evidence exists, this one asks whether it finished the job.
+    fn observe_evidenced_work_not_closed(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store
+            .evidenced_work_not_closed_candidates(now, EVIDENCED_WORK_NOT_CLOSED_SECONDS)
+        {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect evidenced work");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_evidenced_work_not_closed_attention(&candidate, now) {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    task_id = %candidate.task_id,
+                    worker_id = %candidate.worker_id,
+                    message = %error,
+                    "evidenced work attention could not be recorded"
                 ),
             }
         }

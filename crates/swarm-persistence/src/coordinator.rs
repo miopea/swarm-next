@@ -6391,6 +6391,64 @@ mod tests {
         );
         assert!(store.current_coordinator_attention(0).unwrap().is_empty());
     }
+
+    #[test]
+    fn partial_delivery_is_evidence_that_does_not_close_and_must_still_be_raised() {
+        // ⚠️ THE CASE THAT WENT SILENT IN PRODUCTION. A partial deployment
+        // satisfies reviewed_work_without_evidence's "a deployment exists" test,
+        // so that detector stops firing -- while failing the closer's
+        // delivers_whole_task test, so nothing closes it either. Measured
+        // 2026-09-19: two tasks sat 56 hours in that gap, one with zero
+        // attentions in its entire life.
+        let store = crate::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Partial",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/p",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = crate::WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Ship half of it", "/workspace/p")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Review)
+            .unwrap();
+        store
+            .record_partial_task_deployment(task.id, "production", "abc123", 100)
+            .unwrap();
+
+        let an_hour = 60 * 60;
+        let now = store.get_task(task.id).unwrap().updated_at;
+        assert!(
+            store
+                .evidenced_work_not_closed_candidates(now, an_hour)
+                .unwrap()
+                .is_empty(),
+            "partial evidence seconds old is not yet an abandoned task"
+        );
+
+        let candidates = store
+            .evidenced_work_not_closed_candidates(now + an_hour + 60, an_hour)
+            .unwrap();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "a partial deployment must not buy silence once the grace has passed"
+        );
+        assert_eq!(candidates[0].task_id, task.id);
+    }
 }
 
 /// A decision nobody answered by the time its asker said it needed one.
