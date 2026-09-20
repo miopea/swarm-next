@@ -977,6 +977,7 @@ mod tests {
             evidence: "",
             suggested_action: "Choose",
             allowed_actions: actions,
+            operator_actions: &[],
             questions: &[],
             deadline: None,
             requested_command: None,

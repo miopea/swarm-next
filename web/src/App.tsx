@@ -61,6 +61,7 @@ import {
   removeWorker,
   removeTask,
   restoreTask,
+  liftTaskPark,
   reorderTasks,
   reorderWorkers,
   reconcileJira,
@@ -1108,6 +1109,27 @@ export function App() {
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "The task could not be restored");
       throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * The operator reporting that the action a park was held for is done.
+   *
+   * The server returns the task to Ready with its assignment intact AND deletes
+   * the operator_deferral receipt, so the park cannot resurface on an unrelated
+   * later block.
+   */
+  async function liftParkedTask(taskId: string) {
+    if (!operatorToken) return;
+    setBusy(true);
+    setOperationError(undefined);
+    try {
+      const released = await liftTaskPark(operatorToken, taskId);
+      setTasks((current) => current.map((candidate) => (candidate.id === released.id ? released : candidate)));
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "The park could not be lifted");
     } finally {
       setBusy(false);
     }
@@ -2530,6 +2552,7 @@ export function App() {
               tasks={tasks}
               workers={workers}
               busy={busy || databaseRecoveryRequired}
+              onLiftPark={(taskId) => void liftParkedTask(taskId)}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
               additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length}

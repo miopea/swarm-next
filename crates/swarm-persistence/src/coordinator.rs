@@ -3629,6 +3629,7 @@ mod tests {
                 evidence: "Both environments are healthy.",
                 suggested_action: "continue",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 // A deadline in the past is refused at creation, so it is set
                 // in the future and then aged below — which is also what
@@ -5112,6 +5113,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Treat the wire as authoritative",
                 allowed_actions: &["Treat the wire as authoritative".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -5188,6 +5190,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Provide a test account",
                 allowed_actions: &["Provide a test account".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

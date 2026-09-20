@@ -253,6 +253,20 @@ export async function restoreTask(operatorToken: string, taskId: string): Promis
   return response.json() as Promise<Task>;
 }
 
+/**
+ * The operator saying the action they parked a task for is done.
+ *
+ * Not a plain transition: the server also DELETES the operator_deferral receipt,
+ * because leaving `blocked` only hides the park by derivation and a surviving
+ * row would make the next unrelated block read as a park and stay covered.
+ */
+export async function liftTaskPark(operatorToken: string, taskId: string): Promise<Task> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/lift-park`, {
+    method: "POST",
+  });
+  return response.json() as Promise<Task>;
+}
+
 export async function transitionTask(operatorToken: string, taskId: string, state: TaskState, note = ""): Promise<Task> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/state`, {
     method: "PATCH",

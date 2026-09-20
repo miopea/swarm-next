@@ -394,6 +394,7 @@ mod clarification_tests {
                 evidence: "No commands execute",
                 suggested_action: "Wait",
                 allowed_actions: &["Wait".into()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

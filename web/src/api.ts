@@ -59,6 +59,7 @@ export {
   reorderTasks,
   removeTask,
   restoreTask,
+  liftTaskPark,
   transitionTask,
   updateTask,
 } from "./api/tasks";

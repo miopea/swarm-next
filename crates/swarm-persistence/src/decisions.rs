@@ -287,6 +287,14 @@ pub struct NewDecisionRequest<'a> {
     pub evidence: &'a str,
     pub suggested_action: &'a str,
     pub allowed_actions: &'a [String],
+    /// The subset of `allowed_actions` that mean THE OPERATOR will carry the
+    /// action out themselves, rather than authorising the worker to proceed.
+    ///
+    /// ⚠️ A HINT, NEVER AN AUTHORITY. Marking an option does nothing on its own:
+    /// the park fires only when the operator PICKS that option. A worker can
+    /// therefore offer one but cannot park its own task, which is what stops
+    /// this becoming a way to silence its own stale-work attention.
+    pub operator_actions: &'a [String],
     /// Present makes this an interview rather than a ruling. Empty is a ruling.
     pub questions: &'a [DecisionQuestion],
     pub deadline: Option<i64>,
@@ -427,6 +435,8 @@ impl TaskStore {
         validate_new_request(request)?;
         let questions = serde_json::to_string(request.questions)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        let operator_actions = serde_json::to_string(request.operator_actions)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         // SWARM APPENDS THE GRANT BUTTON, never the caller. If a worker could
         // supply the label that mints a grant, the exact-match check below would
         // be checking a string the worker chose — which is not a check.
@@ -460,9 +470,9 @@ impl TaskStore {
             "INSERT INTO decision_requests (
                 id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
                 risk, evidence, suggested_action, allowed_actions, deadline, questions,
-                summary, requested_command
+                summary, requested_command, operator_action_labels
              )
-             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
              FROM worker_profiles w
              JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
              WHERE w.id = ?2
@@ -485,6 +495,7 @@ impl TaskStore {
                 questions,
                 request.summary,
                 request.requested_command,
+                operator_actions,
             ],
         )?;
         if inserted == 0 {
@@ -989,6 +1000,22 @@ impl TaskStore {
                 [id.to_string()],
             )?;
         }
+        // ⚠️ THE PARK, AND IT FIRES ONLY ON THE OPERATOR'S OWN CHOICE. Same
+        // shape as the grant above and for the same reason: an EQUALITY check
+        // against a label the operator pressed, never a reading of prose. The
+        // requesting worker marked which options mean "I will do this myself",
+        // but marking alone parks nothing -- so a worker cannot park its own
+        // task and cannot silence its own stale-work attention.
+        //
+        // WHY THIS EXISTS: NextMoveOwner::derive reads a task as the operator's
+        // only while a decision is PENDING, so answering handed the task back to
+        // a worker that could not act. Measured 2026-09-20 on task 01a0bd40:
+        // decision 01a0bd43 resolved 12:39:21Z with "File it now in Play
+        // Console", every remaining step operator-only and verified
+        // API-unreachable, and six hours later it was still Active and firing
+        // stale_owned_work_attention -- one of the two live recovery
+        // obligations forcing EVERY Queen run to Incomplete.
+        park_when_operator_owes_the_action(&transaction, id, action)?;
         crate::decision_clarification::cancel_queued(&transaction, id)?;
         transaction.execute(
             "INSERT INTO decision_deliveries (decision_id, worker_id, state)
@@ -1322,7 +1349,197 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     {
         return Err(TaskStoreError::InvalidDecisionActions);
     }
+    // ⚠️ A SUBSET, CHECKED, because a marked label that matches nothing the
+    // operator can press is a park that silently never fires. Refusing it at
+    // authoring time is the only moment anyone is looking.
+    if request.operator_actions.len() > request.allowed_actions.len()
+        || request
+            .operator_actions
+            .iter()
+            .any(|marked| !request.allowed_actions.contains(marked))
+    {
+        return Err(TaskStoreError::InvalidDecisionActions);
+    }
     Ok(())
+}
+
+impl TaskStore {
+    /// The operator saying they have done the thing they parked this for.
+    ///
+    /// ⚠️ THE RECEIPT IS DELETED, NOT JUST OUTRUN. Leaving `blocked` already
+    /// HIDES the park, because the projection derives it only while blocked —
+    /// but the row would survive, and the next unrelated block on this task
+    /// would read as an operator park again and stay covered in Queen's review.
+    /// A stale deferral quietly covering a real blocker is worse than the stall
+    /// this whole feature removes, so discharging the park deletes its evidence.
+    ///
+    /// Returns the task to `ready` KEEPING its assignment: it was resting, not
+    /// reassigned, so it goes back to the worker that already holds it.
+    ///
+    /// # Errors
+    /// Refuses a task that is not parked, and returns database failures.
+    pub fn lift_operator_park(&self, task_id: TaskId) -> Result<(), TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let parked: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks t
+                JOIN queen_task_review_receipts r ON r.task_id = t.id
+                WHERE t.id = ?1 AND t.removed_at IS NULL
+                  AND t.state = 'blocked' AND r.kind = 'operator_deferral')",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !parked {
+            return Err(TaskStoreError::NotFound);
+        }
+        transaction.execute(
+            "UPDATE tasks SET state = 'ready', blocked_until = NULL, updated_at = unixepoch()
+             WHERE id = ?1",
+            [task_id.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind, actor_id)
+             VALUES (?1, 'state_changed', 'ready', ?2, 'operator', NULL)",
+            params![
+                task_id.to_string(),
+                "Park lifted by the operator: the action they were holding this for is done.                  Returned to Ready with its assignment intact."
+            ],
+        )?;
+        transaction.execute(
+            "DELETE FROM queen_task_review_receipts
+             WHERE task_id = ?1 AND kind = 'operator_deferral'",
+            [task_id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
+/// Park the linked task when the operator's chosen action is one they marked as
+/// theirs to perform.
+///
+/// ⚠️ A RECEIPT, NOT A FLAG, and that is what makes it self-clearing. `park` is
+/// derived live in the task projection from an `operator_deferral` receipt WHILE
+/// THE TASK IS BLOCKED, so the park disappears the moment the task moves and
+/// nothing has to remember to clear it. Three things fall out without being
+/// written here: `ParkedWork.tsx` already lists `park === "operator_deferral"`;
+/// `review_coverage` already covers that receipt kind, so Queen's runs stop
+/// being forced Incomplete by it; and updating the task makes `task.updated_at`
+/// differ from the attention's `evidence_revision`, which drops the stale
+/// attention out of `LIVE_ATTENTION_SOURCE` on its own.
+///
+/// The assignment is KEPT. The task is resting, not reassigned, and returns to
+/// the same worker when the operator lifts it.
+fn park_when_operator_owes_the_action(
+    transaction: &rusqlite::Transaction<'_>,
+    id: DecisionRequestId,
+    action: &str,
+) -> Result<(), TaskStoreError> {
+    let row: Option<(Option<String>, String, String)> = transaction
+        .query_row(
+            "SELECT d.task_id, d.operator_action_labels, coalesce(t.state,'')
+             FROM decision_requests d LEFT JOIN tasks t
+               ON t.id = d.task_id AND t.removed_at IS NULL
+             WHERE d.id = ?1",
+            [id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((task_id, marked, state)) = row else {
+        return Ok(());
+    };
+    // A decision with no live task parks nothing, and that is not a failure:
+    // there is simply nothing to rest.
+    let Some(task_id) = task_id else {
+        return Ok(());
+    };
+    let marked: Vec<String> = serde_json::from_str(&marked)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    if !marked.iter().any(|candidate| candidate == action) {
+        return Ok(());
+    }
+    // Finished work has nothing left to owe, and blocked work is already
+    // resting. Re-parking either would write over a settled record for no gain.
+    if matches!(state.as_str(), "" | "completed" | "abandoned" | "blocked") {
+        return Ok(());
+    }
+    transaction.execute(
+        "UPDATE tasks SET state = 'blocked', blocked_until = NULL, updated_at = unixepoch()
+         WHERE id = ?1",
+        [&task_id],
+    )?;
+    transaction.execute(
+        "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind, actor_id)
+         VALUES (?1, 'state_changed', 'blocked', ?2, 'operator', NULL)",
+        params![
+            &task_id,
+            format!(
+                "Parked by the operator's own answer \"{action}\" on decision {id}, which is an \
+                 action they carry out themselves. Held here, still assigned, until they clear it \
+                 from Parked. Recorded from that resolution, not asserted by a worker."
+            )
+        ],
+    )?;
+    let recorded_sequence = transaction.last_insert_rowid();
+    let parsed: TaskId = crate::parse_domain_id(&task_id)?;
+    let evidence = crate::queen_review::task_review_evidence(transaction, parsed)?;
+    // run_id names the DECISION rather than a Queen run, because no run reached
+    // this: the operator's answer did. Storing it keeps every receipt traceable
+    // to the exact ruling that created it.
+    transaction.execute(
+        "INSERT INTO queen_task_review_receipts
+            (task_id, run_id, kind, accepted_revision, input_payload,
+             recorded_sequence, recorded_at, times_seen, first_seen_at)
+         VALUES (?1, ?2, 'operator_deferral', ?3, ?4, ?5, unixepoch(), 1, unixepoch())
+         ON CONFLICT(task_id) DO UPDATE SET
+            run_id=excluded.run_id, kind=excluded.kind,
+            accepted_revision=excluded.accepted_revision,
+            input_payload=excluded.input_payload,
+            recorded_sequence=excluded.recorded_sequence,
+            recorded_at=excluded.recorded_at, times_seen=1,
+            first_seen_at=excluded.recorded_at",
+        params![
+            &task_id,
+            format!("operator-decision:{id}"),
+            evidence.evidence_revision,
+            serde_json::json!({
+                "source": "operator_resolution",
+                "decision_id": id.to_string(),
+                "action": action,
+                "parked_from_state": state,
+            })
+            .to_string(),
+            recorded_sequence,
+        ],
+    )?;
+    Ok(())
+}
+
+/// The subset of offered actions the OPERATOR said they would carry out.
+///
+/// Defaults to `[]` for every record written before the column existed, which
+/// reads as "nothing here parks" — the behaviour those records already had.
+pub(super) fn migrate_operator_owed_park(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('decision_requests')
+         WHERE name = 'operator_action_labels'",
+        [],
+        |row| row.get(0),
+    )?;
+    if present == 0 {
+        transaction.execute_batch(
+            "ALTER TABLE decision_requests
+             ADD COLUMN operator_action_labels TEXT NOT NULL DEFAULT '[]'",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::OPERATOR_OWED_PARK_SCHEMA_VERSION,
+    )
 }
 
 /// Bounds an interview so it stays an instrument rather than a questionnaire.
@@ -1617,6 +1834,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Do the thing",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -1871,6 +2089,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Do not run it",
                 allowed_actions: &refusals,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: Some(command),
@@ -1934,6 +2153,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Do not run it",
                 allowed_actions: &refusals,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: Some(command),
@@ -1982,10 +2202,196 @@ mod tests {
             evidence: "All automated checks passed.",
             suggested_action: "Deploy after the current session.",
             allowed_actions: actions,
+            operator_actions: &[],
             questions: &[],
             deadline: None,
             requested_command: None,
         }
+    }
+
+    /// A task a worker is actively holding, which is the shape that stalled.
+    fn parked_fixture(store: &TaskStore) -> (WorkerId, TaskId) {
+        let worker = store
+            .create_worker(
+                "Park fixture",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/park",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Operator-only console step", "/workspace/park")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &crate::TaskActivityActor::operator())
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Active)
+            .unwrap();
+        (worker.id, task.id)
+    }
+
+    /// ⚠️ THE REGRESSION TEST FOR THE OWNERSHIP HOLE. Before this, answering
+    /// handed the task straight back to a worker that could not act, and it sat
+    /// Active firing stale_owned_work_attention until somebody noticed.
+    #[test]
+    fn an_action_the_operator_takes_on_themselves_parks_its_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let (worker, task_id) = parked_fixture(&store);
+        let actions = vec![
+            "File it now in Play Console".to_owned(),
+            "Let the worker proceed".to_owned(),
+        ];
+        let mine = vec!["File it now in Play Console".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                operator_actions: &mine,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(
+                created.id,
+                "File it now in Play Console",
+                "",
+                "control_room",
+            )
+            .unwrap();
+
+        let task = store.get_task(task_id).unwrap();
+        assert_eq!(task.state, swarm_domain::TaskState::Blocked);
+        assert_eq!(
+            task.park,
+            Some(swarm_domain::TaskPark::OperatorDeferral),
+            "it must show under Needs you / Parked"
+        );
+        assert_eq!(
+            task.assigned_worker_id,
+            Some(worker),
+            "parked work is resting, not reassigned"
+        );
+    }
+
+    /// The marking is an offer. If the operator picks something else, the task
+    /// goes back to the worker exactly as it always did.
+    #[test]
+    fn marking_an_option_parks_nothing_until_the_operator_picks_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let (_, task_id) = parked_fixture(&store);
+        let actions = vec![
+            "File it now in Play Console".to_owned(),
+            "Let the worker proceed".to_owned(),
+        ];
+        let mine = vec!["File it now in Play Console".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                operator_actions: &mine,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(created.id, "Let the worker proceed", "", "control_room")
+            .unwrap();
+
+        let task = store.get_task(task_id).unwrap();
+        assert_eq!(task.state, swarm_domain::TaskState::Active);
+        assert_eq!(
+            task.park, None,
+            "a worker must not be able to park its own work"
+        );
+    }
+
+    /// A marked label nobody can press is a park that silently never fires, so
+    /// it is refused where someone is still looking.
+    #[test]
+    fn a_marked_action_must_be_one_of_the_offered_ones() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = vec!["Proceed".to_owned(), "Hold".to_owned()];
+        let stray = vec!["Something nobody offered".to_owned()];
+        assert!(matches!(
+            store.create_decision_request(&NewDecisionRequest {
+                operator_actions: &stray,
+                ..request(queen.id, &actions)
+            }),
+            Err(TaskStoreError::InvalidDecisionActions)
+        ));
+    }
+
+    /// A decision with nothing linked parks nothing and must not fail: there is
+    /// simply no task to rest.
+    #[test]
+    fn a_marked_action_with_no_linked_task_resolves_without_parking() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = vec!["I will do it".to_owned(), "You do it".to_owned()];
+        let mine = vec!["I will do it".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: None,
+                operator_actions: &mine,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        assert!(
+            store
+                .resolve_decision_request(created.id, "I will do it", "", "control_room")
+                .is_ok()
+        );
+    }
+
+    /// ⚠️ THE RECEIPT MUST GO, not merely stop being read. Leaving `blocked`
+    /// hides the park by derivation, but a surviving row would make the NEXT
+    /// unrelated block read as an operator park and stay covered in review —
+    /// a stale deferral quietly covering a real blocker.
+    #[test]
+    fn lifting_a_park_returns_the_work_and_discharges_its_receipt() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let (worker, task_id) = parked_fixture(&store);
+        let actions = vec!["I will do it".to_owned(), "You do it".to_owned()];
+        let mine = vec!["I will do it".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                operator_actions: &mine,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(created.id, "I will do it", "", "control_room")
+            .unwrap();
+        store.lift_operator_park(task_id).unwrap();
+
+        let task = store.get_task(task_id).unwrap();
+        assert_eq!(task.state, swarm_domain::TaskState::Ready);
+        assert_eq!(task.park, None);
+        assert_eq!(task.assigned_worker_id, Some(worker));
+        let receipts: i64 = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM queen_task_review_receipts WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            receipts, 0,
+            "the discharged park must leave no receipt behind"
+        );
+        assert!(
+            store.lift_operator_park(task_id).is_err(),
+            "lifting work that is not parked must refuse"
+        );
     }
 
     #[test]
@@ -2817,6 +3223,7 @@ mod tests {
         let created = store
             .create_decision_request(&NewDecisionRequest {
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: &questions,
                 ..request(queen.id, &[])
             })
@@ -2864,6 +3271,7 @@ mod tests {
         let created = store
             .create_decision_request(&NewDecisionRequest {
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: &questions,
                 ..request(queen.id, &[])
             })
@@ -2918,6 +3326,7 @@ mod tests {
         assert!(matches!(
             store.create_decision_request(&NewDecisionRequest {
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: &questions,
                 ..request(queen.id, &[])
             }),
@@ -3115,6 +3524,7 @@ mod tests {
         let created = store
             .create_decision_request(&NewDecisionRequest {
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: &questions,
                 ..request(queen.id, &[])
             })
@@ -3150,6 +3560,7 @@ mod tests {
         assert!(matches!(
             store.create_decision_request(&NewDecisionRequest {
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &interview(&[("Scope", &["One", "All"])]),
                 ..request(queen.id, &actions)
             }),
@@ -3177,6 +3588,7 @@ mod tests {
             assert!(matches!(
                 store.create_decision_request(&NewDecisionRequest {
                     allowed_actions: &[],
+                    operator_actions: &[],
                     questions: &bad,
                     ..request(queen.id, &[])
                 }),
@@ -3195,6 +3607,7 @@ mod tests {
         let created = store
             .create_decision_request(&NewDecisionRequest {
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: &interview(&[("Scope", &["One", "All"])]),
                 ..request(queen.id, &[])
             })
@@ -3547,6 +3960,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Use the production listing",
                 allowed_actions: &["Use the production listing".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

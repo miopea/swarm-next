@@ -137,6 +137,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Choose",
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: std::slice::from_ref(&question),
                 deadline: None,
                 requested_command: None,

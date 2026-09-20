@@ -2568,6 +2568,15 @@ impl TaskService {
             .restore_task_as(task_id, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
+    /// The operator releasing work they had parked on their own action.
+    ///
+    /// # Errors
+    /// Refuses a task that is not parked; propagates persistence failures.
+    pub fn lift_operator_park(&self, task_id: TaskId) -> Result<Task, ApplicationError> {
+        self.store.lift_operator_park(task_id)?;
+        self.store.get_task(task_id).map_err(Into::into)
+    }
+
     /// Assigns a local task to a stable worker profile.
     ///
     /// # Errors
@@ -3387,6 +3396,7 @@ impl TaskService {
                 evidence: &input.evidence,
                 suggested_action: &input.suggested_action,
                 allowed_actions: &input.allowed_actions,
+                operator_actions: &input.operator_actions,
                 questions: &input.questions,
                 deadline: input.deadline,
                 requested_command: input.requested_command.as_deref(),
@@ -3517,6 +3527,9 @@ impl TaskService {
             evidence: &summary,
             suggested_action: "Release them to the queue",
             allowed_actions: &actions,
+            // Neither option is the operator doing the work themselves; both
+            // route the tasks back. Nothing here should park.
+            operator_actions: &[],
             questions: &[],
             deadline: None,
             requested_command: None,
@@ -3593,6 +3606,13 @@ pub struct DecisionRequestInput {
     pub evidence: String,
     pub suggested_action: String,
     pub allowed_actions: Vec<String>,
+    /// The subset of `allowed_actions` the OPERATOR carries out themselves.
+    ///
+    /// Picking one of these parks the linked task instead of handing it back to
+    /// a worker who cannot act. Marking is only an offer: the park fires on the
+    /// operator's choice, never on the marking, so a worker cannot park its own
+    /// work. Empty means nothing parks.
+    pub operator_actions: Vec<String>,
     /// Present makes this an interview rather than a ruling.
     pub questions: Vec<DecisionQuestion>,
     pub deadline: Option<i64>,
@@ -4556,6 +4576,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Keep parked",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -4633,6 +4654,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Go",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -5315,6 +5337,7 @@ mod tests {
             evidence: "Both prototypes pass".into(),
             suggested_action: actions[0].into(),
             allowed_actions: actions.iter().map(|action| (*action).to_string()).collect(),
+            operator_actions: Vec::new(),
             questions: Vec::new(),
             deadline: None,
             requested_command: None,
@@ -5580,6 +5603,7 @@ mod tests {
                     evidence: String::new(),
                     suggested_action: "Do not allow".into(),
                     allowed_actions: vec!["acknowledge".into()],
+                    operator_actions: Vec::new(),
                     questions: Vec::new(),
                     deadline: None,
                     requested_command: None,
