@@ -1020,8 +1020,10 @@ test("parked work is reachable from the tab bar and counts both kinds", () => {
   // is the world's, and one list would invite unmaking a decision never made.
   expect(screen.getByText("Parked by you")).toBeInTheDocument();
   expect(screen.getByText("Waiting on the world")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Deferred until the migration lands" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Blocked on the vendor answer" })).toBeInTheDocument();
+  expect(screen.getByText("Deferred until the migration lands")).toBeInTheDocument();
+  expect(screen.getByText("Blocked on the vendor answer")).toBeInTheDocument();
+  // Each row offers an action rather than only reading as a list.
+  expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(2);
 });
 
 test("a block with no recorded park reason is not listed as parked", () => {
@@ -1054,4 +1056,24 @@ test("arrow keys reach every tab, including the third one", () => {
   expect(needs).toHaveFocus();
   fireEvent.keyDown(needs, { key: "End" });
   expect(activity).toHaveFocus();
+});
+
+test("a long handoff note is summarised to one sentence, not dumped whole", () => {
+  // ⚠️ THE DEFECT THIS GUARDS. Blocked notes are worker-to-Queen handoffs of
+  // several hundred words in markdown; the first version of this panel rendered
+  // one whole and the operator got an unscannable wall.
+  const wordy = {
+    id: "task-wordy",
+    title: "Parked with a long note",
+    workspace: "/w/x",
+    updated_at: Math.floor(Date.now() / 1000) - 3600,
+    park: "operator_deferral",
+    blocked_note: "**BLOCKED ON THE OPERATOR'S DEFERRAL**, recorded on another ticket. " + "Then a great deal more detail follows that nobody wants on this screen. ".repeat(20),
+  } as Task;
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[wordy]} busy={false} onResolve={vi.fn()} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
+  expect(screen.getByText(/BLOCKED ON THE OPERATOR'S DEFERRAL/)).toBeInTheDocument();
+  expect(screen.queryByText(/nobody wants on this screen. Then a great deal more/)).not.toBeInTheDocument();
+  // Markdown emphasis is stripped rather than shown raw.
+  expect(screen.queryByText(/\*\*BLOCKED/)).not.toBeInTheDocument();
 });

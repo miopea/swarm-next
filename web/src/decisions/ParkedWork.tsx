@@ -14,6 +14,28 @@ function waitedFor(since: number, now: number) {
   return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
+/**
+ * One scannable line out of a worker's handoff note.
+ *
+ * ⚠️ THESE NOTES ARE NOT WRITTEN FOR THIS SCREEN. They are worker-to-Queen
+ * handoffs — markdown, capitals, several hundred words — and rendering one
+ * whole made this list a wall of text the operator could not scan, which is
+ * the opposite of what a Parked tab is for. The first sentence is a summary;
+ * the rest belongs on the task, one click away.
+ */
+function gist(note: string | null | undefined) {
+  if (!note) return "";
+  const flattened = note
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[*_`#>|]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!flattened) return "";
+  const stop = flattened.search(/[.!?](\s|$)/);
+  const sentence = stop > 0 ? flattened.slice(0, stop + 1) : flattened;
+  return sentence.length > 150 ? `${sentence.slice(0, 149).trimEnd()}…` : sentence;
+}
+
 type Props = {
   tasks: Task[];
   now?: number;
@@ -45,15 +67,21 @@ export default function ParkedWork({ tasks, now = Math.floor(Date.now() / 1000),
     rows.length > 0 && (
       <section className="parked-group">
         <h4>{heading} <small>{rows.length}</small></h4>
-        <p className="muted">{blurb}</p>
+        <p className="muted parked-blurb">{blurb}</p>
         <ul className="parked-list">
-          {rows.map((task) => (
-            <li key={task.id}>
-              <button type="button" className="linklike" onClick={() => onOpenTask?.(task.id)}>{task.title}</button>
-              <span className="muted"> · {repoName(task.workspace)} · waiting {waitedFor(task.updated_at, now)}</span>
-              {task.blocked_note && <p className="muted parked-note">{task.blocked_note}</p>}
-            </li>
-          ))}
+          {rows.map((task) => {
+            const summary = gist(task.blocked_note);
+            return (
+              <li key={task.id}>
+                <div className="parked-row">
+                  <span className="parked-title">{task.title}</span>
+                  <button type="button" className="secondary-button parked-open" onClick={() => onOpenTask?.(task.id)}>Open</button>
+                </div>
+                <p className="muted parked-meta">{repoName(task.workspace)} · waiting {waitedFor(task.updated_at, now)}</p>
+                {summary && <p className="parked-gist">{summary}</p>}
+              </li>
+            );
+          })}
         </ul>
       </section>
     );

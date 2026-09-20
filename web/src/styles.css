@@ -3353,8 +3353,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .parked-group h4 small { font-weight: 400; opacity: 0.7; }
 .parked-group > p.muted { margin: 0 0 0.75rem; }
 .parked-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
-.parked-list > li { border-left: 2px solid currentColor; padding-left: 0.75rem; opacity: 0.95; }
-.parked-note { margin: 0.25rem 0 0; }
+.parked-list > li { border-left: 2px solid var(--line); padding-left: 0.75rem; }
+.parked-row { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+.parked-title { font-weight: 600; }
+.parked-open { flex: 0 0 auto; min-height: 30px; padding: 3px 12px; }
+.parked-meta { margin: 0.1rem 0 0; font-size: 0.9em; }
+/* The handoff gist: ONE line, clamped. These notes are worker-to-Queen
+   handoffs of several hundred words, and rendering one whole turned this list
+   into a wall the operator could not scan. */
+.parked-gist { margin: 0.35rem 0 0; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.parked-blurb { margin: 0 0 0.75rem; }
 /* A button that reads as a link. Keeps the control a real button for keyboard
    and assistive technology while looking like the text it opens. */
 .linklike { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
