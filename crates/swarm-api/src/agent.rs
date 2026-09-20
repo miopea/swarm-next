@@ -1007,6 +1007,16 @@ impl ServerHandler for AgentMcp {
                                 // since when, and says nothing about whether
                                 // the conclusion was right.
                                 "reviews_repeating": self.tasks.store().reviews_repeating_without_conversion(crate::REVIEW_REPETITION_ATTENTION_TIMES)?,
+                                // ⚠️ THE OTHER HALF OF THE SAME BLINDNESS, and
+                                // it is reported rather than bounded. A recovery
+                                // verdict now survives its run, so a worker that
+                                // never moves no longer costs a re-assessment
+                                // every run -- but it must not go quiet either.
+                                // This says which workers keep producing the
+                                // same verdict and since when, so a stall that
+                                // outlives the counting is visible as a stall
+                                // instead of as coverage.
+                                "recoveries_repeating": self.tasks.store().recoveries_repeating_without_progress(crate::REVIEW_REPETITION_ATTENTION_TIMES)?,
                                 // ⚠️ READY WORK NOBODY OWNS, WHICH NOTHING ELSE
                                 // WATCHES. UNSTARTED_WORK_CANDIDATES_SQL opens
                                 // with an INNER join on assigned_worker_id, so

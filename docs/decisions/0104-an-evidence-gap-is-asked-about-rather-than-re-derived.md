@@ -152,3 +152,10 @@ same breath: parked work should have its own surface beside Needs You and
 Activity. Measured the same day: of 15 blocked tasks, 4 are operator parks, 3 are
 external waits, 6 wait on another task. Until that surface exists, this change
 makes parks quieter without making them findable.
+
+⚠️ THE SIBLING GATE CARRIED THE SAME DEFECT AND WAS NOT FIXED HERE. Review
+coverage stopped depending on the run on 2026-09-18; `recovery_coverage` kept its
+`run_id` clause until 2026-09-20, so 54 of the 75 runs after this ADR's change
+were still forced Incomplete by the `||` beside it. ADR 0105 removes it — and
+records why the bound above must NOT be mirrored onto that path, where a count
+rising while nothing moves is the stall itself rather than a settled wait.

@@ -185,6 +185,7 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
+pub use queen_recovery::RepeatedRecovery;
 pub use queen_review::{
     MAX_UNASKED_STILL_SECONDS, RepeatedReview, UnaskedStalledWork, UnroutedReadyWork,
 };
@@ -330,7 +331,9 @@ const DECISION_SUPERSESSION_SCHEMA_VERSION: i64 = 180;
 const WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION: i64 = 181;
 /// An attention may name a worker without naming a task.
 const WORKER_SCOPED_ATTENTION_SCHEMA_VERSION: i64 = 182;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_SCOPED_ATTENTION_SCHEMA_VERSION;
+/// A recovery verdict outlives the run that reached it, and its repetition is counted.
+const RECOVERY_REPETITION_SCHEMA_VERSION: i64 = 183;
+const CURRENT_SCHEMA_VERSION: i64 = RECOVERY_REPETITION_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4550,6 +4553,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < WORKER_SCOPED_ATTENTION_SCHEMA_VERSION {
         crate::coordinator::migrate_worker_scoped_attention(transaction)?;
+    }
+    if schema_version < RECOVERY_REPETITION_SCHEMA_VERSION {
+        crate::queen_recovery::migrate_recovery_repetition(transaction)?;
     }
     Ok(())
 }
@@ -10262,8 +10268,6 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
                 WHERE type = 'table' AND name = 'worker_recovery_circuit'",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "coordinator_actions",
             artifact: "worker_cannot_start_attention",
@@ -10304,6 +10308,22 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
                 WHERE type = 'table' AND name = 'coordinator_actions'
                   AND sql LIKE '%worker_cannot_start_attention%'",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        //
+        // One artifact names the step, as everywhere else in this list, but the
+        // undo drops all three columns together: they were added by one
+        // migration and a partial rewind would leave a receipt that counts
+        // without saying since when.
+        SchemaStep {
+            table: "queen_recovery_receipts",
+            artifact: "times_seen",
+            undo_sql: "ALTER TABLE queen_recovery_receipts DROP COLUMN times_seen;
+                ALTER TABLE queen_recovery_receipts DROP COLUMN first_seen_at;
+                ALTER TABLE queen_recovery_receipts DROP COLUMN recorded_sequence",
+            probe_sql: "SELECT COUNT(*) = 3 FROM pragma_table_info('queen_recovery_receipts')
+                WHERE name IN ('times_seen', 'first_seen_at', 'recorded_sequence')",
         },
     ];
 
