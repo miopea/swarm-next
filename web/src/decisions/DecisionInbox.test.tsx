@@ -405,9 +405,14 @@ test("attention tabs support manual keyboard activation without starting reads o
   const onFetchActivity = vi.fn().mockResolvedValue({ entries: [], next_before: null });
   render(<DecisionInbox decisions={[]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} onFetchActivity={onFetchActivity} />);
   const attention = screen.getByRole("tab", { name: "Needs you 0" });
+  const parked = screen.getByRole("tab", { name: /^Parked/ });
   const activity = screen.getByRole("tab", { name: "Activity" });
   attention.focus();
+  // Parked sits between the two now, so reaching Activity by arrow is two
+  // presses. The property under test is unchanged: focus moves, nothing reads.
   fireEvent.keyDown(attention, { key: "ArrowRight" });
+  expect(parked).toHaveFocus();
+  fireEvent.keyDown(parked, { key: "ArrowRight" });
   expect(activity).toHaveFocus();
   expect(attention).toHaveAttribute("aria-selected", "true");
   expect(activity).toHaveAttribute("tabindex", "-1");
@@ -989,4 +994,64 @@ test("says nothing about the terminal on an item it cannot settle", () => {
   // must not be read as an invitation.
   render(<DecisionInbox decisions={[pending]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
   expect(screen.queryByText(/You can answer this in/)).not.toBeInTheDocument();
+});
+
+const parkedTask = {
+  id: "task-parked",
+  title: "Deferred until the migration lands",
+  workspace: "/home/op/projects/swarm-next",
+  updated_at: Math.floor(Date.now() / 1000) - 60 * 60 * 30,
+  park: "operator_deferral",
+} as Task;
+const waitingTask = {
+  id: "task-waiting",
+  title: "Blocked on the vendor answer",
+  workspace: "/home/op/projects/bfg-ops-console",
+  updated_at: Math.floor(Date.now() / 1000) - 60 * 60 * 3,
+  park: "external_condition",
+} as Task;
+
+test("parked work is reachable from the tab bar and counts both kinds", () => {
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask, waitingTask]} busy={false} onResolve={vi.fn()} />);
+  const parked = screen.getByRole("tab", { name: /^Parked/ });
+  expect(parked).toHaveTextContent("2");
+  fireEvent.click(parked);
+  // Kept apart on purpose: a park is the operator's decision, an external wait
+  // is the world's, and one list would invite unmaking a decision never made.
+  expect(screen.getByText("Parked by you")).toBeInTheDocument();
+  expect(screen.getByText("Waiting on the world")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Deferred until the migration lands" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Blocked on the vendor answer" })).toBeInTheDocument();
+});
+
+test("a block with no recorded park reason is not listed as parked", () => {
+  const prerequisiteBlock = { id: "task-prereq", title: "Waiting on another task", workspace: "/w/x", updated_at: 1 } as Task;
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[prerequisiteBlock]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByRole("tab", { name: /^Parked/ })).toHaveTextContent("0");
+  fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
+  expect(screen.getByText(/Nothing is parked/)).toBeInTheDocument();
+});
+
+test("arrow keys reach every tab, including the third one", () => {
+  // ⚠️ THE SILENT DEFECT THIS GUARDS. moveTabFocus toggled between exactly two
+  // refs, so a third tab rendered and responded to a mouse while being
+  // unreachable by keyboard — working, and inaccessible.
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask]} busy={false} onResolve={vi.fn()} />);
+  const needs = screen.getByRole("tab", { name: /^Needs you/ });
+  const parked = screen.getByRole("tab", { name: /^Parked/ });
+  const activity = screen.getByRole("tab", { name: "Activity" });
+
+  needs.focus();
+  fireEvent.keyDown(needs, { key: "ArrowRight" });
+  expect(parked).toHaveFocus();
+  fireEvent.keyDown(parked, { key: "ArrowRight" });
+  expect(activity).toHaveFocus();
+  fireEvent.keyDown(activity, { key: "ArrowRight" });
+  expect(needs).toHaveFocus();
+  fireEvent.keyDown(needs, { key: "ArrowLeft" });
+  expect(activity).toHaveFocus();
+  fireEvent.keyDown(activity, { key: "Home" });
+  expect(needs).toHaveFocus();
+  fireEvent.keyDown(needs, { key: "End" });
+  expect(activity).toHaveFocus();
 });

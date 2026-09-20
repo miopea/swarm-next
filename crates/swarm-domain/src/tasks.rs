@@ -675,6 +675,28 @@ pub struct Task {
     pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Why this blocked task is waiting, when a review recorded a reason.
+    ///
+    /// Derived from the live review receipt rather than stored, so a task that
+    /// MOVES stops being parked without anything having to clear a flag.
+    #[serde(default)]
+    pub park: Option<TaskPark>,
+}
+
+/// Why a blocked task is waiting, as Queen's review recorded it.
+///
+/// ⚠️ NOT EVERY BLOCK IS ONE OF THESE. Work waiting on a prerequisite task is
+/// blocked and is neither parked nor an external wait, and `insufficient_evidence`
+/// is not a park either: it means nobody has established the answer yet, which
+/// is the opposite of a decision to wait. Measured 2026-09-19: of 15 blocked
+/// tasks only 7 carried one of these.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPark {
+    /// The operator decided to wait. Their own park.
+    OperatorDeferral,
+    /// It waits on something outside this Hive.
+    ExternalCondition,
 }
 
 /// What a single reported commit turned out to be, checked once when reported.

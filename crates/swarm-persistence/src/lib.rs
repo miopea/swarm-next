@@ -2241,7 +2241,22 @@ impl TaskStore {
                       AND dr.state='pending' AND c.reply IS NULL AND c.delivery_state!='cancelled'),
                    (SELECT count(*) FROM decision_requests dr
                     WHERE dr.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)
-                      AND dr.state='pending')
+                      AND dr.state='pending'),
+                   -- WHY a blocked task is waiting, when Queen's review said so.
+                   --
+                   -- ⚠️ APPENDED LAST ON PURPOSE. task_from_row reads this
+                   -- projection by POSITION, so a column inserted anywhere else
+                   -- silently shifts every index after it.
+                   --
+                   -- Only these two kinds, and only while blocked.
+                   -- insufficient_evidence is not a park: it means nobody has
+                   -- established the answer yet, which is the opposite of a
+                   -- decision to wait. Reading the receipt live rather than
+                   -- storing a flag is what makes a park leave the list the
+                   -- moment its task moves.
+                   (SELECT r.kind FROM queen_task_review_receipts r
+                    WHERE r.task_id = t.id AND t.state = 'blocked'
+                      AND r.kind IN ('operator_deferral','external_condition'))
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -6823,6 +6838,13 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         ),
         clarification_waits,
         prerequisites,
+        // Index 29: the LAST column in TASK_PROJECTION. This mapper reads by
+        // position, so the park column was appended rather than inserted.
+        park: match row.get::<_, Option<String>>(29)?.as_deref() {
+            Some("operator_deferral") => Some(swarm_domain::TaskPark::OperatorDeferral),
+            Some("external_condition") => Some(swarm_domain::TaskPark::ExternalCondition),
+            _ => None,
+        },
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()

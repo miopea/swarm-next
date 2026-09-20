@@ -3343,3 +3343,19 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .decision-clarification li { padding-block: .5rem; }
 .decision-clarification li + li { border-top: 1px solid var(--line); }
 .clarification-reply { border-left: 3px solid var(--accent); padding-left: .75rem; }
+
+/* Parked work: the tab that exists because the nagging stopped.
+   Two groups, kept visually apart — a park is the operator's own decision to
+   wait, an external wait is the world's, and blurring them invites unmaking a
+   decision that was never made. */
+.parked-work { display: flex; flex-direction: column; gap: 1.5rem; }
+.parked-group h4 { margin: 0 0 0.25rem; display: flex; align-items: baseline; gap: 0.5rem; }
+.parked-group h4 small { font-weight: 400; opacity: 0.7; }
+.parked-group > p.muted { margin: 0 0 0.75rem; }
+.parked-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.parked-list > li { border-left: 2px solid currentColor; padding-left: 0.75rem; opacity: 0.95; }
+.parked-note { margin: 0.25rem 0 0; }
+/* A button that reads as a link. Keeps the control a real button for keyboard
+   and assistive technology while looking like the text it opens. */
+.linklike { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
+.linklike:hover { text-decoration: none; }

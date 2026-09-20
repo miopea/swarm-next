@@ -905,6 +905,14 @@ pub(super) fn task_review_evidence(
         crate::task_from_row,
     ).optional()?.ok_or(TaskStoreError::NotFound)?;
     let mut digest = Sha256::new();
+    // ⚠️ NEVER HASH `park`. It is derived from the review receipt, so recording
+    // a disposition would change the very revision that disposition accepted --
+    // no two passes could ever match, every wait would read uncovered, and the
+    // repetition 07c24d3d just bounded would come straight back through a new
+    // door. Caught by review_disposition_tools_are_queen_only_and_preserve_
+    // blocked_work, which went from covered_for_current_run to evidence_changed
+    // the moment the column was added.
+    task.park = None;
     if task.state == swarm_domain::TaskState::Blocked {
         // A retained worker's new PTY is not new evidence about its blocker.
         // Keep durable ownership, every task fact and all decision/message/
@@ -2856,6 +2864,39 @@ mod tests {
                 QueenReviewCoverage::Missing { .. }
             ),
             "a state change resets the count, so the wait is Queen's work again"
+        );
+    }
+    #[test]
+    fn a_park_is_read_live_and_leaves_the_moment_its_task_moves() {
+        // ⚠️ THE PROPERTY THAT KEEPS THE SURFACE HONEST. The thing a Parked tab
+        // replaces -- being nagged -- went stale by design once the coverage
+        // bound landed. A stored flag would go stale the same way, so `park` is
+        // derived from the live receipt and a state change retires it with
+        // nothing having to clear anything.
+        let store = TaskStore::in_memory().unwrap();
+        let input = external_wait(&store);
+        assert_eq!(
+            store.get_task(input.task_id).unwrap().park,
+            None,
+            "a block with no review disposition is not a park"
+        );
+
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .unwrap();
+        assert_eq!(
+            store.get_task(input.task_id).unwrap().park,
+            Some(swarm_domain::TaskPark::ExternalCondition),
+            "an external wait reads as one while it is blocked"
+        );
+
+        store
+            .transition_task(input.task_id, TaskState::Ready)
+            .unwrap();
+        assert_eq!(
+            store.get_task(input.task_id).unwrap().park,
+            None,
+            "work that MOVED is not parked, and nothing had to clear a flag"
         );
     }
 }

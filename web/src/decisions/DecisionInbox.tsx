@@ -9,6 +9,7 @@ import { needsOperatorDecision, waitingForClarification } from "./decisionAttent
 import BeeMascot from "../brand/BeeMascot";
 import DecisionInterview from "./DecisionInterview";
 import LongText from "./LongText";
+import ParkedWork from "./ParkedWork";
 import WorkActivity from "./WorkActivity";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
@@ -55,11 +56,12 @@ type Props = {
 };
 
 export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification }: Props) {
-  const [view, setView] = useState<"attention" | "activity">("attention");
+  const [view, setView] = useState<"attention" | "activity" | "parked">("attention");
   const clarifications = useDecisionClarifications(decisions, view === "attention" ? onFetchClarifications : undefined);
   const tabId = useId();
   const attentionTab = useRef<HTMLButtonElement>(null);
   const activityTab = useRef<HTMLButtonElement>(null);
+  const parkedTab = useRef<HTMLButtonElement>(null);
   const pendingNavigation = useRef(false);
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -181,10 +183,20 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   // Manual activation: arrows move focus; Enter/Space selects a tab. Merely
   // exploring tabs must not launch the asynchronous Activity read.
   const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>) => {
+    // ⚠️ A ROVING TABINDEX OVER A LIST, NOT A HARDCODED PAIR. This used to
+    // toggle between exactly two refs, so a third tab would have been
+    // unreachable by arrow key — an accessibility defect rather than a
+    // cosmetic one, and a silent one, since the tab still renders and still
+    // responds to a mouse.
+    const order = [attentionTab.current, parkedTab.current, activityTab.current].filter(
+      (tab): tab is HTMLButtonElement => tab !== null,
+    );
+    const here = order.indexOf(event.currentTarget);
     let target: HTMLButtonElement | null;
-    if (event.key === "Home") target = attentionTab.current;
-    else if (event.key === "End") target = activityTab.current;
-    else if (event.key === "ArrowLeft" || event.key === "ArrowRight") target = event.currentTarget === attentionTab.current ? activityTab.current : attentionTab.current;
+    if (event.key === "Home") target = order[0] ?? null;
+    else if (event.key === "End") target = order[order.length - 1] ?? null;
+    else if (event.key === "ArrowLeft") target = order[(here - 1 + order.length) % order.length] ?? null;
+    else if (event.key === "ArrowRight") target = order[(here + 1) % order.length] ?? null;
     else return;
     event.preventDefault();
     target?.focus();
@@ -214,15 +226,24 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   // Fetch on entry/return or explicit refresh, never on an interval. The shared
   // owner coalesces requests and cancels on hide, navigation, or disposal.
   const loadActivity = useVisiblePolling(readActivity, view === "activity" && Boolean(onFetchActivity), null);
+  // COUNTS BOTH KINDS, and the panel keeps them apart. A park is the operator's
+  // own decision to wait; an external wait is the world's. Both are invisible
+  // on this page otherwise, and since 07c24d3d both are silent too.
+  const parkedTotal = useMemo(
+    () => tasks.filter((task) => task.park === "operator_deferral" || task.park === "external_condition").length,
+    [tasks],
+  );
 
   return (
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
       <h3 id="decision-inbox-heading" className="sr-only">What needs you</h3>
       <div className="attention-tabs" role="tablist" aria-label="Attention workspace">
         <button ref={attentionTab} id={`${tabId}-attention`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "attention" ? 0 : -1} aria-selected={view === "attention"} onKeyDown={moveTabFocus} onClick={() => setView("attention")}>Needs you <small>{pendingTotal}</small></button>
+        <button ref={parkedTab} id={`${tabId}-parked`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "parked" ? 0 : -1} aria-selected={view === "parked"} onKeyDown={moveTabFocus} onClick={() => setView("parked")}>Parked <small>{parkedTotal}</small></button>
         <button ref={activityTab} id={`${tabId}-activity`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "activity" ? 0 : -1} aria-selected={view === "activity"} onKeyDown={moveTabFocus} onClick={() => { pendingNavigation.current = false; if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
       </div>
       <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${view}`}>
+      {view === "parked" && <ParkedWork tasks={tasks} onOpenTask={onOpenTask} />}
       {view === "activity" && <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} />}
       {/* Keep pending forms owned by the inbox across tab switches. Hidden
           controls leave the accessibility tree; clarification reads remain

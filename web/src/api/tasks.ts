@@ -107,6 +107,14 @@ export type Task = {
   blocked_note?: string | null;
   /** Explicit recorded hold deadline, Unix seconds; not inferred from prose. */
   blocked_until?: number | null;
+  /**
+   * Why this blocked task is waiting, when a review recorded a reason.
+   *
+   * Read live from the review receipt rather than stored, so a task that MOVES
+   * stops being parked without anything clearing a flag. Absent for a block
+   * waiting on a prerequisite task, which is neither a park nor a wait.
+   */
+  park?: "operator_deferral" | "external_condition" | null;
   prerequisites?: TaskPrerequisite[];
   assigned_worker_id: string | null;
   assigned_session_id: string | null;
