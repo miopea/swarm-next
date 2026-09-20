@@ -93,3 +93,62 @@ the threshold fails the boundary test at its assertion AND fails the asking test
 in its SETUP, because both share a helper that assumes ordinary passes succeed.
 That is weaker than isolation in one direction, and it is recorded rather than
 dressed up.
+
+## Amended, 2026-09-19: the bound now also reaches the coverage path
+
+⚠️ THIS ADR'S SCOPE DECISION IS REVERSED ON ONE POINT, and the reversal is the
+operator's, not a later reading of the original. Decision
+`01a0bc10-821a-73a3-b9f7-5fbc219d24d6`, answered `chose_an_offered_action`:
+**"Apply the existing bound to the coverage path."**
+
+What this ADR got right and still stands: the refusal it built genuinely works.
+Since `3fb6084e` deployed at 02:32 on 2026-09-19, **zero `insufficient_evidence`
+receipts have incremented**, and the worst is frozen at 90.
+
+What it did not cover, deliberately, was `operator_deferral` and
+`external_condition` — the two kinds `review_coverage` actually selects. The
+reasoning above is still the right reasoning: those two are legitimate coverage,
+and refusing them would stop Queen looking at waits that might have moved.
+
+**The measurement that changed the answer.** Receipt `01a0588f-5a6a` was created
+2026-09-19 12:11 — after the 09-18 rotation cap AND after this ADR's guard went
+live — and reached `times_seen` 12, twice the bound, by 15:52. Twelve passes in
+3.7 hours, identical condition text each pass, zero state changes. Live cost at
+that moment: 216 passes beyond the bound, 103 of them on these two kinds.
+
+**Why neither existing terminator reached it**, which is the same shape this ADR
+already documented once. `times_seen` gates what is OFFERED
+(`queen_review_queue_snapshot`) and what is REFUSED (this ADR). `review_coverage`
+does neither: it matches `accepted_revision` against `task_review_evidence`, a
+hash that includes `task_messages` and `task_message_deliveries`. So a message,
+or a delivery-state update, uncovers the receipt and forces a re-review that can
+only reach the same conclusion. This ADR's own line — "capping the rotation never
+touched the obligation forcing the re-review" — turned out to be true of its own
+guard too.
+
+**No third number and no third anchor.** `times_seen` resets to 1 whenever the
+task moves state and otherwise increments, so reaching the bound ALREADY means
+"re-derived this many times while standing still". The change accepts the current
+evidence revision at the bound, which says the wait is covered until the task
+moves.
+
+**The cost, named rather than discovered.** Queen stops re-checking an external
+wait whose evidence genuinely moved, once it has been re-derived six times
+without the task moving. A wait that becomes actionable on its seventh pass now
+waits for a state change. That is a real loss and it is what the operator chose
+with it stated; the 2026-09-18 answer about showing a hold with Last checked was
+NOT read as authorising it, which is why a separate decision was raised.
+
+⚠️ NOTHING BECOMES INVISIBLE, and the test that matters most asserts it. Skipped
+work stays in `reviews_repeating`, and a real state change resets the count and
+returns the work. Ablation is clean: removing the clause fails exactly one test,
+`a_wait_at_the_bound_stops_returning_even_when_its_evidence_moves`, while the
+under-bound and returns-on-movement tests still pass — they assert behaviour that
+exists without it.
+
+⚠️ THE VISIBILITY HALF IS NOT BUILT HERE. Stopping the re-raise removes the only
+thing currently keeping a park in front of anyone. The operator raised this in the
+same breath: parked work should have its own surface beside Needs You and
+Activity. Measured the same day: of 15 blocked tasks, 4 are operator parks, 3 are
+external waits, 6 wait on another task. Until that surface exists, this change
+makes parks quieter without making them findable.

@@ -853,14 +853,40 @@ pub(super) fn review_coverage(
             return Ok(QueenReviewCoverage::Unavailable);
         }
         let current = task_review_evidence(connection, task.id)?;
-        let saved: Option<String> = connection.query_row(
-            "SELECT accepted_revision FROM queen_task_review_receipts WHERE task_id=?1 AND kind IN ('operator_deferral','external_condition')",
-            rusqlite::params![task.id.to_string()], |row| row.get(0),
+        let saved: Option<(String, i64)> = connection.query_row(
+            "SELECT accepted_revision, times_seen FROM queen_task_review_receipts WHERE task_id=?1 AND kind IN ('operator_deferral','external_condition')",
+            rusqlite::params![task.id.to_string()], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
-        if let Some(evidence_revision) = saved {
+        if let Some((accepted_revision, times_seen)) = saved {
             receipts.push(VerifiedQueenReviewReceipt {
                 task_id: task.id,
-                evidence_revision,
+                // ⚠️ THE BOUND, ON THE COVERAGE PATH TOO, and it reuses both the
+                // constant and the anchor rather than adding a third number.
+                //
+                // `times_seen` resets to 1 whenever the task MOVES state and
+                // otherwise increments, so reaching the bound already means
+                // "re-derived this many times while standing still". Matching
+                // the saved revision was never a question about whether the
+                // ANSWER changed: the revision hashes task_messages and message
+                // deliveries, so a message or a delivery-state update uncovered
+                // the receipt and forced a re-review that could only reach the
+                // same conclusion. Measured 2026-09-19: a receipt created after
+                // the offer-path and refusal-path bounds both shipped still
+                // reached twice the bound in 3.7 hours.
+                //
+                // Accepting the CURRENT revision here says the wait is covered
+                // until the task moves, which is exactly what the count means.
+                // Operator decision 01a0bc10-821a resolved this; ADR 0104
+                // declined it for these two kinds and is superseded on that
+                // point, with the cost named there and in its amendment.
+                //
+                // ⚠️ NOTHING IS HIDDEN. `reviews_repeating` still reports the
+                // count, and a real state change resets it and returns the work.
+                evidence_revision: if times_seen >= MAX_UNCHANGED_REVIEW_PASSES {
+                    current.evidence_revision.clone()
+                } else {
+                    accepted_revision
+                },
             });
         }
         obligations.push(current);
@@ -2723,5 +2749,113 @@ mod tests {
         store.connection().unwrap().execute("UPDATE task_message_deliveries SET state = 'uncertain' WHERE message_id = 'fixture-message'", []).unwrap();
         assert_ne!(before, store.queen_task_review_evidence(task.id).unwrap());
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Draft);
+    }
+
+    #[test]
+    fn a_wait_one_pass_under_the_bound_still_returns_when_its_evidence_moves() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES - 1);
+        store
+            .append_task_correction(
+                input.task_id,
+                "Changed external evidence",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .finish_queen_automation_run(&input.run_id, QueenAutomationOutcome::NoAction, 250)
+            .unwrap();
+        let next = start_review(&store, 300);
+        assert!(
+            matches!(
+                store.queen_run_review_coverage(&next).unwrap(),
+                QueenReviewCoverage::Missing { .. }
+            ),
+            "one pass under the bound, changed evidence is still Queen's work"
+        );
+    }
+
+    #[test]
+    fn a_wait_at_the_bound_stops_returning_even_when_its_evidence_moves() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES);
+        store
+            .append_task_correction(
+                input.task_id,
+                "Changed external evidence",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .finish_queen_automation_run(&input.run_id, QueenAutomationOutcome::NoAction, 250)
+            .unwrap();
+        let next = start_review(&store, 300);
+        assert!(
+            matches!(
+                store.queen_run_review_coverage(&next).unwrap(),
+                QueenReviewCoverage::Covered { .. }
+            ),
+            "at the bound the wait is a hold until the task moves, not a re-review"
+        );
+    }
+
+    #[test]
+    fn a_wait_stopped_by_the_bound_returns_the_moment_the_task_moves() {
+        // ⚠️ THE TEST THAT MATTERS MOST. Work dropped and never returning is
+        // WORSE than the repetition it replaces, because repetition at least
+        // kept the task in front of somebody.
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        re_read_without_moving(&store, &mut input, MAX_UNCHANGED_REVIEW_PASSES);
+        store
+            .finish_queen_automation_run(&input.run_id, QueenAutomationOutcome::NoAction, 250)
+            .unwrap();
+        let next = start_review(&store, 300);
+        assert!(matches!(
+            store.queen_run_review_coverage(&next).unwrap(),
+            QueenReviewCoverage::Covered { .. }
+        ));
+        store
+            .finish_queen_automation_run(&next, QueenAutomationOutcome::NoAction, 350)
+            .unwrap();
+
+        store
+            .transition_task(input.task_id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task_with_note(
+                input.task_id,
+                TaskState::Blocked,
+                "External condition requires verification",
+            )
+            .unwrap();
+        input.run_id = start_review(&store, 400);
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 401)
+            .unwrap();
+        store
+            .append_task_correction(
+                input.task_id,
+                "Changed external evidence",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .finish_queen_automation_run(&input.run_id, QueenAutomationOutcome::NoAction, 450)
+            .unwrap();
+        let after_move = start_review(&store, 500);
+        assert!(
+            matches!(
+                store.queen_run_review_coverage(&after_move).unwrap(),
+                QueenReviewCoverage::Missing { .. }
+            ),
+            "a state change resets the count, so the wait is Queen's work again"
+        );
     }
 }
