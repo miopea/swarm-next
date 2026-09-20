@@ -4469,6 +4469,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/tasks/{task_id}/restore", post(tasks::restore_task))
         .route(
+            "/api/v1/tasks/{task_id}/lift-park",
+            post(tasks::lift_task_park),
+        )
+        .route(
             "/api/v1/tasks/{task_id}/prerequisites",
             post(tasks::change_prerequisite),
         )
@@ -16936,6 +16940,7 @@ mod tests {
                 evidence: "All checks pass",
                 suggested_action: "Ship",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -16954,6 +16959,7 @@ mod tests {
                 evidence: "The operator already handled it elsewhere",
                 suggested_action: "Hold",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -17048,6 +17054,7 @@ mod tests {
                 evidence: "Fictional",
                 suggested_action: "Narrow",
                 allowed_actions: &[],
+                operator_actions: &[],
                 questions: &questions,
                 deadline: None,
                 requested_command: None,
@@ -17156,6 +17163,7 @@ mod tests {
                 evidence: "All checks pass",
                 suggested_action: "Ship",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -17300,6 +17308,7 @@ mod tests {
                 evidence: "All checks pass",
                 suggested_action: "Ship",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

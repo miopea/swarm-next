@@ -333,7 +333,9 @@ const WORKER_RECOVERY_CIRCUIT_SCHEMA_VERSION: i64 = 181;
 const WORKER_SCOPED_ATTENTION_SCHEMA_VERSION: i64 = 182;
 /// A recovery verdict outlives the run that reached it, and its repetition is counted.
 const RECOVERY_REPETITION_SCHEMA_VERSION: i64 = 183;
-const CURRENT_SCHEMA_VERSION: i64 = RECOVERY_REPETITION_SCHEMA_VERSION;
+/// An answer the operator takes on themselves parks its task instead of dropping it.
+const OPERATOR_OWED_PARK_SCHEMA_VERSION: i64 = 184;
+const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_OWED_PARK_SCHEMA_VERSION;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4556,6 +4558,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < RECOVERY_REPETITION_SCHEMA_VERSION {
         crate::queen_recovery::migrate_recovery_repetition(transaction)?;
+    }
+    if schema_version < OPERATOR_OWED_PARK_SCHEMA_VERSION {
+        crate::decisions::migrate_operator_owed_park(transaction)?;
     }
     Ok(())
 }
@@ -10309,9 +10314,6 @@ mod tests {
                 WHERE type = 'table' AND name = 'coordinator_actions'
                   AND sql LIKE '%worker_cannot_start_attention%'",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
-        //
         // One artifact names the step, as everywhere else in this list, but the
         // undo drops all three columns together: they were added by one
         // migration and a partial rewind would leave a receipt that counts
@@ -10324,6 +10326,15 @@ mod tests {
                 ALTER TABLE queen_recovery_receipts DROP COLUMN recorded_sequence",
             probe_sql: "SELECT COUNT(*) = 3 FROM pragma_table_info('queen_recovery_receipts')
                 WHERE name IN ('times_seen', 'first_seen_at', 'recorded_sequence')",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "operator_action_labels",
+            undo_sql: "ALTER TABLE decision_requests DROP COLUMN operator_action_labels",
+            probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('decision_requests')
+                WHERE name = 'operator_action_labels'",
         },
     ];
 

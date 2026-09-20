@@ -247,6 +247,24 @@ pub(super) async fn restore_task(
     Ok(Json(task).into_response())
 }
 
+/// The operator saying the action they parked this task for is done.
+///
+/// Only reachable for work parked by their OWN answer. An external-condition
+/// wait is the world's rather than theirs, and is deliberately not liftable
+/// here — unparking one would be taking back a decision they never made.
+pub(super) async fn lift_task_park(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task = task_service(&state)?
+        .lift_operator_park(parse_task_id(&task_id)?)
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(task).into_response())
+}
+
 /// The operator agreeing that a task had nothing to deploy.
 ///
 /// Queen approves these ordinarily. This exists so a Queen who is wedged, or

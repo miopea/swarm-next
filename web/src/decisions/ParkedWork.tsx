@@ -40,6 +40,8 @@ type Props = {
   tasks: Task[];
   now?: number;
   onOpenTask?: (taskId: string) => void;
+  /** Present only for work the operator parked themselves. */
+  onLiftPark?: (taskId: string) => void;
 };
 
 /**
@@ -55,7 +57,7 @@ type Props = {
  * made and can unmake; an external wait is the world's, and reading them as one
  * list would invite them to take back a decision they never made.
  */
-export default function ParkedWork({ tasks, now = Math.floor(Date.now() / 1000), onOpenTask }: Props) {
+export default function ParkedWork({ tasks, now = Math.floor(Date.now() / 1000), onOpenTask, onLiftPark }: Props) {
   const parked = tasks.filter((task) => task.park === "operator_deferral");
   const waiting = tasks.filter((task) => task.park === "external_condition");
 
@@ -63,7 +65,11 @@ export default function ParkedWork({ tasks, now = Math.floor(Date.now() / 1000),
     return <p className="muted">Nothing is parked. Work you defer, and work waiting on something outside this Hive, will appear here.</p>;
   }
 
-  const group = (heading: string, blurb: string, rows: Task[]) =>
+  // ⚠️ LIFTABLE ONLY IN THE FIRST GROUP, and the split is the whole reason the
+  // groups exist. A park is the operator's own decision and theirs to unmake; an
+  // external wait belongs to the world, and offering to clear one would invite
+  // taking back a decision they never made.
+  const group = (heading: string, blurb: string, rows: Task[], liftable = false) =>
     rows.length > 0 && (
       <section className="parked-group">
         <h4>{heading} <small>{rows.length}</small></h4>
@@ -75,6 +81,15 @@ export default function ParkedWork({ tasks, now = Math.floor(Date.now() / 1000),
               <li key={task.id}>
                 <div className="parked-row">
                   <span className="parked-title">{task.title}</span>
+                  {liftable && onLiftPark && (
+                    <button
+                      type="button"
+                      className="secondary-button parked-lift"
+                      onClick={() => onLiftPark(task.id)}
+                    >
+                      I've done this
+                    </button>
+                  )}
                   <button type="button" className="secondary-button parked-open" onClick={() => onOpenTask?.(task.id)}>Open</button>
                 </div>
                 <p className="muted parked-meta">{repoName(task.workspace)} · waiting {waitedFor(task.updated_at, now)}</p>
@@ -88,7 +103,7 @@ export default function ParkedWork({ tasks, now = Math.floor(Date.now() / 1000),
 
   return (
     <div className="parked-work">
-      {group("Parked by you", "You decided these could wait. Nothing will raise them until you move them.", parked)}
+      {group("Parked by you", "You decided these could wait, or answered that you would do them yourself. Nothing will raise them until you move them.", parked, true)}
       {group("Waiting on the world", "These wait on something outside this Hive. Nobody here can move them.", waiting)}
     </div>
   );

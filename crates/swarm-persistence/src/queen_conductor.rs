@@ -2891,6 +2891,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Route to the platform repository",
                 allowed_actions: &["Route to the platform repository".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

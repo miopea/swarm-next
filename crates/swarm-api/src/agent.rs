@@ -504,7 +504,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 31;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 32;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -523,7 +523,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 31;
 /// no fingerprint change means the wording moved; a fingerprint change always
 /// means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "73887a784a21610e006933dc0769c9dbfc77c610254ac8f3833cee1d29729517";
+    "0724788b060da7e05fa4391e75846841978a5d7388a69d9c7fef2483eaaf8532";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1398,6 +1398,7 @@ impl ServerHandler for AgentMcp {
                                 evidence: input.evidence,
                                 suggested_action: input.suggested_action,
                                 allowed_actions: input.allowed_actions,
+                                operator_actions: input.operator_actions,
                                 questions: input.questions,
                                 requested_command: input.command,
                                 deadline: input.deadline,
@@ -3540,6 +3541,13 @@ struct DraftEmailReplyInput {
 #[derive(Deserialize)]
 struct RequestDecisionInput {
     task_id: Option<String>,
+    /// The subset of `allowed_actions` the OPERATOR performs themselves.
+    ///
+    /// Defaulted so a client holding the older schema keeps filing ordinary
+    /// decisions rather than failing to file at all — empty simply means
+    /// nothing parks, which is the behaviour every record had before this.
+    #[serde(default)]
+    operator_actions: Vec<String>,
     /// The one command being asked for, verbatim.
     ///
     /// Defaulted so a client holding the older schema, which cannot send it,
@@ -3680,6 +3688,7 @@ fn request_decision_tool() -> Tool {
                 "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label, or an empty string to explicitly report No preference when there is no meaningful basis to favor an answer. Do not invent a recommendation or add a No preference answer button. During Queen automation a nonempty recommendation must exactly match one allowed_actions value." },
                 "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "option_descriptions": { "type": "object", "maxProperties": 4, "description": "Exact explanatory text keyed by an offered option label. Preserve conditions and scope; unknown option labels are rejected.", "additionalProperties": { "type": "string", "maxLength": 4096 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
                 "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+                "operator_actions": { "type": "array", "maxItems": 6, "uniqueItems": true, "description": "The subset of allowed_actions that the OPERATOR carries out themselves rather than authorising you to proceed. Mark an option here when answering it leaves THEM owing the action -- filing something in a console, setting a credential, pressing something only they can reach. Picking one parks this task and shows it under Needs you / Parked, still assigned to you, until they clear it; without the mark the task returns to you the moment they answer, and goes stale because you cannot act. Marking is an offer, not an authority: the park fires on their choice, never on this list, so it cannot be used to park your own work. Every entry must exactly match an allowed_actions value.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] },
                 "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you are asking to be allowed to run, verbatim and complete. Supplying it adds a separate grant button to the request; approving THAT button, and only that button, lets you run this command. The grant is scoped to you, dies when the task leaves the board, and is offered to one session. Send the command you will actually run, not a pattern and not a shortened version: the operator reads this exact text before allowing it, and a command that does not match what you run is a request for something nobody approved. Omit this for an ordinary approval that authorises no execution." }
             },
@@ -5811,6 +5820,7 @@ mod tests {
                 evidence: "Fixture only",
                 suggested_action: "Provide the fictional session",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -9255,6 +9265,7 @@ mod tests {
                     evidence: &"e".repeat(4_000),
                     suggested_action: "Proceed",
                     allowed_actions: &actions,
+                    operator_actions: &[],
                     questions: &[],
                     deadline: None,
                     requested_command: None,
@@ -9464,6 +9475,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Release the hold — repoint the forwarder",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -9543,6 +9555,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Go ahead",
                 allowed_actions: &actions,
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -9604,6 +9617,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Yes",
                 allowed_actions: &["Yes".to_owned(), "No".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,
@@ -9690,6 +9704,7 @@ mod tests {
                     evidence: "",
                     suggested_action: "Ship",
                     allowed_actions: &["Ship".to_owned()],
+                    operator_actions: &[],
                     questions: &[],
                     deadline: None,
                     requested_command: None,
@@ -9744,6 +9759,7 @@ mod tests {
                     evidence: "",
                     suggested_action: "Ship",
                     allowed_actions: &["Ship".to_owned()],
+                    operator_actions: &[],
                     questions: &[],
                     deadline: None,
                     requested_command: None,
@@ -9896,6 +9912,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Cut and release 0.8.10",
                 allowed_actions: &["Cut and release 0.8.10".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

@@ -744,6 +744,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Proceed",
                 allowed_actions: &["Proceed".to_owned()],
+                operator_actions: &[],
                 questions: &[],
                 deadline: None,
                 requested_command: None,

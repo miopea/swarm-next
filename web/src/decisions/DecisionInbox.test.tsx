@@ -1026,6 +1026,26 @@ test("parked work is reachable from the tab bar and counts both kinds", () => {
   expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(2);
 });
 
+test("only work the operator parked themselves offers to be released", () => {
+  // ⚠️ THE ASYMMETRY IS THE POINT. A park is the operator's own decision and
+  // theirs to unmake. An external wait belongs to the world, so offering to
+  // clear one would invite taking back a decision they never made.
+  const onLiftPark = vi.fn();
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask, waitingTask]} busy={false} onResolve={vi.fn()} onLiftPark={onLiftPark} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
+  const release = screen.getAllByRole("button", { name: "I've done this" });
+  expect(release).toHaveLength(1);
+  fireEvent.click(release[0]);
+  expect(onLiftPark).toHaveBeenCalledWith("task-parked");
+});
+
+test("without a release handler the parked list still renders", () => {
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask]} busy={false} onResolve={vi.fn()} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
+  expect(screen.getByText("Deferred until the migration lands")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "I've done this" })).not.toBeInTheDocument();
+});
+
 test("a block with no recorded park reason is not listed as parked", () => {
   const prerequisiteBlock = { id: "task-prereq", title: "Waiting on another task", workspace: "/w/x", updated_at: 1 } as Task;
   render(<DecisionInbox decisions={[]} workers={[]} tasks={[prerequisiteBlock]} busy={false} onResolve={vi.fn()} />);
