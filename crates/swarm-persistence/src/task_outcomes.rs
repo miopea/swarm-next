@@ -1080,6 +1080,60 @@ mod tests {
             Some(TaskOutcomeDeliveryState::Uncertain)
         );
     }
+
+    #[test]
+    fn an_approval_does_not_survive_the_words_it_approved() {
+        // ⚠️ QUEEN APPROVES WORDS, NOT A ROW. Withdrawing an approved claim so a
+        // corrected one can be approved is the whole point of withdrawal; if the
+        // re-claim inherits the old approval, the replacement is born approved by
+        // someone who never read it and completion_evidence reports
+        // ExemptionApproved for text nobody saw.
+        //
+        // Observed on the live board 2026-09-19, task 01a0bc57-29a9: the
+        // replacement claim came back approved at 23:21:53 carrying an approval
+        // granted at 22:16:38 — an hour BEFORE the text it approved existed.
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("A spike", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                900,
+            )
+            .unwrap();
+        store
+            .claim_completion_exemption(task.id, "The first reason.", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(task.id, "queen", "Read the handoff.", 1_500)
+            .unwrap();
+        store
+            .withdraw_completion_exemption(task.id, "queen", 1_700)
+            .unwrap();
+
+        store
+            .claim_completion_exemption(task.id, "A DIFFERENT reason nobody has read.", None, 2_000)
+            .unwrap();
+
+        let approved: Option<i64> = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT approved_at FROM task_completion_exemptions WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            approved, None,
+            "a re-claim must not inherit the approval of the text it replaced"
+        );
+    }
 }
 
 /// What a task has to show before it may be called done.
@@ -1287,7 +1341,26 @@ impl TaskStore {
                      -- somebody just made, which is a worse silence than the one
                      -- withdrawal exists to fix.
                      withdrawn_at = NULL,
-                     withdrawn_by = NULL",
+                     withdrawn_by = NULL,
+                     -- ⚠️ AND THE APPROVAL MUST NOT SURVIVE IT EITHER, for the
+                     -- mirror of the reason above. Queen approves WORDS, not a
+                     -- row: she reads a reason and says yes to that reason.
+                     -- Keeping approved_at across a re-claim means the next
+                     -- text is born already approved by someone who never saw
+                     -- it, and completion_evidence reports ExemptionApproved
+                     -- for a claim nobody read -- approval laundering through
+                     -- an upsert, and a silence worse than the one above
+                     -- because it reads as a granted permission.
+                     --
+                     -- Observed 2026-09-19 on 01a0bc57-29a9: Queen withdrew an
+                     -- approved claim precisely so a corrected one could be
+                     -- approved, the re-claim inherited her 22:16:38 approval,
+                     -- and the replacement came back approved at 23:21:53 --
+                     -- an approval timestamped an hour BEFORE the text it
+                     -- approved.
+                     approved_at = NULL,
+                     approved_by = NULL,
+                     approved_basis = NULL",
             params![
                 task_id.to_string(),
                 reason,
