@@ -99,6 +99,21 @@ fn configure_github_feedback(state: AppState) -> AppState {
 /// remains opt-in and defaults off, deliberately: a default that silently began
 /// uploading FILES rather than text would be a different risk class from a
 /// default destination for reports the operator already chose to send.
+/// Where Swarm posts private support reports, and WHERE THE VALUE CAME FROM.
+///
+/// Confirmed by BFG Admin against their own infrastructure on 2026-09-19, on a
+/// filed cross-repo ask rather than a guess: `az webapp config hostname list`
+/// on `bfg-ops-console` returns exactly two bindings —
+/// `bfg-ops-console.azurewebsites.net` (`sslState None`, the platform default)
+/// and `admin.bfgsolutions.net` (`SniEnabled`, a custom domain with a real TLS
+/// binding). Both currently serve the same app. The custom domain is the stable
+/// one; the `azurewebsites.net` name moves if the app is renamed or re-homed.
+///
+/// ⚠️ THIS IS A DESTINATION, NOT AN ORIGIN HEADER, and the variable's name
+/// invites the wrong reading. BFG Admin confirmed nothing on their side reads an
+/// Origin header — no CORS registration, no origin handling in the feedback
+/// routes — because this is a server-to-server POST. Setting one and expecting
+/// it to be validated would be believing in a check that does not exist.
 const DEFAULT_SUPPORT_ORIGIN: &str = "https://admin.bfgsolutions.net";
 
 fn configure_central_support(mut state: AppState) -> AppState {
