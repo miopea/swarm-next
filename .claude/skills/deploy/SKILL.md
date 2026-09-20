@@ -204,10 +204,34 @@ git tag -a vX.Y.Z -m "Swarm X.Y.Z"
 git push origin main && git push origin vX.Y.Z
 ```
 
-**Say in the message whether it carries a schema migration**, because the backup
-guard covers a reload from a checkout and **not** a tarball install — an
-upgrading Hive migrates unprotected. Tell the operator to copy their
-`swarm.sqlite3` first when it does.
+**Say in the message whether it carries a schema migration**, so an operator
+correlating a problem afterwards can see at a glance whether their database
+moved.
+
+⚠️ DO NOT TELL THEM TO COPY `swarm.sqlite3` FIRST. This step used to say the
+backup guard covered a reload from a checkout and not a tarball install, and
+that an upgrading Hive migrated unprotected. That is FALSE and was corrected on
+2026-09-20 by reading `packaging/linux/swarm-package` rather than trusting this
+file.
+
+`install_or_update()` calls `create_update_backup` (line 1570), and so does
+`activate_protocol_migration()` (1958) — so `install`, `update` and
+`migrate-protocol` are all covered. The capture happens BEFORE the new release
+can migrate anything; its own comment says so, because a rollback has to tell
+"the database is untouched" apart from "the database moved on and the release we
+are rolling back to cannot read it". It PREFERS an API snapshot over a file
+copy, since a copy of a database being written is not consistent, and falls back
+to a copy so the repair never depends on the thing that is broken. Backups land
+in `$state_root/backups` at 0700, are pruned, and `test-package-lifecycle.sh`
+exercises the missing-backup failure path.
+
+So the manual copy this file used to recommend was both unnecessary and WORSE
+than what already runs. Recommending it also implied the installer was unsafe,
+which would make an operator hesitate over the one path that is actually
+protected.
+
+The honest shape of the warning: name the migration range, say the pre-update
+backup is automatic, and leave the operator nothing to do.
 
 ## 6. Build
 

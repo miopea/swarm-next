@@ -12,6 +12,52 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.12.0
+
+⚠️ This release carries six schema migrations, 177 through 182. Two of them
+rewrite a table rather than add one: 181 adds the durable worker recovery
+circuit, and 182 rebuilds `coordinator_actions` so an alert can name a worker
+without naming a task. **The pre-update backup is automatic — there is nothing
+for you to do.** `swarm-package` takes it before anything migrates, preferring a
+consistent snapshot from the running API over a file copy, and keeps it in
+`backups/` so a rollback has something to return to.
+
+(The 1.11.0 notes told you to copy `swarm.sqlite3` yourself. That was wrong — the
+installer had been doing it all along, and the advice has been corrected.)
+
+Your workers are not stopped: the terminal protocol has not changed.
+
+### New features
+- A **Parked** tab sits beside Needs You. Work you decided could wait, and work
+  waiting on something outside this Hive, are listed separately with how long
+  each has been waiting — so deferring something no longer means losing track of
+  it. It exists because parked work stopped nagging in this same release, and
+  quiet work needs somewhere to be found.
+- A worker can be given permission to READ the whole board without being able to
+  move anything on it, so asking "what is happening" no longer costs a Queen
+  turn.
+- A worker that cannot start now reaches the board instead of failing silently.
+  Previously an alert had to name a task, and a worker that never started owns
+  no task, so there was nothing to say.
+- The provider usage figures refresh on their own rather than when somebody
+  happens to open the panel. They had been up to 42 hours stale.
+
+### Fixes
+- Queen stops re-reading a park or an external wait that has not changed. One
+  had been re-derived 90 times. Work stopped this way is still listed as
+  repeating, and returns the moment the task actually moves.
+- Finished work whose evidence cannot close it no longer goes silent. Recording
+  partial delivery used to satisfy the alarm while failing the thing that closes
+  a task, so two tasks sat 56 hours with nobody told.
+- An approval no longer survives the words it approved. Withdrawing an approved
+  claim and recording a corrected one used to inherit the old approval — and
+  silently swallow the new one.
+- The conversation a worker is on follows a `/clear`, and is kept across the
+  other ways a new conversation can start.
+- A conversation pinned more recently than everything else is no longer treated
+  as superseded by older history.
+- An evidence gap is asked about rather than re-derived indefinitely.
+
 ## 1.11.0
 
 ⚠️ This release carries two schema migrations, 175 and 176. The first adds four
