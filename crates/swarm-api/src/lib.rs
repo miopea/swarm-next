@@ -10620,27 +10620,35 @@ mod tests {
         std::fs::create_dir_all(checkout_path.join("crates")).unwrap();
         std::fs::write(checkout_path.join("Cargo.toml"), "[workspace]\n").unwrap();
         std::fs::write(checkout_path.join("crates/lib.rs"), "fn base() {}\n").unwrap();
+        // ⚠️ HERMETIC ON PURPOSE, and the first version of this test was not.
+        //
+        // Identity came from `-c user.name` on the commit command only, so
+        // `cherry-pick` below -- which also writes a commit -- inherited
+        // nothing. It passed locally by borrowing the developer's global git
+        // config and failed on a runner that has none. Passing for a reason CI
+        // does not have is worse than failing.
+        //
+        // The env covers EVERY git call including the ones that commit
+        // implicitly, and disabling global/system config makes a local run
+        // behave like the runner rather than like this machine.
         let git = |arguments: &[&str]| {
             let status = Command::new("git")
                 .arg("-C")
                 .arg(checkout_path)
                 .args(arguments)
+                .env("GIT_AUTHOR_NAME", "Swarm Test")
+                .env("GIT_AUTHOR_EMAIL", "swarm-test@example.com")
+                .env("GIT_COMMITTER_NAME", "Swarm Test")
+                .env("GIT_COMMITTER_EMAIL", "swarm-test@example.com")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
                 .status()
                 .unwrap();
             assert!(status.success(), "git {arguments:?} failed");
         };
         let commit = |message: &str| {
             git(&["add", "."]);
-            git(&[
-                "-c",
-                "user.name=Swarm Test",
-                "-c",
-                "user.email=swarm-test@example.com",
-                "commit",
-                "--quiet",
-                "-m",
-                message,
-            ]);
+            git(&["commit", "--quiet", "-m", message]);
         };
         git(&["init", "--quiet", "--initial-branch=main"]);
         commit("base");
