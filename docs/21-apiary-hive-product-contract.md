@@ -546,3 +546,48 @@ but deferred beyond initial dogfood. Repositories are never included; external
 environment provisioning restores them. Full backup later requires integrity
 checks, disposable restore verification, pre-upgrade creation, and rollback to
 prevent backup rot.
+
+## ⚠️ Amendment 2026-09-21: Keeper reach is a full live window
+
+This contract states in several places that private workers, repositories,
+terminals and provider sessions stay inside a Hive, and that "routine terminal
+output and ordinary Queen conversations do not enter the Keeper attention
+stream". **Those statements are SUPERSEDED for watching and takeover.** Read
+this section before relying on them.
+
+The operator's decision: Keeper gets "literally everything, basically a window
+into that hive, either watching or being able to do a takeover". A Steward gets
+the same window over the Hives in their exact granted scope — the grant decides
+WHICH Hives, never HOW MUCH.
+
+### The four properties that make this statable
+
+1. **Live only, never stored.** Keeper relays frames and never persists them or
+   builds a cross-Hive transcript. This contract already says exactly that for
+   takeover — "Keeper persists the reasoned lease and audit but never terminal
+   frames or a cross-Hive transcript" — and watching inherits it unchanged.
+2. **Always visible while watching**, naming who is watching. No reason is
+   required, so the audit answers who and when but never why.
+3. **Instant reclaim, including against Keeper**, from any authenticated local
+   surface. Keeper may take over again; the operator at the machine is the only
+   one who knows whether they are mid-deploy.
+4. **Credentials, filesystem roots and provider permissions remain OUT.** This
+   amendment widens visibility and control of Queen. It does not give Keeper a
+   member's secrets or the right to rewrite its execution permissions.
+
+### What this does NOT change
+
+- **Task routing still identifies only the public Hive.** Keeper routing a
+  canonical task neither selects nor exposes a private worker. Watching is a
+  deliberate act against one Hive, not a widening of ordinary coordination.
+- **The attention stream stays structured.** Routine terminal output still does
+  not flow into Keeper's attention stream. A window is something a person opens,
+  not a firehose the Apiary subscribes to.
+- **Engagement rules are untouched.** Viewing a terminal still does not reserve
+  it; while engaged, Queen, Keeper, Steward and automation still queue requests
+  rather than injecting them.
+- **Members still do not contact each other.** Every route remains outbound to
+  Keeper, and members still need no inbound address.
+
+Supersedes the corresponding bounds in ADR 0034, which carries its own
+amendment. Design record: `docs/specs/apiary-controls-scope.md`.

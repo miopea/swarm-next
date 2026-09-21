@@ -88,3 +88,84 @@ Continue already-approved enrollment and project-readiness work while scoping
 this extension. Do not block that work on persistent transport or turn transport
 refactoring into its prerequisite. No BFG Admin coordination is needed or
 authorized here. No release is authorized by this document.
+
+## ⚠️ Amendment 2026-09-21: the authority table's visibility row is superseded
+
+The **Visibility** row above puts "private transcripts, tokens, private tasks or
+repository contents" outside the Keeper default, and the **Terminal
+intervention** row puts "membership itself granting terminal control" outside
+it. **Both are SUPERSEDED.** The rest of the table stands.
+
+Operator decision: Keeper gets "literally everything, basically a window into
+that hive, either watching or being able to do a takeover". A Steward gets the
+same window over the Hives in their exact granted scope, because the grant
+decides WHICH Hives, never HOW MUCH.
+
+### Revised rows
+
+| Area | Now | Still outside |
+|---|---|---|
+| Visibility | A full live window into any Hive in granted scope — tasks, terminal, state | Stored transcripts; credentials and tokens |
+| Terminal intervention | Watching within scope; takeover per ADR 0036, extended to Keeper | Holding a Hive against its operator; arbitrary machine commands |
+
+### The four properties that make this safe enough to state
+
+Stated here in full rather than by reference, because this table is what an
+implementer reads:
+
+1. **Live only, never stored.** Keeper relays frames and never persists them or
+   builds an Apiary transcript — the rule ADR 0036 already sets for takeover.
+2. **Always visible while watching**, naming who is watching. No reason is
+   required, so the audit answers who and when but never why.
+3. **Instant reclaim, including against Keeper**, from any authenticated local
+   surface. Keeper may take over again; the operator at the machine is the only
+   one who knows whether they are mid-deploy or mid-incident.
+4. **Credentials, filesystem roots and provider permissions stay out**, exactly
+   as the Shared configuration row already says.
+
+### ⚠️ This amendment breaks one of this document's own rules, knowingly
+
+This document states: **"Policy or permission expansion requires renewed scoped
+consent."** Upgrading the existing **Observe** grant in place is exactly a
+permission expansion without renewed consent — whoever holds Observe today gains
+terminal visibility having agreed only to four counts.
+
+The operator's premise was "there is only one apiary out there, mine, so we
+don't need to worry about this happening in place". Checked against the live
+store on 2026-09-21, that is only mostly true: one Apiary, but ONE live
+stewardship carrying FOUR capability grants across EIGHT memberships. So the
+expansion is not zero-impact — it widens exactly one Steward's authority.
+
+The decision stands; it was made with this in front of the operator. **The
+affected Steward should be told rather than discover it.** If a second Apiary or
+an outside member ever exists, the renewed-consent rule above applies again in
+full and this exception does not carry.
+
+### What is NOT superseded, and must not be widened by inference
+
+- **Credentials, filesystem roots and provider permissions.** Still outside,
+  exactly as the Shared configuration row says. Watching a Hive is one thing;
+  writing its secrets or rewriting its execution permissions is another, and
+  nothing in the interview asked for it.
+- **Work coordination and Recovery rows.** Unchanged. Keeper still cannot
+  interrupt active work, restart workers, or run arbitrary machine commands.
+- **Removing a grant still prevents future execution**, including queued
+  actions, and an executed action remains audited.
+- **Departure still stops shared management** without deleting private settings
+  or work.
+
+### Transport, also superseded
+
+This document instructs measuring latency and resource use before choosing a
+more complex transport, and says no persistent transport is accepted by the
+proposal alone. The operator has chosen **one outbound WebSocket per Hive** now,
+on the grounds that takeover relay needs bidirectional frames regardless. That
+is a deliberate override: if polling would have sufficed, this is where the
+extra complexity entered.
+
+The constraint it does NOT override: the connection "should announce durable
+changes, not carry arbitrary remote commands or establish authority". Durable
+state keeps arriving through the existing polled, cursored feed; the socket is a
+doorbell. Live terminal frames are the one exception that must ride the stream.
+
+Design record: `docs/specs/apiary-controls-scope.md`.
