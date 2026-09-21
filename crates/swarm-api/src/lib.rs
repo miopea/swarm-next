@@ -10605,6 +10605,99 @@ mod tests {
         assert!(!older_checkout.reload_available);
     }
 
+    /// ⚠️ THE REGRESSION TEST FOR A DEV HIVE THAT COULD NOT CATCH UP. A build
+    /// reloaded from a feature branch becomes a SIBLING of main the moment its
+    /// PR merges by rebase, because rebasing rewrites the commit. Ancestry alone
+    /// then reads "this checkout does not contain the deployed source" although
+    /// every line of it is in main, and the refusal is unescapable: the only
+    /// cure for a stale deployment is the reload being refused.
+    ///
+    /// Observed on this Hive 2026-09-20 with 9e74b6f7 rebased to b7965d43.
+    #[test]
+    fn a_rebased_deployment_still_counts_as_contained_but_a_missing_one_does_not() {
+        let checkout = TempDir::new().unwrap();
+        let checkout_path = checkout.path();
+        std::fs::create_dir_all(checkout_path.join("crates")).unwrap();
+        std::fs::write(checkout_path.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(checkout_path.join("crates/lib.rs"), "fn base() {}\n").unwrap();
+        let git = |arguments: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(checkout_path)
+                .args(arguments)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {arguments:?} failed");
+        };
+        let commit = |message: &str| {
+            git(&["add", "."]);
+            git(&[
+                "-c",
+                "user.name=Swarm Test",
+                "-c",
+                "user.email=swarm-test@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ]);
+        };
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        commit("base");
+
+        // A feature branch, reloaded from while it was still unmerged.
+        git(&["checkout", "--quiet", "-b", "feature"]);
+        std::fs::write(
+            checkout_path.join("crates/lib.rs"),
+            "fn base() {}\nfn added() {}\n",
+        )
+        .unwrap();
+        commit("add the feature");
+        let deployed = git_output(checkout_path, &["rev-parse", "HEAD"]).unwrap();
+
+        // main moves on, then the branch lands by REBASE, rewriting its commit.
+        git(&["checkout", "--quiet", "main"]);
+        std::fs::write(checkout_path.join("crates/other.rs"), "fn other() {}\n").unwrap();
+        commit("unrelated main work");
+        git(&["cherry-pick", "--quiet", &deployed]);
+        std::fs::write(checkout_path.join("crates/later.rs"), "fn later() {}\n").unwrap();
+        commit("work after the merge");
+
+        assert!(
+            !Command::new("git")
+                .arg("-C")
+                .arg(checkout_path)
+                .args(["merge-base", "--is-ancestor", &deployed, "HEAD"])
+                .status()
+                .unwrap()
+                .success(),
+            "the fixture must reproduce the orphaned deployment, or it proves nothing"
+        );
+        let rebased = development_source_status_for(checkout_path, Some(&deployed)).unwrap();
+        assert!(
+            rebased.aligned,
+            "a checkout that already carries the deployed change must not be refused"
+        );
+        assert!(rebased.reload_available, "and dev must be able to catch up");
+
+        // The protection is unchanged: a deployment this checkout genuinely
+        // does NOT carry is still refused.
+        git(&["checkout", "--quiet", "-b", "elsewhere", "HEAD~3"]);
+        std::fs::write(
+            checkout_path.join("crates/unrelated.rs"),
+            "fn unrelated() {}\n",
+        )
+        .unwrap();
+        commit("a change that never reached main");
+        let stranger = git_output(checkout_path, &["rev-parse", "HEAD"]).unwrap();
+        git(&["checkout", "--quiet", "main"]);
+        let missing = development_source_status_for(checkout_path, Some(&stranger)).unwrap();
+        assert!(
+            !missing.aligned,
+            "an older or unrelated checkout must still be refused"
+        );
+    }
+
     #[tokio::test]
     async fn development_reload_fails_closed_when_not_enabled() {
         let app = router(
