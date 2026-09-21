@@ -194,7 +194,7 @@ pub struct FederationDirectorySnapshot {
     pub signature: String,
 }
 
-fn valid_revision(revision: u64) -> bool {
+pub(crate) fn valid_revision(revision: u64) -> bool {
     revision > 0 && i64::try_from(revision).is_ok()
 }
 

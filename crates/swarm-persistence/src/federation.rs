@@ -42,9 +42,9 @@ const MAX_ACTIVE_FEDERATION_CLAIMS: usize = 1_000;
 const FEDERATION_SYNC_INTERVAL_SECONDS: i64 = 60;
 const MAX_FEDERATION_SYNC_FAILURES: u32 = 1_000;
 
-struct LocalFederationIdentity {
-    node_id: FederationNodeId,
-    signing_key: SigningKey,
+pub(crate) struct LocalFederationIdentity {
+    pub(crate) node_id: FederationNodeId,
+    pub(crate) signing_key: SigningKey,
 }
 
 struct KeeperInvitationContext {
@@ -2752,7 +2752,7 @@ impl TaskStore {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
-    fn local_federation_identity(
+    pub(crate) fn local_federation_identity(
         &self,
         now: i64,
     ) -> Result<LocalFederationIdentity, TaskStoreError> {
@@ -4888,7 +4888,7 @@ fn candidate_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryHiveCan
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use swarm_domain::{SharedWorkBackend, StewardCapability};
 
@@ -6524,7 +6524,7 @@ mod tests {
         );
     }
 
-    fn register_remote_member(
+    pub(crate) fn register_remote_member(
         keeper: &TaskStore,
         member: &TaskStore,
         now: i64,
@@ -6559,7 +6559,7 @@ mod tests {
             .unwrap()
     }
 
-    fn joined_member(now: i64) -> (TaskStore, TaskStore) {
+    pub(crate) fn joined_member(now: i64) -> (TaskStore, TaskStore) {
         let keeper = TaskStore::in_memory().unwrap();
         keeper
             .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)

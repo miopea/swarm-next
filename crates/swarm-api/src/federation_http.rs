@@ -81,6 +81,30 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Publishes this Hive's signed capability report.
+    ///
+    /// One-way on purpose: unlike the directory exchange there is nothing to
+    /// receive. Keeper holds the fleet picture and members read it through the
+    /// ordinary catalog path, so returning it here would be a second route to
+    /// the same data.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn publish_capability(
+        &self,
+        credential: &str,
+        update: &swarm_domain::HiveCapabilityUpdate,
+    ) -> Result<(), FederationHttpError> {
+        self.send_json::<_, serde::de::IgnoredAny>(
+            Method::PUT,
+            "api/v1/federation/capability",
+            Some(credential),
+            Some(update),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Creates a bounded, redirect-free transport for one signed Keeper base
     /// endpoint. Plain HTTP is accepted only for loopback test/development
     /// peers; remote federation always requires HTTPS.

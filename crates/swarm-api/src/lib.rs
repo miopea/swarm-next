@@ -26,6 +26,7 @@ pub mod federation_http;
 mod feedback;
 mod github_device;
 mod github_feedback;
+mod hive_capability;
 mod jira;
 mod maintenance;
 mod mcp_oauth;
@@ -1109,6 +1110,18 @@ impl AppState {
             Err(error) => {
                 tracing::warn!(%error, "Apiary directory could not refresh; existing shared-work sync continues");
             }
+        }
+        if let Some(store) = self.task_store.as_ref()
+            && let Err(error) = reconcile_hive_capability(
+                &service,
+                store,
+                &client,
+                &connection.node_credential,
+                now,
+            )
+            .await
+        {
+            tracing::warn!(%error, "Hive capability could not be published; shared-work sync continues");
         }
         if let Err(condition) =
             reconcile_federation_catalog(&service, &client, &connection.node_credential, now).await
@@ -4084,6 +4097,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/directory",
             axum::routing::put(exchange_federation_directory),
         )
+        .route(
+            "/api/v1/federation/capability",
+            axum::routing::put(accept_hive_capability),
+        )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
             "/api/v1/federation/departure-readiness",
@@ -5759,6 +5776,31 @@ async fn exchange_federation_directory(
         .map_err(federation_catalog_error)?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(directory)).into_response())
+}
+
+/// Keeper receiving one member's capability report.
+///
+/// Returns no body. Unlike the directory exchange there is nothing to hand
+/// back: Keeper holds the fleet picture and members read it through the
+/// ordinary catalog path, so answering here would be a second route to the
+/// same data and a second thing to keep consistent.
+async fn accept_hive_capability(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(update): Json<swarm_domain::HiveCapabilityUpdate>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let changed = apiary_service(&state)?
+        .accept_hive_capability(credential, &update, unix_timestamp())
+        .map_err(federation_catalog_error)?;
+    if changed {
+        state.control_room_notify.notify_waiters();
+    }
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
 }
 
 async fn federation_catalog(
@@ -8099,6 +8141,44 @@ async fn reconcile_federation_directory(
     service
         .apply_directory(&snapshot, unix_timestamp())
         .map_err(|_| "signed directory could not be verified or saved".to_owned())
+}
+
+/// Publishes what this Hive can do, so Keeper can route work to a Hive that
+/// holds the matching repository.
+///
+/// ⚠️ NON-FATAL BY DESIGN. A Keeper that does not yet serve this route, or a
+/// transient failure here, must not stop shared-work sync: capability is how
+/// routing gets BETTER, and losing it costs less than losing the task feed.
+/// Sealing is cheap and idempotent — an unchanged fleet re-seals to the same
+/// revision — so the next pass simply tries again.
+async fn reconcile_hive_capability(
+    service: &ApiaryService,
+    store: &TaskStore,
+    client: &federation_http::FederationHttpClient,
+    credential: &str,
+    now: i64,
+) -> Result<(), String> {
+    let (workers, truncated) = hive_capability::derive_hive_capability(store);
+    let update = service
+        .seal_local_hive_capability(
+            &workers,
+            truncated,
+            build_version(),
+            // The schema the database is ACTUALLY on, read live, rather than a
+            // constant compiled into this binary. A build running against a
+            // database it has not migrated is exactly the mismatch the Apiary
+            // view exists to surface, and a constant would hide it.
+            store.schema_version().unwrap_or_default(),
+            now,
+        )
+        .map_err(|_| "local capability could not be sealed".to_owned())?;
+    match client.publish_capability(credential, &update).await {
+        // The 404/405 arm shares this body deliberately: a Keeper on an older
+        // build has no such route, which is an ordinary rolling-update state
+        // rather than a failure worth reporting.
+        Ok(()) | Err(federation_http::FederationHttpError::RemoteRejected(404 | 405)) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 async fn reconcile_federation_catalog(

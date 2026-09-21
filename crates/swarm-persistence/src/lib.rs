@@ -31,6 +31,7 @@ mod decision_clarification;
 pub use decision_clarification::{
     ClarificationAttention, ClarificationDispatch, DecisionClarification,
 };
+mod hive_capability;
 mod provider_usage;
 mod queen_recovery;
 mod queen_review;
@@ -185,6 +186,7 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
+pub use hive_capability::{StoredHiveCapability, verify_hive_capability_update};
 pub use queen_recovery::RepeatedRecovery;
 pub use queen_review::{
     MAX_UNASKED_STILL_SECONDS, RepeatedReview, UnaskedStalledWork, UnroutedReadyWork,
@@ -335,7 +337,9 @@ const WORKER_SCOPED_ATTENTION_SCHEMA_VERSION: i64 = 182;
 const RECOVERY_REPETITION_SCHEMA_VERSION: i64 = 183;
 /// An answer the operator takes on themselves parks its task instead of dropping it.
 const OPERATOR_OWED_PARK_SCHEMA_VERSION: i64 = 184;
-const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_OWED_PARK_SCHEMA_VERSION;
+/// A Hive publishes what it can do, and a Keeper holds the fleet's capability.
+const HIVE_CAPABILITY_SCHEMA_VERSION_MARKER: i64 = 185;
+const CURRENT_SCHEMA_VERSION: i64 = HIVE_CAPABILITY_SCHEMA_VERSION_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4561,6 +4565,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < OPERATOR_OWED_PARK_SCHEMA_VERSION {
         crate::decisions::migrate_operator_owed_park(transaction)?;
+    }
+    if schema_version < HIVE_CAPABILITY_SCHEMA_VERSION_MARKER {
+        crate::hive_capability::migrate(transaction)?;
     }
     Ok(())
 }
@@ -10327,14 +10334,22 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 3 FROM pragma_table_info('queen_recovery_receipts')
                 WHERE name IN ('times_seen', 'first_seen_at', 'recorded_sequence')",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "decision_requests",
             artifact: "operator_action_labels",
             undo_sql: "ALTER TABLE decision_requests DROP COLUMN operator_action_labels",
             probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('decision_requests')
                 WHERE name = 'operator_action_labels'",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "apiary_hive_capabilities",
+            artifact: "",
+            undo_sql: "DROP TABLE apiary_hive_capabilities;
+                DROP TABLE local_hive_capability",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
+                AND name IN ('apiary_hive_capabilities', 'local_hive_capability')",
         },
     ];
 

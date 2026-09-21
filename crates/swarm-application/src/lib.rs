@@ -121,6 +121,59 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Keeper accepting one authenticated member's capability report.
+    ///
+    /// # Errors
+    /// Rejects invalid member credentials, signatures, revisions or storage.
+    pub fn accept_hive_capability(
+        &self,
+        credential: &str,
+        update: &swarm_domain::HiveCapabilityUpdate,
+        now: i64,
+    ) -> Result<bool, ApplicationError> {
+        self.store
+            .accept_hive_capability(credential, update, now)
+            .map_err(Into::into)
+    }
+
+    /// Seals this Hive's derived capability into one signed report.
+    ///
+    /// The workers are derived by the caller, because resolving a repository
+    /// remote means reading git and that is not database state.
+    ///
+    /// # Errors
+    /// Rejects non-members, invalid input and unavailable storage.
+    pub fn seal_local_hive_capability(
+        &self,
+        workers: &[swarm_domain::HiveCapabilityWorker],
+        workers_truncated: bool,
+        swarm_version: &str,
+        database_schema_version: i64,
+        now: i64,
+    ) -> Result<swarm_domain::HiveCapabilityUpdate, ApplicationError> {
+        self.store
+            .seal_local_hive_capability(
+                workers,
+                workers_truncated,
+                swarm_version,
+                database_schema_version,
+                now,
+            )
+            .map_err(Into::into)
+    }
+
+    /// The fleet's capability as this Hive holds it.
+    ///
+    /// # Errors
+    /// Returns corrupt stored evidence rather than a partial fleet.
+    pub fn federation_hive_capabilities(
+        &self,
+    ) -> Result<Vec<swarm_persistence::StoredHiveCapability>, ApplicationError> {
+        self.store
+            .federation_hive_capabilities()
+            .map_err(Into::into)
+    }
+
     /// Prepares the latest local profile for its current membership.
     ///
     /// # Errors
