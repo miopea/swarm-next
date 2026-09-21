@@ -470,6 +470,17 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
             state.reconcile_federation().await;
         }
     });
+    // One outbound event socket per Hive. The period is the gap BETWEEN passes;
+    // each pass holds the connection for its own bounded window, so this is a
+    // near-continuous connection rather than a poll.
+    let federation_events = state.clone();
+    let mut event_backoff = std::time::Duration::from_secs(2);
+    services.periodic(std::time::Duration::from_secs(1), true, move || {
+        let state = federation_events.clone();
+        async move {
+            swarm_api::poll_member_events(&state, &mut event_backoff).await;
+        }
+    });
     let email_delivery = state.clone();
     services.periodic(std::time::Duration::from_secs(30), false, move || {
         let state = email_delivery.clone();

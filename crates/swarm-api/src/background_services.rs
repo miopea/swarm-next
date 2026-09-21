@@ -53,8 +53,15 @@ impl BackgroundServices {
         //
         // 7 since 2026-09-11, when the release sweep that closes the tickets a
         // release carried was added.
+        //
+        // 8 since 2026-09-21, for the federation event socket. Raised
+        // deliberately, having checked what this comment asks: it IS owned by
+        // this struct, and its pass IS bounded — each pass dials, listens for a
+        // fixed window, and returns, precisely so shutdown can join it. An
+        // unbounded socket loop would have been the wrong shape and this
+        // tripwire is what forced that design.
         assert!(
-            self.tasks.len() < 7,
+            self.tasks.len() < 8,
             "all background services need a bounded owner"
         );
         let mut stop = self.stop.subscribe();

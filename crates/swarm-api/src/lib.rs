@@ -22,6 +22,8 @@ mod apiary_enrollment;
 mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
+mod federation_events;
+pub use federation_events::poll_member_events;
 pub mod federation_http;
 mod feedback;
 mod github_device;
@@ -436,6 +438,9 @@ pub struct AppState {
     /// anyway, and a lock here would suggest otherwise.
     degraded: Vec<DegradedSubsystem>,
     control_room_notify: Arc<Notify>,
+    /// Keeper's doorbell to connected members. In-memory on purpose: a missed
+    /// notice costs latency, never correctness, so it needs no durability.
+    federation_events: federation_events::FederationEventBus,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -565,6 +570,7 @@ impl AppState {
             test_start_admission: None,
             degraded: Vec::new(),
             control_room_notify: Arc::new(Notify::new()),
+            federation_events: federation_events::FederationEventBus::new(),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -4101,6 +4107,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/capability",
             axum::routing::put(accept_hive_capability),
         )
+        .route(
+            "/api/v1/federation/events",
+            get(federation_events::federation_events),
+        )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
             "/api/v1/federation/departure-readiness",
@@ -5775,6 +5785,7 @@ async fn exchange_federation_directory(
         .exchange_federation_directory(credential, &update, unix_timestamp())
         .map_err(federation_catalog_error)?;
     state.control_room_notify.notify_waiters();
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Directory);
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(directory)).into_response())
 }
 
@@ -6220,6 +6231,11 @@ async fn create_apiary_task(
         )
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
+    // Ring the doorbell so connected members fetch the ordered feed now rather
+    // than at their next poll. The task itself is NOT sent: members read it
+    // through the cursored feed, which is what keeps ordering and idempotency
+    // in one place.
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Tasks);
     Ok((
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -9699,6 +9715,29 @@ fn host_unavailable(error: &swarm_terminal::IpcError) -> ApiError {
         "terminal_host_unavailable",
         error.to_string(),
     )
+}
+
+/// Ring Keeper's doorbell for every connected member of this Apiary.
+///
+/// ⚠️ BEST EFFORT ON PURPOSE. A failure to announce must never fail the change
+/// that just succeeded: the durable write is the truth, and a member that
+/// misses the notice simply reconciles at its next poll — which is exactly
+/// today's behaviour. Anything stricter would make a latency optimisation able
+/// to break correctness.
+fn announce_federation_change(state: &AppState, kind: swarm_domain::FederationChangeKind) {
+    let Ok(service) = apiary_service(state) else {
+        return;
+    };
+    let Ok(Some(apiary_id)) = service.local_apiary_id() else {
+        return;
+    };
+    state
+        .federation_events
+        .announce(swarm_domain::FederationChangeNotice::new(
+            kind,
+            apiary_id,
+            unix_timestamp(),
+        ));
 }
 
 fn federation_node_credential(headers: &HeaderMap) -> Result<&str, ApiError> {

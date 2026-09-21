@@ -121,6 +121,28 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// The Apiary this Hive belongs to, if any.
+    ///
+    /// # Errors
+    /// Returns storage failures; a personal Hive is `None` rather than an error.
+    pub fn local_apiary_id(&self) -> Result<Option<swarm_domain::ApiaryId>, ApplicationError> {
+        Ok(self.store.local_hive_identity()?.hive.apiary_id)
+    }
+
+    /// The Apiary one authenticated member node belongs to.
+    ///
+    /// # Errors
+    /// Rejects malformed, unknown and expired credentials.
+    pub fn authenticated_member_apiary(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<swarm_domain::ApiaryId, ApplicationError> {
+        self.store
+            .authenticated_member_apiary(credential, now)
+            .map_err(Into::into)
+    }
+
     /// Keeper accepting one authenticated member's capability report.
     ///
     /// # Errors

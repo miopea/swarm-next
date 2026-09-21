@@ -77,6 +77,39 @@ pub struct PolicyConvergence {
 }
 
 impl TaskStore {
+    /// The Apiary one authenticated member node belongs to.
+    ///
+    /// Exists so a caller can authenticate a member WITHOUT being handed the
+    /// credential-matching internals. Used by the event socket, which must
+    /// recheck authority at connect time rather than trust an upgrade.
+    ///
+    /// # Errors
+    /// Rejects malformed, unknown and expired credentials.
+    pub fn authenticated_member_apiary(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<swarm_domain::ApiaryId, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationCredential);
+        }
+        let credential: [u8; 32] = Base64UrlUnpadded::decode_vec(credential)
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = crate::federation::authenticate_member_credential(
+            &transaction,
+            &identity,
+            &credential,
+            now,
+        )?;
+        transaction.commit()?;
+        Ok(member.apiary)
+    }
+
     /// Keeper replacing the Apiary's shared defaults, which advances the policy
     /// revision.
     ///
