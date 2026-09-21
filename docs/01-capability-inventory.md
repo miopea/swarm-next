@@ -132,7 +132,14 @@ target Hive privately chooses its worker and repository. **Observe** now adds a
 Keeper-derived, content-free shared-work pulse for each managed Hive: counts of
 Ready, Active, Blocked, Review, and active Jira ownership plus the last shared
 change. It never reports worker, repository, terminal, transcript, local-task,
-or credential data. **Assist** now provides a separate durable request/response
+or credential data. ⚠️ **SUPERSEDED 2026-09-21 — the pulse is no longer the
+boundary.** The operator decided Keeper gets a full live window into any Hive,
+and a Steward the same window over the Hives in their granted scope; the grant
+decides WHICH Hives, never HOW MUCH. The sentence above still describes the
+pulse accurately, and the pulse still exists as a cheap scannable summary — but
+it is no longer the limit of what **Observe** permits. See the amendments to ADR
+0034, doc 21 and doc 98, and `docs/specs/apiary-controls-scope.md`. **Assist**
+now provides a separate durable request/response
 loop: the Steward offers bounded help, Keeper rechecks scope, the target Hive
 polls it outward, and its operator accepts or declines without any terminal
 injection or engagement interruption. The Steward sees the resulting status on
