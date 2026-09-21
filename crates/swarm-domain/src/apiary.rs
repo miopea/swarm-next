@@ -816,7 +816,17 @@ pub struct FederationStewardTakeoverLease {
     pub source_hive_id: HiveId,
     pub target_hive_id: HiveId,
     pub source_operator_id: OperatorId,
-    pub stewardship_id: StewardshipId,
+    /// The stewardship this takeover was granted under.
+    ///
+    /// ⚠️ `None` MEANS KEEPER'S OWN AUTHORITY, exactly as `WatchAuthority::Keeper`
+    /// does for watching. The 2026-09-21 interview settled that Keeper may take
+    /// over on the same terms as a Steward, and Keeper holds no stewardship over
+    /// its own Apiary — so the absence is the authority rather than missing data.
+    ///
+    /// It also means a Keeper-sourced lease can never be transitioned through a
+    /// member credential: there is no stewardship for such a credential to
+    /// match, and Keeper acts on its own store instead.
+    pub stewardship_id: Option<StewardshipId>,
     pub reason: String,
     pub state: FederationStewardTakeoverState,
     pub revision: u64,

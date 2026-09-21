@@ -350,7 +350,9 @@ const APIARY_POLICY_SCHEMA_MARKER: i64 = 186;
 const FLEET_VERSION_SCHEMA_MARKER: i64 = 187;
 /// Watching a Hive is a recorded session the watched operator can always see.
 const APIARY_WATCH_SCHEMA_MARKER: i64 = 188;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_WATCH_SCHEMA_MARKER;
+/// Keeper may take over, so a takeover lease need not name a stewardship.
+const KEEPER_TAKEOVER_SCHEMA_MARKER: i64 = 189;
+const CURRENT_SCHEMA_VERSION: i64 = KEEPER_TAKEOVER_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4588,6 +4590,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < APIARY_WATCH_SCHEMA_MARKER {
         crate::apiary_watch::migrate(transaction)?;
+    }
+    if schema_version < KEEPER_TAKEOVER_SCHEMA_MARKER {
+        crate::federation_steward_takeovers::migrate_keeper_takeover_authority(transaction)?;
     }
     Ok(())
 }
@@ -10386,8 +10391,6 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'apiary_expected_release'",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "apiary_watches",
             artifact: "",
@@ -10395,6 +10398,49 @@ mod tests {
                 DROP TABLE local_federation_watches",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('apiary_watches', 'local_federation_watches')",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "apiary_steward_takeover_leases",
+            artifact: "",
+            undo_sql: "CREATE TABLE apiary_steward_takeover_leases_undo (
+                     lease_id TEXT PRIMARY KEY, apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+                     source_hive_id TEXT NOT NULL REFERENCES hives(id),
+                     target_hive_id TEXT NOT NULL REFERENCES hives(id),
+                     source_operator_id TEXT NOT NULL REFERENCES operators(id),
+                     stewardship_id TEXT NOT NULL REFERENCES stewardships(id),
+                     reason TEXT NOT NULL,
+                     state TEXT NOT NULL CHECK (state IN ('requested','active','released','reclaimed','expired')),
+                     revision INTEGER NOT NULL, requested_at INTEGER NOT NULL, acknowledged_at INTEGER,
+                     expires_at INTEGER NOT NULL, ended_at INTEGER, updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO apiary_steward_takeover_leases_undo
+                     SELECT * FROM apiary_steward_takeover_leases WHERE stewardship_id IS NOT NULL;
+                 DROP TABLE apiary_steward_takeover_leases;
+                 ALTER TABLE apiary_steward_takeover_leases_undo
+                     RENAME TO apiary_steward_takeover_leases;
+                 CREATE UNIQUE INDEX IF NOT EXISTS one_open_takeover_per_target
+                     ON apiary_steward_takeover_leases(apiary_id, target_hive_id)
+                     WHERE state IN ('requested','active');
+                 CREATE INDEX IF NOT EXISTS apiary_steward_takeover_participants
+                     ON apiary_steward_takeover_leases(apiary_id, source_hive_id, target_hive_id, requested_at DESC);
+                 CREATE TABLE local_federation_steward_takeover_leases_undo (
+                     lease_id TEXT PRIMARY KEY, apiary_id TEXT NOT NULL, source_hive_id TEXT NOT NULL,
+                     target_hive_id TEXT NOT NULL, source_operator_id TEXT NOT NULL,
+                     stewardship_id TEXT NOT NULL, reason TEXT NOT NULL,
+                     state TEXT NOT NULL CHECK (state IN ('requested','active','released','reclaimed','expired')),
+                     revision INTEGER NOT NULL, requested_at INTEGER NOT NULL, acknowledged_at INTEGER,
+                     expires_at INTEGER NOT NULL, ended_at INTEGER, synced_at INTEGER NOT NULL
+                 );
+                 INSERT INTO local_federation_steward_takeover_leases_undo
+                     SELECT * FROM local_federation_steward_takeover_leases
+                     WHERE stewardship_id IS NOT NULL;
+                 DROP TABLE local_federation_steward_takeover_leases;
+                 ALTER TABLE local_federation_steward_takeover_leases_undo
+                     RENAME TO local_federation_steward_takeover_leases",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM pragma_table_info('apiary_steward_takeover_leases')
+                WHERE name = 'stewardship_id' AND \"notnull\" = 0)",
         },
     ];
 

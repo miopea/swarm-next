@@ -178,12 +178,13 @@ impl TaskStore {
             FederationStewardTakeoverRelayRole::Target
         } else if member.hive == lease.source_hive_id
             && member.operator == lease.source_operator_id
-            && authorized_stewardship(
-                &transaction,
-                member.apiary,
-                member.operator,
-                lease.target_hive_id,
-            )? == Some(lease.stewardship_id)
+            // ⚠️ NOT `== lease.stewardship_id`. A Keeper-sourced lease carries
+            // `None`, and comparing Options would have matched any member who
+            // also has no stewardship — authorizing them onto Keeper's relay.
+            // The hive and operator checks above already make that unreachable,
+            // but this is the kind of safety that must not depend on a
+            // coincidence two lines up.
+            && member_holds_source_authority(&transaction, &member, &lease)?
         {
             FederationStewardTakeoverRelayRole::Source
         } else {
@@ -191,6 +192,131 @@ impl TaskStore {
         };
         transaction.commit()?;
         Ok(FederationStewardTakeoverRelayAuthorization { lease, role })
+    }
+
+    /// Keeper taking over a member Hive, on its own authority.
+    ///
+    /// ⚠️ KEEPER DOES NOT TRAVEL THE MEMBER COMMAND PATH. That path exists so a
+    /// Steward's Hive can journal an intent before network I/O and retry it
+    /// idempotently; Keeper IS the authority and writes to its own store, so
+    /// routing it through an outbound queue to itself would be ceremony that
+    /// could disagree with the table beside it.
+    ///
+    /// Everything the ADR requires of a Steward still holds: one bounded lease
+    /// per target, a REASON (unlike watching, which the operator explicitly
+    /// exempted), an active member target, and a conflict rather than a silent
+    /// replacement when someone already holds the Hive.
+    ///
+    /// # Errors
+    /// Refuses a caller that is not this Apiary's Keeper, an empty or oversized
+    /// reason, a target that is not an active member, and a target somebody is
+    /// already holding.
+    pub fn open_keeper_takeover(
+        &self,
+        target_hive_id: HiveId,
+        reason: &str,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverLease, TaskStoreError> {
+        if !valid_reason(reason) {
+            return Err(TaskStoreError::InvalidFederationStewardTakeover);
+        }
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let apiary_id = keeper_apiary(&transaction, &identity)?;
+        expire_open_leases(&transaction, apiary_id, now)?;
+        if !active_member_hive(&transaction, apiary_id, target_hive_id)? {
+            return Err(TaskStoreError::InvalidFederationStewardTakeover);
+        }
+        if open_lease_for_target(&transaction, apiary_id, target_hive_id)?.is_some() {
+            return Err(TaskStoreError::FederationStewardTakeoverQueueFull);
+        }
+        let lease = FederationStewardTakeoverLease {
+            id: FederationStewardTakeoverLeaseId::new(),
+            apiary_id,
+            source_hive_id: identity.hive.id,
+            target_hive_id,
+            source_operator_id: identity.operator.id,
+            // Keeper's own authority. See `FederationStewardTakeoverLease`.
+            stewardship_id: None,
+            reason: reason.trim().to_owned(),
+            state: FederationStewardTakeoverState::Requested,
+            revision: 1,
+            requested_at: now,
+            acknowledged_at: None,
+            expires_at: now.saturating_add(REQUEST_LIFETIME_SECONDS),
+            ended_at: None,
+        };
+        insert_keeper_lease(&transaction, &lease)?;
+        transaction.commit()?;
+        Ok(lease)
+    }
+
+    /// Keeper extending or ending a takeover it holds.
+    ///
+    /// ⚠️ NOT REVISION-FENCED EITHER, for the same reason reclaim is not: the
+    /// target acknowledging moves the revision, and Keeper would otherwise have
+    /// to re-read before every renewal to keep holding a lease it already owns.
+    /// The exclusivity that matters is enforced by `one_open_takeover_per_target`
+    /// and by requiring Keeper to be the recorded source.
+    ///
+    /// # Errors
+    /// Refuses a caller that is not this Apiary's Keeper, and a lease Keeper
+    /// does not hold or that is no longer open.
+    pub fn transition_keeper_takeover(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        to: FederationStewardTakeoverState,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverLease, TaskStoreError> {
+        if !matches!(
+            to,
+            FederationStewardTakeoverState::Active | FederationStewardTakeoverState::Released
+        ) {
+            return Err(TaskStoreError::InvalidFederationStewardTakeover);
+        }
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let apiary_id = keeper_apiary(&transaction, &identity)?;
+        expire_open_leases(&transaction, apiary_id, now)?;
+        let lease = lease_by_id(&transaction, lease_id)?
+            .filter(|lease| {
+                lease.apiary_id == apiary_id
+                    && lease.source_hive_id == identity.hive.id
+                    && lease.source_operator_id == identity.operator.id
+                    && lease.stewardship_id.is_none()
+                    && lease.state == FederationStewardTakeoverState::Active
+            })
+            .ok_or(TaskStoreError::InvalidFederationStewardTakeover)?;
+        let expires_at = if to == FederationStewardTakeoverState::Active {
+            now.saturating_add(ACTIVE_LIFETIME_SECONDS)
+        } else {
+            lease.expires_at
+        };
+        let ended_at = (!to.is_open()).then_some(now);
+        let updated = FederationStewardTakeoverLease {
+            state: to,
+            revision: lease.revision.saturating_add(1),
+            expires_at,
+            ended_at,
+            ..lease
+        };
+        transaction.execute(
+            "UPDATE apiary_steward_takeover_leases
+             SET state = ?1, revision = ?2, expires_at = ?3, ended_at = ?4, updated_at = ?5
+             WHERE lease_id = ?6",
+            params![
+                updated.state.to_string(),
+                updated.revision,
+                updated.expires_at,
+                updated.ended_at,
+                now,
+                updated.id.to_string()
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(updated)
     }
 
     /// Journals a reasoned Steward takeover request before network I/O.
@@ -644,6 +770,10 @@ fn apply_authenticated_command(
             reason,
             ..
         } => {
+            // A command arriving on a member credential is always a Steward's.
+            // Keeper does not travel this path — it acts on its own store — so
+            // a missing stewardship here is still a refusal rather than Keeper
+            // authority.
             let Some(stewardship_id) = authorized_stewardship(
                 transaction,
                 member.apiary,
@@ -665,7 +795,7 @@ fn apply_authenticated_command(
                 source_hive_id: member.hive,
                 target_hive_id: *target_hive_id,
                 source_operator_id: member.operator,
-                stewardship_id,
+                stewardship_id: Some(stewardship_id),
                 reason: reason.trim().to_owned(),
                 state: FederationStewardTakeoverState::Requested,
                 revision: 1,
@@ -738,6 +868,37 @@ fn apply_authenticated_command(
     }
 }
 
+/// Whether this member credential still carries the authority the lease was
+/// granted under.
+///
+/// ⚠️ A KEEPER-SOURCED LEASE ANSWERS `false` HERE, ALWAYS AND ON PURPOSE. Its
+/// `stewardship_id` is `None`, and comparing `None` to "this member has no
+/// stewardship" would read as a match.
+///
+/// ⚠️ THIS GUARD IS UNREACHABLE TODAY AND IS KEPT ANYWAY — stated plainly
+/// because an ablation proved it. Removing the `None` arm and comparing the two
+/// Options directly leaves every takeover test passing, because `actor_allowed`
+/// independently requires the caller's hive and operator to match the lease's
+/// source, and Keeper's hive is never a member. So nothing here PINS this; it is
+/// defence in depth against a future refactor of `actor_allowed`, and claiming
+/// a test covers it would be exactly the kind of false assurance this file is
+/// careful about elsewhere.
+fn member_holds_source_authority(
+    transaction: &Transaction<'_>,
+    member: &MemberCredentialContext,
+    lease: &FederationStewardTakeoverLease,
+) -> Result<bool, TaskStoreError> {
+    let Some(granted) = lease.stewardship_id else {
+        return Ok(false);
+    };
+    Ok(authorized_stewardship(
+        transaction,
+        member.apiary,
+        member.operator,
+        lease.target_hive_id,
+    )? == Some(granted))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn transition_lease(
     transaction: &Transaction<'_>,
@@ -779,13 +940,7 @@ fn transition_lease(
         || lease.state != from
         || (fence_revision && lease.revision != expected_revision)
         || lease.expires_at <= now
-        || (source_action
-            && authorized_stewardship(
-                transaction,
-                member.apiary,
-                member.operator,
-                lease.target_hive_id,
-            )? != Some(lease.stewardship_id))
+        || (source_action && !member_holds_source_authority(transaction, member, &lease)?)
     {
         return Ok((FederationStewardTakeoverOutcome::Rejected, Some(lease)));
     }
@@ -865,6 +1020,22 @@ fn authorized_stewardship(
         .map_err(Into::into)
 }
 
+/// The Apiary this Hive keeps, refusing any caller that is not its Keeper.
+fn keeper_apiary(
+    transaction: &Transaction<'_>,
+    identity: &swarm_domain::HiveIdentity,
+) -> Result<swarm_domain::ApiaryId, TaskStoreError> {
+    transaction
+        .query_row(
+            "SELECT id FROM apiaries WHERE keeper_operator_id = ?1 AND collapsed_at IS NULL",
+            params![identity.operator.id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryKeeperRequired)
+        .and_then(|id| parse_domain_id(&id).map_err(Into::into))
+}
+
 fn active_member_hive(
     transaction: &Transaction<'_>,
     apiary_id: swarm_domain::ApiaryId,
@@ -923,7 +1094,7 @@ fn insert_keeper_lease(
             lease.source_hive_id.to_string(),
             lease.target_hive_id.to_string(),
             lease.source_operator_id.to_string(),
-            lease.stewardship_id.to_string(),
+            lease.stewardship_id.map(|id| id.to_string()),
             lease.reason,
             lease.state.to_string(),
             lease.revision,
@@ -953,7 +1124,7 @@ fn insert_local_lease(
             lease.source_hive_id.to_string(),
             lease.target_hive_id.to_string(),
             lease.source_operator_id.to_string(),
-            lease.stewardship_id.to_string(),
+            lease.stewardship_id.map(|id| id.to_string()),
             lease.reason,
             lease.state.to_string(),
             lease.revision,
@@ -998,7 +1169,10 @@ fn takeover_lease_from_row(
         source_hive_id: parse_domain_id(&row.get::<_, String>(2)?)?,
         target_hive_id: parse_domain_id(&row.get::<_, String>(3)?)?,
         source_operator_id: parse_domain_id(&row.get::<_, String>(4)?)?,
-        stewardship_id: parse_domain_id(&row.get::<_, String>(5)?)?,
+        stewardship_id: row
+            .get::<_, Option<String>>(5)?
+            .map(|id| parse_domain_id(&id))
+            .transpose()?,
         reason: row.get(6)?,
         state: FederationStewardTakeoverState::from_str(&row.get::<_, String>(7)?)
             .map_err(|()| rusqlite::Error::InvalidQuery)?,
@@ -1126,6 +1300,57 @@ fn valid_lease(lease: &FederationStewardTakeoverLease, now: i64) -> bool {
             FederationStewardTakeoverState::Expired => true,
         }
         && lease.state.is_open() == lease.ended_at.is_none()
+}
+
+/// Keeper may take over, so a lease need not name a stewardship.
+///
+/// ⚠️ A TABLE REBUILD, because `SQLite` cannot drop a `NOT NULL`. Both lease tables
+/// are rebuilt rather than only the Keeper-side one: the member's local
+/// projection mirrors the same rows, and a member that could not store a
+/// Keeper-sourced lease would fail to project the takeover being done to it —
+/// which is the one thing it must always be able to show its operator.
+pub(super) fn migrate_keeper_takeover_authority(
+    transaction: &Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE apiary_steward_takeover_leases_rebuilt (
+             lease_id TEXT PRIMARY KEY, apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             source_hive_id TEXT NOT NULL REFERENCES hives(id), target_hive_id TEXT NOT NULL REFERENCES hives(id),
+             source_operator_id TEXT NOT NULL REFERENCES operators(id), stewardship_id TEXT REFERENCES stewardships(id),
+             reason TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('requested','active','released','reclaimed','expired')),
+             revision INTEGER NOT NULL, requested_at INTEGER NOT NULL, acknowledged_at INTEGER,
+             expires_at INTEGER NOT NULL, ended_at INTEGER, updated_at INTEGER NOT NULL
+         );
+         INSERT INTO apiary_steward_takeover_leases_rebuilt
+             SELECT lease_id, apiary_id, source_hive_id, target_hive_id, source_operator_id,
+                    stewardship_id, reason, state, revision, requested_at, acknowledged_at,
+                    expires_at, ended_at, updated_at
+             FROM apiary_steward_takeover_leases;
+         DROP TABLE apiary_steward_takeover_leases;
+         ALTER TABLE apiary_steward_takeover_leases_rebuilt
+             RENAME TO apiary_steward_takeover_leases;
+         CREATE UNIQUE INDEX IF NOT EXISTS one_open_takeover_per_target
+             ON apiary_steward_takeover_leases(apiary_id, target_hive_id)
+             WHERE state IN ('requested','active');
+         CREATE INDEX IF NOT EXISTS apiary_steward_takeover_participants
+             ON apiary_steward_takeover_leases(apiary_id, source_hive_id, target_hive_id, requested_at DESC);
+         CREATE TABLE local_federation_steward_takeover_leases_rebuilt (
+             lease_id TEXT PRIMARY KEY, apiary_id TEXT NOT NULL, source_hive_id TEXT NOT NULL,
+             target_hive_id TEXT NOT NULL, source_operator_id TEXT NOT NULL, stewardship_id TEXT,
+             reason TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('requested','active','released','reclaimed','expired')),
+             revision INTEGER NOT NULL, requested_at INTEGER NOT NULL, acknowledged_at INTEGER,
+             expires_at INTEGER NOT NULL, ended_at INTEGER, synced_at INTEGER NOT NULL
+         );
+         INSERT INTO local_federation_steward_takeover_leases_rebuilt
+             SELECT lease_id, apiary_id, source_hive_id, target_hive_id, source_operator_id,
+                    stewardship_id, reason, state, revision, requested_at, acknowledged_at,
+                    expires_at, ended_at, synced_at
+             FROM local_federation_steward_takeover_leases;
+         DROP TABLE local_federation_steward_takeover_leases;
+         ALTER TABLE local_federation_steward_takeover_leases_rebuilt
+             RENAME TO local_federation_steward_takeover_leases;",
+    )?;
+    transaction.pragma_update(None, "user_version", crate::KEEPER_TAKEOVER_SCHEMA_MARKER)
 }
 
 pub(super) fn migrate_federation_steward_takeovers(
@@ -1328,6 +1553,144 @@ mod tests {
                 .expect("projection");
         }
         active
+    }
+
+    /// ⚠️ KEEPER TAKES OVER ON THE SAME TERMS AS A STEWARD, which the
+    /// 2026-09-21 interview settled. Keeper holds no stewardship over its own
+    /// Apiary, so the lease records `None` — the absence IS the authority,
+    /// exactly as `WatchAuthority::Keeper` works for watching.
+    ///
+    /// The target's side is unchanged: it still has to acknowledge before
+    /// anything is active, and it can still reclaim.
+    #[test]
+    fn keeper_takes_over_on_its_own_authority_and_the_target_still_acknowledges() {
+        let now = 700_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+
+        let lease = keeper
+            .open_keeper_takeover(
+                target_hive_id,
+                "Incident: the operator is unreachable.",
+                now + 53,
+            )
+            .expect("keeper takeover");
+        assert_eq!(lease.state, FederationStewardTakeoverState::Requested);
+        assert_eq!(
+            lease.stewardship_id, None,
+            "Keeper's own authority, not a stewardship it does not hold"
+        );
+
+        // ⚠️ A REQUESTED LEASE GRANTS NOTHING, including to Keeper.
+        assert!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &target_acceptance.node_credential,
+                    lease.id,
+                    lease.revision,
+                    now + 54,
+                )
+                .is_err(),
+            "no relay before the target has acknowledged"
+        );
+
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 55)
+            .expect("target poll");
+        assert_eq!(
+            inbox.leases.len(),
+            1,
+            "the target is told who is taking over"
+        );
+        assert_eq!(inbox.leases[0].stewardship_id, None);
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind queen");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 56)
+            .expect("target projection");
+        assert!(
+            !target
+                .worker_accepts_injection(queen.id, now + 56)
+                .expect("automation guard"),
+            "a Keeper takeover pauses competing Queen automation like any other"
+        );
+
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(
+                lease.id,
+                inbox.leases[0].revision,
+                now + 57,
+            )
+            .expect("journal acknowledgement");
+        let active = keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &acknowledgement.command,
+                now + 58,
+            )
+            .expect("acknowledge");
+        assert_eq!(active.outcome, FederationStewardTakeoverOutcome::Applied);
+        assert_eq!(
+            active.lease.as_ref().map(|lease| lease.state),
+            Some(FederationStewardTakeoverState::Active)
+        );
+
+        // Keeper renews and releases on its own store, without a command queue.
+        let renewed = keeper
+            .transition_keeper_takeover(lease.id, FederationStewardTakeoverState::Active, now + 59)
+            .expect("keeper renew");
+        assert!(renewed.expires_at > now + 59);
+        let released = keeper
+            .transition_keeper_takeover(
+                lease.id,
+                FederationStewardTakeoverState::Released,
+                now + 60,
+            )
+            .expect("keeper release");
+        assert_eq!(released.state, FederationStewardTakeoverState::Released);
+        assert_eq!(released.ended_at, Some(now + 60));
+    }
+
+    /// A Steward holding the very same scope cannot drive a lease Keeper holds.
+    ///
+    /// ⚠️ WHAT THIS DOES AND DOES NOT PROVE. It pins the refusal, which is worth
+    /// having. It does NOT pin the `None`-arm in `member_holds_source_authority`:
+    /// ablating that guard leaves this test green, because the hive and operator
+    /// checks refuse first. Said out loud because a test whose name suggests it
+    /// guards something it does not is worse than no test — the refusal here is
+    /// real, its cause is elsewhere.
+    #[test]
+    fn a_keeper_lease_is_not_drivable_through_a_member_credential() {
+        let now = 700_000;
+        let (keeper, steward, steward_acceptance, target, target_acceptance) = setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let lease = keeper
+            .open_keeper_takeover(target_hive_id, "Incident.", now + 53)
+            .expect("keeper takeover");
+
+        // The Steward has a real stewardship over this very Hive, and still
+        // cannot touch a lease Keeper holds.
+        assert!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &steward_acceptance.node_credential,
+                    lease.id,
+                    lease.revision,
+                    now + 54,
+                )
+                .is_err(),
+            "a Steward does not inherit Keeper's lease by holding the same scope"
+        );
+        assert!(
+            steward
+                .queue_federation_steward_takeover_renewal(lease.id, lease.revision, now + 55)
+                .is_err(),
+            "and cannot even journal a renewal of it"
+        );
+        let _ = target;
     }
 
     /// ⚠️ RECLAIM MUST NOT LOSE A RACE IT IS THE WHOLE POINT OF WINNING.
