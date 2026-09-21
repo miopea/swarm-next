@@ -1508,6 +1508,34 @@ export async function cancelApiaryClaimHandoff(operatorToken: string, handoffId:
   return response.json() as Promise<FederationClaimHandoff>;
 }
 
+/** Why someone may watch a Hive. Breadth only — it never varies the depth. */
+export type WatchAuthority = "keeper" | { steward: string };
+
+export type ApiaryWatch = {
+  id: string;
+  apiary_id: string;
+  /** Who is watching. Shown to the watched operator while it is open. */
+  watcher_operator_id: string;
+  target_hive_id: string;
+  authority: WatchAuthority;
+  state: "requested" | "active" | "ended";
+  requested_at: number;
+  acknowledged_at: number | null;
+  expires_at: number;
+  ended_at: number | null;
+};
+
+/** Who is watching THIS Hive right now, read from its own local mirror. */
+export async function fetchWatchedBy(operatorToken: string, signal?: AbortSignal): Promise<ApiaryWatch[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/watched-by", { signal });
+  return response.json() as Promise<ApiaryWatch[]>;
+}
+
+/** Ends a watch from the watched Hive's own side. */
+export async function endApiaryWatch(operatorToken: string, watchId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/apiary/watches/${encodeURIComponent(watchId)}`, { method: "DELETE" });
+}
+
 /** Where a Hive stands against the release the Apiary expects. */
 export type FleetVersionStanding = "current" | "development" | "behind_within_grace" | "behind" | "schema_behind" | "unreadable" | "unknown";
 

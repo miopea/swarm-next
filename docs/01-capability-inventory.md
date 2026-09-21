@@ -155,6 +155,21 @@ promoted Jira projects, active reservations or durable home-Hive ownership, and
 Steward scopes from the existing private contracts. Routine worker activity
 remains inside each Hive; invitations and configuration stay in Settings.
 
+Hive watching checkpoint: the CONTROL PLANE for watching a member Hive is
+implemented; the frame relay is not, and no terminal output crosses the Apiary
+yet. A watch is authorized at Keeper against the grants as they stand — Keeper
+over any Hive, a Steward over the Hives in scope, one authority function with no
+depth parameter because the grant decides which Hives and never how much. The
+session is recorded and the frames are not: neither table has a column that
+could hold terminal output. A watch is created `requested`, relays only once the
+TARGET acknowledges, and the member writes its local mirror before acknowledging
+— so an acknowledgement means the watch is already on the watched operator's
+screen. That notice is read app-wide from the member's own mirror, appears from
+`requested` onward, and can end the watch from the watched machine. A watch
+lapses after five minutes unless renewed, and a lapsed one cannot be revived.
+There is no reason field, by the operator's explicit choice, so the audit answers
+who looked and when but never why. See ADR 0107.
+
 Fleet version standing checkpoint: the Apiary records which release it expects
 and when that release first appeared, and judges every reporting Hive against
 it from the capability report it already holds. A Hive still behind after a

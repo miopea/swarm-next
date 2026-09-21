@@ -1059,6 +1059,12 @@ test("creates a persisted task draft from the task board", async () => {
         );
       });
     }
+    // Answered by URL rather than from the ordered queue below: this notice
+    // polls app-wide, so letting it take a positional slot would desynchronise
+    // every response after it.
+    if (String(url).includes("/api/v1/apiary/watched-by")) {
+      return Promise.resolve(ok([]));
+    }
     if (String(url).includes("/api/v1/orchestration/queen-policy")) {
       return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     }

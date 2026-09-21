@@ -7,6 +7,7 @@ import ConversationRetry from "./workers/ConversationRetry";
 import { conversationGap } from "./workers/conversationGap";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
+import WatchedByNotice from "./WatchedByNotice";
 import StaleBundleNotice, { reloadBrowser } from "./StaleBundleNotice";
 import { watchDevelopmentBuild as observeDevelopmentBuild } from "./runtime/watchDevelopmentBuild";
 import { useDogfoodCollection } from "./runtime/useDogfoodCollection";
@@ -109,6 +110,7 @@ import {
   stopTunnel,
   type TunnelStatus,
   recordAttentionSeen,
+  fetchWatchedBy, endApiaryWatch, type ApiaryWatch,
 } from "./api";
 import type { BlockedEscalation, ReleaseVersionNotes, UnsettledReview } from "./api";
 import { bundleIsStale } from "./staleBundle";
@@ -526,6 +528,19 @@ export function App() {
     if (!signal.aborted) setPublicAddress(status);
   }, [operatorToken]);
   useVisiblePolling(refreshPublicAddress, Boolean(operatorToken) && !detached, 15_000);
+
+  // ⚠️ READ APP-WIDE FOR THE SAME REASON THE TUNNEL IS, and with more at stake.
+  // Watching a Hive is a full live window into it, allowed only on the promise
+  // that it is never invisible; a notice confined to one screen would be an
+  // invisible watch for anyone not on that screen. This reads the Hive's own
+  // local mirror, so it keeps saying so while Keeper is unreachable.
+  const [watchedBy, setWatchedBy] = useState<ApiaryWatch[]>();
+  const refreshWatchedBy = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    const watches = await fetchWatchedBy(operatorToken, signal);
+    if (!signal.aborted) setWatchedBy(watches);
+  }, [operatorToken]);
+  useVisiblePolling(refreshWatchedBy, Boolean(operatorToken) && !detached, 10_000);
 
   const [presence, setPresence] = useState<OperatorPresence>();
   const readRecentActivity = useCallback((signal: AbortSignal) => {
@@ -1967,6 +1982,14 @@ export function App() {
                 <span><DiagnosticsIcon /> System</span>
               </button>
 
+              <WatchedByNotice
+                watches={watchedBy}
+                onEnd={async (watchId) => {
+                  if (!operatorToken) return;
+                  await endApiaryWatch(operatorToken, watchId);
+                  setWatchedBy((current) => current?.filter((watch) => watch.id !== watchId));
+                }}
+              />
               <PublicAddressWarning
                 status={publicAddress}
                 onOpen={() => openSettings("settings-access")}

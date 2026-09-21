@@ -252,6 +252,14 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    warning rendered as plain text. It is a state, not a destination, so it is
    styled as a warning and carries the control that ends it. */
 .surface-nav .public-address-warning { display: grid; gap: 6px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
+/* Scoped into the rail for the same reason, and styled as a warning rather than
+   a neutral note on purpose: somebody is looking at this Hive right now, and
+   that is a state its operator has to be able to notice at a glance rather than
+   read past. It carries the control that ends it, like the address warning. */
+.surface-nav .watched-by-notice { display: grid; gap: 6px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
+.surface-nav .watched-by-notice strong { color: var(--text); font-size: .82rem; }
+.surface-nav .watched-by-notice small { color: var(--text-muted); font-size: .74rem; line-height: 1.35; }
+.surface-nav .watched-by-notice button { min-height: 44px; justify-content: flex-start; }
 /* Scoped into the rail for the same reason as the address warning above:
    `.surface-nav button` sets its own display and background at higher
    specificity, so a bare selector loses on both count and order. */
@@ -272,6 +280,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    rather than duplicated into the media query — and it protects the panels if
    the nav ever gains columns at another width. */
 .surface-nav .stale-bundle-notice,
+.surface-nav .watched-by-notice,
 .surface-nav .public-address-warning { grid-column: 1 / -1; }
 /* The actions wrap rather than overflow when the panel is still narrow. */
 .surface-nav .stale-bundle-actions { flex-wrap: wrap; }

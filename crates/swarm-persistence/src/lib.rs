@@ -32,6 +32,7 @@ pub use decision_clarification::{
     ClarificationAttention, ClarificationDispatch, DecisionClarification,
 };
 mod apiary_policy;
+mod apiary_watch;
 mod fleet_version;
 mod hive_capability;
 mod provider_usage;
@@ -347,7 +348,9 @@ const HIVE_CAPABILITY_SCHEMA_VERSION_MARKER: i64 = 185;
 const APIARY_POLICY_SCHEMA_MARKER: i64 = 186;
 /// The Apiary records which release it expects, so a Hive behind it can be raised.
 const FLEET_VERSION_SCHEMA_MARKER: i64 = 187;
-const CURRENT_SCHEMA_VERSION: i64 = FLEET_VERSION_SCHEMA_MARKER;
+/// Watching a Hive is a recorded session the watched operator can always see.
+const APIARY_WATCH_SCHEMA_MARKER: i64 = 188;
+const CURRENT_SCHEMA_VERSION: i64 = APIARY_WATCH_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4582,6 +4585,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < FLEET_VERSION_SCHEMA_MARKER {
         crate::fleet_version::migrate(transaction)?;
+    }
+    if schema_version < APIARY_WATCH_SCHEMA_MARKER {
+        crate::apiary_watch::migrate(transaction)?;
     }
     Ok(())
 }
@@ -10373,14 +10379,22 @@ mod tests {
                 AND name IN ('apiary_policy_settings', 'local_policy_settings',
                              'local_policy_manifest')",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "apiary_expected_release",
             artifact: "",
             undo_sql: "DROP TABLE apiary_expected_release",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'apiary_expected_release'",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "apiary_watches",
+            artifact: "",
+            undo_sql: "DROP TABLE apiary_watches;
+                DROP TABLE local_federation_watches",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
+                AND name IN ('apiary_watches', 'local_federation_watches')",
         },
     ];
 

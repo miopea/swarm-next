@@ -1149,6 +1149,12 @@ impl AppState {
             tracing::warn!(%error, "Apiary policy could not refresh; shared-work sync continues");
         }
         if let Some(store) = self.task_store.as_ref()
+            && let Err(error) =
+                reconcile_apiary_watches(store, &client, &connection.node_credential, now).await
+        {
+            tracing::warn!(%error, "this Hive could not learn who is watching it");
+        }
+        if let Some(store) = self.task_store.as_ref()
             && let Err(error) = reconcile_hive_capability(
                 &service,
                 store,
@@ -4062,6 +4068,19 @@ fn api_router(state: AppState) -> Router {
             post(apiary_decline_claim_handoff),
         )
         .route("/api/v1/apiary/fleet-versions", get(apiary_fleet_versions))
+        .route(
+            "/api/v1/apiary/watches",
+            get(apiary_watch_audit).post(open_apiary_watch),
+        )
+        .route(
+            "/api/v1/apiary/watches/{watch_id}",
+            axum::routing::delete(end_apiary_watch),
+        )
+        .route(
+            "/api/v1/apiary/watches/{watch_id}/renewal",
+            post(renew_apiary_watch),
+        )
+        .route("/api/v1/apiary/watched-by", get(apiary_watched_by))
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route("/api/v1/apiary/sync-retry", post(retry_apiary_sync))
         .route(
@@ -4144,6 +4163,14 @@ fn api_router(state: AppState) -> Router {
             get(federation_events::federation_events),
         )
         .route("/api/v1/federation/policy", get(federation_policy))
+        .route(
+            "/api/v1/federation/watches",
+            get(federation_watches).post(open_federation_watch),
+        )
+        .route(
+            "/api/v1/federation/watches/{watch_id}/acknowledgement",
+            axum::routing::put(acknowledge_federation_watch),
+        )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
             "/api/v1/federation/departure-readiness",
@@ -5318,6 +5345,129 @@ async fn apiary_fleet_versions(
             .collect(),
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)).into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct OpenWatchRequest {
+    target_hive_id: swarm_domain::HiveId,
+}
+
+/// The Keeper's own operator opening a window into a member Hive.
+async fn open_apiary_watch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<OpenWatchRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let watcher = store
+        .local_hive_identity()
+        .map_err(|error| task_store_error(&error))?
+        .operator
+        .id;
+    let watch = store
+        .open_apiary_watch(watcher, request.target_hive_id, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
+}
+
+/// A Steward asking Keeper for the same window, over its outbound connection.
+async fn open_federation_watch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<OpenWatchRequest>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let watch = task_store(&state)?
+        .open_apiary_watch_for_member(credential, request.target_hive_id, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
+}
+
+/// Ends a watch. Open to either side — see `end_apiary_watch` in persistence.
+async fn end_apiary_watch(
+    State(state): State<Arc<AppState>>,
+    Path(watch_id): Path<swarm_domain::ApiaryWatchId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_store(&state)?
+        .end_apiary_watch(watch_id, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+async fn renew_apiary_watch(
+    State(state): State<Arc<AppState>>,
+    Path(watch_id): Path<swarm_domain::ApiaryWatchId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let watcher = store
+        .local_hive_identity()
+        .map_err(|error| task_store_error(&error))?
+        .operator
+        .id;
+    let watch = store
+        .renew_apiary_watch(watcher, watch_id, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
+}
+
+/// Who looked, and when.
+async fn apiary_watch_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let watches = task_store(&state)?
+        .apiary_watch_audit(50)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watches)).into_response())
+}
+
+/// ⚠️ THE ALWAYS-VISIBLE NOTICE. This is what the watched operator's own screen
+/// reads, from their own Hive's mirror — so it keeps working while Keeper is
+/// unreachable. A watch that is happening and a screen that does not say so is
+/// the failure this whole design exists to prevent.
+async fn apiary_watched_by(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let watches = task_store(&state)?
+        .local_open_watches(unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watches)).into_response())
+}
+
+/// Served to a member about ITSELF: who is watching it right now.
+async fn federation_watches(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let watches = task_store(&state)?
+        .federation_watch_inbox(credential, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watches)).into_response())
+}
+
+async fn acknowledge_federation_watch(
+    State(state): State<Arc<AppState>>,
+    Path(watch_id): Path<swarm_domain::ApiaryWatchId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let watch = task_store(&state)?
+        .acknowledge_federation_watch(credential, watch_id, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
 }
 
 async fn apiary_sync_health(
@@ -8282,6 +8432,37 @@ async fn reconcile_federation_directory(
 /// which is an ordinary rolling-update state. And storing the defaults changes
 /// no local setting — it records what the Apiary expects so drift becomes
 /// computable. Losing it costs visibility, never correctness.
+/// Learns who is watching this Hive, and tells Keeper it knows.
+///
+/// ⚠️ THE ACKNOWLEDGEMENT IS SENT ONLY AFTER THE LOCAL MIRROR IS WRITTEN. That
+/// order is the visibility promise: Keeper treats the acknowledgement as "the
+/// member has this on its screen", so acknowledging first would licence a relay
+/// against a Hive whose operator still cannot see anything.
+async fn reconcile_apiary_watches(
+    store: &TaskStore,
+    client: &federation_http::FederationHttpClient,
+    credential: &str,
+    now: i64,
+) -> Result<(), String> {
+    let watches = match client.watches(credential).await {
+        Ok(watches) => watches,
+        Err(federation_http::FederationHttpError::RemoteRejected(404 | 405)) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    store
+        .apply_federation_watch_inbox(&watches, now)
+        .map_err(|_| "watch notices could not be saved".to_owned())?;
+    for watch in watches
+        .iter()
+        .filter(|watch| watch.state == swarm_domain::WatchState::Requested)
+    {
+        if let Err(error) = client.acknowledge_watch(credential, watch.id).await {
+            return Err(error.to_string());
+        }
+    }
+    Ok(())
+}
+
 async fn reconcile_apiary_policy(
     service: &ApiaryService,
     client: &federation_http::FederationHttpClient,
@@ -12414,6 +12595,100 @@ mod tests {
         let app = router(state);
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
         (endpoint, bus, server)
+    }
+
+    /// ⚠️ THE PROMISE, OVER A REAL KEEPER AND A REAL OUTBOUND CLIENT: a Hive
+    /// learns it is being watched, and it learns BEFORE it tells Keeper that it
+    /// knows. The unit tests prove each half; only this proves the order, and
+    /// the order is the whole safety property — Keeper reads an acknowledgement
+    /// as "the member has this on its screen", so acknowledging first would
+    /// licence a relay against a Hive whose operator can still see nothing.
+    #[tokio::test]
+    async fn a_watched_hive_learns_who_is_watching_before_it_acknowledges() {
+        let now = unix_timestamp();
+        let member_store = TaskStore::in_memory().unwrap();
+        let card = member_store.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let (keeper_endpoint, _bus, _server) = start_keeper_event_server(keeper.clone()).await;
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(card.payload.hive_id, &keeper_endpoint, now, 3_600)
+            .unwrap();
+        let imported = member_store
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member_store
+            .accept_federation_join_policy(imported.invitation_id, 1, now)
+            .unwrap();
+        let readiness = swarm_domain::FederationJoinReadiness {
+            jira_connection: swarm_domain::JiraConnectionState::Ready,
+            projects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        let submission = member_store
+            .prepare_federation_join_submission(imported.invitation_id, &readiness, now)
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member_store
+            .apply_federation_join_acceptance(imported.invitation_id, &acceptance, now)
+            .unwrap();
+        let credential = member_store
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+
+        // The Keeper opens a window into the member.
+        let target = member_store.local_hive_identity().unwrap().hive.id;
+        let keeper_operator = keeper.local_hive_identity().unwrap().operator.id;
+        let watch = keeper
+            .open_apiary_watch(keeper_operator, target, now)
+            .unwrap();
+        assert_eq!(watch.state, swarm_domain::WatchState::Requested);
+        assert!(
+            member_store.local_open_watches(now).unwrap().is_empty(),
+            "nothing is on the member's screen before it has reconciled"
+        );
+
+        let client = federation_http::FederationHttpClient::new(&keeper_endpoint).unwrap();
+        reconcile_apiary_watches(&member_store, &client, &credential, now)
+            .await
+            .unwrap();
+
+        let shown = member_store.local_open_watches(now).unwrap();
+        assert_eq!(
+            shown.len(),
+            1,
+            "the watched operator is told who is watching"
+        );
+        assert_eq!(shown[0].watcher_operator_id, keeper_operator);
+        assert_eq!(shown[0].authority, swarm_domain::WatchAuthority::Keeper);
+
+        // And only now does Keeper consider it live.
+        let live = keeper.apiary_watch_audit(10).unwrap();
+        assert_eq!(live.len(), 1);
+        assert!(
+            live[0].is_live(now),
+            "the acknowledgement travelled back over the member's own connection"
+        );
+
+        // Ending it clears the member's screen on the next reconcile.
+        keeper.end_apiary_watch(watch.id, now + 1).unwrap();
+        reconcile_apiary_watches(&member_store, &client, &credential, now + 2)
+            .await
+            .unwrap();
+        assert!(
+            member_store.local_open_watches(now + 2).unwrap().is_empty(),
+            "a watch that stopped must stop being claimed on screen"
+        );
     }
 
     /// ⚠️ THE CARD, NOT THE COLUMN. The unit tests prove which Hives COUNT as

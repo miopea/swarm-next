@@ -98,6 +98,50 @@ impl FederationHttpClient {
         .await
     }
 
+    /// The watches Keeper says are open on this Hive.
+    ///
+    /// Pulled by the member about ITSELF. The member has to know it is being
+    /// watched in order to show it, so this is the one route whose failure is
+    /// worth noticing loudly — a member that cannot read this is a member whose
+    /// operator would not be told.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn watches(
+        &self,
+        credential: &str,
+    ) -> Result<Vec<swarm_domain::ApiaryWatch>, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/watches",
+            Some(credential),
+            None,
+        )
+        .await
+    }
+
+    /// Tells Keeper this Hive has the watch on its own screen.
+    ///
+    /// Nothing is relayed until this lands, which is what makes "always
+    /// visible" a sequence rather than a promise.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn acknowledge_watch(
+        &self,
+        credential: &str,
+        watch_id: swarm_domain::ApiaryWatchId,
+    ) -> Result<(), FederationHttpError> {
+        self.send_json::<(), serde::de::IgnoredAny>(
+            Method::PUT,
+            &format!("api/v1/federation/watches/{watch_id}/acknowledgement"),
+            Some(credential),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Publishes this Hive's signed capability report.
     ///
     /// One-way on purpose: unlike the directory exchange there is nothing to
