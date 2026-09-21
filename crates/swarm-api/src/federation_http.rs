@@ -81,6 +81,23 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Fetches the Apiary's current signed policy body.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn policy(
+        &self,
+        credential: &str,
+    ) -> Result<swarm_domain::ApiaryPolicySnapshot, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/policy",
+            Some(credential),
+            None,
+        )
+        .await
+    }
+
     /// Publishes this Hive's signed capability report.
     ///
     /// One-way on purpose: unlike the directory exchange there is nothing to

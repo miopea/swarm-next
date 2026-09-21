@@ -121,6 +121,44 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Keeper signing the current policy body for one authenticated member.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials and unavailable storage.
+    pub fn signed_apiary_policy(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<swarm_domain::ApiaryPolicySnapshot, ApplicationError> {
+        self.store
+            .signed_apiary_policy(credential, now)
+            .map_err(Into::into)
+    }
+
+    /// A member verifying and storing the Apiary's current defaults.
+    ///
+    /// # Errors
+    /// Rejects non-members, bad signatures, wrong scope and expired snapshots.
+    pub fn apply_apiary_policy(
+        &self,
+        snapshot: &swarm_domain::ApiaryPolicySnapshot,
+        now: i64,
+    ) -> Result<bool, ApplicationError> {
+        self.store
+            .apply_apiary_policy(snapshot, now)
+            .map_err(Into::into)
+    }
+
+    /// Where this member stands against the Apiary's defaults.
+    ///
+    /// # Errors
+    /// Returns corrupt stored evidence rather than a false convergence.
+    pub fn local_policy_convergence(
+        &self,
+    ) -> Result<swarm_persistence::PolicyConvergence, ApplicationError> {
+        self.store.local_policy_convergence().map_err(Into::into)
+    }
+
     /// The Apiary this Hive belongs to, if any.
     ///
     /// # Errors

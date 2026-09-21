@@ -1117,6 +1117,11 @@ impl AppState {
                 tracing::warn!(%error, "Apiary directory could not refresh; existing shared-work sync continues");
             }
         }
+        if let Err(error) =
+            reconcile_apiary_policy(&service, &client, &connection.node_credential, now).await
+        {
+            tracing::warn!(%error, "Apiary policy could not refresh; shared-work sync continues");
+        }
         if let Some(store) = self.task_store.as_ref()
             && let Err(error) = reconcile_hive_capability(
                 &service,
@@ -4111,6 +4116,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/events",
             get(federation_events::federation_events),
         )
+        .route("/api/v1/federation/policy", get(federation_policy))
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
             "/api/v1/federation/departure-readiness",
@@ -5812,6 +5818,22 @@ async fn accept_hive_capability(
         StatusCode::NO_CONTENT,
     )
         .into_response())
+}
+
+/// Keeper serving the Apiary's current shared defaults to one member.
+///
+/// A short-lived signed pull, exactly like the catalog: no-store, and it grants
+/// nothing. Receiving policy is not applying it — the member decides what it
+/// runs, which is what keeps this shared defaults rather than remote control.
+async fn federation_policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let snapshot = apiary_service(&state)?
+        .signed_apiary_policy(credential, unix_timestamp())
+        .map_err(federation_catalog_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
 }
 
 async fn federation_catalog(
@@ -8157,6 +8179,29 @@ async fn reconcile_federation_directory(
     service
         .apply_directory(&snapshot, unix_timestamp())
         .map_err(|_| "signed directory could not be verified or saved".to_owned())
+}
+
+/// Fetches and stores the Apiary's shared defaults.
+///
+/// ⚠️ NON-FATAL, LIKE CAPABILITY. A Keeper on an older build has no such route,
+/// which is an ordinary rolling-update state. And storing the defaults changes
+/// no local setting — it records what the Apiary expects so drift becomes
+/// computable. Losing it costs visibility, never correctness.
+async fn reconcile_apiary_policy(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    credential: &str,
+    now: i64,
+) -> Result<(), String> {
+    let snapshot = match client.policy(credential).await {
+        Ok(snapshot) => snapshot,
+        Err(federation_http::FederationHttpError::RemoteRejected(404 | 405)) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    service
+        .apply_apiary_policy(&snapshot, now)
+        .map(|_| ())
+        .map_err(|_| "signed policy could not be verified or saved".to_owned())
 }
 
 /// Publishes what this Hive can do, so Keeper can route work to a Hive that
@@ -13156,7 +13201,14 @@ mod tests {
             now,
         )
         .await;
-        assert_federation_claim_endpoints(app, &keeper, credential).await;
+        assert_federation_claim_endpoints(app.clone(), &keeper, credential).await;
+        // ⚠️ LAST, AND DELIBERATELY SO. This advances the Apiary policy
+        // revision, which correctly makes a PENDING invitation's acceptance
+        // stale -- the revision-bound staleness this system already has. Run
+        // earlier it broke this journey's own readiness assertion with
+        // `policy_revision_changed`, which was the design working, not a bug.
+        assert_federation_policy_endpoint(app, &keeper, credential, invited_card.payload.node_id)
+            .await;
         assert_keeper_has_two_hives(&keeper);
     }
 
@@ -13376,6 +13428,74 @@ mod tests {
                 .active_hive_count,
             2
         );
+    }
+
+    /// ⚠️ THE END-TO-END GAP QUEEN CAUGHT. The policy body was signed, verifiable
+    /// and drift-computable in unit tests, but no member could FETCH one: there
+    /// was no route. Persistence passing is not the same as a member applying
+    /// anything, and this asserts the wire.
+    async fn assert_federation_policy_endpoint(
+        app: Router,
+        keeper: &TaskStore,
+        credential: &str,
+        member_node_id: swarm_domain::FederationNodeId,
+    ) {
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/policy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        keeper
+            .set_apiary_policy_settings(
+                &[
+                    swarm_domain::ApiaryPolicySetting {
+                        key: "checks.max_warnings".to_owned(),
+                        value: "0".to_owned(),
+                    },
+                    swarm_domain::ApiaryPolicySetting {
+                        key: "checks.required".to_owned(),
+                        value: "true".to_owned(),
+                    },
+                ],
+                unix_timestamp(),
+            )
+            .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/policy")
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(
+            json["payload"]["member_node_id"],
+            member_node_id.to_string()
+        );
+        assert_eq!(json["payload"]["settings"][0]["key"], "checks.max_warnings");
+        assert_eq!(json["payload"]["settings"][1]["value"], "true");
+        assert!(
+            json["payload"]["policy_revision"].as_u64().unwrap() > 1,
+            "authoring defaults advances the revision"
+        );
+
+        // A signed body is a pull, not a grant: nothing private rides along.
+        let serialized = json.to_string();
+        assert!(!serialized.contains("node_credential"));
+        assert!(!serialized.contains("keeper_public_key"));
     }
 
     async fn assert_federation_catalog_endpoint(
