@@ -23,6 +23,8 @@ mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
 mod federation_events;
+mod watch_producer;
+mod watch_relay;
 pub use federation_events::poll_member_events;
 pub mod federation_http;
 mod feedback;
@@ -441,6 +443,7 @@ pub struct AppState {
     /// Keeper's doorbell to connected members. In-memory on purpose: a missed
     /// notice costs latency, never correctness, so it needs no durability.
     federation_events: federation_events::FederationEventBus,
+    watch_relay: Arc<watch_relay::WatchRelay>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -571,6 +574,7 @@ impl AppState {
             degraded: Vec::new(),
             control_room_notify: Arc::new(Notify::new()),
             federation_events: federation_events::FederationEventBus::new(),
+            watch_relay: Arc::new(watch_relay::WatchRelay::default()),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -1056,6 +1060,13 @@ impl AppState {
     /// Jira is deliberately absent from this path: every Hive continues to
     /// synchronize canonical Jira work directly with Jira.
     #[allow(clippy::too_many_lines)]
+    /// Sends this Hive's terminal to whoever it has acknowledged watching it.
+    ///
+    /// Returns promptly when nobody is watching, which is the ordinary case.
+    pub async fn relay_watched_frames(&self) {
+        watch_producer::relay_watched_frames(self).await;
+    }
+
     pub async fn reconcile_federation(&self) {
         self.reconcile_federation_inner(false).await;
     }
@@ -4081,6 +4092,10 @@ fn api_router(state: AppState) -> Router {
             post(renew_apiary_watch),
         )
         .route("/api/v1/apiary/watched-by", get(apiary_watched_by))
+        .route(
+            "/api/v1/apiary/watches/{watch_id}/stream",
+            get(watch_relay::apiary_watch_stream),
+        )
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route("/api/v1/apiary/sync-retry", post(retry_apiary_sync))
         .route(
@@ -4170,6 +4185,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/watches/{watch_id}/acknowledgement",
             axum::routing::put(acknowledge_federation_watch),
+        )
+        .route(
+            "/api/v1/federation/watches/{watch_id}/frames",
+            get(watch_relay::federation_watch_frames),
         )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
@@ -5368,6 +5387,7 @@ async fn open_apiary_watch(
     let watch = store
         .open_apiary_watch(watcher, request.target_hive_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
 }
 
@@ -5381,6 +5401,7 @@ async fn open_federation_watch(
     let watch = task_store(&state)?
         .open_apiary_watch_for_member(credential, request.target_hive_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
 }
 
@@ -5394,6 +5415,13 @@ async fn end_apiary_watch(
     task_store(&state)?
         .end_apiary_watch(watch_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    // The window closes with the record. Leaving the channel attached would
+    // keep relaying frames for a watch the operator has just ended, which is
+    // the one thing ending it is supposed to guarantee.
+    state.watch_relay.retire(watch_id);
+    // Rung on the way out too. A notice that appears in a second and takes a
+    // minute to clear is its own small lie about who is looking.
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         StatusCode::NO_CONTENT,
@@ -12597,15 +12625,12 @@ mod tests {
         (endpoint, bus, server)
     }
 
-    /// ⚠️ THE PROMISE, OVER A REAL KEEPER AND A REAL OUTBOUND CLIENT: a Hive
-    /// learns it is being watched, and it learns BEFORE it tells Keeper that it
-    /// knows. The unit tests prove each half; only this proves the order, and
-    /// the order is the whole safety property — Keeper reads an acknowledgement
-    /// as "the member has this on its screen", so acknowledging first would
-    /// licence a relay against a Hive whose operator can still see nothing.
-    #[tokio::test]
-    async fn a_watched_hive_learns_who_is_watching_before_it_acknowledges() {
-        let now = unix_timestamp();
+    /// Keeper plus one joined member, and the member's node credential.
+    ///
+    /// Extracted because three watch tests were each carrying the same forty
+    /// lines of enrollment, and the duplication was hiding what each test was
+    /// actually about.
+    fn keeper_and_candidate(now: i64) -> (TaskStore, TaskStore, swarm_domain::HiveConnectionCard) {
         let member_store = TaskStore::in_memory().unwrap();
         let card = member_store.issue_hive_connection_card(now, 3_600).unwrap();
         let keeper = TaskStore::in_memory().unwrap();
@@ -12617,9 +12642,25 @@ mod tests {
             )
             .unwrap();
         keeper.pin_hive_candidate(&card, now).unwrap();
-        let (keeper_endpoint, _bus, _server) = start_keeper_event_server(keeper.clone()).await;
+        (keeper, member_store, card)
+    }
+
+    /// Completes enrollment against a Keeper endpoint, returning the member's
+    /// node credential.
+    ///
+    /// Split from `keeper_and_candidate` because the tests that need a REAL
+    /// Keeper server have to start it between the two halves — the bundle
+    /// carries the endpoint, and the endpoint is not known until the server is
+    /// listening.
+    fn complete_join(
+        keeper: &TaskStore,
+        member_store: &TaskStore,
+        card: &swarm_domain::HiveConnectionCard,
+        keeper_endpoint: &str,
+        now: i64,
+    ) -> String {
         let bundle = keeper
-            .issue_apiary_invitation_bundle(card.payload.hive_id, &keeper_endpoint, now, 3_600)
+            .issue_apiary_invitation_bundle(card.payload.hive_id, keeper_endpoint, now, 3_600)
             .unwrap();
         let imported = member_store
             .import_apiary_invitation_bundle(&bundle, now)
@@ -12641,10 +12682,232 @@ mod tests {
         member_store
             .apply_federation_join_acceptance(imported.invitation_id, &acceptance, now)
             .unwrap();
-        let credential = member_store
+        member_store
             .federation_member_connection()
             .unwrap()
-            .node_credential;
+            .node_credential
+    }
+
+    /// ⚠️ THE WINDOW ITSELF, OVER TWO REAL SOCKETS. Every other test proves a
+    /// rule about watching; this proves a byte leaves the watched Hive and
+    /// arrives at the watcher, which is the thing the ticket actually asks for.
+    ///
+    /// It also pins the two refusals that make the relay safe rather than merely
+    /// working: a Hive cannot stream on behalf of a watch that does not target
+    /// it, and an operator cannot attach to a watch they do not hold.
+    #[tokio::test]
+    async fn a_frame_crosses_from_the_watched_hive_to_the_watcher_and_nowhere_else() {
+        let now = unix_timestamp();
+        let (keeper, member_store, card) = keeper_and_candidate(now);
+        let (endpoint, _bus, _server) = start_keeper_event_server(keeper.clone()).await;
+        let credential = complete_join(&keeper, &member_store, &card, &endpoint, now);
+
+        let target = member_store.local_hive_identity().unwrap().hive.id;
+        let watcher = keeper.local_hive_identity().unwrap().operator.id;
+        let watch = keeper.open_apiary_watch(watcher, target, now).unwrap();
+        keeper
+            .acknowledge_federation_watch(&credential, watch.id, now)
+            .unwrap();
+
+        let socket_base = endpoint.replace("http://", "ws://");
+        let dial = |path: String, bearer: String| async move {
+            let mut request = path.into_client_request().unwrap();
+            request.headers_mut().insert(
+                header::AUTHORIZATION,
+                axum::http::HeaderValue::from_str(&format!("Bearer {bearer}")).unwrap(),
+            );
+            tokio_tungstenite::connect_async(request).await
+        };
+
+        // The watcher attaches first, so nothing can be missed by racing.
+        let (mut viewer, _) = dial(
+            format!("{socket_base}/api/v1/apiary/watches/{}/stream", watch.id),
+            "keeper-secret".to_owned(),
+        )
+        .await
+        .expect("the watcher may attach to a watch they hold");
+        let (mut producer, _) = dial(
+            format!(
+                "{socket_base}/api/v1/federation/watches/{}/frames",
+                watch.id
+            ),
+            credential.clone(),
+        )
+        .await
+        .expect("the watched Hive may stream its own frames");
+
+        // One frame, in the same wire format the local terminal socket uses.
+        let mut frame = vec![1u8];
+        frame.extend_from_slice(&7u64.to_be_bytes());
+        frame.extend_from_slice(b"hello");
+        // Retried briefly: the viewer's subscription is established inside the
+        // upgrade task, so the first publish can land before it attaches. A
+        // resend is what a live relay does anyway — it keeps no backlog.
+        let received = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                producer
+                    .send(ClientMessage::Binary(frame.clone().into()))
+                    .await
+                    .unwrap();
+                if let Ok(Some(Ok(ClientMessage::Binary(payload)))) =
+                    tokio::time::timeout(Duration::from_millis(200), viewer.next()).await
+                {
+                    return payload;
+                }
+            }
+        })
+        .await
+        .expect("a frame must reach the watcher");
+        assert_eq!(received.as_ref(), frame.as_slice(), "relayed byte for byte");
+
+        // ⚠️ AND NOWHERE ELSE. A second Hive must not be able to stream into
+        // someone else's watch, nor an unrelated operator attach to it.
+        let stranger = TaskStore::in_memory().unwrap();
+        let stranger_card = stranger.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&stranger_card, now).unwrap();
+        assert!(
+            dial(
+                format!(
+                    "{socket_base}/api/v1/federation/watches/{}/frames",
+                    watch.id
+                ),
+                "not-a-credential".to_owned(),
+            )
+            .await
+            .is_err(),
+            "a Hive cannot stream into a watch it cannot authenticate for"
+        );
+        assert!(
+            dial(
+                format!(
+                    "{socket_base}/api/v1/apiary/watches/{}/stream",
+                    swarm_domain::ApiaryWatchId::new()
+                ),
+                "keeper-secret".to_owned(),
+            )
+            .await
+            .is_err(),
+            "and nobody attaches to a watch that does not exist"
+        );
+    }
+
+    /// ⚠️ MEASURED, NOT ASSUMED: the ordinary federation pass is held to 60
+    /// seconds by the pacing gate in `federation.rs`, and the app-wide notice
+    /// poll adds up to 10 more. Without a doorbell a watched operator could sit
+    /// uninformed for over a minute while Keeper had already authorized the
+    /// window — and opening a window would take that long to start.
+    ///
+    /// The acknowledgement ordering means no frame could flow in that gap, so
+    /// this is not a correctness hole. It is the difference between a live
+    /// window and one that feels broken, which is what the ticket's transport
+    /// dependency was about.
+    #[tokio::test]
+    async fn opening_a_watch_rings_the_doorbell_rather_than_waiting_for_the_pacing_gate() {
+        let now = unix_timestamp();
+        let member_store = TaskStore::in_memory().unwrap();
+        let card = member_store.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                card.payload.hive_id,
+                "https://keeper.invalid",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let imported = member_store
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member_store
+            .accept_federation_join_policy(imported.invitation_id, 1, now)
+            .unwrap();
+        let readiness = swarm_domain::FederationJoinReadiness {
+            jira_connection: swarm_domain::JiraConnectionState::Ready,
+            projects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        let submission = member_store
+            .prepare_federation_join_submission(imported.invitation_id, &readiness, now)
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member_store
+            .apply_federation_join_acceptance(imported.invitation_id, &acceptance, now)
+            .unwrap();
+
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(keeper.clone());
+        // Cloned out before `router` consumes the state; the bus shares one
+        // broadcast sender, so this receiver sees what the routes announce.
+        let mut notices = state.federation_events.subscribe();
+        let app = router(state);
+        let target = member_store.local_hive_identity().unwrap().hive.id;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/watches")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "target_hive_id": target }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let notice = notices
+            .try_recv()
+            .expect("opening a watch rings the doorbell");
+        assert_eq!(notice.kind, swarm_domain::FederationChangeKind::Watch);
+
+        // And it rings again on the way out, so the notice clears as promptly as
+        // it appeared rather than lingering for a pacing interval.
+        let watch = keeper.apiary_watch_audit(1).unwrap().pop().unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/apiary/watches/{}", watch.id))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            notices.try_recv().expect("ending one rings it too").kind,
+            swarm_domain::FederationChangeKind::Watch
+        );
+    }
+
+    /// ⚠️ THE PROMISE, OVER A REAL KEEPER AND A REAL OUTBOUND CLIENT: a Hive
+    /// learns it is being watched, and it learns BEFORE it tells Keeper that it
+    /// knows. The unit tests prove each half; only this proves the order, and
+    /// the order is the whole safety property — Keeper reads an acknowledgement
+    /// as "the member has this on its screen", so acknowledging first would
+    /// licence a relay against a Hive whose operator can still see nothing.
+    #[tokio::test]
+    async fn a_watched_hive_learns_who_is_watching_before_it_acknowledges() {
+        let now = unix_timestamp();
+        let (keeper, member_store, card) = keeper_and_candidate(now);
+        let (keeper_endpoint, _bus, _server) = start_keeper_event_server(keeper.clone()).await;
+        let credential = complete_join(&keeper, &member_store, &card, &keeper_endpoint, now);
 
         // The Keeper opens a window into the member.
         let target = member_store.local_hive_identity().unwrap().hive.id;

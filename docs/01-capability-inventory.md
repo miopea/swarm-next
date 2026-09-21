@@ -155,9 +155,20 @@ promoted Jira projects, active reservations or durable home-Hive ownership, and
 Steward scopes from the existing private contracts. Routine worker activity
 remains inside each Hive; invitations and configuration stay in Settings.
 
-Hive watching checkpoint: the CONTROL PLANE for watching a member Hive is
-implemented; the frame relay is not, and no terminal output crosses the Apiary
-yet. A watch is authorized at Keeper against the grants as they stand — Keeper
+Hive watching checkpoint: the control plane AND the frame relay are implemented;
+no viewer surface presents the window yet, so the relay is reachable only by a
+client that speaks it directly. Frames travel member to Keeper to watcher over
+two sockets, both outbound from the member, in the same wire format the local
+terminal socket uses. Keeper holds one bounded in-memory channel per watch,
+forwards opaque bytes, never parses a frame and keeps none; a viewer that falls
+behind is dropped rather than buffered, because a terminal cannot be
+resynchronised from a gap. Both sockets re-read the lease rather than trusting
+the authorization they opened under. Opening or ending a watch rings the
+federation doorbell, because the ordinary pass is paced to 60 seconds and that is
+both too slow to open a window through and too long to leave someone uninformed.
+Still narrower than asked: it relays Queen's terminal on ADR 0036's precedent
+rather than a chosen session, and a Steward watching from their own Hive needs
+one more transport hop that is not built — the authority is already identical. A watch is authorized at Keeper against the grants as they stand — Keeper
 over any Hive, a Steward over the Hives in scope, one authority function with no
 depth parameter because the grant decides which Hives and never how much. The
 session is recorded and the frames are not: neither table has a column that

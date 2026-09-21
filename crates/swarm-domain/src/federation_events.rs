@@ -33,6 +33,14 @@ pub enum FederationChangeKind {
     Policy,
     /// The public member directory.
     Directory,
+    /// Someone started or stopped watching a Hive.
+    ///
+    /// ⚠️ THIS ONE IS URGENT IN A WAY THE OTHERS ARE NOT. A stale task feed is
+    /// inconvenient; a watched operator who has not been told yet is the state
+    /// this feature is forbidden to be in. The pacing gate holds an ordinary
+    /// pass to 60 seconds, which is both too slow to open a window through and
+    /// too long to leave someone uninformed, so a watch rings the doorbell.
+    Watch,
     /// Something changed and Keeper could not say what.
     ///
     /// ⚠️ NOT AN ERROR, AND THE REASON IT EXISTS IS BACKPRESSURE. A member whose

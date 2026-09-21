@@ -60,8 +60,15 @@ impl BackgroundServices {
         // fixed window, and returns, precisely so shutdown can join it. An
         // unbounded socket loop would have been the wrong shape and this
         // tripwire is what forced that design.
+        //
+        // 9 since 2026-09-21, for the watch frame relay. Raised deliberately on
+        // the same check: owned here, and each pass dials, relays for a bounded
+        // window and returns. It also re-reads the watch lease every poll, so a
+        // watch ended on this machine stops this service producing without
+        // waiting for the window to expire — the tripwire is what made that
+        // liveness re-check get written rather than assumed.
         assert!(
-            self.tasks.len() < 8,
+            self.tasks.len() < 9,
             "all background services need a bounded owner"
         );
         let mut stop = self.stop.subscribe();

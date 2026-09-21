@@ -1,8 +1,8 @@
 # ADR 0107: A watch is recorded; a frame is not
 
 Status: Accepted from the operator interview of 2026-09-21, recorded in
-`docs/specs/apiary-controls-scope.md`. This ADR covers the CONTROL PLANE only;
-the frame relay it authorizes is not yet built.
+`docs/specs/apiary-controls-scope.md`. The control plane and the frame relay are
+both built; no viewer surface presents the window yet.
 
 Watching a member Hive is a full live window, the same depth for Keeper and for
 a Steward in scope. The grant decides WHICH Hives, never HOW MUCH.
@@ -83,9 +83,40 @@ Apiary, one stewardship, four capability grants over two Hives, eight
 memberships. Whoever holds that stewardship gains terminal visibility without
 having agreed to it, and should be told rather than discover it.
 
-## Status of the relay
+## The relay carries bytes and keeps none
 
-Not built. No frame crosses the Apiary yet, and no route exposes one. The
-control plane shipping first is deliberate: it makes an invisible watch
-unreachable before anything can be relayed, rather than leaving a window in
-which watching works and the notice does not.
+Frames travel member → Keeper → watcher over two sockets, both outbound from the
+member's side of the trust boundary. Keeper holds one bounded in-memory channel
+per watch and forwards opaque bytes; it never parses a frame, so there is nothing
+in the relay that could grow into a transcript. `watch_relay` has no `TaskStore`,
+and giving it one would be reversing this ADR.
+
+A viewer that falls behind is DROPPED rather than buffered. A doorbell can ring
+once for everything it missed; a terminal cannot be resynchronised from a gap,
+and a generous buffer would quietly become the recent-history store this design
+forbids. The viewer reconnects to a fresh snapshot, which is the only honest
+answer.
+
+Frames use the SAME wire format as the local terminal socket, byte for byte, so
+a watcher renders a remote Hive with the code that renders their own. A second
+format would be a second thing to keep correct, and the two would drift the first
+time either changed.
+
+Both sockets RE-READ the lease every fifteen seconds rather than trusting the
+authorization they opened under, and the producing side re-reads it every poll —
+so a watch ended from the watched machine stops production there, without waiting
+for Keeper to hang up.
+
+## What the relay does not yet do
+
+The window surface is not built: no UI attaches to the viewer socket, so the
+relay is reachable only by a client that speaks it directly.
+
+It relays QUEEN's terminal, which is narrower than "literally everything". ADR
+0036 relays exactly this for takeover and it is the surface with a precedent;
+widening to a chosen session needs the watcher to be able to ASK for one, which
+this one-way push deliberately cannot carry.
+
+A Steward watching from their own Hive needs one more hop — their Hive proxying
+Keeper's viewer socket — which is not built. The AUTHORITY is already identical,
+so this is transport rather than a second depth.

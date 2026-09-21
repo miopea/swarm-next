@@ -473,6 +473,16 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
     // One outbound event socket per Hive. The period is the gap BETWEEN passes;
     // each pass holds the connection for its own bounded window, so this is a
     // near-continuous connection rather than a poll.
+    // The live window. Separate from the event socket on purpose: that one is a
+    // doorbell and must stay one — carrying terminal frames on it would make a
+    // pipe of the thing every other part of this design treats as a signal.
+    let watch_relay = state.clone();
+    services.periodic(std::time::Duration::from_secs(1), true, move || {
+        let state = watch_relay.clone();
+        async move {
+            state.relay_watched_frames().await;
+        }
+    });
     let federation_events = state.clone();
     let mut event_backoff = std::time::Duration::from_secs(2);
     services.periodic(std::time::Duration::from_secs(1), true, move || {
