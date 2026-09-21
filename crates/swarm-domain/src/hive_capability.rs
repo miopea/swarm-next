@@ -8,10 +8,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::apiary_directory::valid_revision;
-use crate::{ApiaryId, ProviderKind, PublicHiveIdentity};
+use crate::{ApiaryId, ApiaryPolicySetting, ProviderKind, PublicHiveIdentity};
 
 /// The report format, so a Keeper can refuse one it cannot read.
-pub const HIVE_CAPABILITY_SCHEMA_VERSION: u16 = 1;
+///
+/// 2 since 2026-09-21, when applied policy joined the report. Bumped rather than
+/// extended in place even though NO deployed member holds a v1 report — the
+/// capability report has never been released — because two different shapes
+/// sharing one version number is how a verifier starts accepting the wrong
+/// thing, and the cost of being disciplined here is zero.
+pub const HIVE_CAPABILITY_SCHEMA_VERSION: u16 = 2;
 
 /// Bounded like every other federation read here. A Hive with more workers than
 /// this reports the first `MAX` and says plainly that it truncated, rather than
@@ -139,6 +145,23 @@ pub struct HiveCapabilityPayload {
     pub workers: Vec<HiveCapabilityWorker>,
     /// True when this Hive holds more workers than `MAX_CAPABILITY_WORKERS`.
     pub workers_truncated: bool,
+    /// The policy revision this Hive holds a body for, if any.
+    ///
+    /// `None` is the pre-body member: it accepted a revision back when policy
+    /// was a bare integer and has no settings to converge to. A real state
+    /// rather than an error, and it must not read as non-compliance.
+    pub policy_revision: Option<u64>,
+    /// The shared defaults this Hive has ACTUALLY APPLIED.
+    ///
+    /// ⚠️ CARRIED HERE RATHER THAN ON A SECOND ROUTE. Keeper needs this to see
+    /// drift from its own side, and the capability report is already the member's
+    /// channel for "facts about me" — a separate carrier would be a second thing
+    /// to keep consistent for no gain.
+    ///
+    /// It is what the member RUNS, not what it was told. The difference between
+    /// this and the Apiary's defaults IS the drift, and it is computed rather
+    /// than asserted by either side.
+    pub applied_policy: Vec<ApiaryPolicySetting>,
 }
 
 impl HiveCapabilityPayload {
@@ -162,6 +185,29 @@ impl HiveCapabilityPayload {
             && self.database_schema_version >= 0
             && self.workers.len() <= MAX_CAPABILITY_WORKERS
             && self.workers.iter().all(HiveCapabilityWorker::is_valid)
+            && self.applied_policy.len() <= crate::MAX_POLICY_SETTINGS
+            && self
+                .applied_policy
+                .iter()
+                .all(crate::ApiaryPolicySetting::is_valid)
+    }
+
+    /// How this Hive differs from the Apiary defaults, computed by Keeper from
+    /// the report rather than taken on the member's word.
+    ///
+    /// ⚠️ A PRE-BODY MEMBER REPORTS NO DRIFT, NOT TOTAL DRIFT. It holds no
+    /// settings body, so there is nothing for it to have deviated from, and
+    /// listing every default as missing would make a member look
+    /// non-compliant for a change it has not been handed yet.
+    #[must_use]
+    pub fn policy_drift_against(
+        &self,
+        expected: &[ApiaryPolicySetting],
+    ) -> Vec<crate::PolicyDrift> {
+        if self.policy_revision.is_none() {
+            return Vec::new();
+        }
+        crate::policy_drift(expected, &self.applied_policy)
     }
 
     /// Every distinct repository this Hive can work in, for routing.
@@ -272,6 +318,8 @@ mod tests {
             database_schema_version: 184,
             workers,
             workers_truncated: false,
+            policy_revision: Some(3),
+            applied_policy: Vec::new(),
         }
     }
 

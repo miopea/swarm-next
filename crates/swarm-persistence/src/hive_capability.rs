@@ -112,6 +112,10 @@ impl TaskStore {
         database_schema_version: i64,
         now: i64,
     ) -> Result<HiveCapabilityUpdate, TaskStoreError> {
+        // Read from the same place the member's own convergence view reads, so
+        // the two can never disagree about what this Hive is running.
+        let convergence = self.local_policy_convergence()?;
+        let applied_policy = self.local_policy_settings()?;
         if now < 0 {
             return Err(TaskStoreError::InvalidHiveIdentity);
         }
@@ -147,6 +151,8 @@ impl TaskStore {
             database_schema_version,
             workers: workers.to_vec(),
             workers_truncated,
+            policy_revision: convergence.policy_revision,
+            applied_policy,
         };
 
         if let Some((revision, saved)) = &prior {
@@ -159,7 +165,9 @@ impl TaskStore {
                 && saved.swarm_version == payload.swarm_version
                 && saved.database_schema_version == payload.database_schema_version
                 && saved.identity == payload.identity
-                && saved.apiary_id == payload.apiary_id;
+                && saved.apiary_id == payload.apiary_id
+                && saved.policy_revision == payload.policy_revision
+                && saved.applied_policy == payload.applied_policy;
             payload.revision = if unchanged {
                 *revision
             } else {
@@ -327,6 +335,29 @@ impl TaskStore {
         )?;
         transaction.commit()?;
         Ok(true)
+    }
+
+    /// Each member's drift from the Apiary's shared defaults, as Keeper sees it.
+    ///
+    /// ⚠️ COMPUTED AT KEEPER, NOT REPORTED BY THE MEMBER. A member sends what it
+    /// RUNS; Keeper holds what the Apiary EXPECTS; the difference is derived
+    /// here. A member cannot declare itself compliant, which is the property
+    /// that makes this worth having.
+    ///
+    /// # Errors
+    /// Returns corrupt stored evidence rather than a false clean bill.
+    pub fn member_policy_drift(
+        &self,
+    ) -> Result<Vec<(StoredHiveCapability, Vec<swarm_domain::PolicyDrift>)>, TaskStoreError> {
+        let expected = self.apiary_policy_settings()?;
+        let reports = self.federation_hive_capabilities()?;
+        Ok(reports
+            .into_iter()
+            .map(|report| {
+                let drift = report.payload.policy_drift_against(&expected);
+                (report, drift)
+            })
+            .collect())
     }
 
     /// Every member capability report this Hive holds, newest observation first.
@@ -639,5 +670,137 @@ mod tests {
                 .is_err(),
             "an altered payload must not verify"
         );
+    }
+}
+
+#[cfg(test)]
+mod policy_drift_tests {
+    use super::*;
+    use swarm_domain::{ApiaryPolicySetting, ProviderKind};
+
+    fn setting(key: &str, value: &str) -> ApiaryPolicySetting {
+        ApiaryPolicySetting {
+            key: key.to_owned(),
+            value: value.to_owned(),
+        }
+    }
+
+    fn worker() -> HiveCapabilityWorker {
+        HiveCapabilityWorker {
+            name: "Platform".to_owned(),
+            provider: ProviderKind::ClaudeCode,
+            repository: Some("git@github.com:rcg/platform.git".to_owned()),
+            awake: false,
+        }
+    }
+
+    /// ⚠️ THE DONE WHEN'S SECOND HALF: drift visible to KEEPER, not just the
+    /// member. The member sends what it RUNS; Keeper holds what the Apiary
+    /// EXPECTS; the gap is derived at Keeper. A member cannot declare itself
+    /// compliant, which is the property that makes this worth having.
+    #[test]
+    fn keeper_computes_each_members_drift_from_the_report_it_already_holds() {
+        let now = 120_000;
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+
+        let defaults = vec![
+            setting("checks.max_warnings", "0"),
+            setting("checks.required", "true"),
+        ];
+        keeper
+            .set_apiary_policy_settings(&defaults, now + 5)
+            .unwrap();
+        let policy = keeper.signed_apiary_policy(&credential, now + 6).unwrap();
+        member.apply_apiary_policy(&policy, now + 7).unwrap();
+
+        // The member converges on one default and overrides the other.
+        member
+            .record_local_policy_setting(&setting("checks.required", "true"), now + 8)
+            .unwrap();
+        member
+            .record_local_policy_setting(&setting("checks.max_warnings", "5"), now + 8)
+            .unwrap();
+
+        let report = member
+            .seal_local_hive_capability(&[worker()], false, "1.12.0", 186, now + 9)
+            .unwrap();
+        assert_eq!(
+            report.payload.policy_revision,
+            policy.payload.policy_revision.into()
+        );
+        keeper
+            .accept_hive_capability(&credential, &report, now + 10)
+            .unwrap();
+
+        let drift = keeper.member_policy_drift().unwrap();
+        assert_eq!(drift.len(), 1);
+        let (_, entries) = &drift[0];
+        assert_eq!(entries.len(), 1, "only the override differs");
+        assert_eq!(entries[0].key, "checks.max_warnings");
+        assert_eq!(entries[0].expected, "0");
+        assert_eq!(
+            entries[0].local.as_deref(),
+            Some("5"),
+            "Keeper sees what the member actually runs"
+        );
+    }
+
+    /// A member that holds no policy body has nothing to have deviated from.
+    /// Listing every default as missing would make it look non-compliant for a
+    /// change it was never handed.
+    #[test]
+    fn a_pre_body_member_reports_no_drift_rather_than_total_drift() {
+        let now = 120_000;
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        keeper
+            .set_apiary_policy_settings(&[setting("checks.required", "true")], now + 5)
+            .unwrap();
+
+        // Sealed WITHOUT ever applying a policy body.
+        let report = member
+            .seal_local_hive_capability(&[worker()], false, "1.12.0", 186, now + 9)
+            .unwrap();
+        assert_eq!(report.payload.policy_revision, None);
+        keeper
+            .accept_hive_capability(&credential, &report, now + 10)
+            .unwrap();
+
+        let drift = keeper.member_policy_drift().unwrap();
+        assert_eq!(drift.len(), 1);
+        assert!(
+            drift[0].1.is_empty(),
+            "a member awaiting a body is not in breach of it"
+        );
+    }
+
+    /// Applying a policy setting locally must move the report, or Keeper's view
+    /// of drift would be frozen at whatever the member ran first.
+    #[test]
+    fn changing_an_applied_setting_advances_the_report() {
+        let now = 120_000;
+        let (_keeper, member) = crate::federation::tests::joined_member(now);
+        let first = member
+            .seal_local_hive_capability(&[worker()], false, "1.12.0", 186, now + 9)
+            .unwrap();
+        member
+            .record_local_policy_setting(&setting("checks.required", "true"), now + 10)
+            .unwrap();
+        let second = member
+            .seal_local_hive_capability(&[worker()], false, "1.12.0", 186, now + 11)
+            .unwrap();
+        assert_eq!(
+            second.payload.revision,
+            first.payload.revision + 1,
+            "a changed local setting is a changed capability report"
+        );
+        assert_eq!(second.payload.applied_policy.len(), 1);
     }
 }
