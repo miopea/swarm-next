@@ -6,6 +6,7 @@ mod apiary;
 mod workspace_settings;
 pub use workspace_settings::WorkspaceSearchSettings;
 mod apiary_directory;
+mod apiary_policy;
 mod control_room;
 mod conversation_recovery;
 mod conversation_selection;
@@ -37,6 +38,7 @@ mod workers;
 
 pub use apiary::*;
 pub use apiary_directory::*;
+pub use apiary_policy::*;
 pub use control_room::*;
 pub use conversation_recovery::*;
 pub use conversation_selection::*;
