@@ -415,13 +415,31 @@ pub(super) fn development_source_status_for(
         &DEVELOPMENT_PRODUCT_PATHS,
     )
     .is_some_and(|output| output.is_empty());
+    // ⚠️ ANCESTRY IS ONE WAY TO CONTAIN THE DEPLOYED SOURCE, NOT THE ONLY ONE,
+    // and asking only about ancestry blocked development for a reason that had
+    // nothing to do with safety.
+    //
+    // What this guard means is "does this checkout contain what is running".
+    // `--is-ancestor` answers that for a fast-forward, and answers it WRONG for
+    // a rebase: rebasing rewrites the commit, so a build reloaded from a feature
+    // branch becomes a SIBLING of main the moment its PR merges, even though
+    // every line of it is now in main. Observed 2026-09-20: this Hive reloaded
+    // onto 9e74b6f7, that branch merged by rebase as b7965d43 with an IDENTICAL
+    // tree, and reload was refused from then on -- with no way out, because the
+    // only cure for a stale deployment is the reload being refused.
+    //
+    // `git cherry` asks the containment question directly. It compares patch
+    // ids, so a rebased commit reports `-` (already upstream) while a commit
+    // genuinely missing reports `+`. The protection is unchanged: an older or
+    // unrelated checkout still has `+` lines and is still refused.
     let aligned = deployed_revision.is_some_and(|deployed| {
-        Command::new("git")
+        let ancestor = Command::new("git")
             .arg("-C")
             .arg(checkout)
             .args(["merge-base", "--is-ancestor", deployed, "HEAD"])
             .status()
-            .is_ok_and(|status| status.success())
+            .is_ok_and(|status| status.success());
+        ancestor || deployed_changes_already_upstream(checkout, deployed)
     });
     let committed_changes = aligned
         && deployed_revision.is_some_and(|deployed| {
@@ -468,6 +486,20 @@ pub(super) fn git_output(checkout: &FilePath, arguments: &[&str]) -> Option<Stri
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// Whether every change in the deployed commit is already present in `HEAD`,
+/// even under a different commit id.
+///
+/// ⚠️ FAILS CLOSED, and the distinction matters more here than usual. `None`
+/// from `git_output` means the command failed — an unknown commit, no repo, git
+/// missing — and every one of those means we CANNOT show containment, so the
+/// answer is no. Only an actual listing with no `+` lines proves it.
+fn deployed_changes_already_upstream(checkout: &FilePath, deployed: &str) -> bool {
+    git_output(checkout, &["cherry", "HEAD", deployed]).is_some_and(|listing| {
+        // `-` is already upstream, `+` is not. Empty means nothing to carry.
+        !listing.lines().any(|line| line.starts_with('+'))
+    })
 }
 
 fn git_output_with_paths(
