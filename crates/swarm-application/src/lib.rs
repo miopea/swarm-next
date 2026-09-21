@@ -1,3 +1,11 @@
+/// The question this check raises, and the action that answers it.
+///
+/// Shared constants rather than three string literals, because the offer, the
+/// execution and the loop guard must agree exactly. They did not: the action was
+/// offered in two places and executed in none.
+const PARKED_WORK_QUESTION_TITLE: &str = "Work left parked by an answer";
+const RELEASE_PARKED_WORK_ACTION: &str = "Release them to the queue";
+
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinLink,
@@ -3565,8 +3573,43 @@ impl TaskService {
         let resolved = self
             .store
             .resolve_decision_request(id, action, note, surface)?;
+        self.release_blocks_this_answer_freed(&resolved);
         self.ask_about_blocks_this_answer_left_parked(&resolved);
         Ok(resolved)
+    }
+
+    /// Carries out "Release them to the queue" instead of merely recording it.
+    ///
+    /// ⚠️ THE ACTION WAS OFFERED AND NEVER EXECUTED, WHICH IS WHY THE CARD CAME
+    /// BACK. Measured on this Hive 2026-09-21: fourteen "Work left parked by an
+    /// answer" decisions, four of them inside seventeen seconds — 17:25:16,
+    /// :22, :27 and :33 — every one answered "Release them to the queue", every
+    /// one about the SAME task, each spawning the next within six seconds. The
+    /// operator's report was "This needs you keeps coming back. I tell ur to
+    /// release to the queue", and they were pressing a button that did nothing.
+    ///
+    /// A recorded answer that performs no act is worse than no button: it reads
+    /// as done, and the only evidence otherwise is the question returning.
+    fn release_blocks_this_answer_freed(&self, resolved: &DecisionRequest) {
+        if resolved.resolution_action.as_deref() != Some(RELEASE_PARKED_WORK_ACTION) {
+            return;
+        }
+        let Ok(parked) = self.store.blocks_left_parked_by_resolving(resolved.id) else {
+            return;
+        };
+        for task in parked {
+            // Ready rather than Active: releasing returns work to the queue for
+            // routing, which is what the button says. Starting it would be a
+            // different and larger claim about who should do it.
+            if let Err(error) = self.store.transition_task(task, TaskState::Ready) {
+                tracing::warn!(
+                    message = %error,
+                    decision = %resolved.id,
+                    %task,
+                    "parked work could not be released to the queue"
+                );
+            }
+        }
     }
 
     /// Asks the operator about work their answer has just left with no way back.
@@ -3589,6 +3632,20 @@ impl TaskService {
     /// is work nobody can see; replacing it with a queue of near-identical cards
     /// would be the same silence wearing a different coat.
     fn ask_about_blocks_this_answer_left_parked(&self, resolved: &DecisionRequest) {
+        // ⚠️ DO NOT ASK ABOUT THE CONSEQUENCES OF YOUR OWN QUESTION. This check
+        // raises a follow-up LINKED TO the parked task, which makes that
+        // follow-up a gate on the same task — so resolving it re-triggers this
+        // check, which raises another, forever. That is the loop the operator
+        // hit, and the card's own self-referential title said so: "Answering
+        // 'Work left parked by an answer' left 1 blocked task(s)".
+        //
+        // Belt and braces beside the release above. Releasing moves the task out
+        // of Blocked so there is nothing left to find — but the OTHER option,
+        // "Keep them parked and set a revisit date", has no way to record a date
+        // here, so without this guard that branch would loop exactly as before.
+        if resolved.title == PARKED_WORK_QUESTION_TITLE {
+            return;
+        }
         let parked = match self.store.blocks_left_parked_by_resolving(resolved.id) {
             Ok(parked) if !parked.is_empty() => parked,
             Ok(_) => return,
@@ -3623,7 +3680,7 @@ impl TaskService {
             parked.len()
         );
         let actions = vec![
-            "Release them to the queue".to_owned(),
+            RELEASE_PARKED_WORK_ACTION.to_owned(),
             "Keep them parked and set a revisit date".to_owned(),
         ];
         if let Err(error) = self.store.create_decision_request(&NewDecisionRequest {
@@ -3631,14 +3688,14 @@ impl TaskService {
             task_id: parked.first().copied(),
             kind: swarm_domain::DecisionRequestKind::Input,
             urgency: swarm_domain::DecisionUrgency::Normal,
-            title: "Work left parked by an answer",
+            title: PARKED_WORK_QUESTION_TITLE,
             summary: &summary,
             reason: "A block whose only recorded gate was this decision has no terminating \
                      condition now that it is answered. Nothing will fire to raise it again.",
             risk: "Left as is, these tasks are invisible until somebody happens to remember \
                    them, which is the failure this check exists to prevent.",
             evidence: &summary,
-            suggested_action: "Release them to the queue",
+            suggested_action: RELEASE_PARKED_WORK_ACTION,
             allowed_actions: &actions,
             // Neither option is the operator doing the work themselves; both
             // route the tasks back. Nothing here should park.
@@ -3835,6 +3892,177 @@ mod tests {
     use super::*;
     use swarm_domain::{CommitRepositoryState, JiraProjectScope, JiraStatusMapping, ProviderKind};
     use swarm_persistence::JiraProjectBindingInput;
+
+    /// ⚠️ THE OPERATOR'S ACTUAL COMPLAINT, REPRODUCED: "This needs you keeps
+    /// coming back. I tell ur to release to the queue."
+    ///
+    /// Measured on the live Hive 2026-09-21 before the fix: fourteen of these
+    /// decisions, four inside seventeen seconds, every one answered "Release
+    /// them to the queue", every one about the same task. The button was offered
+    /// in two places and executed in none.
+    #[test]
+    fn releasing_parked_work_actually_releases_it_and_does_not_ask_again() {
+        let (service, _queen, worker) = setup();
+        let task = service
+            .store
+            .create_task("Parked work", "/workspace/petal")
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        let actions = vec!["Proceed".to_owned()];
+        let gate = service
+            .store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "The gate this work waits on",
+                summary: "Whether to proceed, and what it costs if we do not.",
+                reason: "Needs an operator answer.",
+                risk: "None.",
+                evidence: "None.",
+                suggested_action: "Proceed",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Blocked)
+            .unwrap();
+
+        // Answering the gate leaves the work with nothing to wait for, so the
+        // check asks about it. That part is correct and stays.
+        service
+            .resolve_operator_decision(gate.id, "Proceed", "", "control_room")
+            .unwrap();
+        let asked = service
+            .store
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .find(|decision| {
+                decision.title == PARKED_WORK_QUESTION_TITLE
+                    && decision.state == swarm_domain::DecisionRequestState::Pending
+            })
+            .expect("the check should ask once");
+
+        // The operator presses the button it recommends.
+        service
+            .resolve_operator_decision(asked.id, RELEASE_PARKED_WORK_ACTION, "", "control_room")
+            .unwrap();
+
+        assert_eq!(
+            service.store.get_task(task.id).unwrap().state,
+            TaskState::Ready,
+            "Release them to the queue must RELEASE the work, not merely record that it was chosen"
+        );
+        let asked_again = service
+            .store
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .filter(|decision| {
+                decision.title == PARKED_WORK_QUESTION_TITLE
+                    && decision.state == swarm_domain::DecisionRequestState::Pending
+            })
+            .count();
+        assert_eq!(
+            asked_again, 0,
+            "answering the question must not raise the same question again"
+        );
+    }
+
+    /// The other option has no way to record a date here, so without the
+    /// self-reference guard it would loop exactly as Release did.
+    #[test]
+    fn keeping_work_parked_does_not_ask_the_same_question_forever() {
+        let (service, _queen, worker) = setup();
+        let task = service
+            .store
+            .create_task("Parked work", "/workspace/petal")
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let gate = service
+            .store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "The gate this work waits on",
+                summary: "Whether to proceed, and what it costs if we do not.",
+                reason: "Needs an operator answer.",
+                risk: "None.",
+                evidence: "None.",
+                suggested_action: "Proceed",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+            })
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Blocked)
+            .unwrap();
+        service
+            .resolve_operator_decision(gate.id, "Proceed", "", "control_room")
+            .unwrap();
+        let asked = service
+            .store
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .find(|decision| decision.title == PARKED_WORK_QUESTION_TITLE)
+            .expect("the check should ask once");
+
+        service
+            .resolve_operator_decision(
+                asked.id,
+                "Keep them parked and set a revisit date",
+                "",
+                "control_room",
+            )
+            .unwrap();
+
+        assert_eq!(
+            service.store.get_task(task.id).unwrap().state,
+            TaskState::Blocked,
+            "keeping it parked must leave it parked"
+        );
+        let pending = service
+            .store
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .filter(|decision| {
+                decision.title == PARKED_WORK_QUESTION_TITLE
+                    && decision.state == swarm_domain::DecisionRequestState::Pending
+            })
+            .count();
+        assert_eq!(pending, 0, "the check must not ask about its own answer");
+    }
 
     fn setup() -> (TaskService, WorkerProfile, WorkerProfile) {
         let store = TaskStore::in_memory().unwrap();
