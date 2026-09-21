@@ -581,28 +581,29 @@ fn authorize_local_action(
             *lease_id,
             identity.hive.id,
             false,
-            *expected_revision,
+            Some(*expected_revision),
             FederationStewardTakeoverState::Requested,
         )?,
-        FederationStewardTakeoverAction::Reclaim {
-            lease_id,
-            expected_revision,
-            ..
-        } => {
+        FederationStewardTakeoverAction::Reclaim { lease_id, .. } => {
+            // ⚠️ UNFENCED HERE TOO, for the same reason and one more: the local
+            // projection only advances when this Hive next polls Keeper, so
+            // straight after acknowledging, the revision on screen is already
+            // behind. Refusing to even JOURNAL the reclaim would make the local
+            // operator wait for a round trip to take their own machine back.
             require_local_lease(
                 transaction,
                 *lease_id,
                 identity.hive.id,
                 false,
-                *expected_revision,
+                None,
                 FederationStewardTakeoverState::Active,
             )?;
             transaction.execute(
                 "UPDATE local_federation_steward_takeover_leases
                  SET state = 'reclaimed', revision = revision + 1,
                      ended_at = ?1, synced_at = ?1
-                 WHERE lease_id = ?2 AND revision = ?3 AND state = 'active'",
-                params![now, lease_id.to_string(), expected_revision],
+                 WHERE lease_id = ?2 AND state = 'active'",
+                params![now, lease_id.to_string()],
             )?;
             insert_control_room_event(transaction, ControlRoomEventKind::RuntimeChanged)?;
         }
@@ -618,7 +619,7 @@ fn authorize_local_action(
             *lease_id,
             identity.hive.id,
             true,
-            *expected_revision,
+            Some(*expected_revision),
             FederationStewardTakeoverState::Active,
         )?,
     }
@@ -762,9 +763,21 @@ fn transition_lease(
         || (source_action
             && member.hive == lease.source_hive_id
             && member.operator == lease.source_operator_id);
+    // ⚠️ RECLAIM IS NOT REVISION-FENCED, AND THAT IS THE OPERATOR'S RULING
+    // RATHER THAN A RELAXATION. Every renewal bumps the revision, and a Steward
+    // actively working renews constantly — so fencing reclaim means the busier
+    // the remote actor is, the more reliably the person at the keyboard is told
+    // "no". Measured in `reclaim_is_not_fenced_by_a_revision_the_steward_keeps_moving`:
+    // one ordinary renewal between projection and reclaim was enough to refuse
+    // the local operator. The alternatives — an unreclaimable lease and a
+    // Keeper-settable lock — were offered on 2026-09-21 and declined.
+    //
+    // Nothing else is relaxed: the actor must still be the target Hive, and the
+    // lease must still be Active.
+    let fence_revision = to != FederationStewardTakeoverState::Reclaimed;
     if !actor_allowed
         || lease.state != from
-        || lease.revision != expected_revision
+        || (fence_revision && lease.revision != expected_revision)
         || lease.expires_at <= now
         || (source_action
             && authorized_stewardship(
@@ -1014,17 +1027,21 @@ fn takeover_outbox_from_row(
     })
 }
 
+/// `expected_revision` of `None` means "whatever revision this Hive holds".
+///
+/// Used only by reclaim, where fencing on a revision the local operator cannot
+/// keep up with is the bug rather than the safety.
 fn require_local_lease(
     transaction: &Transaction<'_>,
     lease_id: FederationStewardTakeoverLeaseId,
     local_hive_id: HiveId,
     source: bool,
-    expected_revision: u64,
+    expected_revision: Option<u64>,
     expected_state: FederationStewardTakeoverState,
 ) -> Result<(), TaskStoreError> {
     let found = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM local_federation_steward_takeover_leases
-         WHERE lease_id = ?1 AND revision = ?2 AND state = ?5
+         WHERE lease_id = ?1 AND (?2 IS NULL OR revision = ?2) AND state = ?5
          AND CASE WHEN ?3 THEN source_hive_id = ?4 ELSE target_hive_id = ?4 END)",
         params![
             lease_id.to_string(),
@@ -1244,6 +1261,159 @@ mod tests {
             target,
             target_acceptance,
         )
+    }
+
+    /// Drives one takeover to Active, with BOTH sides projecting it, and
+    /// returns the active receipt.
+    ///
+    /// Extracted because the path to an active lease is eight round trips and
+    /// says nothing about what any individual test is checking.
+    fn activate_takeover(
+        keeper: &TaskStore,
+        steward: &TaskStore,
+        steward_acceptance: &FederationJoinAcceptance,
+        target: &TaskStore,
+        target_acceptance: &FederationJoinAcceptance,
+        now: i64,
+    ) -> FederationStewardTakeoverReceipt {
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let request = steward
+            .queue_federation_steward_takeover(target_hive_id, "Release is blocked.", now)
+            .expect("journal request");
+        keeper
+            .apply_federation_steward_takeover_command(
+                &steward_acceptance.node_credential,
+                &request.command,
+                now + 1,
+            )
+            .expect("request");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 2)
+            .expect("target poll");
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind queen");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 3)
+            .expect("target projection");
+        let lease = inbox.leases.first().expect("requested lease");
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(lease.id, lease.revision, now + 4)
+            .expect("journal acknowledgement");
+        let active = keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &acknowledgement.command,
+                now + 5,
+            )
+            .expect("acknowledge");
+        target
+            .apply_federation_steward_takeover_receipt(&active, now + 5)
+            .expect("target receipt");
+        // ⚠️ THE TARGET HAS TO POLL TO SEE ITS OWN ACKNOWLEDGEMENT LAND.
+        // `apply_..._receipt` advances the OUTBOX only; the lease projection
+        // moves on the next inbox. So a local surface cannot act on the active
+        // lease until a round trip completes — one of two reasons "immediately"
+        // was not quite what the word meant.
+        for (store, credential) in [
+            (target, &target_acceptance.node_credential),
+            (steward, &steward_acceptance.node_credential),
+        ] {
+            let inbox = keeper
+                .federation_steward_takeover_inbox(credential, now + 6)
+                .expect("poll");
+            store
+                .apply_federation_steward_takeover_inbox(&inbox, now + 6)
+                .expect("projection");
+        }
+        active
+    }
+
+    /// ⚠️ RECLAIM MUST NOT LOSE A RACE IT IS THE WHOLE POINT OF WINNING.
+    ///
+    /// The operator's ruling, 2026-09-21: "The local operator reclaims from any
+    /// authenticated local surface, IMMEDIATELY." The alternatives — an
+    /// unreclaimable lease, and a Keeper-settable lock — were offered and
+    /// declined, because a remote actor holding a machine against the person
+    /// sitting at it leaves the audit trail as the only protection.
+    ///
+    /// A revision fence on reclaim quietly reintroduces exactly that. The
+    /// Steward renews while working; each renewal bumps the revision; the local
+    /// operator's reclaim carries whatever revision their screen last showed.
+    /// The busier the Steward, the more reliably the person at the keyboard is
+    /// told "no" — and they are mid-deploy or mid-incident, which is why they
+    /// reached for it.
+    #[test]
+    fn reclaim_is_not_fenced_by_a_revision_the_steward_keeps_moving() {
+        let now = 700_000;
+        let (keeper, steward, steward_acceptance, target, target_acceptance) = setup_takeover(now);
+        let active = activate_takeover(
+            &keeper,
+            &steward,
+            &steward_acceptance,
+            &target,
+            &target_acceptance,
+            now + 53,
+        );
+        let active_lease = active.lease.as_ref().expect("active lease");
+
+        // The Steward keeps working; renewal is how an active lease stays alive.
+        let renewal = steward
+            .queue_federation_steward_takeover_renewal(
+                active_lease.id,
+                active_lease.revision,
+                now + 61,
+            )
+            .expect("journal renewal");
+        let renewed = keeper
+            .apply_federation_steward_takeover_command(
+                &steward_acceptance.node_credential,
+                &renewal.command,
+                now + 62,
+            )
+            .expect("renew");
+        assert_eq!(renewed.outcome, FederationStewardTakeoverOutcome::Applied);
+        let renewed_revision = renewed.lease.as_ref().unwrap().revision;
+
+        // The person at the machine reclaims, carrying the revision their own
+        // Hive last projected — all a local surface can ever send.
+        let projected = target
+            .federation_steward_takeover_local_state()
+            .expect("local state")
+            .leases
+            .into_iter()
+            .find(|lease| lease.id == active_lease.id)
+            .expect("the target projects its own lease");
+        assert_eq!(projected.state, FederationStewardTakeoverState::Active);
+        assert!(
+            renewed_revision > projected.revision,
+            "the renewal moved the revision out from under the local operator"
+        );
+        let reclaim = target
+            .queue_federation_steward_takeover_reclaim(
+                active_lease.id,
+                projected.revision,
+                "Mid-deploy; taking my machine back.",
+                now + 63,
+            )
+            .expect("journal reclaim");
+        let outcome = keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &reclaim.command,
+                now + 64,
+            )
+            .expect("reclaim");
+        assert_eq!(
+            outcome.outcome,
+            FederationStewardTakeoverOutcome::Applied,
+            "the person at the keyboard wins, whatever the Steward did meanwhile"
+        );
+        assert_eq!(
+            outcome.lease.as_ref().map(|lease| lease.state),
+            Some(FederationStewardTakeoverState::Reclaimed)
+        );
     }
 
     #[test]

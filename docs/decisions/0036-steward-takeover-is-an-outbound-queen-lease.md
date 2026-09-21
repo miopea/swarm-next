@@ -11,6 +11,14 @@ federation route exposes them yet. Outbound relay, restart reconciliation,
 automation recovery, audit presentation, and desktop/mobile control remain the
 release gate.
 
+Checkpoint (2026-09-21): the outbound relay half of the gate now exists — ADR
+0107's watch relay is bounded, memory-only and never persists a frame, and
+takeover should reuse it rather than grow a second one. The reclaim rule below
+was amended after a proven defect. Still no route exposes takeover, and the gate
+is otherwise unchanged: restart reconciliation, automation recovery, audit
+presentation and desktop/mobile control remain outstanding, and the ADR's
+refusal to ship a partial takeover behind a flag stands.
+
 ## Context
 
 A Steward may need to step into a managed Hive when its operator is unavailable
@@ -55,6 +63,17 @@ target Hive, actor, reason, state, revision, and timestamps.
 - The target operator can reclaim Queen immediately from any authenticated
   local input surface. Reclaim closes the relay, records the reason, and gives
   the local operator a fresh engagement lease.
+- **Reclaim is not fenced by the lease revision, on either side.** Renewal bumps
+  the revision, and a Steward actively working renews constantly, so a fence
+  means the busier the remote actor is the more reliably the person at the
+  keyboard is refused — at exactly the moment they reached for it. The local
+  projection also only advances when the target next polls Keeper, so the
+  revision on screen is already stale immediately after acknowledgement.
+  Measured 2026-09-21: one ordinary renewal between projection and reclaim was
+  enough to reject the local operator. Everything else about reclaim is
+  unchanged — the actor must still be the target Hive and the lease must still
+  be active. Amended from the 2026-09-21 interview, which offered an
+  unreclaimable Keeper lease and a Keeper-settable lock and had both declined.
 - Keeper revocation, Stewardship revocation, membership departure, target
   restart without a matching durable lease, expiry, or credential failure ends
   takeover and resumes normal automation only after local reconciliation.
