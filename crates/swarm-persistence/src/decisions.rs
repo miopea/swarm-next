@@ -2237,7 +2237,7 @@ mod tests {
 
     /// ⚠️ THE REGRESSION TEST FOR THE OWNERSHIP HOLE. Before this, answering
     /// handed the task straight back to a worker that could not act, and it sat
-    /// Active firing stale_owned_work_attention until somebody noticed.
+    /// Active firing `stale_owned_work_attention` until somebody noticed.
     #[test]
     fn an_action_the_operator_takes_on_themselves_parks_its_task() {
         let store = TaskStore::in_memory().unwrap();

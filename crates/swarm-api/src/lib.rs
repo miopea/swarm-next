@@ -16927,43 +16927,37 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let actions = vec!["ship".to_string(), "hold".to_string()];
+        // Both fixtures differ only in prose and urgency, so they are built from
+        // one shape. Spelling out sixteen identical fields twice is what put
+        // this test over the line bound when a seventeenth was added.
+        let fixture = |title, urgency| swarm_persistence::NewDecisionRequest {
+            requesting_worker_id: queen.id,
+            task_id: None,
+            kind: swarm_domain::DecisionRequestKind::Approval,
+            urgency,
+            title,
+            summary: "Whether to proceed, and what it costs if we do not.",
+            reason: "The candidate is ready",
+            risk: "Users wait if held",
+            evidence: "All checks pass",
+            suggested_action: "Ship",
+            allowed_actions: &actions,
+            operator_actions: &[],
+            questions: &[],
+            deadline: None,
+            requested_command: None,
+        };
         let decision = store
-            .create_decision_request(&swarm_persistence::NewDecisionRequest {
-                requesting_worker_id: queen.id,
-                task_id: None,
-                kind: swarm_domain::DecisionRequestKind::Approval,
-                urgency: swarm_domain::DecisionUrgency::TimeSensitive,
-                title: "Approve the release",
-                summary: "Whether to proceed, and what it costs if we do not.",
-                reason: "The candidate is ready",
-                risk: "Users wait if held",
-                evidence: "All checks pass",
-                suggested_action: "Ship",
-                allowed_actions: &actions,
-                operator_actions: &[],
-                questions: &[],
-                deadline: None,
-                requested_command: None,
-            })
+            .create_decision_request(&fixture(
+                "Approve the release",
+                swarm_domain::DecisionUrgency::TimeSensitive,
+            ))
             .unwrap();
         let stale_decision = store
-            .create_decision_request(&swarm_persistence::NewDecisionRequest {
-                requesting_worker_id: queen.id,
-                task_id: None,
-                kind: swarm_domain::DecisionRequestKind::Approval,
-                urgency: swarm_domain::DecisionUrgency::Normal,
-                title: "Review an obsolete request",
-                summary: "Whether to proceed, and what it costs if we do not.",
-                reason: "The underlying work changed",
-                risk: "None; this request is stale",
-                evidence: "The operator already handled it elsewhere",
-                suggested_action: "Hold",
-                allowed_actions: &actions,
-                operator_actions: &[],
-                questions: &[],
-                deadline: None,
-                requested_command: None,
-            })
+            .create_decision_request(&fixture(
+                "Review an obsolete request",
+                swarm_domain::DecisionUrgency::Normal,
+            ))
             .unwrap();
         let app = router(
             AppState::default()
