@@ -579,6 +579,20 @@ pub(super) async fn check(state: &Arc<AppState>) {
                 // session has been deleting.
                 None => ("current", None),
                 Some(offer) => {
+                    // ⚠️ RECORDED EVEN WHEN THIS HIVE IS ALREADY CURRENT. The
+                    // Apiary needs to know which release is newest in order to
+                    // judge its MEMBERS, and a Keeper that happens to be up to
+                    // date is exactly the Keeper best placed to say so. Writing
+                    // this only in the `offered` branch would leave a healthy
+                    // Keeper unable to see anyone else fall behind.
+                    if let Ok(store) = crate::task_store(state) {
+                        let _ = store.note_expected_release(&offer.version, now);
+                    }
+                    // A new release appearing is the other moment the fleet's
+                    // standing can change, so it is judged here too.
+                    if let Ok(apiary) = crate::apiary_service(state) {
+                        let _ = apiary.raise_hives_left_behind(now);
+                    }
                     let current = SwarmVersion::parse(build_version());
                     let supersedes = current.as_ref().is_some_and(|current| {
                         offer

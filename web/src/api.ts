@@ -1508,6 +1508,33 @@ export async function cancelApiaryClaimHandoff(operatorToken: string, handoffId:
   return response.json() as Promise<FederationClaimHandoff>;
 }
 
+/** Where a Hive stands against the release the Apiary expects. */
+export type FleetVersionStanding = "current" | "development" | "behind_within_grace" | "behind" | "schema_behind" | "unreadable" | "unknown";
+
+export type FleetHiveVersion = {
+  hive_id: string;
+  node_id: string;
+  swarm_version: string;
+  database_schema_version: number;
+  observed_at: number;
+  standing: FleetVersionStanding;
+  /** Whether this Hive is raised rather than merely listed. */
+  raises: boolean;
+};
+
+export type FleetVersions = {
+  /** Null when no release check has ever returned an offer; nothing can be called behind. */
+  expected_release: string | null;
+  expected_release_first_seen_at: number | null;
+  expected_schema_version: number;
+  hives: FleetHiveVersion[];
+};
+
+export async function fetchFleetVersions(operatorToken: string, signal?: AbortSignal): Promise<FleetVersions> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/fleet-versions", { signal });
+  return response.json() as Promise<FleetVersions>;
+}
+
 export async function fetchFederationSyncHealth(
   operatorToken: string,
   signal?: AbortSignal,

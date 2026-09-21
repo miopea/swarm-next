@@ -4061,6 +4061,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/apiary/handoffs/{handoff_id}/decline",
             post(apiary_decline_claim_handoff),
         )
+        .route("/api/v1/apiary/fleet-versions", get(apiary_fleet_versions))
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route("/api/v1/apiary/sync-retry", post(retry_apiary_sync))
         .route(
@@ -5257,6 +5258,68 @@ async fn apiary_cancel_claim_handoff(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoff)).into_response())
 }
 
+/// What every Hive in the Apiary is running, and which of them are raised.
+#[derive(serde::Serialize)]
+struct FleetVersionView {
+    /// The release everyone is judged against, and when it first appeared.
+    ///
+    /// Null when no release check has ever returned an offer. The surface must
+    /// SAY so rather than drawing a healthy fleet, because in that state every
+    /// Hive reads `unknown` and nothing has actually been checked.
+    expected_release: Option<String>,
+    expected_release_first_seen_at: Option<i64>,
+    expected_schema_version: i64,
+    hives: Vec<HiveVersionView>,
+}
+
+#[derive(serde::Serialize)]
+struct HiveVersionView {
+    hive_id: String,
+    node_id: String,
+    swarm_version: String,
+    database_schema_version: i64,
+    observed_at: i64,
+    standing: swarm_domain::VersionStanding,
+    /// Whether this Hive is raised rather than merely listed. Carried so the
+    /// surface does not have to re-derive which standings are faults.
+    raises: bool,
+}
+
+async fn apiary_fleet_versions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let report = apiary_service(&state)?
+        .raise_hives_left_behind(unix_timestamp())
+        .map_err(application_error)?;
+    let view = FleetVersionView {
+        expected_release: report
+            .expected_release
+            .as_ref()
+            .map(|(version, _)| version.clone()),
+        expected_release_first_seen_at: report
+            .expected_release
+            .as_ref()
+            .map(|(_, first_seen_at)| *first_seen_at),
+        expected_schema_version: report.expected_schema_version,
+        hives: report
+            .hives
+            .iter()
+            .map(|hive| HiveVersionView {
+                hive_id: hive.identity.hive_id.to_string(),
+                node_id: hive.identity.node_id.to_string(),
+                swarm_version: hive.swarm_version.clone(),
+                database_schema_version: hive.database_schema_version,
+                observed_at: hive.observed_at,
+                standing: hive.standing,
+                raises: hive.standing.raises(),
+            })
+            .collect(),
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)).into_response())
+}
+
 async fn apiary_sync_health(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -5837,6 +5900,12 @@ async fn accept_hive_capability(
         .accept_hive_capability(credential, &update, unix_timestamp())
         .map_err(federation_catalog_error)?;
     if changed {
+        // A member reporting is one of exactly two moments the fleet's standing
+        // can change, so it is where the raise is evaluated. The other is a new
+        // release appearing.
+        if let Err(error) = apiary_service(&state)?.raise_hives_left_behind(unix_timestamp()) {
+            tracing::warn!(message = %error, "could not judge the fleet against the current release");
+        }
         state.control_room_notify.notify_waiters();
     }
     Ok((
@@ -12345,6 +12414,125 @@ mod tests {
         let app = router(state);
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
         (endpoint, bus, server)
+    }
+
+    /// ⚠️ THE CARD, NOT THE COLUMN. The unit tests prove which Hives COUNT as
+    /// behind; this proves the operator is actually TOLD. A version rendered in
+    /// a table is what this Hive already had while it sat wedged on a stale
+    /// build for a day, so the standing computation passing is not evidence
+    /// that anything would have been said.
+    ///
+    /// It also proves the card LEAVES. The operator's standing complaint about
+    /// this machinery is a card that keeps coming back after it has been dealt
+    /// with, and a raise that outlives its cause is that same bug.
+    #[test]
+    fn a_member_on_an_old_build_raises_a_card_that_clears_when_it_catches_up() {
+        let now = unix_timestamp();
+        let member_store = TaskStore::in_memory().unwrap();
+        let card = member_store.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                card.payload.hive_id,
+                "https://keeper.invalid",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let imported = member_store
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member_store
+            .accept_federation_join_policy(imported.invitation_id, 1, now)
+            .unwrap();
+        let readiness = swarm_domain::FederationJoinReadiness {
+            jira_connection: swarm_domain::JiraConnectionState::Ready,
+            projects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        let submission = member_store
+            .prepare_federation_join_submission(imported.invitation_id, &readiness, now)
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member_store
+            .apply_federation_join_acceptance(imported.invitation_id, &acceptance, now)
+            .unwrap();
+        let credential = member_store
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+
+        let schema = keeper.schema_version().unwrap();
+        let worker = swarm_domain::HiveCapabilityWorker {
+            name: "Platform".to_owned(),
+            provider: swarm_domain::ProviderKind::ClaudeCode,
+            repository: Some("git@github.com:rcg/platform.git".to_owned()),
+            awake: false,
+        };
+        let stale = member_store
+            .seal_local_hive_capability(std::slice::from_ref(&worker), false, "1.11.0", schema, now)
+            .unwrap();
+        keeper
+            .accept_hive_capability(&credential, &stale, now)
+            .unwrap();
+        keeper.note_expected_release("1.12.0", now).unwrap();
+
+        // The raise is addressed to Queen, so the Apiary needs one.
+        keeper.ensure_queen("/tmp/keeper").unwrap();
+
+        let service = swarm_application::ApiaryService::new(keeper.clone());
+        let raised_at = now + swarm_domain::VERSION_GRACE_SECONDS;
+        let report = service.raise_hives_left_behind(raised_at).unwrap();
+        assert_eq!(report.raised().len(), 1);
+        let cards = |state: swarm_domain::DecisionRequestState| {
+            keeper
+                .list_decision_requests()
+                .unwrap()
+                .into_iter()
+                .filter(|request| {
+                    request.title == "Hives are behind the current release"
+                        && request.state == state
+                })
+                .count()
+        };
+        assert_eq!(
+            cards(swarm_domain::DecisionRequestState::Pending),
+            1,
+            "the operator is told, rather than left to notice a column"
+        );
+
+        // Asking again while it is still true must not add a second card.
+        service.raise_hives_left_behind(raised_at + 1).unwrap();
+        assert_eq!(
+            cards(swarm_domain::DecisionRequestState::Pending),
+            1,
+            "a repeat evaluation is not a repeat question"
+        );
+
+        // The Hive upgrades.
+        let current = member_store
+            .seal_local_hive_capability(&[worker], false, "1.12.0", schema, raised_at + 2)
+            .unwrap();
+        keeper
+            .accept_hive_capability(&credential, &current, raised_at + 3)
+            .unwrap();
+        let settled = service.raise_hives_left_behind(raised_at + 4).unwrap();
+        assert!(settled.raised().is_empty());
+        assert_eq!(
+            cards(swarm_domain::DecisionRequestState::Pending),
+            0,
+            "catching up clears the card by itself"
+        );
     }
 
     /// ⚠️ THE ROUND TRIP QUEEN ASKED FOR, AND THE ONE THING THE UNIT TESTS COULD

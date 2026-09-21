@@ -32,6 +32,7 @@ pub use decision_clarification::{
     ClarificationAttention, ClarificationDispatch, DecisionClarification,
 };
 mod apiary_policy;
+mod fleet_version;
 mod hive_capability;
 mod provider_usage;
 mod queen_recovery;
@@ -188,6 +189,7 @@ pub use decisions::{
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
+pub use fleet_version::{FleetVersionReport, HiveVersionStanding};
 pub use hive_capability::{StoredHiveCapability, verify_hive_capability_update};
 pub use queen_recovery::RepeatedRecovery;
 pub use queen_review::{
@@ -343,7 +345,9 @@ const OPERATOR_OWED_PARK_SCHEMA_VERSION: i64 = 184;
 const HIVE_CAPABILITY_SCHEMA_VERSION_MARKER: i64 = 185;
 /// Policy revisions carry settings, and a member's drift from them is computable.
 const APIARY_POLICY_SCHEMA_MARKER: i64 = 186;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_POLICY_SCHEMA_MARKER;
+/// The Apiary records which release it expects, so a Hive behind it can be raised.
+const FLEET_VERSION_SCHEMA_MARKER: i64 = 187;
+const CURRENT_SCHEMA_VERSION: i64 = FLEET_VERSION_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4575,6 +4579,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < APIARY_POLICY_SCHEMA_MARKER {
         crate::apiary_policy::migrate(transaction)?;
+    }
+    if schema_version < FLEET_VERSION_SCHEMA_MARKER {
+        crate::fleet_version::migrate(transaction)?;
     }
     Ok(())
 }
@@ -10356,8 +10363,6 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('apiary_hive_capabilities', 'local_hive_capability')",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "apiary_policy_settings",
             artifact: "",
@@ -10367,6 +10372,15 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('apiary_policy_settings', 'local_policy_settings',
                              'local_policy_manifest')",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "apiary_expected_release",
+            artifact: "",
+            undo_sql: "DROP TABLE apiary_expected_release",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'apiary_expected_release'",
         },
     ];
 

@@ -155,6 +155,22 @@ promoted Jira projects, active reservations or durable home-Hive ownership, and
 Steward scopes from the existing private contracts. Routine worker activity
 remains inside each Hive; invitations and configuration stay in Settings.
 
+Fleet version standing checkpoint: the Apiary records which release it expects
+and when that release first appeared, and judges every reporting Hive against
+it from the capability report it already holds. A Hive still behind after a
+six-hour grace window RAISES a decision the operator sees, rather than showing a
+version in a column — the distinction the September 2026 wedge made, when this
+Hive sat on a stale build for roughly a day with its version on screen the whole
+time. The card is raised once, not per Hive, and withdraws itself when the fleet
+catches up. Schema drift is judged against Keeper's own schema, is a different
+problem from staleness rather than a worse degree of it, and gets no grace.
+Development builds are exempt from the version raise because their own reload
+card reports drift locally; they are NOT exempt from schema drift. With no
+release check ever having returned an offer, every Hive reads "not compared" and
+the surface says so, because a version check that fails open would report the
+whole fleet healthy on the strength of not having looked. Keeper pushing an
+update to a member remains out of scope.
+
 Member control-room checkpoint: a joined Hive receives the same first-class
 Apiary navigation without being shown Keeper administration. Its read-only
 surface identifies the Keeper, local Hive and operator, catalog convergence,

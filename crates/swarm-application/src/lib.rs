@@ -110,7 +110,130 @@ pub struct FederationJoinInvitationOverview {
     pub readiness: FederationJoinReadiness,
 }
 
+/// The title every fleet-version raise carries.
+///
+/// ⚠️ ONE TITLE FOR ALL OF THEM, ON PURPOSE. A title per Hive would mean a
+/// separate card per member the moment a release cuts, which is a pile rather
+/// than a signal — and the pile is what gets dismissed wholesale. The card
+/// names the Hives in its summary instead, and it is the dedup key.
+const FLEET_BEHIND_QUESTION_TITLE: &str = "Hives are behind the current release";
+
 impl ApiaryService {
+    /// Raises the Hives that have fallen behind, and withdraws the raise once
+    /// they catch up.
+    ///
+    /// Returns the report it judged, so a caller can surface the same numbers
+    /// it acted on rather than reading them again and possibly differing.
+    ///
+    /// ⚠️ EVENT-DRIVEN, NOT TIMED. This runs when the answer can actually have
+    /// changed — a member reported, or a new release appeared — rather than on
+    /// a repeating timer, because a periodic sweep would be a background task to
+    /// own and bound for no gain over the moments that already exist.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn raise_hives_left_behind(
+        &self,
+        now: i64,
+    ) -> Result<swarm_persistence::FleetVersionReport, ApplicationError> {
+        let report = self.store.fleet_version_report(now)?;
+        let raised = report.raised();
+        // ⚠️ THE CARD MUST GO AWAY BY ITSELF. The operator's standing complaint
+        // about this machinery is a card that keeps coming back after being
+        // dealt with. A Hive that upgraded has answered the question, and
+        // leaving the card up would make catching up look like nothing
+        // happened.
+        let open = self
+            .store
+            .list_decision_requests()?
+            .into_iter()
+            .filter(|request| {
+                request.title == FLEET_BEHIND_QUESTION_TITLE
+                    && request.state == swarm_domain::DecisionRequestState::Pending
+            })
+            .collect::<Vec<_>>();
+        if raised.is_empty() {
+            for request in open {
+                if let Err(error) = self.store.withdraw_decision_request(
+                    request.id,
+                    request.requesting_worker_id,
+                    "Every Hive has caught up.",
+                ) {
+                    tracing::warn!(
+                        message = %error,
+                        decision = %request.id,
+                        "the fleet caught up and its raise could not be withdrawn"
+                    );
+                }
+            }
+            return Ok(report);
+        }
+        // Already asked, and still true. Asking again would be the loop.
+        if !open.is_empty() {
+            return Ok(report);
+        }
+        let Ok(Some(queen)) = self.store.queen_worker_id() else {
+            tracing::warn!(
+                behind = raised.len(),
+                "Hives are behind and there is no Queen to raise it to"
+            );
+            return Ok(report);
+        };
+        let expected = report
+            .expected_release
+            .as_ref()
+            .map_or("an unknown release", |(version, _)| version.as_str());
+        let listed = raised
+            .iter()
+            .map(|hive| {
+                format!(
+                    "- {} runs {} (schema {}), last reported {}: {:?}",
+                    hive.identity.hive_id,
+                    hive.swarm_version,
+                    hive.database_schema_version,
+                    hive.observed_at,
+                    hive.standing
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let summary = format!(
+            "{} Hive(s) in the Apiary are not on {expected}, and the grace window \
+             has passed.\n{listed}",
+            raised.len()
+        );
+        if let Err(error) = self.store.create_decision_request(&NewDecisionRequest {
+            requesting_worker_id: queen,
+            task_id: None,
+            kind: DecisionRequestKind::Input,
+            urgency: DecisionUrgency::Normal,
+            title: FLEET_BEHIND_QUESTION_TITLE,
+            summary: &summary,
+            reason: "A Hive left on an old build stops being evidence about what \
+                     gets released, which is the point of running it.",
+            risk: "This Hive sat wedged on a stale build for roughly a day in \
+                   September and every screen that could have said so showed a \
+                   version and nothing else.",
+            evidence: &summary,
+            suggested_action: "Update them",
+            allowed_actions: &[
+                "Update them".to_owned(),
+                "Leave them behind for now".to_owned(),
+            ],
+            operator_actions: &[],
+            questions: &[],
+            deadline: None,
+            requested_command: None,
+        }) {
+            tracing::warn!(
+                message = %error,
+                behind = raised.len(),
+                "Hives are behind and the raise could not be recorded"
+            );
+        }
+        Ok(report)
+    }
+
     /// Exchanges an authenticated member's signed public profile for a signed
     /// full directory. A retry after response loss does not duplicate changes.
     ///
