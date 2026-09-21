@@ -159,7 +159,13 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   const observations = screen.getByRole("list", { name: "Managed Hive shared-work status" });
   expect(observations).toHaveTextContent("Clover Hive");
   expect(observations).toHaveTextContent("Ready2Active1Blocked1Review3Jira owned4");
-  expect(stewardship).toHaveTextContent("private workers and terminals stay local");
+  // ⚠️ THIS ASSERTION CHANGED BECAUSE THE DECISION DID, not because the copy
+  // was tidied. It used to pin "private workers and terminals stay local",
+  // which ADR 0107 reversed: a Steward now sees a Hive in scope exactly as
+  // Keeper would. The counts survive as a cheap summary; they are no longer the
+  // ceiling, and a Steward has a way to open the window from here.
+  expect(stewardship).toHaveTextContent("open a live window on any Hive in scope");
+  expect(screen.getByRole("list", { name: "Hives you can watch" })).toHaveTextContent("Clover Hive");
   expect(document.body).not.toHaveTextContent("WWD-102");
   expect(document.body).not.toHaveTextContent("node-2");
   expect(document.body).not.toHaveTextContent("secret");

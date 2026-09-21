@@ -432,6 +432,45 @@ impl TaskStore {
         Ok(watches)
     }
 
+    /// The watch a Steward holds, checked for their outbound viewer socket.
+    ///
+    /// ⚠️ KEEPER IS THE AUTHORITY FOR THIS, NOT THE STEWARD'S OWN HIVE. The
+    /// Steward's Hive proxies frames, and a proxy that decided for itself who
+    /// may watch would be a second authority to keep in step with the grants —
+    /// which is how a Steward ends up seeing a Hive after their stewardship was
+    /// revoked.
+    ///
+    /// # Errors
+    /// Rejects an invalid credential, and refuses a watch this member's
+    /// operator does not hold or that is no longer live.
+    pub fn federation_watch_for_watcher(
+        &self,
+        credential: &str,
+        watch_id: ApiaryWatchId,
+        now: i64,
+    ) -> Result<ApiaryWatch, TaskStoreError> {
+        let (apiary_id, _, operator) = self.authenticated_member(credential, now)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let watch = read_watches(
+            &transaction,
+            "apiary_watches",
+            "WHERE watch_id = ?1 AND apiary_id = ?2 AND watcher_operator_id = ?3",
+            params![
+                watch_id.to_string(),
+                apiary_id.to_string(),
+                operator.to_string()
+            ],
+        )?
+        .pop()
+        .ok_or(TaskStoreError::InvalidStewardship)?;
+        if !watch.is_live(now) {
+            return Err(TaskStoreError::InvalidStewardship);
+        }
+        transaction.commit()?;
+        Ok(watch)
+    }
+
     /// A Steward asking Keeper to open a watch, over its outbound connection.
     ///
     /// ⚠️ THE SAME `open_apiary_watch` BEHIND BOTH DOORS. Keeper's own operator

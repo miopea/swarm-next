@@ -2,7 +2,7 @@
 
 Status: Accepted from the operator interview of 2026-09-21, recorded in
 `docs/specs/apiary-controls-scope.md`. The control plane, the frame relay and
-the Keeper's viewer surface are built.
+both viewer surfaces — Keeper's and a Steward's — are built.
 
 Watching a member Hive is a full live window, the same depth for Keeper and for
 a Steward in scope. The grant decides WHICH Hives, never HOW MUCH.
@@ -138,6 +138,20 @@ It relays QUEEN's terminal, which is narrower than "literally everything". ADR
 widening to a chosen session needs the watcher to be able to ASK for one, which
 this one-way push deliberately cannot carry.
 
-A Steward watching from their own Hive needs one more hop — their Hive proxying
-Keeper's viewer socket — which is not built. The AUTHORITY is already identical,
-so this is transport rather than a second depth.
+## A Steward looks through their own Hive
+
+A Steward's browser never talks to Keeper. It asks its OWN Hive, which forwards
+the open to Keeper and proxies the frames back — the same outbound-only hop
+every other federation read takes.
+
+⚠️ THE PROXY DECIDES NOTHING. Keeper authorizes the open, Keeper authorizes the
+outbound viewer socket, and Keeper owns whether the watch is still live. A
+member that answered any of those from its own tables would be a second
+authority to keep in step with the grants, which is how a revoked Steward
+carries on looking. The member's own store holds no `apiary_watches` at all, and
+an early version that checked it anyway refused every legitimate window —
+because an empty table reads exactly like a watch that ended.
+
+So the depth does not vary with the route you arrived on. That is the rule this
+capability is built around, and it is now enforced by both viewer sockets
+reaching the same relay under the same lease.

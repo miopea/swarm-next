@@ -38,9 +38,11 @@ import {
   type FederationTaskOutboxStatus,
   type HiveIdentity,
   type LocalApiaryTaskExecution,
+  openApiaryWatch, endApiaryWatch, type ApiaryWatch,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
+import WatchWindow from "./WatchWindow";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
 import MemberSetup from "./MemberSetup";
 import { catalogReadinessLabel, federationSyncCopy } from "./presentation";
@@ -152,6 +154,8 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const projectCount = snapshot.catalog?.projects.length ?? 0;
   const syncCondition = snapshot.sync?.condition ?? "idle";
   const [syncTitle, syncDetail] = federationSyncCopy[syncCondition];
+  const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
+  const [watchError, setWatchError] = useState<string>();
   const stewardship = snapshot.stewardship?.stewardship;
   const managedMembers = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId) ?? { hive_id: hiveId, hive_name: "Registered Hive" }) ?? [];
   const managedHives = managedMembers.map((member) => member.hive_name);
@@ -163,6 +167,10 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   };
   const sentAssists = stewardAssists.sent;
   const canAssist = stewardship?.capabilities.includes("assist") ?? false;
+  // Checked rather than assumed, even though `normalize_stewardship_grant`
+  // refuses a stewardship without Observe today — a rule enforced elsewhere is
+  // not a rule this surface should depend on silently.
+  const canObserve = stewardship?.capabilities.includes("observe") ?? false;
   const [assistTarget, setAssistTarget] = useState("");
   const [assistMessage, setAssistMessage] = useState("");
   const [sendingAssist, setSendingAssist] = useState(false);
@@ -262,8 +270,42 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
             <div><dt>Hives in scope</dt><dd>{managedHives.join(", ")}</dd></div>
             <div><dt>Capabilities</dt><dd>{stewardship.capabilities.map(stewardCapabilityLabel).join(", ")}</dd></div>
           </dl>
+          {/*
+            ⚠️ THE PULSE IS NO LONGER THE LIMIT OF WHAT OBSERVE PERMITS. ADR
+            0107 widened it: a Steward sees a Hive in scope exactly as Keeper
+            would. The counts remain because a cheap scannable summary is still
+            worth having — they are just not the ceiling any more, and the copy
+            beside them used to say they were.
+          */}
+          {canObserve ? <section className="steward-windows" aria-labelledby="steward-windows-heading">
+            <header><div><p className="eyebrow">Watch</p><h5 id="steward-windows-heading">Live windows</h5></div><small>Each Hive is shown who is watching, for as long as it lasts</small></header>
+            <ul aria-label="Hives you can watch">{managedMembers.map((member) => <li key={member.hive_id}>
+              <strong>{member.hive_name}</strong>
+              <button type="button" className="secondary-button" onClick={async () => {
+                setWatchError(undefined);
+                try {
+                  const watch = await openApiaryWatch(operatorToken, member.hive_id);
+                  setWatching({ watch, hiveName: member.hive_name });
+                } catch {
+                  // Keeper decides, so a refusal here is Keeper's answer — most
+                  // likely a stewardship that no longer covers this Hive.
+                  setWatchError(`Keeper did not grant a window into ${member.hive_name}.`);
+                }
+              }}>Watch</button>
+            </li>)}</ul>
+            {watchError ? <p className="keeper-empty" role="alert">{watchError}</p> : null}
+            {watching ? <WatchWindow
+              watchId={watching.watch.id}
+              operatorToken={operatorToken}
+              hiveName={watching.hiveName}
+              onClose={() => {
+                void endApiaryWatch(operatorToken, watching.watch.id).catch(() => undefined);
+                setWatching(undefined);
+              }}
+            /> : null}
+          </section> : null}
           {stewardObservations.length ? <section className="steward-observations" aria-labelledby="steward-observations-heading">
-            <header><div><p className="eyebrow">Observe</p><h5 id="steward-observations-heading">Shared-work pulse</h5></div><small>Keeper-known work only · private workers and terminals stay local</small></header>
+            <header><div><p className="eyebrow">Observe</p><h5 id="steward-observations-heading">Shared-work pulse</h5></div><small>A scannable summary · open a live window on any Hive in scope</small></header>
             <ul aria-label="Managed Hive shared-work status">{stewardObservations.map((observation) => {
               const member = managedMembers.find((candidate) => candidate.hive_id === observation.hive_id);
               return <li key={observation.hive_id}>

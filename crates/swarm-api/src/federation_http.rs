@@ -120,6 +120,29 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Asks Keeper to open a window into another Hive, on this Steward's behalf.
+    ///
+    /// ⚠️ KEEPER DECIDES, NOT THIS HIVE. The stewardship grants live there and
+    /// are rechecked there; a member that authorized its own watches would be a
+    /// second authority to keep in step, and the way a revoked Steward keeps
+    /// looking.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn open_watch(
+        &self,
+        credential: &str,
+        target_hive_id: swarm_domain::HiveId,
+    ) -> Result<swarm_domain::ApiaryWatch, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            "api/v1/federation/watches",
+            Some(credential),
+            Some(&serde_json::json!({ "target_hive_id": target_hive_id })),
+        )
+        .await
+    }
+
     /// Tells Keeper this Hive has the watch on its own screen.
     ///
     /// Nothing is relayed until this lands, which is what makes "always

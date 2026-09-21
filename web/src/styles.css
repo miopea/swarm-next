@@ -252,6 +252,12 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    warning rendered as plain text. It is a state, not a destination, so it is
    styled as a warning and carries the control that ends it. */
 .surface-nav .public-address-warning { display: grid; gap: 6px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
+/* The Steward's list of Hives they may open a window into. Laid out like the
+   observation rows above it so the two read as one capability rather than two. */
+.steward-windows ul { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.steward-windows li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.steward-windows li button { min-height: 44px; margin-left: auto; }
+
 /* A window into another Hive. Bordered and labelled rather than chromeless: it
    should never be mistakable for this Hive's own terminal, because the thing on
    screen belongs to somebody else. */

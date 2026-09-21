@@ -18,8 +18,10 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use futures_util::StreamExt;
 use swarm_domain::ApiaryWatchId;
 use tokio::sync::broadcast;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::{ApiError, AppState};
 
@@ -282,6 +284,47 @@ async fn receive_frames(mut socket: WebSocket, state: Arc<AppState>, watch: Apia
     }
 }
 
+/// A Steward's own Hive attaching to the window, on its outbound connection.
+///
+/// ⚠️ THE SAME RELAY AND THE SAME LEASE AS THE KEEPER'S VIEWER. The only thing
+/// that differs is how the caller proved who they are — a node credential
+/// rather than a browser's grant — because a Steward's browser talks to their
+/// own Hive and their Hive talks to Keeper. Depth does not vary with the route
+/// you arrived on, which is the rule this whole capability is built around.
+pub(crate) async fn federation_watch_stream(
+    websocket: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Path(watch_id): Path<ApiaryWatchId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = crate::federation_node_credential(&headers)?.to_owned();
+    let now = crate::unix_timestamp();
+    crate::task_store(&state)?
+        .federation_watch_for_watcher(&credential, watch_id, now)
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::FORBIDDEN,
+                "watch_not_live",
+                "no live watch of yours has that id",
+            )
+        })?;
+    let permit = Arc::clone(&state.websocket_limit)
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "federation_websocket_limit_reached",
+                "federation WebSocket capacity is exhausted",
+            )
+        })?;
+    let receiver = state.watch_relay.subscribe(watch_id);
+    let viewed = Arc::clone(&state);
+    Ok(websocket.on_upgrade(move |socket| async move {
+        serve_frames(socket, receiver, viewed, watch_id).await;
+        drop(permit);
+    }))
+}
+
 /// The watcher's window.
 ///
 /// Authorized against the watch this operator holds, re-checked while it runs.
@@ -305,9 +348,15 @@ pub(crate) async fn apiary_watch_stream(
             "the watch grant is invalid, expired, or already used",
         ));
     }
+    // ⚠️ A STEWARD'S HIVE HOLDS NO `apiary_watches` AND MUST NOT ANSWER FROM
+    // THE ABSENCE. Checking here on a member refused every legitimate window,
+    // because an empty table reads identically to a watch that ended. Keeper
+    // owns this question and answers it when the proxy dials — the same reason
+    // the grant route does not ask it either.
+    let member = crate::local_apiary_role(&state) == Some(swarm_domain::LocalApiaryRole::Member);
     // Re-checked after the grant, not instead of it: a grant proves who asked,
     // and this proves the watch is still theirs and still live.
-    if !watch_is_live(&state, watch_id, crate::unix_timestamp()) {
+    if !member && !watch_is_live(&state, watch_id, crate::unix_timestamp()) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "watch_not_live",
@@ -323,7 +372,11 @@ pub(crate) async fn apiary_watch_stream(
                 "federation WebSocket capacity is exhausted",
             )
         })?;
-    let receiver = state.watch_relay.subscribe(watch_id);
+    // ⚠️ A STEWARD'S HIVE HOLDS NO FRAMES OF ITS OWN. It is not the relay; the
+    // relay is at Keeper. So a member PROXIES — it dials Keeper's viewer socket
+    // outbound and forwards what arrives, which is the same hop every other
+    // federation read takes and keeps the outbound-only model intact.
+    let receiver = (!member).then(|| state.watch_relay.subscribe(watch_id));
     let viewed = Arc::clone(&state);
     // ⚠️ THE SELECTED SUBPROTOCOL MUST BE ECHOED. A client that offers one and
     // is answered with none fails the handshake — so omitting this made the
@@ -333,9 +386,67 @@ pub(crate) async fn apiary_watch_stream(
     Ok(websocket
         .protocols([selected])
         .on_upgrade(move |socket| async move {
-            serve_frames(socket, receiver, viewed, watch_id).await;
+            match receiver {
+                Some(receiver) => serve_frames(socket, receiver, viewed, watch_id).await,
+                None => proxy_frames(socket, viewed, watch_id).await,
+            }
             drop(permit);
         }))
+}
+
+/// Forwards Keeper's frames to a Steward's own browser.
+///
+/// Failures here close the window rather than being reported in detail: from
+/// the watcher's side "the window closed" is the whole truth, and a Hive that
+/// could not reach Keeper and one whose watch just ended look identical and
+/// deserve the same words.
+async fn proxy_frames(mut socket: WebSocket, state: Arc<AppState>, watch: ApiaryWatchId) {
+    let Ok(service) = crate::apiary_service(&state) else {
+        return;
+    };
+    let Ok(connection) = service.federation_member_connection() else {
+        return;
+    };
+    let Ok(url) = keeper_stream_url(&connection.keeper_endpoint, watch) else {
+        return;
+    };
+    let Ok(mut request) = url.into_client_request() else {
+        return;
+    };
+    let Ok(bearer) =
+        axum::http::HeaderValue::from_str(&format!("Bearer {}", connection.node_credential))
+    else {
+        return;
+    };
+    request
+        .headers_mut()
+        .insert(axum::http::header::AUTHORIZATION, bearer);
+    let Ok((upstream, _)) = tokio_tungstenite::connect_async(request).await else {
+        return;
+    };
+    let (_, mut inbound) = upstream.split();
+    while let Some(Ok(message)) = inbound.next().await {
+        if let tokio_tungstenite::tungstenite::Message::Binary(frame) = message
+            && socket
+                .send(Message::Binary(frame.to_vec().into()))
+                .await
+                .is_err()
+        {
+            return;
+        }
+    }
+}
+
+fn keeper_stream_url(keeper_endpoint: &str, watch: ApiaryWatchId) -> Result<String, ()> {
+    let trimmed = keeper_endpoint.trim_end_matches('/');
+    let base = if let Some(rest) = trimmed.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        return Err(());
+    };
+    Ok(format!("{base}/api/v1/federation/watches/{watch}/stream"))
 }
 
 /// Forwards frames to one viewer until the watch ends or they fall behind.

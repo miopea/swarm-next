@@ -4196,6 +4196,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/watches/{watch_id}/frames",
             get(watch_relay::federation_watch_frames),
         )
+        .route(
+            "/api/v1/federation/watches/{watch_id}/stream",
+            get(watch_relay::federation_watch_stream),
+        )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
             "/api/v1/federation/departure-readiness",
@@ -5390,9 +5394,37 @@ async fn open_apiary_watch(
         .map_err(|error| task_store_error(&error))?
         .operator
         .id;
-    let watch = store
-        .open_apiary_watch(watcher, request.target_hive_id, unix_timestamp())
-        .map_err(|error| task_store_error(&error))?;
+    // ⚠️ A MEMBER FORWARDS RATHER THAN DECIDING. The stewardship grants live at
+    // Keeper and are rechecked there; a Hive that authorized its own watches
+    // would be a second authority to keep in step with them, which is how a
+    // revoked Steward carries on looking.
+    let watch = if local_apiary_role(&state) == Some(LocalApiaryRole::Member) {
+        let service = apiary_service(&state)?;
+        let connection = service
+            .federation_member_connection()
+            .map_err(application_error)?;
+        federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "apiary_keeper_unreachable",
+                    "this Apiary's Keeper could not be reached",
+                )
+            })?
+            .open_watch(&connection.node_credential, request.target_hive_id)
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::FORBIDDEN,
+                    "watch_not_permitted",
+                    "Keeper did not grant a window into that Hive",
+                )
+            })?
+    } else {
+        store
+            .open_apiary_watch(watcher, request.target_hive_id, unix_timestamp())
+            .map_err(|error| task_store_error(&error))?
+    };
     announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
 }
@@ -5478,13 +5510,19 @@ async fn apiary_watch_grant(
         .map_err(|error| task_store_error(&error))?
         .operator
         .id;
-    let holds = store
-        .apiary_watch_audit(200)
-        .map_err(|error| task_store_error(&error))?
-        .into_iter()
-        .any(|watch| {
-            watch.id == watch_id && watch.watcher_operator_id == watcher && watch.is_live(now)
-        });
+    // ⚠️ A MEMBER HAS NO `apiary_watches` TO CHECK, and must not pretend
+    // otherwise. The grant here only proves the browser reached its own Hive as
+    // the operator; whether the watch exists and is theirs is settled when the
+    // proxy dials Keeper, which is the only place that knows.
+    let member = local_apiary_role(&state) == Some(LocalApiaryRole::Member);
+    let holds = member
+        || store
+            .apiary_watch_audit(200)
+            .map_err(|error| task_store_error(&error))?
+            .into_iter()
+            .any(|watch| {
+                watch.id == watch_id && watch.watcher_operator_id == watcher && watch.is_live(now)
+            });
     if !holds {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
@@ -10136,6 +10174,14 @@ fn host_unavailable(error: &swarm_terminal::IpcError) -> ApiError {
 /// misses the notice simply reconciles at its next poll — which is exactly
 /// today's behaviour. Anything stricter would make a latency optimisation able
 /// to break correctness.
+/// This Hive's role in its Apiary, or `None` when it is not federated.
+fn local_apiary_role(state: &AppState) -> Option<LocalApiaryRole> {
+    match apiary_service(state).ok()?.local_context().ok()? {
+        LocalApiaryContext::Federated { local_role, .. } => Some(local_role),
+        LocalApiaryContext::Personal => None,
+    }
+}
+
 fn announce_federation_change(state: &AppState, kind: swarm_domain::FederationChangeKind) {
     let Ok(service) = apiary_service(state) else {
         return;
@@ -12902,6 +12948,166 @@ mod tests {
             .await
             .is_err(),
             "and a bearer header is not a substitute for a grant"
+        );
+    }
+
+    /// ⚠️ THE TITLE'S OWN PROMISE: "same depth for Keeper and Steward". Three
+    /// real Hives and three real servers — a Keeper, a watched Hive, and a
+    /// Steward on a machine of their own — because the Steward path is the one
+    /// that could quietly become a lesser view, and only an end-to-end run can
+    /// show it is not.
+    ///
+    /// The Steward's browser never talks to Keeper. It asks its OWN Hive, which
+    /// forwards the open to Keeper and proxies the frames back, which is the
+    /// same outbound-only hop every other federation read takes.
+    #[tokio::test]
+    async fn a_steward_sees_the_same_window_through_their_own_hive() {
+        let now = unix_timestamp();
+        let (keeper, watched, watched_card) = keeper_and_candidate(now);
+        let (keeper_endpoint, _bus, _keeper_server) =
+            start_keeper_event_server(keeper.clone()).await;
+        let watched_credential =
+            complete_join(&keeper, &watched, &watched_card, &keeper_endpoint, now);
+
+        // A second Hive joins the same Apiary: the Steward's own machine.
+        let steward = TaskStore::in_memory().unwrap();
+        let steward_card = steward.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&steward_card, now).unwrap();
+        let steward_credential =
+            complete_join(&keeper, &steward, &steward_card, &keeper_endpoint, now);
+        let _ = steward_credential;
+
+        let watched_hive = watched.local_hive_identity().unwrap().hive.id;
+        let steward_operator = steward.local_hive_identity().unwrap().operator.id;
+        keeper
+            .set_stewardship(
+                steward_operator,
+                &[watched_hive],
+                &[swarm_domain::StewardCapability::Observe],
+                now,
+            )
+            .unwrap();
+
+        let (steward_endpoint, _steward_bus, _steward_server) =
+            start_keeper_event_server(steward.clone()).await;
+
+        // The Steward's browser asks its OWN Hive to open the window.
+        let opened = reqwest::Client::new()
+            .post(format!("{steward_endpoint}/api/v1/apiary/watches"))
+            .header(header::AUTHORIZATION, "Bearer keeper-secret")
+            .json(&serde_json::json!({ "target_hive_id": watched_hive }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            opened.status(),
+            200,
+            "a Steward in scope is granted a window"
+        );
+        let watch: swarm_domain::ApiaryWatch = opened.json().await.unwrap();
+        assert_eq!(
+            watch.watcher_operator_id, steward_operator,
+            "Keeper recorded the Steward as the watcher, not their Hive"
+        );
+        assert!(
+            matches!(watch.authority, swarm_domain::WatchAuthority::Steward(_)),
+            "and recorded the stewardship it was granted under"
+        );
+
+        // The watched Hive is told, and acknowledges.
+        let inbox = keeper
+            .federation_watch_inbox(&watched_credential, now)
+            .unwrap();
+        assert_eq!(inbox.len(), 1, "the watched operator is told, as always");
+        watched.apply_federation_watch_inbox(&inbox, now).unwrap();
+        assert_eq!(watched.local_open_watches(now).unwrap().len(), 1);
+        keeper
+            .acknowledge_federation_watch(&watched_credential, watch.id, now)
+            .unwrap();
+
+        // The Steward attaches through their own Hive, exactly as a browser does.
+        let ticket = watch_grant(&steward_endpoint, watch.id).await;
+        let steward_socket_base = steward_endpoint.replace("http://", "ws://");
+        let mut viewer = dial_viewer(&steward_socket_base, watch.id, &ticket)
+            .await
+            .expect("a Steward may look through their own Hive");
+
+        // The watched Hive pushes a frame to Keeper.
+        let keeper_socket_base = keeper_endpoint.replace("http://", "ws://");
+        let mut producer_request = format!(
+            "{keeper_socket_base}/api/v1/federation/watches/{}/frames",
+            watch.id
+        )
+        .into_client_request()
+        .unwrap();
+        producer_request.headers_mut().insert(
+            header::AUTHORIZATION,
+            axum::http::HeaderValue::from_str(&format!("Bearer {watched_credential}")).unwrap(),
+        );
+        let (mut producer, _) = tokio_tungstenite::connect_async(producer_request)
+            .await
+            .expect("the watched Hive may stream its own frames");
+
+        let mut frame = vec![1u8];
+        frame.extend_from_slice(&7u64.to_be_bytes());
+        frame.extend_from_slice(b"steward sees this");
+        let received = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                producer
+                    .send(ClientMessage::Binary(frame.clone().into()))
+                    .await
+                    .unwrap();
+                if let Ok(Some(Ok(ClientMessage::Binary(payload)))) =
+                    tokio::time::timeout(Duration::from_millis(200), viewer.next()).await
+                {
+                    return payload;
+                }
+            }
+        })
+        .await
+        .expect("the same frame must reach the Steward");
+        assert_eq!(
+            received.as_ref(),
+            frame.as_slice(),
+            "the Steward's window is the Keeper's window, byte for byte"
+        );
+    }
+
+    /// ⚠️ A REVOKED STEWARDSHIP STOPS WORKING AT KEEPER, not at the Steward's
+    /// own Hive. The proxy deliberately does not decide who may watch, so a
+    /// Hive that kept its own answer would be how a revoked Steward carries on
+    /// looking.
+    #[tokio::test]
+    async fn a_steward_without_scope_is_refused_by_keeper_not_by_their_own_hive() {
+        let now = unix_timestamp();
+        let (keeper, watched, watched_card) = keeper_and_candidate(now);
+        let (keeper_endpoint, _bus, _keeper_server) =
+            start_keeper_event_server(keeper.clone()).await;
+        let _ = complete_join(&keeper, &watched, &watched_card, &keeper_endpoint, now);
+
+        let steward = TaskStore::in_memory().unwrap();
+        let steward_card = steward.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&steward_card, now).unwrap();
+        let _ = complete_join(&keeper, &steward, &steward_card, &keeper_endpoint, now);
+        let watched_hive = watched.local_hive_identity().unwrap().hive.id;
+        let (steward_endpoint, _steward_bus, _steward_server) =
+            start_keeper_event_server(steward.clone()).await;
+
+        let refused = reqwest::Client::new()
+            .post(format!("{steward_endpoint}/api/v1/apiary/watches"))
+            .header(header::AUTHORIZATION, "Bearer keeper-secret")
+            .json(&serde_json::json!({ "target_hive_id": watched_hive }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            refused.status(),
+            403,
+            "a member with no stewardship gets no window, however it asks"
+        );
+        assert!(
+            keeper.apiary_watch_audit(10).unwrap().is_empty(),
+            "and a refusal records no watch"
         );
     }
 
