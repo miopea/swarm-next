@@ -212,7 +212,7 @@ async fn connect_and_listen(state: &AppState) -> Result<(), String> {
                 // not read it: the reconciliation owner already fetches every
                 // feed and applies each atomically. Acting on the KIND would be
                 // the first step toward trusting the socket's contents.
-                state.reconcile_federation().await;
+                state.reconcile_federation_announced().await;
             }
             ClientMessage::Close(_) => return Ok(()),
             // Ping/pong are handled by the library; anything else is noise a

@@ -1057,6 +1057,30 @@ impl AppState {
     /// synchronize canonical Jira work directly with Jira.
     #[allow(clippy::too_many_lines)]
     pub async fn reconcile_federation(&self) {
+        self.reconcile_federation_inner(false).await;
+    }
+
+    /// Reconcile because Keeper SAID something changed, rather than because the
+    /// interval elapsed.
+    ///
+    /// ⚠️ THIS SKIPS THE PACING GATE, AND THAT IS THE WHOLE POINT. The interval
+    /// exists to stop a member guessing too often; an announcement is not a
+    /// guess, it is Keeper reporting a durable change. Without this the event
+    /// socket is decorative: the doorbell rings, `next_attempt_at` is still
+    /// sixty seconds out, and the pass returns having done nothing.
+    ///
+    /// Found by the integration test rather than by reading — every unit test
+    /// passed while the wire was inert.
+    ///
+    /// It does NOT skip the authentication or incompatibility gates. Those are
+    /// refusals rather than pacing, and an announcement is no reason to retry
+    /// against a credential Keeper has already rejected.
+    pub async fn reconcile_federation_announced(&self) {
+        self.reconcile_federation_inner(true).await;
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn reconcile_federation_inner(&self, announced: bool) {
         self.reconcile_apiary_enrollments().await;
         let Some(store) = self.task_store.as_ref() else {
             return;
@@ -1074,8 +1098,10 @@ impl AppState {
         if matches!(
             health.condition,
             FederationSyncCondition::AuthenticationRequired | FederationSyncCondition::Incompatible
-        ) || health.next_attempt_at.is_some_and(|next| next > now)
-        {
+        ) {
+            return;
+        }
+        if !announced && health.next_attempt_at.is_some_and(|next| next > now) {
             return;
         }
         let connection = match service.federation_member_connection() {
@@ -12293,6 +12319,163 @@ mod tests {
         );
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
         (endpoint, server)
+    }
+
+    /// Keeper listening for real, with a handle on its doorbell.
+    ///
+    /// `router` consumes the state, so the bus is cloned out first — it shares
+    /// one broadcast sender, so announcing through the clone reaches every
+    /// member connected to the server built from the original.
+    async fn start_keeper_event_server(
+        keeper: TaskStore,
+    ) -> (
+        String,
+        federation_events::FederationEventBus,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new("/unreachable/terminal.sock"),
+                "keeper-secret",
+            )
+            .with_task_store(keeper);
+        let bus = state.federation_events.clone();
+        let app = router(state);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        (endpoint, bus, server)
+    }
+
+    /// ⚠️ THE ROUND TRIP QUEEN ASKED FOR, AND THE ONE THING THE UNIT TESTS COULD
+    /// NOT SHOW. URL construction, backoff bounding and notice shape each pass in
+    /// isolation while the wiring is broken; this stands up a real Keeper on a
+    /// real port, connects a real member socket, announces, and observes the
+    /// member actually reconcile.
+    ///
+    /// The isolation matters: no periodic reconciler runs in this test, so after
+    /// the connect-time reconcile the ONLY thing that can make the member fetch
+    /// again is the announcement. If the doorbell does not work, this hangs and
+    /// fails rather than passing on a timer.
+    #[tokio::test]
+    async fn a_keeper_announcement_makes_a_connected_member_reconcile() {
+        let now = unix_timestamp();
+        let member_store = TaskStore::in_memory().unwrap();
+        let card = member_store.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        // A sentinel created BEFORE the member connects. Seeing it is what
+        // proves a connect-time reconcile actually happened, rather than the
+        // test racing ahead and crediting the doorbell for it.
+        keeper
+            .create_apiary_task(
+                "Sentinel: present before the member connects",
+                "Its arrival proves the connect-time reconcile ran.",
+                TaskPriority::Normal,
+                now,
+            )
+            .unwrap();
+        let (keeper_endpoint, bus, _server) = start_keeper_event_server(keeper.clone()).await;
+
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(card.payload.hive_id, &keeper_endpoint, now, 3_600)
+            .unwrap();
+        let imported = member_store
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member_store
+            .accept_federation_join_policy(imported.invitation_id, 1, now)
+            .unwrap();
+        let readiness = swarm_domain::FederationJoinReadiness {
+            jira_connection: swarm_domain::JiraConnectionState::Ready,
+            projects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        let submission = member_store
+            .prepare_federation_join_submission(imported.invitation_id, &readiness, now)
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member_store
+            .apply_federation_join_acceptance(imported.invitation_id, &acceptance, now)
+            .unwrap();
+
+        let member_state = Arc::new(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(member_store.clone()),
+        );
+        let loop_state = Arc::clone(&member_state);
+        let socket = tokio::spawn(async move {
+            let mut backoff = std::time::Duration::from_secs(2);
+            loop {
+                federation_events::poll_member_events(&loop_state, &mut backoff).await;
+            }
+        });
+
+        // ⚠️ THIS MUST BE A REAL SIGNAL, NOT A TAUTOLOGY. An earlier version
+        // waited for the task list to be EMPTY, which is true before the socket
+        // has done anything — so the test could race ahead, let the connect-time
+        // reconcile fetch the announced task, and credit the doorbell for work
+        // it never did. Waiting for the sentinel proves the member is connected
+        // and has already reconciled once.
+        let connected = wait_until(|| {
+            member_has(
+                &member_store,
+                "Sentinel: present before the member connects",
+            )
+        })
+        .await;
+        assert!(connected, "the member should have reconciled on connect");
+
+        // Now the only trigger left is the doorbell.
+        keeper
+            .create_apiary_task(
+                "Coordinate the release across Hives",
+                "Announced rather than polled.",
+                TaskPriority::High,
+                unix_timestamp(),
+            )
+            .unwrap();
+        bus.announce(swarm_domain::FederationChangeNotice::new(
+            swarm_domain::FederationChangeKind::Tasks,
+            acceptance.receipt.payload.apiary_id,
+            unix_timestamp(),
+        ));
+
+        let arrived =
+            wait_until(|| member_has(&member_store, "Coordinate the release across Hives")).await;
+        socket.abort();
+        assert!(
+            arrived,
+            "an announcement must make the connected member fetch the ordered feed"
+        );
+    }
+
+    fn member_has(store: &TaskStore, title: &str) -> bool {
+        store
+            .list_local_apiary_tasks()
+            .is_ok_and(|tasks| tasks.iter().any(|task| task.title == title))
+    }
+
+    /// Polls a condition rather than sleeping a fixed time, so the test is not
+    /// tuned to one machine's speed.
+    async fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        for _ in 0..200 {
+            if condition() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        false
     }
 
     #[test]
