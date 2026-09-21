@@ -155,9 +155,16 @@ promoted Jira projects, active reservations or durable home-Hive ownership, and
 Steward scopes from the existing private contracts. Routine worker activity
 remains inside each Hive; invitations and configuration stay in Settings.
 
-Hive watching checkpoint: the control plane AND the frame relay are implemented;
-no viewer surface presents the window yet, so the relay is reachable only by a
-client that speaks it directly. Frames travel member to Keeper to watcher over
+Hive watching checkpoint: the control plane, the frame relay and the Keeper's
+viewer surface are implemented. A Keeper opens a window from the Apiary Hive
+roster — offered for remote Hives and not for this one — and closing it ENDS the
+watch rather than merely hiding it, so the other operator's notice goes with it.
+The viewer authenticates with a single-use 30-second grant offered as a
+WebSocket subprotocol, because a browser cannot send an Authorization header on
+a socket and a long-lived token in a subprotocol would land in proxy logs. The
+window has no input path at all: no keyboard handler, no send method, because
+typing into another operator's machine is takeover under ADR 0036 rather than
+watching. Frames travel member to Keeper to watcher over
 two sockets, both outbound from the member, in the same wire format the local
 terminal socket uses. Keeper holds one bounded in-memory channel per watch,
 forwards opaque bytes, never parses a frame and keeps none; a viewer that falls

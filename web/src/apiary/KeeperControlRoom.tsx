@@ -1,13 +1,14 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
-  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions,
-  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type FleetVersions as Fleet, type HiveIdentity, type Stewardship,
+  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, openApiaryWatch, endApiaryWatch,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
 import SharedProfileHint from "./SharedProfileHint";
 import FleetVersions from "./FleetVersions";
+import WatchWindow from "./WatchWindow";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
@@ -21,6 +22,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const [observed, setObserved] = useState<Set<keyof KeeperSnapshot>>(() => new Set());
   const [failed, setFailed] = useState<Set<keyof KeeperSnapshot>>(() => new Set());
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  // The window this Keeper currently has open, if any. One at a time: a wall of
+  // other people's terminals is surveillance wearing a dashboard, and nobody
+  // asked for it.
+  const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
+  const [watchError, setWatchError] = useState<string>();
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
       const results = await Promise.allSettled([
@@ -88,7 +94,28 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel">
           <header><div><p className="eyebrow">People and Hives</p><h4>Apiary Hives</h4></div><small>Registration, not live presence</small></header>
           {section("members", "Hive roster", <>
-{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span></li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? null : <button type="button" className="secondary-button" onClick={async () => {
+            setWatchError(undefined);
+            try {
+              const watch = await openApiaryWatch(operatorToken, member.hive_id);
+              setWatching({ watch, hiveName: member.hive_name });
+            } catch {
+              setWatchError(`${member.hive_name} could not be watched.`);
+            }
+          }}>Watch</button>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+          {watchError ? <p className="keeper-empty" role="alert">{watchError}</p> : null}
+          {watching ? <WatchWindow
+            watchId={watching.watch.id}
+            operatorToken={operatorToken}
+            hiveName={watching.hiveName}
+            onClose={() => {
+              // Ended rather than merely hidden. A closed window that left the
+              // watch open would keep the other operator's notice up while
+              // nobody was looking, which is its own kind of lie.
+              void endApiaryWatch(operatorToken, watching.watch.id).catch(() => undefined);
+              setWatching(undefined);
+            }}
+          /> : null}
           </>)}
         </article>
         <article className="keeper-panel keeper-shared-work-panel">

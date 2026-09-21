@@ -444,6 +444,7 @@ pub struct AppState {
     /// notice costs latency, never correctness, so it needs no durability.
     federation_events: federation_events::FederationEventBus,
     watch_relay: Arc<watch_relay::WatchRelay>,
+    watch_grants: Arc<watch_relay::WatchGrantStore>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -575,6 +576,7 @@ impl AppState {
             control_room_notify: Arc::new(Notify::new()),
             federation_events: federation_events::FederationEventBus::new(),
             watch_relay: Arc::new(watch_relay::WatchRelay::default()),
+            watch_grants: Arc::new(watch_relay::WatchGrantStore::default()),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -4096,6 +4098,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/apiary/watches/{watch_id}/stream",
             get(watch_relay::apiary_watch_stream),
         )
+        .route(
+            "/api/v1/apiary/watches/{watch_id}/grant",
+            post(apiary_watch_grant),
+        )
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route("/api/v1/apiary/sync-retry", post(retry_apiary_sync))
         .route(
@@ -5445,6 +5451,63 @@ async fn renew_apiary_watch(
         .renew_apiary_watch(watcher, watch_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
+}
+
+#[derive(serde::Serialize)]
+struct WatchGrantResponse {
+    grant: String,
+    websocket_path: String,
+    expires_in_ms: u64,
+}
+
+/// Issues the single-use ticket a browser needs to open its viewer socket.
+///
+/// Authorized here, with the operator token, because this is an ordinary
+/// request and can carry a header. The socket then proves only that the caller
+/// held this ticket seconds ago.
+async fn apiary_watch_grant(
+    State(state): State<Arc<AppState>>,
+    Path(watch_id): Path<swarm_domain::ApiaryWatchId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let now = unix_timestamp();
+    let store = task_store(&state)?;
+    let watcher = store
+        .local_hive_identity()
+        .map_err(|error| task_store_error(&error))?
+        .operator
+        .id;
+    let holds = store
+        .apiary_watch_audit(200)
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .any(|watch| {
+            watch.id == watch_id && watch.watcher_operator_id == watcher && watch.is_live(now)
+        });
+    if !holds {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "watch_not_live",
+            "this operator holds no live watch with that id",
+        ));
+    }
+    let grant = state.watch_grants.issue(watch_id).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "watch_grant_unavailable",
+            "too many watch grants are outstanding",
+        )
+    })?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(WatchGrantResponse {
+            websocket_path: format!("/api/v1/apiary/watches/{watch_id}/stream"),
+            grant,
+            expires_in_ms: 30_000,
+        }),
+    )
+        .into_response())
 }
 
 /// Who looked, and when.
@@ -12688,6 +12751,47 @@ mod tests {
             .node_credential
     }
 
+    /// Fetches the single-use ticket a browser needs to open a viewer socket.
+    async fn watch_grant(endpoint: &str, watch: swarm_domain::ApiaryWatchId) -> String {
+        let body = reqwest::Client::new()
+            .post(format!("{endpoint}/api/v1/apiary/watches/{watch}/grant"))
+            .header(header::AUTHORIZATION, "Bearer keeper-secret")
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["grant"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// Opens a viewer socket the way a BROWSER must: grant as a subprotocol,
+    /// never an Authorization header.
+    async fn dial_viewer(
+        socket_base: &str,
+        watch: swarm_domain::ApiaryWatchId,
+        ticket: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::Error,
+    > {
+        let mut request = format!("{socket_base}/api/v1/apiary/watches/{watch}/stream")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            axum::http::HeaderValue::from_str(&format!("swarm-watch.{ticket}")).unwrap(),
+        );
+        tokio_tungstenite::connect_async(request)
+            .await
+            .map(|(socket, _)| socket)
+    }
+
     /// ⚠️ THE WINDOW ITSELF, OVER TWO REAL SOCKETS. Every other test proves a
     /// rule about watching; this proves a byte leaves the watched Hive and
     /// arrives at the watcher, which is the thing the ticket actually asks for.
@@ -12719,13 +12823,17 @@ mod tests {
             tokio_tungstenite::connect_async(request).await
         };
 
+        // ⚠️ THE VIEWER AUTHENTICATES THE WAY A BROWSER MUST: a single-use
+        // grant fetched over an ordinary request, then offered as a
+        // subprotocol. A browser cannot set an Authorization header on a
+        // WebSocket, so a test that used one would prove a path the UI could
+        // never take — which is exactly the bug this replaced.
+        let ticket = watch_grant(&endpoint, watch.id).await;
+
         // The watcher attaches first, so nothing can be missed by racing.
-        let (mut viewer, _) = dial(
-            format!("{socket_base}/api/v1/apiary/watches/{}/stream", watch.id),
-            "keeper-secret".to_owned(),
-        )
-        .await
-        .expect("the watcher may attach to a watch they hold");
+        let mut viewer = dial_viewer(&socket_base, watch.id, &ticket)
+            .await
+            .expect("the watcher may attach to a watch they hold");
         let (mut producer, _) = dial(
             format!(
                 "{socket_base}/api/v1/federation/watches/{}/frames",
@@ -12777,6 +12885,12 @@ mod tests {
             .is_err(),
             "a Hive cannot stream into a watch it cannot authenticate for"
         );
+        // ⚠️ A GRANT IS GOOD FOR ONE SOCKET. Replaying it must not open a
+        // second window, or a ticket captured from a log becomes a standing one.
+        assert!(
+            dial_viewer(&socket_base, watch.id, &ticket).await.is_err(),
+            "a spent grant opens nothing"
+        );
         assert!(
             dial(
                 format!(
@@ -12787,7 +12901,7 @@ mod tests {
             )
             .await
             .is_err(),
-            "and nobody attaches to a watch that does not exist"
+            "and a bearer header is not a substitute for a grant"
         );
     }
 

@@ -96,6 +96,94 @@ impl WatchRelay {
     }
 }
 
+/// How long a viewer has to use a grant before it lapses.
+///
+/// Matches the terminal attach grant rather than inventing a second number. It
+/// is the gap between asking for a window and opening it, not the length of the
+/// watch — the LEASE bounds that.
+const WATCH_GRANT_TTL: Duration = Duration::from_secs(30);
+
+/// A ceiling, so a bug that issues grants in a loop cannot grow this without
+/// bound. Generous next to the number of windows anyone opens by hand.
+const MAX_WATCH_GRANTS: usize = 64;
+
+const WATCH_GRANT_PROTOCOL_PREFIX: &str = "swarm-watch.";
+
+/// Short-lived single-use tickets that let a BROWSER open a viewer socket.
+///
+/// ⚠️ THIS EXISTS BECAUSE A BROWSER CANNOT SEND AN `Authorization` HEADER ON A
+/// WEBSOCKET. The first version of the viewer route read one, which meant it
+/// could never have been reached from the UI it was built for — it worked only
+/// from a test that could set headers. Putting the operator token in a
+/// subprotocol instead would leak a long-lived credential into a string that
+/// proxies and logs routinely record, which is exactly what a single-use,
+/// 30-second ticket avoids.
+#[derive(Debug)]
+pub(crate) struct WatchGrantStore {
+    grants: Mutex<HashMap<String, (ApiaryWatchId, std::time::Instant)>>,
+}
+
+impl Default for WatchGrantStore {
+    fn default() -> Self {
+        Self {
+            grants: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl WatchGrantStore {
+    fn issue_at(&self, watch: ApiaryWatchId, now: std::time::Instant) -> Option<String> {
+        let mut grants = match self.grants.lock() {
+            Ok(grants) => grants,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        grants.retain(|_, (_, expires)| *expires > now);
+        if grants.len() >= MAX_WATCH_GRANTS {
+            return None;
+        }
+        let mut bytes = [0_u8; 32];
+        getrandom::fill(&mut bytes).ok()?;
+        let mut token = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            use std::fmt::Write;
+            write!(&mut token, "{byte:02x}").ok()?;
+        }
+        grants.insert(token.clone(), (watch, now + WATCH_GRANT_TTL));
+        Some(token)
+    }
+
+    /// Spends a grant. A grant is good for ONE socket: replaying it must not
+    /// open a second window, so it is removed whether or not it matched.
+    fn consume_at(&self, token: &str, watch: ApiaryWatchId, now: std::time::Instant) -> bool {
+        let mut grants = match self.grants.lock() {
+            Ok(grants) => grants,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        grants.retain(|_, (_, expires)| *expires > now);
+        grants
+            .remove(token)
+            .is_some_and(|(granted, _)| granted == watch)
+    }
+
+    pub(crate) fn issue(&self, watch: ApiaryWatchId) -> Option<String> {
+        self.issue_at(watch, std::time::Instant::now())
+    }
+
+    pub(crate) fn consume(&self, token: &str, watch: ApiaryWatchId) -> bool {
+        self.consume_at(token, watch, std::time::Instant::now())
+    }
+}
+
+fn offered_grant(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::SEC_WEBSOCKET_PROTOCOL)?
+        .to_str()
+        .ok()?
+        .split(',')
+        .map(str::trim)
+        .find_map(|protocol| protocol.strip_prefix(WATCH_GRANT_PROTOCOL_PREFIX))
+}
+
 /// Whether this watch still authorizes a socket, read fresh.
 ///
 /// ⚠️ RE-READ RATHER THAN TRUSTED FROM CONNECT TIME. A lease can lapse, and the
@@ -203,26 +291,27 @@ pub(crate) async fn apiary_watch_stream(
     Path(watch_id): Path<ApiaryWatchId>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    crate::authorize(&state, &headers)?;
-    let now = crate::unix_timestamp();
-    let store = crate::task_store(&state)?;
-    let watcher = store
-        .local_hive_identity()
-        .map_err(|error| crate::task_store_error(&error))?
-        .operator
-        .id;
-    let authorized = store
-        .apiary_watch_audit(200)
-        .map_err(|error| crate::task_store_error(&error))?
-        .into_iter()
-        .any(|watch| {
-            watch.id == watch_id && watch.watcher_operator_id == watcher && watch.is_live(now)
-        });
-    if !authorized {
+    let grant = offered_grant(&headers).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "watch_grant_required",
+            "a short-lived watch grant is required",
+        )
+    })?;
+    if !state.watch_grants.consume(grant, watch_id) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_watch_grant",
+            "the watch grant is invalid, expired, or already used",
+        ));
+    }
+    // Re-checked after the grant, not instead of it: a grant proves who asked,
+    // and this proves the watch is still theirs and still live.
+    if !watch_is_live(&state, watch_id, crate::unix_timestamp()) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "watch_not_live",
-            "this operator holds no live watch with that id",
+            "that watch is no longer live",
         ));
     }
     let permit = Arc::clone(&state.websocket_limit)
@@ -236,10 +325,17 @@ pub(crate) async fn apiary_watch_stream(
         })?;
     let receiver = state.watch_relay.subscribe(watch_id);
     let viewed = Arc::clone(&state);
-    Ok(websocket.on_upgrade(move |socket| async move {
-        serve_frames(socket, receiver, viewed, watch_id).await;
-        drop(permit);
-    }))
+    // ⚠️ THE SELECTED SUBPROTOCOL MUST BE ECHOED. A client that offers one and
+    // is answered with none fails the handshake — so omitting this made the
+    // route unreachable from the browser it exists for, which is precisely the
+    // shape of the header bug it replaced.
+    let selected = format!("{WATCH_GRANT_PROTOCOL_PREFIX}{grant}");
+    Ok(websocket
+        .protocols([selected])
+        .on_upgrade(move |socket| async move {
+            serve_frames(socket, receiver, viewed, watch_id).await;
+            drop(permit);
+        }))
 }
 
 /// Forwards frames to one viewer until the watch ends or they fall behind.

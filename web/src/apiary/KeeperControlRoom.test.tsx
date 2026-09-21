@@ -90,7 +90,11 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   expect(onManage).not.toHaveBeenCalled();
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(await screen.findByLabelText("Apiary summary")).toHaveTextContent("Registered Hives3Promoted Jira projects1Active Jira claims1Work handoffs1Open Swarm tasks1Steward scopes1");
-  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveFern HiveFayeHive");
+  // ⚠️ "Watch" APPEARS ON THE TWO REMOTE HIVES AND NOT ON THIS ONE. A window
+  // into yourself is a mirror — the terminal is already on this machine — and
+  // the absence here is what proves the guard rather than the presence
+  // elsewhere.
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveWatchFern HiveFayeHiveWatch");
   expect(screen.getByRole("list", { name: "Keeper shared work ownership" })).toHaveTextContent("WWD-101WWD · OwnedClover HiveCora");
   expect(screen.getByRole("list", { name: "Keeper Swarm tasks" })).toHaveTextContent("Coordinate releaseSwarm · readyFern HiveRouted by Steward Cora · revision 1");
   expect(screen.getByRole("list", { name: "Keeper promoted Jira projects" })).toHaveTextContent("WWDWebsite Development");

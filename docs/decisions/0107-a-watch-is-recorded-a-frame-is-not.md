@@ -1,8 +1,8 @@
 # ADR 0107: A watch is recorded; a frame is not
 
 Status: Accepted from the operator interview of 2026-09-21, recorded in
-`docs/specs/apiary-controls-scope.md`. The control plane and the frame relay are
-both built; no viewer surface presents the window yet.
+`docs/specs/apiary-controls-scope.md`. The control plane, the frame relay and
+the Keeper's viewer surface are built.
 
 Watching a member Hive is a full live window, the same depth for Keeper and for
 a Steward in scope. The grant decides WHICH Hives, never HOW MUCH.
@@ -107,10 +107,31 @@ authorization they opened under, and the producing side re-reads it every poll �
 so a watch ended from the watched machine stops production there, without waiting
 for Keeper to hang up.
 
-## What the relay does not yet do
+## The viewer holds a ticket, not a credential
 
-The window surface is not built: no UI attaches to the viewer socket, so the
-relay is reachable only by a client that speaks it directly.
+A browser CANNOT send an `Authorization` header on a WebSocket. The first viewer
+route read one, which meant it could only ever have been reached from a test
+that could set headers — it was unreachable from the UI it existed for. Putting
+the operator token in a subprotocol instead would leak a long-lived credential
+into a string proxies and logs routinely record.
+
+So the viewer fetches a single-use, 30-second grant over an ordinary request and
+offers THAT as the subprotocol. The socket re-checks the watch after spending
+the grant: the grant proves who asked, and the lease proves the watch is still
+theirs and still live. The server echoes the selected subprotocol, without which
+the handshake fails — the same shape of unreachability as the header bug, and
+worth stating because nothing else makes it obvious.
+
+## Watching has no input path, structurally
+
+The window has no keyboard handler and no send method. Typing into another
+operator's machine is TAKEOVER, which ADR 0036 governs separately and gates
+behind a reasoned, audited, exclusive lease. `WatchStream` is deliberately not
+`TerminalConnection` for this reason: reusing that class would have brought
+attach grants, engagement leases and a write path into a surface that must not
+have one.
+
+## What the window does not yet do
 
 It relays QUEEN's terminal, which is narrower than "literally everything". ADR
 0036 relays exactly this for takeover and it is the surface with a precedent;

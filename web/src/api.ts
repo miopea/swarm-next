@@ -1531,6 +1531,16 @@ export async function fetchWatchedBy(operatorToken: string, signal?: AbortSignal
   return response.json() as Promise<ApiaryWatch[]>;
 }
 
+/** Opens a live window into a member Hive. */
+export async function openApiaryWatch(operatorToken: string, targetHiveId: string): Promise<ApiaryWatch> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/watches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_hive_id: targetHiveId }),
+  });
+  return response.json() as Promise<ApiaryWatch>;
+}
+
 /** Ends a watch from the watched Hive's own side. */
 export async function endApiaryWatch(operatorToken: string, watchId: string): Promise<void> {
   await authenticatedFetch(operatorToken, `/api/v1/apiary/watches/${encodeURIComponent(watchId)}`, { method: "DELETE" });
