@@ -110,12 +110,92 @@ pub enum SessionRegistryError {
     History(#[from] HistoryError),
     #[error("terminal session lock was poisoned")]
     LockPoisoned,
-    #[error("continuation recovery is not authorized for this session and attempt")]
-    RecoveryRefused,
+    /// ⚠️ SEVEN CONDITIONS USED TO SHARE ONE SENTENCE, and the sentence named
+    /// none of them. An operator on 2026-09-22 reported a worker that flashed
+    /// "No conversation found to continue" and went back to sleep, on a build
+    /// where every gate had been checked and looked open; nothing anywhere said
+    /// which one refused, so the only way to narrow it was to read the code and
+    /// guess. Same disease as `apiary_join_not_ready`, which collapsed twenty
+    /// causes into one unclassifiable code.
+    ///
+    /// The reason is a detail, not a decision: recovery still refuses in exactly
+    /// the cases it refused before.
+    #[error("continuation recovery was refused: {0}")]
+    RecoveryRefused(RecoveryRefusal),
     #[error("the recorded recovery successor is no longer available; it will not be restarted")]
     RecoverySuccessorUnavailable,
     #[error("the final fresh startup failed; manual recovery is required")]
     RecoveryLaunchFailed,
+}
+
+/// Which gate refused a continuation recovery.
+///
+/// Each of these was reachable before and indistinguishable from the others.
+/// They are worded for an operator reading a stuck worker, because that is who
+/// ends up holding the question.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveryRefusal {
+    /// The engine was asked about a recovery this session is not on.
+    AttemptMismatch,
+    /// No fresh launch was retained, so there is nothing to start instead.
+    NoRetainedLaunch,
+    /// The provider is still running; nothing has failed yet.
+    StillRunning,
+    /// Somebody has used this terminal, so it is theirs and is never replaced.
+    Engaged,
+    /// The process has not exited, so its outcome is not yet known.
+    StillAlive,
+    /// It exited cleanly or was killed by a signal: neither is a failed start.
+    NotAFailedStart,
+    /// The ladder has no further step, so a fresh start is not the next move.
+    LadderExhausted,
+    /// The fresh start could not be built at all, so none was ever retained.
+    UnusableLaunch,
+}
+
+/// Whether the evidence forbids replacing this session, and why.
+///
+/// ⚠️ STRUCTURAL, NOT TEXTUAL. This used to also require the provider's exact
+/// refusal wording and exit code exactly 1, which is what made the 1.13.1
+/// relaxation of the fallback invisible — the gate in front of it still
+/// demanded the thing it had stopped needing. A clean exit is not a failure and
+/// a signalled exit was somebody else's decision, so both still refuse; and
+/// engagement always refuses, because typing into a terminal makes it yours.
+fn refuse_recovery(
+    reader_running: bool,
+    capture: &crate::startup_failure::StartupFailureCapture,
+    exit: Option<portable_pty::ExitStatus>,
+) -> Option<RecoveryRefusal> {
+    if reader_running {
+        return Some(RecoveryRefusal::StillRunning);
+    }
+    if !capture.failed_before_anyone_used_it() {
+        return Some(RecoveryRefusal::Engaged);
+    }
+    let Some(exit) = exit else {
+        return Some(RecoveryRefusal::StillAlive);
+    };
+    if exit.signal().is_some() || exit.exit_code() == 0 {
+        return Some(RecoveryRefusal::NotAFailedStart);
+    }
+    None
+}
+
+impl std::fmt::Display for RecoveryRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::AttemptMismatch => "this session is not on the recovery attempt it was asked about",
+            Self::NoRetainedLaunch => "no fresh start was retained for this session, so there is nothing to start instead",
+            Self::StillRunning => "the provider is still running",
+            Self::Engaged => "somebody has already used this terminal, and it is never replaced once they have",
+            Self::StillAlive => "the provider has not exited, so nothing has failed yet",
+            Self::NotAFailedStart => "the provider exited cleanly or was stopped by a signal, neither of which is a failed start",
+            Self::LadderExhausted => "there is no further recovery step after this one",
+            Self::UnusableLaunch => {
+                "the replacement start could not be built, so none was retained for this session"
+            }
+        })
+    }
 }
 
 /// Prepared by the provider adapter, never accepted as a caller-supplied IPC
@@ -153,7 +233,9 @@ impl FreshRecoveryLaunch {
                 .and_then(|bytes| u64::try_from(bytes).ok())
                 .is_none_or(|bytes| bytes > crate::MAX_REQUEST_BYTES)
         {
-            return Err(SessionRegistryError::RecoveryRefused);
+            return Err(SessionRegistryError::RecoveryRefused(
+                RecoveryRefusal::UnusableLaunch,
+            ));
         }
         // Do not retain oversized spare capacities supplied by a builder.
         command.executable.shrink_to_fit();
@@ -1158,7 +1240,9 @@ impl SessionRegistry {
             .cloned()
             .ok_or(SessionRegistryError::SessionNotFound)?;
         if session.recovery_attempt() != Some(attempt) {
-            return Err(SessionRegistryError::RecoveryRefused);
+            return Err(SessionRegistryError::RecoveryRefused(
+                RecoveryRefusal::AttemptMismatch,
+            ));
         }
         if session.recovery_launch_failed() {
             return Err(SessionRegistryError::RecoveryLaunchFailed);
@@ -1169,10 +1253,13 @@ impl SessionRegistry {
                 .then_some(successor)
                 .ok_or(SessionRegistryError::RecoverySuccessorUnavailable);
         }
-        let launch = session
-            .continuation_launch
-            .get()
-            .ok_or(SessionRegistryError::RecoveryRefused)?;
+        let launch =
+            session
+                .continuation_launch
+                .get()
+                .ok_or(SessionRegistryError::RecoveryRefused(
+                    RecoveryRefusal::NoRetainedLaunch,
+                ))?;
         if self.draining.load(Ordering::Acquire) {
             return Err(SessionRegistryError::HostDraining);
         }
@@ -1207,24 +1294,26 @@ impl SessionRegistry {
         // provider chooses for this is not something Swarm should depend on.
         // `capture` remains for what it is actually good at: telling the
         // operator WHY, not deciding whether to recover.
-        if session.reader_running()
-            || !capture.failed_before_anyone_used_it()
-            || !exit.is_some_and(|exit| exit.signal().is_none() && exit.exit_code() != 0)
-        {
-            return Err(SessionRegistryError::RecoveryRefused);
+        if let Some(refusal) = refuse_recovery(session.reader_running(), &capture, exit) {
+            return Err(SessionRegistryError::RecoveryRefused(refusal));
         }
-        let mut recovery = swarm_domain::ConversationRecovery::from_attempt(attempt)
-            .ok_or(SessionRegistryError::RecoveryRefused)?;
+        let mut recovery = swarm_domain::ConversationRecovery::from_attempt(attempt).ok_or(
+            SessionRegistryError::RecoveryRefused(RecoveryRefusal::LadderExhausted),
+        )?;
         recovery.observe(
             attempt,
             swarm_domain::ConversationRecoveryEvidence::ContextUnavailable,
         );
         let swarm_domain::ConversationRecoveryState::Attempt { attempt: fresh } = recovery.state()
         else {
-            return Err(SessionRegistryError::RecoveryRefused);
+            return Err(SessionRegistryError::RecoveryRefused(
+                RecoveryRefusal::LadderExhausted,
+            ));
         };
         if !matches!(fresh.step, swarm_domain::ConversationRecoveryStep::Fresh) {
-            return Err(SessionRegistryError::RecoveryRefused);
+            return Err(SessionRegistryError::RecoveryRefused(
+                RecoveryRefusal::LadderExhausted,
+            ));
         }
         self.validate_workspace(&launch.command, launch.allow_outside_roots)?;
         let successor = WorkerSessionId::new();
@@ -3113,6 +3202,40 @@ mod tests {
     /// attempt, the provider never produced a usable terminal, nobody engaged
     /// with it, and the process died non-zero. The wording is the provider's to
     /// change and was never Swarm's to depend on.
+    /// ⚠️ A REFUSAL NOBODY CAN TELL APART IS THE ONE THAT COSTS A DAY. Seven
+    /// conditions shared one sentence that named none of them, so a worker
+    /// stuck on 2026-09-22 could only be narrowed by reading the source and
+    /// guessing — twice wrongly. Adding an eighth reason without a sentence, or
+    /// with somebody else's, puts the next person back there.
+    #[test]
+    fn every_recovery_refusal_says_something_different_and_useful() {
+        let reasons = [
+            RecoveryRefusal::AttemptMismatch,
+            RecoveryRefusal::NoRetainedLaunch,
+            RecoveryRefusal::StillRunning,
+            RecoveryRefusal::Engaged,
+            RecoveryRefusal::StillAlive,
+            RecoveryRefusal::NotAFailedStart,
+            RecoveryRefusal::LadderExhausted,
+            RecoveryRefusal::UnusableLaunch,
+        ];
+        let mut sentences = reasons
+            .iter()
+            .map(|reason| {
+                let rendered = SessionRegistryError::RecoveryRefused(*reason).to_string();
+                assert!(
+                    rendered.len() > "continuation recovery was refused: ".len() + 10,
+                    "{reason:?} adds nothing to the bare refusal"
+                );
+                rendered
+            })
+            .collect::<Vec<_>>();
+        sentences.sort();
+        let total = sentences.len();
+        sentences.dedup();
+        assert_eq!(total, sentences.len(), "two refusals read the same");
+    }
+
     #[test]
     fn a_continue_start_that_died_is_recoverable_whatever_the_provider_printed() {
         for (script, expected) in [
@@ -3211,13 +3334,17 @@ mod tests {
         command.arguments = vec![String::new(); 20_000];
         assert!(matches!(
             FreshRecoveryLaunch::new(command, TerminalSize::default(), false),
-            Err(SessionRegistryError::RecoveryRefused)
+            Err(SessionRegistryError::RecoveryRefused(
+                RecoveryRefusal::UnusableLaunch
+            ))
         ));
         let mut command = shell_command("read value");
         command.working_directory = PathBuf::from("relative");
         assert!(matches!(
             FreshRecoveryLaunch::new(command, TerminalSize::default(), false),
-            Err(SessionRegistryError::RecoveryRefused)
+            Err(SessionRegistryError::RecoveryRefused(
+                RecoveryRefusal::UnusableLaunch
+            ))
         ));
         assert!(
             FreshRecoveryLaunch::new(shell_command("read value"), TerminalSize::new(0, 0), false)
@@ -3398,7 +3525,7 @@ mod tests {
             assert!(
                 matches!(
                     registry.recover_continuation(old.id(), attempt),
-                    Err(SessionRegistryError::RecoveryRefused)
+                    Err(SessionRegistryError::RecoveryRefused(_))
                 ),
                 "{action}"
             );
