@@ -120,18 +120,42 @@ run_systemctl() { "$systemctl_bin" --user "$@"; }
 # Keep this descriptor held through on_exit recovery. Build/download wrappers do
 # not take the lock: their nested bundle's update owns the activation boundary.
 # Never unlink this file, including after failure; that could split lock owners.
+# ⚠️ AN OPERATOR'S INSTALL WAITS; BACKGROUND MAINTENANCE DEFERS. Both used to
+# fail the same way the instant the lock was held, and the two are not the same
+# kind of caller.
+#
+# `swarm-host-reconcile.timer` fires EVERY TWO MINUTES and takes this lock. A
+# background pass that cannot have it can simply run next time, which is what
+# the deferring arm below is for. An operator pressing Install cannot: the
+# request is consumed before the install starts, deliberately, so that a failure
+# is reported once instead of retried forever — which means a collision with
+# that timer is terminal and the update never happens. The operator is then told
+# the install failed and nothing changed, with no way forward but pressing it
+# again and hoping to miss the window. Reported twice on 2026-09-22, once as
+# "That was a messy release you just did".
+#
+# So a caller that cannot come back waits for the lock instead of dying on it.
+# The wait is bounded and still fails closed: a reconcile that is genuinely
+# stuck does not become an install that hangs forever.
+PACKAGE_LIFECYCLE_WAIT_SECONDS=${PACKAGE_LIFECYCLE_WAIT_SECONDS:-300}
 lock_package_lifecycle() {
   mkdir -p "$state_root"
   umask 077
   exec 7>"$state_root/.package-lifecycle.lock"
-  if ! flock -n 7; then
-    case "$action" in
-      reconcile-host-if-idle|reconcile-host-requested|complete-protocol-migration-if-idle)
+  case "$action" in
+    reconcile-host-if-idle|reconcile-host-requested|complete-protocol-migration-if-idle)
+      if ! flock -n 7; then
         printf 'Package maintenance deferred; another package lifecycle operation is active. No services or release links changed.\n'
-        exit 0;;
-      *) die "another package lifecycle operation is active; retry after it finishes; no services or release links changed";;
-    esac
-  fi
+        exit 0
+      fi;;
+    *)
+      if ! flock -n 7; then
+        printf 'Waiting up to %ss for another package lifecycle operation to finish.\n' \
+          "$PACKAGE_LIFECYCLE_WAIT_SECONDS" >&2
+        flock -w "$PACKAGE_LIFECYCLE_WAIT_SECONDS" 7 \
+          || die "another package lifecycle operation is still active after ${PACKAGE_LIFECYCLE_WAIT_SECONDS}s; retry after it finishes; no services or release links changed"
+      fi;;
+  esac
 }
 
 # Stop the whole stack, and CONFIRM IT STOPPED.

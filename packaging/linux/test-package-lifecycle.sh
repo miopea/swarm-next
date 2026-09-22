@@ -1308,12 +1308,45 @@ locked_current=$(readlink "$SWARM_INSTALL_ROOT/current")
 locked_host=$(readlink "$SWARM_INSTALL_ROOT/host-current")
 : > "$HOME/systemctl.log"
 : > "$HOME/swarmctl.log"
+# An operator-driven action WAITS for the owner and then fails closed, so the
+# wait is bounded to a second here rather than the five minutes a real install
+# is given.
 for locked_action in update rollback reconcile-host prepare-protocol migrate-protocol complete-protocol-migration restore restore-offline uninstall enable-development disable-development; do
-  if flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" "$package" "$locked_action" "$test_root/bundle-2.0.0" > "$HOME/lock-result" 2>&1; then
+  if PACKAGE_LIFECYCLE_WAIT_SECONDS=1 flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" \
+      "$package" "$locked_action" "$test_root/bundle-2.0.0" > "$HOME/lock-result" 2>&1; then
     echo "$locked_action ignored the lifecycle owner" >&2; exit 1
   fi
-  grep -q 'another package lifecycle operation is active' "$HOME/lock-result"
+  grep -q 'another package lifecycle operation is still active' "$HOME/lock-result"
 done
+
+# ⚠️ AND THE WAIT HAS TO ACTUALLY WAIT, which is the whole point of it. The
+# host-reconcile timer takes this lock every two minutes, and an operator's
+# install used to die the instant it collided — with the request already
+# consumed, so it never retried and the operator was told nothing had changed.
+# Held briefly here, then released: the install must survive that rather than
+# fail against it.
+: > "$HOME/systemctl.log"
+(
+  flock 8
+  sleep 2
+) 8>"$SWARM_STATE_ROOT/.package-lifecycle.lock" &
+holder=$!
+sleep 0.2
+waited_start=$(date +%s)
+# The action's own outcome is beside the point here and depends on the stubs;
+# what must be true is that it WAITED and then took the lock, rather than dying
+# against it the way an operator's install did.
+PACKAGE_LIFECYCLE_WAIT_SECONDS=30 "$package" reconcile-host > "$HOME/wait-result" 2>&1 || true
+wait "$holder"
+waited_for=$(( $(date +%s) - waited_start ))
+grep -q 'Waiting up to 30s' "$HOME/wait-result" \
+  || { echo "the wait was never announced" >&2; cat "$HOME/wait-result" >&2; exit 1; }
+if grep -q 'still active after' "$HOME/wait-result"; then
+  echo "it gave up on a lock that was released while it waited" >&2; exit 1
+fi
+[ "$waited_for" -ge 1 ] || { echo "it returned too fast to have waited for the owner" >&2; exit 1; }
+: > "$HOME/systemctl.log"
+: > "$HOME/swarmctl.log"
 for locked_action in reconcile-host-if-idle reconcile-host-requested complete-protocol-migration-if-idle; do
   flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" "$package" "$locked_action" > "$HOME/lock-result"
   grep -q 'maintenance deferred.*another package lifecycle operation is active' "$HOME/lock-result"
