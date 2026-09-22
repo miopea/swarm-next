@@ -2022,6 +2022,22 @@ export async function leaveApiary(operatorToken: string): Promise<LocalApiaryCon
  * The counts are the same blockers a member hits when it leaves, so the roster
  * can say what to clear rather than refusing after the operator commits.
  */
+/**
+ * Returns a parked join request to the queue.
+ *
+ * ⚠️ NOTHING RETRIES A PARKED JOIN ON ITS OWN, and that is deliberate — the
+ * phase exists to stop an automatic loop. It also meant one failure froze the
+ * request for good, still showing that failure's code long after the cause was
+ * fixed, with cancelling as the only way forward.
+ */
+export async function retryApiaryEnrollment(operatorToken: string, linkId: string): Promise<void> {
+  await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/enrollments/${encodeURIComponent(linkId)}/retry`,
+    { method: "POST" },
+  );
+}
+
 export async function fetchApiaryMemberRemovalReadiness(
   operatorToken: string,
   hiveId: string,

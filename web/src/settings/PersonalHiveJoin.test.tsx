@@ -199,6 +199,49 @@ test("a named join blocker is explained in this Hive's own words", async () => {
 });
 
 /**
+ * ⚠️ THE TRAP, NOT THE SYMPTOM. One failure parks a join in `attention`;
+ * nothing retries a parked join, and the phase had no way out — so the screen
+ * kept showing that first failure's code indefinitely, unchanged by the cause
+ * being fixed. An operator read the same `apiary_join_not_ready` for days on
+ * 2026-09-22 while a valid invitation sat waiting, because nothing was looking.
+ * Cancelling was the only exit and it discards the link and the consent.
+ */
+test("a parked request can be sent round again without starting over", async () => {
+  const retries: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/retry")) { retries.push(url); return new Response("{}"); }
+    return new Response(url.endsWith("/enrollments")
+      ? JSON.stringify([{
+          consent: { link_id: "link-1" },
+          phase: "attention",
+          problem: "unclassified",
+          problem_code: "apiary_join_not_ready (409)",
+        }])
+      : "[]");
+  }));
+
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(retries)
+    .toEqual(["/api/v1/apiary/enrollments/link-1/retry"]));
+});
+
+/** A request still waiting is not stuck, so it is not offered a retry. */
+test("a request still awaiting approval is not offered a retry", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
+    String(input).endsWith("/enrollments")
+      ? JSON.stringify([{ consent: { link_id: "link-1" }, phase: "awaiting_approval" }])
+      : "[]")));
+
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+
+  await screen.findByRole("button", { name: "Cancel request" });
+  expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+});
+
+/**
  * A Keeper on a newer build can name a blocker this one has never heard of.
  * That must degrade to the code-quoting sentence rather than to silence or to
  * text this Hive cannot vouch for.

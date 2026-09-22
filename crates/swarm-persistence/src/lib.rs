@@ -451,6 +451,9 @@ pub enum TaskStoreError {
     ApiaryInvitationResolved,
     #[error("no Hive with that identity is a member of this Apiary")]
     ApiaryMemberNotFound,
+    /// The member's own reason for not finishing a join it consented to.
+    #[error("this Hive cannot finish joining: {}", .0.describe())]
+    ApiaryEnrollmentRefused(swarm_domain::ApiaryEnrollmentRefusal),
     #[error("Apiary join readiness is incomplete")]
     ApiaryJoinNotReady,
     /// ⚠️ CARRIES THE REASONS, BECAUSE THE DOMAIN ALREADY KNEW THEM.

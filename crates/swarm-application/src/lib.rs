@@ -1911,6 +1911,19 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Returns one parked join to the queue at the operator's explicit request.
+    ///
+    /// # Errors
+    /// Rejects an unknown link and any phase that is not parked.
+    pub fn retry_enrollment(
+        &self,
+        link_id: swarm_domain::ApiaryJoinLinkId,
+    ) -> Result<swarm_domain::ApiaryEnrollment, ApplicationError> {
+        self.store
+            .retry_apiary_enrollment(link_id)
+            .map_err(Into::into)
+    }
+
     /// Returns at most four unfinished enrollments for one transport pass.
     /// Receipt recovery precedes expiry so a saved membership is never lost.
     /// # Errors

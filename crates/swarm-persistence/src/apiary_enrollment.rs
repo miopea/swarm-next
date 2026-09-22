@@ -107,13 +107,39 @@ impl TaskStore {
                 |row| row.get(0),
             )
             .optional()?
-            .ok_or(TaskStoreError::ApiaryJoinNotReady)?;
+            .ok_or(TaskStoreError::ApiaryEnrollmentRefused(
+                swarm_domain::ApiaryEnrollmentRefusal::RequestMissing,
+            ))?;
         let mut record = decode(&stored)?;
         if !matches!(
             record.phase,
             ApiaryEnrollmentPhase::AwaitingApproval | ApiaryEnrollmentPhase::Joining
         ) {
-            return Err(TaskStoreError::ApiaryJoinNotReady);
+            return Err(TaskStoreError::ApiaryEnrollmentRefused(
+                swarm_domain::ApiaryEnrollmentRefusal::RequestNotJoinable,
+            ));
+        }
+        // ⚠️ ASKED SEPARATELY, THOUGH THE QUERY BELOW WOULD ALSO CATCH IT. Being
+        // already federated was one arm of that join's WHERE clause, so it came
+        // back indistinguishable from an invitation that did not match the link
+        // — and those need opposite actions: leave the Apiary you are in, versus
+        // ask the Keeper for a new link. A reinstalled Hive on 2026-09-22 hit
+        // exactly this and was told only `apiary_join_not_ready`.
+        // ⚠️ ASKED ON THIS TRANSACTION, NEVER THROUGH `self`. Reaching for
+        // `local_hive_identity()` here takes the same connection mutex this
+        // transaction already holds, and deadlocks the caller — which is
+        // exactly what it did, hanging three enrollment tests until the run was
+        // killed rather than failing. A deadlock is not a test failure; it is a
+        // run that never ends, so nothing reports it.
+        let already_federated: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hives WHERE apiary_id IS NOT NULL)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if already_federated {
+            return Err(TaskStoreError::ApiaryEnrollmentRefused(
+                swarm_domain::ApiaryEnrollmentRefusal::HiveAlreadyFederated,
+            ));
         }
         // Import already checked the signature. Compare its immutable envelope
         // and private bootstrap binding rather than accepting an arbitrary ID.
@@ -129,13 +155,19 @@ impl TaskStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?
-            .ok_or(TaskStoreError::ApiaryJoinNotReady)?;
+            .ok_or(TaskStoreError::ApiaryEnrollmentRefused(
+                swarm_domain::ApiaryEnrollmentRefusal::InvitationMismatch,
+            ))?;
         let envelope: ApiaryInvitationEnvelope = serde_json::from_str(&envelope)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         record
             .consent
             .validate_invitation(link_id, &envelope.payload, now)
-            .map_err(|_| TaskStoreError::ApiaryJoinNotReady)?;
+            .map_err(|_| {
+                TaskStoreError::ApiaryEnrollmentRefused(
+                    swarm_domain::ApiaryEnrollmentRefusal::ConsentStale,
+                )
+            })?;
         if state == "keeper_pinned" {
             tx.execute(
                 "UPDATE apiary_join_invitations
@@ -143,7 +175,9 @@ impl TaskStore {
                 params![invitation_id.to_string(), record.consent.accepted_at],
             )?;
         } else if !matches!(state.as_str(), "policy_accepted" | "submitted") {
-            return Err(TaskStoreError::ApiaryJoinNotReady);
+            return Err(TaskStoreError::ApiaryEnrollmentRefused(
+                swarm_domain::ApiaryEnrollmentRefusal::InvitationNotReady,
+            ));
         }
         record.phase = ApiaryEnrollmentPhase::Joining;
         tx.execute(
@@ -275,6 +309,58 @@ impl TaskStore {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Returns a stalled join to the queue, at the operator's explicit request.
+    ///
+    /// ⚠️ THE ONLY WAY OUT OF `Attention`, AND IT IS DELIBERATELY MANUAL. Any
+    /// problem other than an unreachable Keeper parks a join here, and nothing
+    /// retries a parked one — so a single failure froze the join for good and
+    /// the screen kept reporting that first failure's code indefinitely, even
+    /// after the underlying cause had been fixed. Cancelling and starting over
+    /// was the only exit, and it discards the link and the consent with it.
+    ///
+    /// The failure counter and the recorded problem are cleared, because they
+    /// describe the attempt the operator has just decided to move past. Consent
+    /// is NOT re-dated: a retry must not extend what was agreed to, which is the
+    /// same rule `record_attempt` already keeps.
+    ///
+    /// # Errors
+    /// Rejects an unknown link and any phase that is not parked.
+    pub fn retry_apiary_enrollment(
+        &self,
+        link_id: ApiaryJoinLinkId,
+    ) -> Result<ApiaryEnrollment, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let stored: String = tx
+            .query_row(
+                "SELECT record_json FROM apiary_enrollments WHERE link_id = ?1",
+                [link_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)?;
+        let mut record = decode(&stored)?;
+        if !record
+            .phase
+            .can_transition_to(ApiaryEnrollmentPhase::AwaitingApproval)
+        {
+            return Err(TaskStoreError::ApiaryEnrollmentRefused(
+                swarm_domain::ApiaryEnrollmentRefusal::RequestNotJoinable,
+            ));
+        }
+        record.phase = ApiaryEnrollmentPhase::AwaitingApproval;
+        record.problem = None;
+        record.problem_code = None;
+        record.consecutive_failures = 0;
+        record.next_attempt_at = None;
+        tx.execute(
+            "UPDATE apiary_enrollments SET record_json = ?2 WHERE link_id = ?1",
+            params![link_id.to_string(), encode(&record)?],
+        )?;
+        tx.commit()?;
+        Ok(record)
     }
 
     /// Compare-and-swap progress so stale workers cannot undo cancellation.

@@ -737,3 +737,60 @@ fn an_unclassified_failure_keeps_the_code_and_a_recovery_clears_it() {
         "a cleared problem must not leave its code behind",
     );
 }
+
+/// ⚠️ `Attention` HAD NO EXIT AND THAT MADE ONE FAILURE PERMANENT. Any problem
+/// but an unreachable Keeper parks a join here, nothing retries a parked one,
+/// and the phase had no outgoing transition at all — so the screen kept
+/// reporting the code from the failure that parked it, unchanged by the cause
+/// being fixed. An operator on 2026-09-22 read the same `apiary_join_not_ready`
+/// for days while a valid invitation sat waiting, because nothing was looking.
+#[test]
+fn a_parked_join_can_be_returned_to_the_queue_without_starting_over() {
+    let store = TaskStore::in_memory().unwrap();
+    let saved = consent(&store);
+    store.save_apiary_enrollment(&saved, 10).unwrap();
+    store
+        .record_apiary_enrollment_attempt(
+            saved.link_id,
+            Some(swarm_domain::ApiaryEnrollmentProblem::Unclassified),
+            Some("apiary_join_not_ready (409)".to_owned()),
+            11,
+        )
+        .unwrap();
+    let parked = store.apiary_enrollments().unwrap();
+    let parked = parked.first().expect("still present");
+    assert_eq!(parked.phase, ApiaryEnrollmentPhase::Attention);
+
+    let revived = store.retry_apiary_enrollment(saved.link_id).unwrap();
+    assert_eq!(revived.phase, ApiaryEnrollmentPhase::AwaitingApproval);
+    // The failure being moved past must not be left on the screen describing a
+    // request that is now waiting again.
+    assert_eq!(revived.problem, None);
+    assert_eq!(revived.problem_code, None);
+    assert_eq!(revived.consecutive_failures, 0);
+    assert_eq!(revived.next_attempt_at, None);
+    // Consent is not re-dated: a retry may not extend what was agreed to.
+    assert_eq!(revived.consent.accepted_at, saved.accepted_at);
+    assert_eq!(revived.consent.expires_at, saved.expires_at);
+}
+
+/// Retrying is for a join that stalled, never a way to revive finished work.
+#[test]
+fn a_finished_join_is_not_revived_by_retrying_it() {
+    let store = TaskStore::in_memory().unwrap();
+    let saved = consent(&store);
+    store.save_apiary_enrollment(&saved, 10).unwrap();
+    store
+        .advance_apiary_enrollment(
+            saved.link_id,
+            ApiaryEnrollmentPhase::AwaitingApproval,
+            ApiaryEnrollmentPhase::Cancelled,
+        )
+        .unwrap();
+    assert!(matches!(
+        store.retry_apiary_enrollment(saved.link_id),
+        Err(TaskStoreError::ApiaryEnrollmentRefused(
+            swarm_domain::ApiaryEnrollmentRefusal::RequestNotJoinable
+        ))
+    ));
+}

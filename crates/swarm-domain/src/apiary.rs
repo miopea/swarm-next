@@ -1908,6 +1908,72 @@ pub enum ApiaryJoinBlocker {
     ProtocolMismatch,
 }
 
+/// Why THIS Hive could not finish a join it had already consented to.
+///
+/// ⚠️ SEPARATE FROM `ApiaryJoinBlocker`, WHICH IS ABOUT READINESS. These are the
+/// member's own local reasons, and all five used to be one
+/// `apiary_join_not_ready` — including "this Hive already belongs to an Apiary",
+/// which was buried inside a SQL join condition and so could not be told apart
+/// from an invitation that simply did not match the link. An operator adding a
+/// reinstalled Hive on 2026-09-22 was shown that code beside "Swarm could not
+/// classify why" and had nothing to act on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryEnrollmentRefusal {
+    /// No saved request exists for this link any more.
+    RequestMissing,
+    /// The saved request has already finished or been cancelled.
+    RequestNotJoinable,
+    /// This Hive already belongs to an Apiary.
+    HiveAlreadyFederated,
+    /// The invitation does not belong to the link this Hive saved.
+    InvitationMismatch,
+    /// The terms accepted no longer match the invitation, or have lapsed.
+    ConsentStale,
+    /// The invitation is not at a point where joining can proceed.
+    InvitationNotReady,
+}
+
+impl ApiaryEnrollmentRefusal {
+    /// The stable wire code, mapped to local words by whoever displays it.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::RequestMissing => "apiary_join_request_missing",
+            Self::RequestNotJoinable => "apiary_join_request_not_joinable",
+            Self::HiveAlreadyFederated => "apiary_join_blocked_hive_already_federated",
+            Self::InvitationMismatch => "apiary_join_invitation_mismatch",
+            Self::ConsentStale => "apiary_join_consent_stale",
+            Self::InvitationNotReady => "apiary_join_invitation_not_ready",
+        }
+    }
+
+    /// What this means to the person who has to clear it.
+    #[must_use]
+    pub const fn describe(&self) -> &'static str {
+        match self {
+            Self::RequestMissing => {
+                "the saved join request is gone from this Hive; start joining again"
+            }
+            Self::RequestNotJoinable => {
+                "the saved join request has already finished or been cancelled; start joining again"
+            }
+            Self::HiveAlreadyFederated => {
+                "this Hive already belongs to an Apiary, and must leave it before joining another"
+            }
+            Self::InvitationMismatch => {
+                "the invitation does not belong to the link this Hive saved; ask the Keeper for a new link"
+            }
+            Self::ConsentStale => {
+                "the invitation no longer matches the terms accepted here; cancel the request and join again"
+            }
+            Self::InvitationNotReady => {
+                "the invitation is not at a point where joining can continue; ask the Keeper to reissue it"
+            }
+        }
+    }
+}
+
 impl ApiaryJoinBlocker {
     /// The stable wire code for this blocker.
     ///

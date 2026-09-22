@@ -11,6 +11,7 @@ import {
   importFederationJoinInvitation,
   pollApiaryKeeperLink,
   removeApiaryKeeperLink,
+  retryApiaryEnrollment,
   joinFederationApiary,
   saveApiaryKeeperLink,
   type ApiaryInvitationBundle,
@@ -74,6 +75,19 @@ function joinBlockerSentence(code: string | null | undefined): string | undefine
       return `The two Hives speak different federation protocols. Update Swarm on both, then join again. ${unchanged}`;
     case "apiary_invitation_resolved":
       return `That invitation has already been used or cancelled. Ask your Keeper for a current one. ${unchanged}`;
+    // This Hive's OWN reasons for not finishing a join it had consented to.
+    // All five used to arrive as `apiary_join_not_ready`, including "already in
+    // an Apiary", which was buried in a SQL join condition.
+    case "apiary_join_request_missing":
+      return `The saved join request is gone from this Hive. Start joining again from the beginning. ${unchanged}`;
+    case "apiary_join_request_not_joinable":
+      return `The saved join request has already finished or been cancelled. Start joining again. ${unchanged}`;
+    case "apiary_join_invitation_mismatch":
+      return `The invitation does not belong to the link this Hive saved. Cancel the request and ask your Keeper for a new link. ${unchanged}`;
+    case "apiary_join_consent_stale":
+      return `The invitation no longer matches the terms accepted here. Cancel the request and join again. ${unchanged}`;
+    case "apiary_join_invitation_not_ready":
+      return `The invitation is not at a point where joining can continue. Ask your Keeper to reissue it. ${unchanged}`;
     default:
       return undefined;
   }
@@ -374,6 +388,13 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
                 : "Joining could not finish and Swarm could not determine why. Ask your Keeper for a current invitation; your local work is unchanged.")}
         {record.next_attempt_at ? <> Next check: {new Date(record.next_attempt_at * 1000).toLocaleTimeString()}.</> : null}
       </p> : null}
+      {record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {
+        setWorking(true);
+        void retryApiaryEnrollment(operatorToken, record.consent.link_id)
+          .then(async () => { enrollmentEpoch.current += 1; await refreshSavedState(); })
+          .catch(() => onError("This request could not be retried. Cancel it and join again."))
+          .finally(() => setWorking(false));
+      }}>Try again</button> : null}
       {record.phase === "awaiting_approval" || record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {
         setWorking(true);
         void removeApiaryKeeperLink(operatorToken, record.consent.link_id).then(async () => { enrollmentEpoch.current += 1; setEnrollments([]); await refreshSavedState(); })

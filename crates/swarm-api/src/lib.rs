@@ -4259,6 +4259,10 @@ fn api_router(state: AppState) -> Router {
             get(apiary_enrollment::list).post(apiary_enrollment::submit),
         )
         .route(
+            "/api/v1/apiary/enrollments/{link_id}/retry",
+            post(apiary_enrollment::retry),
+        )
+        .route(
             "/api/v1/apiary/keeper-links/{link_id}",
             delete(remove_apiary_keeper_link),
         )
@@ -10069,6 +10073,10 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_membership_conflict",
             error.to_string(),
         ),
+        // The member's own reason, named so its screen can say what to do.
+        TaskStoreError::ApiaryEnrollmentRefused(refusal) => {
+            ApiError::new(StatusCode::CONFLICT, refusal.code(), error.to_string())
+        }
         TaskStoreError::ApiaryMemberNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "apiary_member_not_found",

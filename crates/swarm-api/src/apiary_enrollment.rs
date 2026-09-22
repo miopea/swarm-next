@@ -31,6 +31,29 @@ pub(super) async fn submit(
         .into_response())
 }
 
+/// Returns a parked join to the queue, at the operator's explicit request.
+///
+/// ⚠️ THE ONLY EXIT FROM `Attention` THAT IS NOT "START OVER". Nothing retries a
+/// parked join, so the screen kept showing the code from the failure that parked
+/// it — indefinitely, and unchanged by the cause being fixed. Cancelling was the
+/// only way forward and it throws away the link and the consent.
+pub(super) async fn retry(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    axum::extract::Path(link_id): axum::extract::Path<swarm_domain::ApiaryJoinLinkId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let record = apiary_service(&state)?
+        .retry_enrollment(link_id)
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(record),
+    )
+        .into_response())
+}
+
 pub(super) async fn list(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

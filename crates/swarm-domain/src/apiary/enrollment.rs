@@ -66,6 +66,20 @@ pub enum ApiaryEnrollmentPhase {
 
 impl ApiaryEnrollmentPhase {
     /// A retry may repeat a phase, but cannot revive cancelled/completed work.
+    ///
+    /// ⚠️ `Attention` HAD NO WAY OUT AND THAT MADE IT A TRAP. Any problem other
+    /// than an unreachable Keeper moves a record here, and nothing retries a
+    /// record in this phase — so ONE failure, however transient, froze the join
+    /// permanently. The screen then kept showing that first failure's code
+    /// forever, which is why an operator on 2026-09-22 saw the same
+    /// `apiary_join_not_ready` for days, unchanged by a valid invitation issued
+    /// in the meantime: nothing was reading it.
+    ///
+    /// `Attention` is a request for a HUMAN, not a verdict. Going back to
+    /// `AwaitingApproval` is that human saying "try it again", which is why this
+    /// edge is deliberate and why nothing takes it automatically — an automatic
+    /// retry is what this phase exists to stop. `Complete` and `Cancelled` stay
+    /// terminal, because those really are finished.
     #[must_use]
     pub fn can_transition_to(self, next: Self) -> bool {
         self == next
@@ -75,6 +89,7 @@ impl ApiaryEnrollmentPhase {
                     Self::AwaitingApproval,
                     Self::Joining | Self::Cancelled | Self::Attention
                 ) | (Self::Joining, Self::Complete | Self::Attention)
+                    | (Self::Attention, Self::AwaitingApproval | Self::Cancelled)
             )
     }
 }
@@ -240,8 +255,30 @@ mod tests {
                         (from, to),
                         (AwaitingApproval, Joining | Cancelled | Attention)
                             | (Joining, Complete | Attention)
+                            | (Attention, AwaitingApproval | Cancelled)
                     );
-                assert_eq!(from.can_transition_to(to), allowed);
+                assert_eq!(from.can_transition_to(to), allowed, "{from:?} -> {to:?}");
+            }
+        }
+
+        // ⚠️ THE PART THAT IS AN INVARIANT RATHER THAN A MIRROR. The loop above
+        // restates the rule and so agrees with whatever the rule says; these
+        // two assertions say what must be TRUE of it. `Attention` having no way
+        // out is what froze an operator's join permanently on 2026-09-22 —
+        // parked by one failure, retried by nothing, and still displaying that
+        // failure's code days later. It is a request for a human, so a human
+        // can now send it back round.
+        assert!(
+            Attention.can_transition_to(AwaitingApproval),
+            "a parked join must have a way back that is not starting over"
+        );
+        for finished in [Complete, Cancelled] {
+            for to in phases {
+                assert_eq!(
+                    finished.can_transition_to(to),
+                    finished == to,
+                    "{finished:?} is finished and must not be revived into {to:?}"
+                );
             }
         }
     }
