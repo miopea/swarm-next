@@ -354,7 +354,9 @@ const APIARY_WATCH_SCHEMA_MARKER: i64 = 188;
 const KEEPER_TAKEOVER_SCHEMA_MARKER: i64 = 189;
 /// A takeover that ended owes a local reconciliation before automation resumes.
 const TAKEOVER_RECOVERY_SCHEMA_MARKER: i64 = 190;
-const CURRENT_SCHEMA_VERSION: i64 = TAKEOVER_RECOVERY_SCHEMA_MARKER;
+/// A member can file work for a repository another Hive owns.
+const CROSS_HIVE_FILING_SCHEMA_MARKER: i64 = 191;
+const CURRENT_SCHEMA_VERSION: i64 = CROSS_HIVE_FILING_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4598,6 +4600,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < TAKEOVER_RECOVERY_SCHEMA_MARKER {
         crate::federation_steward_takeovers::migrate_takeover_recovery(transaction)?;
+    }
+    if schema_version < CROSS_HIVE_FILING_SCHEMA_MARKER {
+        crate::federation_tasks::migrate_cross_hive_filing(transaction)?;
     }
     Ok(())
 }
@@ -10445,14 +10450,24 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM pragma_table_info('apiary_steward_takeover_leases')
                 WHERE name = 'stewardship_id' AND \"notnull\" = 0)",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "local_takeover_recovery",
             artifact: "",
             undo_sql: "DROP TABLE local_takeover_recovery",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'local_takeover_recovery'",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "local_apiary_task_commands",
+            artifact: "",
+            undo_sql: "UPDATE local_apiary_task_commands SET kind = 'claim',
+                    target_state = NULL, expected_revision = 1
+                WHERE kind = 'file'",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'local_apiary_task_commands'
+                  AND sql LIKE '%file%')",
         },
     ];
 

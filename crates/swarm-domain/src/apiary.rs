@@ -340,6 +340,13 @@ pub struct FederationTaskSyncStatus {
 pub enum FederationTaskCommandKind {
     Claim,
     Transition,
+    /// A member asking Keeper to put cross-Hive work on the shared board.
+    ///
+    /// ⚠️ THE ONE THE MOTIVATING FAILURE NEEDED. Before this, a member had no
+    /// way to reach the shared board at all — relocation is Keeper-only — so
+    /// work filed against another Hive's repository landed as a local draft
+    /// nobody who could act on it would ever see.
+    File,
 }
 
 impl fmt::Display for FederationTaskCommandKind {
@@ -347,6 +354,7 @@ impl fmt::Display for FederationTaskCommandKind {
         formatter.write_str(match self {
             Self::Claim => "claim",
             Self::Transition => "transition",
+            Self::File => "file",
         })
     }
 }
@@ -358,6 +366,11 @@ impl FromStr for FederationTaskCommandKind {
         match value {
             "claim" => Ok(Self::Claim),
             "transition" => Ok(Self::Transition),
+            "file" => Ok(Self::File),
+            // ⚠️ AN UNKNOWN KIND IS REFUSED, NOT IGNORED. This is what lets a
+            // new command kind be added without a protocol break: an older
+            // Keeper rejects `file` outright rather than applying some other
+            // part of the command and dropping the bit it did not understand.
             _ => Err(ParseFederationTaskCommandKindError),
         }
     }
@@ -374,6 +387,22 @@ impl fmt::Display for ParseFederationTaskCommandKindError {
 
 impl std::error::Error for ParseFederationTaskCommandKindError {}
 
+/// What a member is asking Keeper to put on the shared board.
+///
+/// ⚠️ IT NAMES A REPOSITORY, NOT A HIVE. Members do not decide routing —
+/// Keeper holds the fleet's capability reports and resolves who owns the repo.
+/// A member choosing the destination would mean two Hives could disagree about
+/// who owns something, with no authority between them; it would also go stale
+/// the moment a repo moved.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskFiling {
+    pub title: String,
+    pub description: String,
+    pub priority: TaskPriority,
+    /// The git remote, matched against what each Hive reports it can work in.
+    pub repository: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FederationTaskCommand {
     pub id: FederationTaskCommandId,
@@ -382,6 +411,15 @@ pub struct FederationTaskCommand {
     pub expected_revision: u64,
     pub kind: FederationTaskCommandKind,
     pub target_state: Option<TaskState>,
+    /// Present only on a `File` command.
+    ///
+    /// ⚠️ DEFAULTED SO AN OLDER NODE STILL PARSES THE REST, but an older Keeper
+    /// cannot be fooled by one: it does not know the `file` KIND, so the
+    /// command is rejected outright rather than applied with the filing
+    /// silently dropped. Failing closed on the kind is what makes this field
+    /// safe to add without a protocol break.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filing: Option<FederationTaskFiling>,
     pub created_at: i64,
 }
 

@@ -580,6 +580,31 @@ impl TaskStore {
                 apiary_task_from_row,
             )
             .optional()?;
+        // ⚠️ FILING IS A CREATE, SO IT BRANCHES BEFORE EVERYTHING BELOW, which
+        // all assumes the task already exists. The member minted the id, which
+        // is what makes a retry idempotent: the second attempt finds the task
+        // and returns Applied rather than minting a duplicate.
+        if command.kind == FederationTaskCommandKind::File {
+            let outcome = apply_member_filing(&transaction, &member, command, task.as_ref(), now)?;
+            let task_revision = transaction
+                .query_row(
+                    "SELECT revision FROM apiary_tasks WHERE id = ?1 AND apiary_id = ?2",
+                    params![command.task_id.to_string(), member.apiary.to_string()],
+                    |row| row.get::<_, u64>(0),
+                )
+                .optional()?;
+            let receipt = insert_task_command_receipt(
+                &transaction,
+                &member,
+                command,
+                &command_json,
+                outcome,
+                task_revision,
+                now,
+            )?;
+            transaction.commit()?;
+            return Ok(receipt);
+        }
         let outcome = match task.as_mut() {
             None => FederationTaskCommandOutcome::Rejected,
             Some(task) if task.revision != command.expected_revision => {
@@ -610,7 +635,9 @@ impl TaskStore {
                         FederationTaskCommandOutcome::Applied
                     }
                 }
-                FederationTaskCommandKind::Claim => FederationTaskCommandOutcome::Rejected,
+                FederationTaskCommandKind::Claim | FederationTaskCommandKind::File => {
+                    FederationTaskCommandOutcome::Rejected
+                }
             },
         };
         if outcome == FederationTaskCommandOutcome::Applied {
@@ -666,6 +693,99 @@ impl TaskStore {
         now: i64,
     ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
         self.queue_federation_task_command(task_id, FederationTaskCommandKind::Claim, None, now)
+    }
+
+    /// Queues one cross-Hive filing: work that belongs to a repository some
+    /// other Hive owns.
+    ///
+    /// ⚠️ THIS IS WHAT THE MOTIVATING FAILURE HAD NO WAY TO DO. On 2026-09-20 a
+    /// worker filed bfg-watchfaces work naming the foreign workspace correctly
+    /// and it landed as a local draft, because a member had no route to the
+    /// shared board at all — relocation is Keeper-only and the command kinds
+    /// were Claim and Transition. The facts were right and the place was wrong.
+    ///
+    /// ⚠️ THE ID IS MINTED HERE, BEFORE ANY NETWORK I/O, and that is what makes
+    /// a retry idempotent rather than a duplicate: the second attempt finds the
+    /// task Keeper already created under the same id. Journal-then-send is the
+    /// same shape every other federation command uses.
+    ///
+    /// # Errors
+    /// Rejects non-Members, empty content, capacity exhaustion, and unavailable
+    /// persistence.
+    pub fn queue_federation_task_filing(
+        &self,
+        repository: &str,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        let title = title.trim();
+        let description = description.trim();
+        let repository = repository.trim();
+        if now < 0 || title.is_empty() || title.len() > crate::MAX_TASK_TITLE_BYTES {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        if repository.is_empty() {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::InvalidFederationTask);
+        };
+        if local_role != LocalApiaryRole::Member {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let queued_count = transaction.query_row(
+            "SELECT COUNT(*) FROM local_apiary_task_commands WHERE state = 'queued'",
+            [],
+            |row| row.get::<_, usize>(0),
+        )?;
+        if queued_count >= MAX_LOCAL_TASK_OUTBOX {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let command = FederationTaskCommand {
+            id: FederationTaskCommandId::new(),
+            apiary_id: apiary.id,
+            task_id: ApiaryTaskId::new(),
+            // The task does not exist yet, so there is no revision to expect.
+            expected_revision: 0,
+            kind: FederationTaskCommandKind::File,
+            target_state: None,
+            filing: Some(swarm_domain::FederationTaskFiling {
+                title: title.to_owned(),
+                description: description.to_owned(),
+                priority,
+                repository: repository.to_owned(),
+            }),
+            created_at: now,
+        };
+        let command_json =
+            serde_json::to_string(&command).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        transaction.execute(
+            "INSERT INTO local_apiary_task_commands
+                 (command_id, apiary_id, task_id, expected_revision, kind,
+                  target_state, command_json, state, attempt_count, last_attempt_at,
+                  receipt_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 0, 'file', NULL, ?4, 'queued', 0, NULL, NULL, ?5, ?5)",
+            params![
+                command.id.to_string(),
+                apiary.id.to_string(),
+                command.task_id.to_string(),
+                command_json,
+                now
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(FederationTaskOutboxEntry {
+            command,
+            state: FederationTaskOutboxState::Queued,
+            attempt_count: 0,
+            last_attempt_at: None,
+            receipt: None,
+        })
     }
 
     /// Queues an offline-safe lifecycle transition for one task already owned
@@ -897,6 +1017,7 @@ impl TaskStore {
             expected_revision: task.revision,
             kind,
             target_state,
+            filing: None,
             created_at: now,
         };
         let command_json =
@@ -1205,14 +1326,22 @@ fn validate_federation_task_command(
     command: &FederationTaskCommand,
     now: i64,
 ) -> Result<(), TaskStoreError> {
+    // ⚠️ A FILING EXPECTS NO REVISION, because it creates the task. Every other
+    // kind acts on something that already has one, which is why the zero check
+    // was right until now — and why relaxing it for `file` alone keeps it right
+    // for the rest.
+    let filing = matches!(command.kind, FederationTaskCommandKind::File);
     if now < 0
         || command.created_at < 0
         || command.created_at > now
-        || command.expected_revision == 0
+        || (!filing && command.expected_revision == 0)
+        || (filing && (command.expected_revision != 0 || command.filing.is_none()))
+        || (!filing && command.filing.is_some())
         || matches!(command.kind, FederationTaskCommandKind::Claim)
             && command.target_state.is_some()
         || matches!(command.kind, FederationTaskCommandKind::Transition)
             && command.target_state.is_none()
+        || filing && command.target_state.is_some()
     {
         return Err(TaskStoreError::InvalidFederationTask);
     }
@@ -1424,6 +1553,7 @@ fn insert_local_lifecycle_command(
         expected_revision,
         kind: FederationTaskCommandKind::Transition,
         target_state: Some(target_state),
+        filing: None,
         created_at: now,
     };
     let command_json =
@@ -2123,6 +2253,181 @@ impl TaskStore {
     }
 }
 
+/// A member may file work that does not exist yet, for a repo that may be
+/// nobody's.
+///
+/// ⚠️ TWO REBUILDS, AND BOTH CONSTRAINTS WERE RIGHT UNTIL FILING EXISTED.
+///
+/// `local_apiary_task_commands` required `expected_revision > 0` and a kind of
+/// claim or transition, because every command until now acted on a task that
+/// already had a revision. A filing creates the task, so it has none to expect.
+///
+/// `apiary_task_commands.task_id` carried a foreign key to `apiary_tasks`. That
+/// held while commands could only ever name an existing task — but a REFUSED
+/// filing names one that was never created and never will be, and refusing to
+/// record that receipt would lose both the audit and the idempotent retry. The
+/// key goes; the column keeps its meaning.
+pub(super) fn migrate_cross_hive_filing(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE local_apiary_task_commands_rebuilt (
+             command_id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             task_id TEXT NOT NULL,
+             expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+             kind TEXT NOT NULL CHECK (kind IN ('claim','transition','file')),
+             target_state TEXT CHECK (target_state IN ('draft','ready','active','blocked','review','awaiting_release','completed','abandoned')),
+             command_json TEXT NOT NULL,
+             state TEXT NOT NULL CHECK (state IN ('queued','applied','conflict','rejected')),
+             attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+             last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+             receipt_json TEXT,
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+             CHECK ((kind = 'claim' AND target_state IS NULL) OR
+                    (kind = 'transition' AND target_state IS NOT NULL) OR
+                    (kind = 'file' AND target_state IS NULL))
+         );
+         INSERT INTO local_apiary_task_commands_rebuilt
+             SELECT command_id, apiary_id, task_id, expected_revision, kind, target_state,
+                    command_json, state, attempt_count, last_attempt_at, receipt_json,
+                    created_at, updated_at
+             FROM local_apiary_task_commands;
+         DROP TABLE local_apiary_task_commands;
+         ALTER TABLE local_apiary_task_commands_rebuilt
+             RENAME TO local_apiary_task_commands;
+         CREATE INDEX IF NOT EXISTS local_apiary_task_commands_queue
+             ON local_apiary_task_commands(state, created_at, command_id);
+         CREATE TABLE apiary_task_commands_rebuilt (
+             command_id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             task_id TEXT NOT NULL,
+             member_node_id TEXT NOT NULL,
+             member_hive_id TEXT NOT NULL REFERENCES hives(id),
+             member_operator_id TEXT NOT NULL,
+             command_json TEXT NOT NULL,
+             outcome TEXT NOT NULL CHECK (outcome IN ('applied','conflict','rejected')),
+             receipt_json TEXT NOT NULL,
+             processed_at INTEGER NOT NULL CHECK (processed_at >= 0)
+         );
+         INSERT INTO apiary_task_commands_rebuilt
+             SELECT command_id, apiary_id, task_id, member_node_id, member_hive_id,
+                    member_operator_id, command_json, outcome, receipt_json, processed_at
+             FROM apiary_task_commands;
+         DROP TABLE apiary_task_commands;
+         ALTER TABLE apiary_task_commands_rebuilt RENAME TO apiary_task_commands;
+         CREATE INDEX IF NOT EXISTS apiary_task_commands_by_apiary
+             ON apiary_task_commands(apiary_id, processed_at DESC);",
+    )?;
+    transaction.pragma_update(None, "user_version", crate::CROSS_HIVE_FILING_SCHEMA_MARKER)
+}
+
+/// Puts one member's cross-Hive filing on the shared board, homed to the Hive
+/// that reports the repository.
+///
+/// ⚠️ KEEPER RESOLVES THE OWNER, NOT THE FILER. The member names a repository;
+/// Keeper holds the capability reports and decides who owns it. A member
+/// choosing the destination would let two Hives disagree with no authority
+/// between them, and would go stale the moment a repo moved.
+///
+/// ⚠️ NO OWNER MEANS REJECTED, NOT UNROUTED. Creating an unhomed shared ticket
+/// for a repository nobody reports would put work on a board where no Hive can
+/// act on it — which is the same disappearance as the bug this fixes, one level
+/// up. The member keeps it locally instead, where at least its own operator
+/// sees it.
+fn apply_member_filing(
+    transaction: &rusqlite::Transaction<'_>,
+    member: &crate::federation::MemberCredentialContext,
+    command: &FederationTaskCommand,
+    existing: Option<&ApiaryTask>,
+    now: i64,
+) -> Result<FederationTaskCommandOutcome, TaskStoreError> {
+    // A retry finds the task already there. Applied, not Conflict: the member
+    // asked for a thing that is now true.
+    if existing.is_some() {
+        return Ok(FederationTaskCommandOutcome::Applied);
+    }
+    let Some(filing) = command.filing.as_ref() else {
+        return Err(TaskStoreError::InvalidFederationTask);
+    };
+    let title = filing.title.trim();
+    let description = filing.description.trim();
+    let repository = filing.repository.trim();
+    if title.is_empty() || title.len() > crate::MAX_TASK_TITLE_BYTES || repository.is_empty() {
+        return Err(TaskStoreError::InvalidFederationTask);
+    }
+    let Some(owner) = repository_owner(transaction, member.apiary, repository)? else {
+        return Ok(FederationTaskCommandOutcome::Rejected);
+    };
+    // Filing work at a Hive that is on its way out would be handing it to
+    // nobody.
+    if !transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM apiary_federation_memberships
+         WHERE apiary_id = ?1 AND member_hive_id = ?2 AND state = 'active')",
+        params![member.apiary.to_string(), owner.1.to_string()],
+        |row| row.get::<_, bool>(0),
+    )? {
+        return Ok(FederationTaskCommandOutcome::Rejected);
+    }
+    transaction.execute(
+        "INSERT INTO apiary_tasks
+             (id, apiary_id, source, title, description, priority, state,
+              home_node_id, home_hive_id, revision, created_at, updated_at)
+         VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, 'ready', ?6, ?7, 1, ?8, ?8)",
+        params![
+            command.task_id.to_string(),
+            member.apiary.to_string(),
+            title,
+            description,
+            filing.priority.to_string(),
+            owner.0.to_string(),
+            owner.1.to_string(),
+            now,
+        ],
+    )?;
+    let task = transaction.query_row(
+        "SELECT id, apiary_id, source, title, description, priority, state,
+                home_node_id, home_hive_id, revision, created_at, updated_at
+         FROM apiary_tasks WHERE id = ?1",
+        params![command.task_id.to_string()],
+        apiary_task_from_row,
+    )?;
+    insert_task_event(transaction, &task, now)?;
+    Ok(FederationTaskCommandOutcome::Applied)
+}
+
+/// The node and Hive reporting a worker for this repository, if any.
+fn repository_owner(
+    transaction: &rusqlite::Transaction<'_>,
+    apiary_id: ApiaryId,
+    repository: &str,
+) -> Result<Option<(FederationNodeId, HiveId)>, TaskStoreError> {
+    let mut statement = transaction.prepare(
+        "SELECT node_id, payload_json FROM apiary_hive_capabilities WHERE apiary_id = ?1",
+    )?;
+    let rows = statement.query_map(params![apiary_id.to_string()], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (node, payload) = row?;
+        let payload: swarm_domain::HiveCapabilityPayload =
+            serde_json::from_str(&payload).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        if payload
+            .workers
+            .iter()
+            .any(|worker| worker.repository.as_deref() == Some(repository))
+        {
+            return Ok(Some((
+                FederationNodeId::from_str(&node)
+                    .map_err(|_| TaskStoreError::InvalidFederationTask)?,
+                payload.identity.hive_id,
+            )));
+        }
+    }
+    Ok(None)
+}
+
 /// Matches `task_prerequisites.reason` at the Hive, so a relocated edge keeps
 /// the sentence that explains why the ordering exists rather than truncating it.
 const MAX_APIARY_PREREQUISITE_REASON_BYTES: usize = 2048;
@@ -2292,6 +2597,50 @@ mod tests {
         FederationJoinAcceptance, FederationJoinReadiness, JiraConnectionState, ProviderKind,
         SharedWorkBackend, TaskActivityActor,
     };
+
+    /// A second Hive joining a Keeper that already has one, so cross-Hive
+    /// routing has somewhere to route TO.
+    fn second_member(keeper: &TaskStore, now: i64) -> (TaskStore, FederationJoinAcceptance) {
+        let member = TaskStore::in_memory().unwrap();
+        let card = member.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                card.payload.hive_id,
+                "https://keeper.example.test/swarm",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let invitation = member
+            .import_apiary_invitation_bundle(&bundle, now + 1)
+            .unwrap();
+        member
+            .accept_federation_join_policy(invitation.invitation_id, 1, now + 2)
+            .unwrap();
+        let submission = member
+            .prepare_federation_join_submission(
+                invitation.invitation_id,
+                &swarm_domain::FederationJoinReadiness {
+                    jira_connection: swarm_domain::JiraConnectionState::Ready,
+                    projects: Vec::new(),
+                    blockers: Vec::new(),
+                },
+                now + 3,
+            )
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now + 4)
+            .unwrap();
+        member
+            .apply_federation_join_acceptance(
+                acceptance.receipt.payload.invitation_id,
+                &acceptance,
+                now + 5,
+            )
+            .unwrap();
+        (member, acceptance)
+    }
 
     fn joined_member(now: i64) -> (TaskStore, TaskStore, FederationJoinAcceptance) {
         let keeper = TaskStore::in_memory().expect("keeper");
@@ -3130,6 +3479,130 @@ mod tests {
     /// A bulk move retries. Minting a second shared task for the same local one
     /// would put the same work on the board twice with no way to tell which is
     /// real, so the second call returns the first result.
+    /// ⚠️ THE MOTIVATING FAILURE, FIXED AND PINNED. On 2026-09-20 a worker
+    /// filed bfg-watchfaces work with the foreign workspace named correctly,
+    /// and it landed as a draft on the FILING Hive's board — the Hive that owns
+    /// that repository never learned of it. Cross-repo filing recorded the
+    /// right facts in the wrong place.
+    ///
+    /// Keeper resolves the owner from the capability reports, so the filer does
+    /// not choose a destination it could be wrong about.
+    #[test]
+    fn a_member_files_cross_hive_work_and_it_lands_on_the_hive_that_owns_the_repo() {
+        let now = 900_000;
+        let (keeper, filer, filer_acceptance) = joined_member(now);
+        let (owner, owner_acceptance) = second_member(&keeper, now + 100);
+        let repository = "git@github.com:rcg/bfg-watchfaces.git";
+
+        // The owning Hive reports that it works in that repository.
+        let report = owner
+            .seal_local_hive_capability(
+                &[swarm_domain::HiveCapabilityWorker {
+                    name: "Watchfaces".to_owned(),
+                    provider: swarm_domain::ProviderKind::ClaudeCode,
+                    repository: Some(repository.to_owned()),
+                    awake: false,
+                }],
+                false,
+                "1.12.0",
+                190,
+                now + 110,
+            )
+            .unwrap();
+        keeper
+            .accept_hive_capability(&owner_acceptance.node_credential, &report, now + 111)
+            .unwrap();
+
+        // A worker on a DIFFERENT Hive files work for that repository.
+        let filing = filer
+            .queue_federation_task_filing(
+                repository,
+                "Watch face crashes on rotate",
+                "Reported by an operator.",
+                TaskPriority::High,
+                now + 120,
+            )
+            .unwrap();
+        let receipt = keeper
+            .apply_federation_task_command(
+                &filer_acceptance.node_credential,
+                &filing.command,
+                now + 121,
+            )
+            .unwrap();
+        assert_eq!(receipt.outcome, FederationTaskCommandOutcome::Applied);
+
+        // ⚠️ IT LANDED ON THE OWNER'S BOARD, not the filer's.
+        let owner_hive = owner_acceptance.receipt.payload.member_hive_id;
+        let page = keeper
+            .federation_task_page(&owner_acceptance.node_credential, 0, now + 122)
+            .unwrap();
+        owner.apply_federation_task_page(&page, now + 122).unwrap();
+        let shared = owner
+            .list_visible_apiary_tasks()
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id == filing.command.task_id)
+            .expect("the owning Hive can see the work filed for it");
+        assert_eq!(shared.title, "Watch face crashes on rotate");
+        assert_eq!(shared.home_hive_id, Some(owner_hive));
+        assert_eq!(shared.priority, TaskPriority::High);
+
+        // ⚠️ A RETRY IS IDEMPOTENT, because the filer minted the id before any
+        // network I/O. A duplicate shared ticket would be its own quiet mess.
+        let retry = keeper
+            .apply_federation_task_command(
+                &filer_acceptance.node_credential,
+                &filing.command,
+                now + 123,
+            )
+            .unwrap();
+        assert_eq!(retry.outcome, FederationTaskCommandOutcome::Applied);
+        assert_eq!(
+            keeper
+                .federation_task_page(&owner_acceptance.node_credential, 0, now + 124)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|event| event.task.id == filing.command.task_id)
+                .count(),
+            1,
+            "one filing, one ticket"
+        );
+    }
+
+    /// ⚠️ A REPOSITORY NOBODY REPORTS IS REFUSED, NOT PARKED UNHOMED. An
+    /// unhomed shared ticket is work on a board where no Hive can act on it —
+    /// the same disappearance as the original bug, one level up. The member
+    /// keeps it locally, where at least its own operator sees it.
+    #[test]
+    fn filing_for_a_repository_nobody_owns_is_refused_rather_than_stranded() {
+        let now = 900_000;
+        let (keeper, filer, acceptance) = joined_member(now);
+        let filing = filer
+            .queue_federation_task_filing(
+                "git@github.com:rcg/nobody-has-this.git",
+                "Work for a repo no Hive reports",
+                "",
+                TaskPriority::Normal,
+                now + 120,
+            )
+            .unwrap();
+        let receipt = keeper
+            .apply_federation_task_command(&acceptance.node_credential, &filing.command, now + 121)
+            .unwrap();
+        assert_eq!(receipt.outcome, FederationTaskCommandOutcome::Rejected);
+        assert_eq!(
+            keeper
+                .federation_task_page(&acceptance.node_credential, 0, now + 122)
+                .unwrap()
+                .events
+                .len(),
+            0,
+            "nothing was put on a board nobody could act from"
+        );
+    }
+
     /// ⚠️ A DEPENDENCY NOBODY WILL EVER MEET UNBLOCKS RATHER THAN WAITS.
     ///
     /// Measured on this Hive 2026-09-20: two tasks whose state had stopped

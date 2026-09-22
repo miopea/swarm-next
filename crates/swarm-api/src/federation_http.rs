@@ -1076,6 +1076,7 @@ mod tests {
             expected_revision: 4,
             kind: FederationTaskCommandKind::Transition,
             target_state: Some(TaskState::Active),
+            filing: None,
             created_at: 1_000,
         };
         let receipt = FederationTaskCommandReceipt {
