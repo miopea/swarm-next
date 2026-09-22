@@ -1065,6 +1065,9 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/apiary/watched-by")) {
       return Promise.resolve(ok([]));
     }
+    if (String(url).includes("/api/v1/apiary/takeovers")) {
+      return Promise.resolve(ok({ holding_me: [], held_by_me: [] }));
+    }
     if (String(url).includes("/api/v1/orchestration/queen-policy")) {
       return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     }

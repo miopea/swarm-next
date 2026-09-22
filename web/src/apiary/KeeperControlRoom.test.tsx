@@ -94,7 +94,7 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   // into yourself is a mirror — the terminal is already on this machine — and
   // the absence here is what proves the guard rather than the presence
   // elsewhere.
-  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveWatchFern HiveFayeHiveWatch");
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveWatchTake overFern HiveFayeHiveWatchTake over");
   expect(screen.getByRole("list", { name: "Keeper shared work ownership" })).toHaveTextContent("WWD-101WWD · OwnedClover HiveCora");
   expect(screen.getByRole("list", { name: "Keeper Swarm tasks" })).toHaveTextContent("Coordinate releaseSwarm · readyFern HiveRouted by Steward Cora · revision 1");
   expect(screen.getByRole("list", { name: "Keeper promoted Jira projects" })).toHaveTextContent("WWDWebsite Development");

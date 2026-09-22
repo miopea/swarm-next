@@ -1531,6 +1531,43 @@ export async function fetchWatchedBy(operatorToken: string, signal?: AbortSignal
   return response.json() as Promise<ApiaryWatch[]>;
 }
 
+export type TakeoverLease = TakeoverAuditEntry["lease"];
+
+/** The single-use ticket a browser needs to open a takeover control channel. */
+export async function requestTakeoverControlGrant(operatorToken: string, leaseId: string): Promise<{ grant: string; websocket_path: string }> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/takeovers/${encodeURIComponent(leaseId)}/control-grant`, { method: "POST" });
+  return response.json() as Promise<{ grant: string; websocket_path: string }>;
+}
+
+export type TakeoverStatus = {
+  /** Takeovers being done TO this Hive, right now. */
+  holding_me: TakeoverLease[];
+  /** Takeovers this operator holds over other Hives. */
+  held_by_me: TakeoverLease[];
+};
+
+export async function fetchTakeoverStatus(operatorToken: string, signal?: AbortSignal): Promise<TakeoverStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/takeovers", { signal });
+  return response.json() as Promise<TakeoverStatus>;
+}
+
+export async function openApiaryTakeover(operatorToken: string, targetHiveId: string, reason: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/apiary/takeovers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_hive_id: targetHiveId, reason }),
+  });
+}
+
+/** The local operator taking their machine back. Takes effect here at once. */
+export async function reclaimApiaryTakeover(operatorToken: string, leaseId: string, reason: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/apiary/takeovers/${encodeURIComponent(leaseId)}/reclaim`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+}
+
 /** One takeover, as the Apiary shows it. */
 export type TakeoverAuditEntry = {
   lease: {

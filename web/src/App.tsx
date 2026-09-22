@@ -8,6 +8,7 @@ import { conversationGap } from "./workers/conversationGap";
 import ConversationDriftCard, { type WorkerConversation } from "./workers/ConversationDriftCard";
 import PublicAddressWarning from "./PublicAddressWarning";
 import WatchedByNotice from "./WatchedByNotice";
+import TakeoverNotice from "./TakeoverNotice";
 import StaleBundleNotice, { reloadBrowser } from "./StaleBundleNotice";
 import { watchDevelopmentBuild as observeDevelopmentBuild } from "./runtime/watchDevelopmentBuild";
 import { useDogfoodCollection } from "./runtime/useDogfoodCollection";
@@ -111,6 +112,7 @@ import {
   type TunnelStatus,
   recordAttentionSeen,
   fetchWatchedBy, endApiaryWatch, type ApiaryWatch,
+  fetchTakeoverStatus, reclaimApiaryTakeover, type TakeoverLease,
 } from "./api";
 import type { BlockedEscalation, ReleaseVersionNotes, UnsettledReview } from "./api";
 import { bundleIsStale } from "./staleBundle";
@@ -541,6 +543,18 @@ export function App() {
     if (!signal.aborted) setWatchedBy(watches);
   }, [operatorToken]);
   useVisiblePolling(refreshWatchedBy, Boolean(operatorToken) && !detached, 10_000);
+
+  // ⚠️ POLLED FASTER THAN ANYTHING ELSE HERE, because this one is a release
+  // condition. ADR 0036 refuses to ship takeover unless the operator can see it
+  // and end it; a notice that arrives late is a window in which someone is
+  // typing on this machine and its owner has not been told.
+  const [takeovers, setTakeovers] = useState<TakeoverLease[]>();
+  const refreshTakeovers = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    const status = await fetchTakeoverStatus(operatorToken, signal);
+    if (!signal.aborted) setTakeovers(status?.holding_me);
+  }, [operatorToken]);
+  useVisiblePolling(refreshTakeovers, Boolean(operatorToken) && !detached, 5_000);
 
   const [presence, setPresence] = useState<OperatorPresence>();
   const readRecentActivity = useCallback((signal: AbortSignal) => {
@@ -1982,6 +1996,18 @@ export function App() {
                 <span><DiagnosticsIcon /> System</span>
               </button>
 
+              <TakeoverNotice
+                leases={takeovers}
+                onReclaim={async (leaseId, reason) => {
+                  if (!operatorToken) return;
+                  await reclaimApiaryTakeover(operatorToken, leaseId, reason);
+                  // Dropped from view at once rather than on the next poll: the
+                  // reclaim takes effect on this machine immediately, and a
+                  // notice still claiming someone holds the Hive would be the
+                  // same lie in the other direction.
+                  setTakeovers((current) => current?.filter((lease) => lease.id !== leaseId));
+                }}
+              />
               <WatchedByNotice
                 watches={watchedBy}
                 onEnd={async (watchId) => {

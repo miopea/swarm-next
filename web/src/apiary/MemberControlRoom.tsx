@@ -39,10 +39,12 @@ import {
   type HiveIdentity,
   type LocalApiaryTaskExecution,
   openApiaryWatch, endApiaryWatch, type ApiaryWatch,
+  openApiaryTakeover, fetchTakeoverStatus, type TakeoverLease,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 import WatchWindow from "./WatchWindow";
+import TakeoverWindow from "./TakeoverWindow";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
 import MemberSetup from "./MemberSetup";
 import { catalogReadinessLabel, federationSyncCopy } from "./presentation";
@@ -66,6 +68,7 @@ type MemberSnapshot = {
   outbox: FederationTaskOutboxEntry[];
   outboxStatus?: FederationTaskOutboxStatus;
   stewardship?: FederationStewardshipSnapshot | null;
+  takeovers: TakeoverLease[];
   stewardTasks: FederationStewardTaskOutboxEntry[];
   stewardAssists: FederationStewardAssistLocalState;
   handoffs: FederationClaimHandoff[];
@@ -73,8 +76,8 @@ type MemberSnapshot = {
   executions: LocalApiaryTaskExecution[];
 };
 
-const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [] };
-const snapshotKeys = ["members", "sharedWork", "tasks", "sync", "taskSync", "catalog", "outbox", "outboxStatus", "stewardship", "stewardTasks", "stewardAssists", "handoffs", "handoffTargets", "executions"] as const;
+const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [], takeovers: [] };
+const snapshotKeys = ["members", "sharedWork", "tasks", "sync", "taskSync", "catalog", "outbox", "outboxStatus", "stewardship", "stewardTasks", "stewardAssists", "handoffs", "handoffTargets", "executions", "takeovers"] as const;
 
 export default function MemberControlRoom({ identity, operatorToken, onManage, onReviewProfile, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
@@ -84,7 +87,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken, signal),
       fetchApiarySharedWork(operatorToken, signal),
       fetchApiaryTasks(operatorToken, signal),
@@ -99,6 +102,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       fetchApiaryClaimHandoffs(operatorToken, signal),
       fetchApiaryHandoffTargets(operatorToken, signal),
       fetchLocalApiaryTaskExecutions(operatorToken, signal),
+      fetchTakeoverStatus(operatorToken, signal),
     ]);
     if (signal.aborted) {
       if (signal.reason?.name === "TimeoutError") {
@@ -107,7 +111,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       }
       return;
     }
-    const results = [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions];
+    const results = [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers];
     if (handoffs.status === "fulfilled" && Array.isArray(handoffs.value)) {
       setHandoffError(undefined);
       setHandoffOfferError(undefined);
@@ -124,13 +128,14 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       outbox: outbox.status === "fulfilled" ? outbox.value : current.outbox,
       outboxStatus: outboxStatus.status === "fulfilled" ? outboxStatus.value : current.outboxStatus,
       stewardship: stewardship.status === "fulfilled" ? stewardship.value : current.stewardship,
+      takeovers: takeovers.status === "fulfilled" && Array.isArray(takeovers.value?.held_by_me) ? takeovers.value.held_by_me : current.takeovers,
       stewardTasks: stewardTasks.status === "fulfilled" ? stewardTasks.value : current.stewardTasks,
       stewardAssists: stewardAssists.status === "fulfilled" && stewardAssists.value ? stewardAssists.value : current.stewardAssists,
       handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
       handoffTargets: handoffTargets.status === "fulfilled" && Array.isArray(handoffTargets.value) ? handoffTargets.value : current.handoffTargets,
       executions: executions.status === "fulfilled" && Array.isArray(executions.value) ? executions.value : current.executions,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null, 8_000, { refreshKey });
   const value = (key: keyof MemberSnapshot, content: string | number) => observed.has(key)
@@ -156,6 +161,14 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const [syncTitle, syncDetail] = federationSyncCopy[syncCondition];
   const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
   const [watchError, setWatchError] = useState<string>();
+  // ⚠️ A STEWARD'S TAKEOVER DOES NOT EXIST UNTIL KEEPER GRANTS IT. The request
+  // is journalled here and travels on the next federation pass, so there is no
+  // lease id to control until it comes back — the window opens when the lease
+  // appears, not when the button is pressed. Saying "requested" meanwhile is
+  // the honest state rather than a spinner pretending to be progress.
+  const [takeoverRequested, setTakeoverRequested] = useState<string>();
+  const [controlling, setControlling] = useState<{ leaseId: string; hiveName: string }>();
+
   const stewardship = snapshot.stewardship?.stewardship;
   const managedMembers = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId) ?? { hive_id: hiveId, hive_name: "Registered Hive" }) ?? [];
   const managedHives = managedMembers.map((member) => member.hive_name);
@@ -171,6 +184,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   // refuses a stewardship without Observe today — a rule enforced elsewhere is
   // not a rule this surface should depend on silently.
   const canObserve = stewardship?.capabilities.includes("observe") ?? false;
+  const canTakeOver = stewardship?.capabilities.includes("takeover") ?? false;
   const [assistTarget, setAssistTarget] = useState("");
   const [assistMessage, setAssistMessage] = useState("");
   const [sendingAssist, setSendingAssist] = useState(false);
@@ -292,7 +306,38 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
                   setWatchError(`Keeper did not grant a window into ${member.hive_name}.`);
                 }
               }}>Watch</button>
+              {canTakeOver ? <button type="button" className="secondary-button" onClick={async () => {
+                const reason = window.prompt(`Why are you taking over ${member.hive_name}?`)?.trim();
+                if (!reason) return;
+                setWatchError(undefined);
+                try {
+                  await openApiaryTakeover(operatorToken, member.hive_id, reason);
+                  setTakeoverRequested(member.hive_name);
+                } catch {
+                  setWatchError(`Keeper did not grant a takeover of ${member.hive_name}.`);
+                }
+              }}>Take over</button> : null}
             </li>)}</ul>
+            {takeoverRequested && !controlling
+              ? <p className="keeper-empty" role="status">Takeover of {takeoverRequested} requested. It opens here once Keeper grants it and that Hive accepts.</p>
+              : null}
+            {(() => {
+              const granted = (Array.isArray(snapshot.takeovers) ? snapshot.takeovers : []).find((lease) => lease.state === "active");
+              if (!granted) return null;
+              if (!controlling || controlling.leaseId !== granted.id) {
+                const name = managedMembers.find((candidate) => candidate.hive_id === granted.target_hive_id)?.hive_name ?? "Managed Hive";
+                // Opening on arrival rather than on the click is the whole point
+                // of the wait above.
+                setControlling({ leaseId: granted.id, hiveName: name });
+              }
+              return null;
+            })()}
+            {controlling ? <TakeoverWindow
+              leaseId={controlling.leaseId}
+              operatorToken={operatorToken}
+              hiveName={controlling.hiveName}
+              onClose={() => { setControlling(undefined); setTakeoverRequested(undefined); }}
+            /> : null}
             {watchError ? <p className="keeper-empty" role="alert">{watchError}</p> : null}
             {watching ? <WatchWindow
               watchId={watching.watch.id}

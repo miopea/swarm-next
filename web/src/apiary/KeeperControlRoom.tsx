@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
-  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchTakeoverAudit, openApiaryWatch, endApiaryWatch,
+  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
   type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type TakeoverAuditEntry, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -10,6 +10,7 @@ import SharedProfileHint from "./SharedProfileHint";
 import FleetVersions from "./FleetVersions";
 import WatchWindow from "./WatchWindow";
 import TakeoverAudit from "./TakeoverAudit";
+import TakeoverWindow from "./TakeoverWindow";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
@@ -28,6 +29,8 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   // asked for it.
   const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
   const [watchError, setWatchError] = useState<string>();
+  // The Hive this Keeper is currently controlling, if any.
+  const [controlling, setControlling] = useState<{ leaseId: string; hiveName: string }>();
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
       const results = await Promise.allSettled([
@@ -105,8 +108,31 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             } catch {
               setWatchError(`${member.hive_name} could not be watched.`);
             }
-          }}>Watch</button>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+          }}>Watch</button>}{member.is_local ? null : <button type="button" className="secondary-button" onClick={async () => {
+            // ⚠️ A REASON IS REQUIRED TO START, as ADR 0036 demands and unlike
+            // watching, which the operator explicitly exempted. Typing on
+            // somebody's machine should cost a sentence.
+            const reason = window.prompt(`Why are you taking over ${member.hive_name}?`)?.trim();
+            if (!reason) return;
+            setWatchError(undefined);
+            try {
+              await openApiaryTakeover(operatorToken, member.hive_id, reason);
+              // The target must ACKNOWLEDGE before anything is controllable, so
+              // the lease is found on the next status read rather than assumed.
+              const status = await fetchTakeoverStatus(operatorToken);
+              const lease = status.held_by_me.find((held) => held.target_hive_id === member.hive_id);
+              if (lease) setControlling({ leaseId: lease.id, hiveName: member.hive_name });
+            } catch {
+              setWatchError(`${member.hive_name} could not be taken over.`);
+            }
+          }}>Take over</button>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
           {watchError ? <p className="keeper-empty" role="alert">{watchError}</p> : null}
+          {controlling ? <TakeoverWindow
+            leaseId={controlling.leaseId}
+            operatorToken={operatorToken}
+            hiveName={controlling.hiveName}
+            onClose={() => setControlling(undefined)}
+          /> : null}
           {watching ? <WatchWindow
             watchId={watching.watch.id}
             operatorToken={operatorToken}

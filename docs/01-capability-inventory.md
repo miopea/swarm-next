@@ -155,6 +155,23 @@ promoted Jira projects, active reservations or durable home-Hive ownership, and
 Steward scopes from the existing private contracts. Routine worker activity
 remains inside each Hive; invitations and configuration stay in Settings.
 
+Takeover checkpoint: ADR 0036 is RELEASED as of 2026-09-22 — the first time
+takeover is reachable from an operator surface. Keeper may take over on its own
+authority, on the same terms as a Steward, and a lease records `None` where a
+stewardship would be because Keeper holds none over its own Apiary. Reclaim is
+never revision-fenced on either side: a proven defect had an actively-renewing
+Steward reliably refusing the person at the keyboard, which is the state the
+operator declined twice under other names. A takeover that ends owes a durable
+local reconciliation before Queen automation may resume, and that debt is
+settled only when the terminal host answers. A restart keeps a lease only when a
+Queen session still exists to be controlled through it. The audit says who held
+a Hive, on whose authority, why it started and why it ended, and never what was
+typed. The target sees an always-visible notice from the moment a takeover is
+requested, carrying a reclaim that takes effect locally at once. Still narrow:
+Queen only, by this ADR's own decision; a Steward's request becomes a lease on
+the next federation pass rather than immediately; and none of it has run between
+two real machines.
+
 Hive watching checkpoint: the control plane, the frame relay and the Keeper's
 viewer surface are implemented. A Keeper opens a window from the Apiary Hive
 roster — offered for remote Hives and not for this one — and closing it ENDS the

@@ -129,6 +129,9 @@ const MAX_WATCH_GRANTS: usize = 64;
 
 const WATCH_GRANT_PROTOCOL_PREFIX: &str = "swarm-watch.";
 
+/// The subprotocol a browser offers to open a takeover control channel.
+pub(crate) const TAKEOVER_GRANT_PROTOCOL_PREFIX: &str = "swarm-takeover.";
+
 /// Short-lived single-use tickets that let a BROWSER open a viewer socket.
 ///
 /// ⚠️ THIS EXISTS BECAUSE A BROWSER CANNOT SEND AN `Authorization` HEADER ON A
@@ -139,11 +142,11 @@ const WATCH_GRANT_PROTOCOL_PREFIX: &str = "swarm-watch.";
 /// proxies and logs routinely record, which is exactly what a single-use,
 /// 30-second ticket avoids.
 #[derive(Debug)]
-pub(crate) struct WatchGrantStore {
-    grants: Mutex<HashMap<String, (ApiaryWatchId, std::time::Instant)>>,
+pub(crate) struct GrantStore<K> {
+    grants: Mutex<HashMap<String, (K, std::time::Instant)>>,
 }
 
-impl Default for WatchGrantStore {
+impl<K> Default for GrantStore<K> {
     fn default() -> Self {
         Self {
             grants: Mutex::new(HashMap::new()),
@@ -151,8 +154,11 @@ impl Default for WatchGrantStore {
     }
 }
 
-impl WatchGrantStore {
-    fn issue_at(&self, watch: ApiaryWatchId, now: std::time::Instant) -> Option<String> {
+/// Tickets for a browser opening a watch viewer.
+pub(crate) type WatchGrantStore = GrantStore<ApiaryWatchId>;
+
+impl<K: Copy + Eq> GrantStore<K> {
+    fn issue_at(&self, watch: K, now: std::time::Instant) -> Option<String> {
         let mut grants = match self.grants.lock() {
             Ok(grants) => grants,
             Err(poisoned) => poisoned.into_inner(),
@@ -174,7 +180,7 @@ impl WatchGrantStore {
 
     /// Spends a grant. A grant is good for ONE socket: replaying it must not
     /// open a second window, so it is removed whether or not it matched.
-    fn consume_at(&self, token: &str, watch: ApiaryWatchId, now: std::time::Instant) -> bool {
+    fn consume_at(&self, token: &str, watch: K, now: std::time::Instant) -> bool {
         let mut grants = match self.grants.lock() {
             Ok(grants) => grants,
             Err(poisoned) => poisoned.into_inner(),
@@ -185,23 +191,28 @@ impl WatchGrantStore {
             .is_some_and(|(granted, _)| granted == watch)
     }
 
-    pub(crate) fn issue(&self, watch: ApiaryWatchId) -> Option<String> {
+    pub(crate) fn issue(&self, watch: K) -> Option<String> {
         self.issue_at(watch, std::time::Instant::now())
     }
 
-    pub(crate) fn consume(&self, token: &str, watch: ApiaryWatchId) -> bool {
+    pub(crate) fn consume(&self, token: &str, watch: K) -> bool {
         self.consume_at(token, watch, std::time::Instant::now())
     }
 }
 
 fn offered_grant(headers: &HeaderMap) -> Option<&str> {
+    grant_with_prefix(headers, WATCH_GRANT_PROTOCOL_PREFIX)
+}
+
+/// Reads a single-use grant offered as a WebSocket subprotocol.
+pub(crate) fn grant_with_prefix<'a>(headers: &'a HeaderMap, prefix: &str) -> Option<&'a str> {
     headers
         .get(axum::http::header::SEC_WEBSOCKET_PROTOCOL)?
         .to_str()
         .ok()?
         .split(',')
         .map(str::trim)
-        .find_map(|protocol| protocol.strip_prefix(WATCH_GRANT_PROTOCOL_PREFIX))
+        .find_map(|protocol| protocol.strip_prefix(prefix))
 }
 
 /// Whether this watch still authorizes a socket, read fresh.

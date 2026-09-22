@@ -2,8 +2,19 @@
 
 ## Status
 
-Accepted for staged implementation. The capability remains unavailable until
-the control lease, relay, owner reclaim, and visible audit ship together.
+Accepted and RELEASED (2026-09-22). The release gate is met: the control lease,
+outbound relay, restart reconciliation, automation recovery, audit presentation
+and desktop/mobile control all landed together, and takeover is now reachable
+from an operator surface for the first time.
+
+⚠️ WHAT IS STILL NARROW, stated because "released" should not be read as
+"finished". Takeover controls QUEEN and no other worker, which is this ADR's own
+decision rather than a shortfall. A Steward's request is journalled locally and
+becomes a lease on the next federation pass, paced at sixty seconds, so their
+control window opens on arrival rather than on the click — the surface says
+"requested" meanwhile rather than pretending to progress. None of this has run
+between two real machines; every end-to-end test stands up its Hives in one
+process.
 
 Implementation checkpoint (2026-08-16): the internal two-phase lease store and
 terminal-host authority primitive are implemented and tested. No operator or
@@ -70,9 +81,23 @@ which is the operator's own words about their own machine. It says WHO held a
 Hive and never what they did while holding it; that second part is why frames
 are not stored at all.
 
-Outstanding, and the refusal to ship a partial takeover behind a flag stands:
-desktop/mobile control, which is also the only remaining reason the capability
-is unreachable — no operator surface can start a takeover.
+Desktop and mobile control is built, both halves.
+
+⚠️ THE TARGET'S HALF IS THE RELEASE CONDITION, NOT THE CONTROLLER'S. A notice
+appears on every surface while a takeover is open — announced from `requested`,
+before anyone is typing, rather than once they are — and it carries a reclaim
+that requires a reason and takes effect on this machine at once, without waiting
+for Keeper. It is styled louder than the watch notice because reading someone's
+screen and typing on their machine are different things, and one treatment for
+both teaches the operator to skim past the one that matters. If that notice ever
+stops rendering, takeover must stop being reachable: they are one release
+condition, not two features.
+
+The controller's half required an honest wait rather than a false failure. A
+takeover is not controllable until the target acknowledges, and the target
+learns on its own federation pass — asking once and giving up reported "no
+longer active" for a takeover seconds old, a working feature reading as a broken
+one.
 
 ## Context
 

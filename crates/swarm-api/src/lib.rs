@@ -447,6 +447,7 @@ pub struct AppState {
     watch_relay: Arc<watch_relay::WatchRelay>,
     watch_grants: Arc<watch_relay::WatchGrantStore>,
     takeover_relay: Arc<takeover_relay::TakeoverRelay>,
+    takeover_grants: Arc<takeover_relay::TakeoverGrantStore>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -580,6 +581,7 @@ impl AppState {
             watch_relay: Arc::new(watch_relay::WatchRelay::default()),
             watch_grants: Arc::new(watch_relay::WatchGrantStore::default()),
             takeover_relay: Arc::new(takeover_relay::TakeoverRelay::default()),
+            takeover_grants: Arc::new(takeover_relay::TakeoverGrantStore::default()),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -4184,6 +4186,22 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/apiary/watched-by", get(apiary_watched_by))
         .route("/api/v1/apiary/takeover-audit", get(apiary_takeover_audit))
         .route(
+            "/api/v1/apiary/takeovers",
+            get(apiary_takeover_status).post(open_apiary_takeover),
+        )
+        .route(
+            "/api/v1/apiary/takeovers/{lease_id}/reclaim",
+            post(reclaim_apiary_takeover),
+        )
+        .route(
+            "/api/v1/apiary/takeovers/{lease_id}/control",
+            get(takeover_relay::apiary_takeover_control),
+        )
+        .route(
+            "/api/v1/apiary/takeovers/{lease_id}/control-grant",
+            post(apiary_takeover_control_grant),
+        )
+        .route(
             "/api/v1/apiary/watches/{watch_id}/stream",
             get(watch_relay::apiary_watch_stream),
         )
@@ -5642,6 +5660,165 @@ async fn apiary_watch_grant(
             grant,
             expires_in_ms: 30_000,
         }),
+    )
+        .into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct OpenTakeoverRequest {
+    target_hive_id: swarm_domain::HiveId,
+    reason: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ReclaimRequest {
+    reason: String,
+}
+
+#[derive(serde::Serialize)]
+struct TakeoverStatus {
+    /// Takeovers being done TO this Hive, right now.
+    ///
+    /// ⚠️ THE FIELD THE WHOLE GATE RESTS ON. ADR 0036 makes activation visibly
+    /// replace the local engagement lease; if this is empty while someone holds
+    /// this machine, the capability is remote control without disclosure, and
+    /// the ADR says it must not ship at all.
+    holding_me: Vec<swarm_domain::FederationStewardTakeoverLease>,
+    /// Takeovers this operator holds over other Hives.
+    held_by_me: Vec<swarm_domain::FederationStewardTakeoverLease>,
+}
+
+/// What is happening to this Hive, and what it is doing to others.
+async fn apiary_takeover_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let now = unix_timestamp();
+    let hive = store
+        .local_hive_identity()
+        .map_err(|error| task_store_error(&error))?
+        .hive
+        .id;
+    // Read from BOTH sides: a Keeper holds its leases in the Apiary table and
+    // has no local projection of them, while a member has only the projection.
+    // Asking one would have made the surface work for one role and quietly not
+    // the other.
+    let mut local = store
+        .federation_steward_takeover_local_state()
+        .map_err(|error| task_store_error(&error))?
+        .leases;
+    if local_apiary_role(&state) == Some(LocalApiaryRole::Keeper) {
+        local.extend(
+            store
+                .apiary_takeover_audit(50)
+                .map_err(|error| task_store_error(&error))?
+                .into_iter()
+                .map(|entry| entry.lease),
+        );
+    }
+    let open = |lease: &swarm_domain::FederationStewardTakeoverLease| {
+        lease.state.is_open() && lease.expires_at > now
+    };
+    let status = TakeoverStatus {
+        holding_me: local
+            .iter()
+            .filter(|lease| lease.target_hive_id == hive && open(lease))
+            .cloned()
+            .collect(),
+        held_by_me: local
+            .iter()
+            .filter(|lease| lease.source_hive_id == hive && open(lease))
+            .cloned()
+            .collect(),
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+/// Opens a takeover: directly when this Hive is Keeper, journalled when it is a
+/// Steward's Hive.
+async fn open_apiary_takeover(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<OpenTakeoverRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let now = unix_timestamp();
+    if local_apiary_role(&state) == Some(LocalApiaryRole::Keeper) {
+        let lease = store
+            .open_keeper_takeover(request.target_hive_id, &request.reason, now)
+            .map_err(|error| task_store_error(&error))?;
+        announce_federation_change(&state, swarm_domain::FederationChangeKind::Unspecified);
+        return Ok(([(header::CACHE_CONTROL, "no-store")], Json(lease)).into_response());
+    }
+    // ⚠️ A STEWARD JOURNALS BEFORE NETWORK I/O, which is ADR 0036's first step
+    // and not an implementation detail: the intent survives a crash mid-request,
+    // and the retry is idempotent because the command carries its own id.
+    let queued = store
+        .queue_federation_steward_takeover(request.target_hive_id, &request.reason, now)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(queued.command)).into_response())
+}
+
+/// The single-use ticket a browser needs to open a control channel.
+async fn apiary_takeover_control_grant(
+    State(state): State<Arc<AppState>>,
+    Path(lease_id): Path<swarm_domain::FederationStewardTakeoverLeaseId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let grant = state.takeover_grants.issue(lease_id).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "takeover_grant_unavailable",
+            "too many takeover grants are outstanding",
+        )
+    })?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(WatchGrantResponse {
+            websocket_path: format!("/api/v1/apiary/takeovers/{lease_id}/control"),
+            grant,
+            expires_in_ms: 30_000,
+        }),
+    )
+        .into_response())
+}
+
+/// The local operator taking their machine back.
+///
+/// ⚠️ THIS TAKES EFFECT LOCALLY AT ONCE, BEFORE KEEPER KNOWS. The journalled
+/// reclaim ends the local lease immediately, so terminal authority and
+/// automation are freed on this machine without a round trip. Keeper learns on
+/// the next pass and may simply be told a takeover it thought was live is over.
+/// ADR 0036 is explicit that local reclaim wins even if Keeper has not observed
+/// it — the person at the keyboard may be mid-incident and is the only one who
+/// knows.
+async fn reclaim_apiary_takeover(
+    State(state): State<Arc<AppState>>,
+    Path(lease_id): Path<swarm_domain::FederationStewardTakeoverLeaseId>,
+    headers: HeaderMap,
+    Json(request): Json<ReclaimRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let now = unix_timestamp();
+    let revision = store
+        .federation_steward_takeover_local_state()
+        .map_err(|error| task_store_error(&error))?
+        .leases
+        .into_iter()
+        .find(|lease| lease.id == lease_id)
+        .map_or(1, |lease| lease.revision);
+    store
+        .queue_federation_steward_takeover_reclaim(lease_id, revision, &request.reason, now)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::NO_CONTENT,
     )
         .into_response())
 }

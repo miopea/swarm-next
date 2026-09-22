@@ -22,7 +22,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 
-use crate::watch_relay::FrameRelay;
+use crate::watch_relay::{
+    FrameRelay, GrantStore, TAKEOVER_GRANT_PROTOCOL_PREFIX, grant_with_prefix,
+};
 use crate::{ApiError, AppState};
 
 /// How often a live takeover socket re-reads the lease that authorizes it.
@@ -64,6 +66,69 @@ pub(crate) struct RelayRevision {
     /// a superseded lease is not the local operator being refused their own
     /// machine.
     revision: u64,
+}
+
+/// Tickets for a Keeper's browser opening a control channel.
+pub(crate) type TakeoverGrantStore = GrantStore<FederationStewardTakeoverLeaseId>;
+
+/// Keeper's own browser taking control of a Hive it holds.
+///
+/// ⚠️ SAME RELAY, SAME LEASE, DIFFERENT DOOR — exactly as watching works. A
+/// browser cannot send an Authorization header on a WebSocket, so it offers a
+/// single-use grant as a subprotocol; putting the operator token there would
+/// leak a long-lived credential into proxy logs.
+pub(crate) async fn apiary_takeover_control(
+    websocket: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Path(lease_id): Path<FederationStewardTakeoverLeaseId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let grant = grant_with_prefix(&headers, TAKEOVER_GRANT_PROTOCOL_PREFIX).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "takeover_grant_required",
+            "a short-lived takeover control grant is required",
+        )
+    })?;
+    if !state.takeover_grants.consume(grant, lease_id) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_takeover_grant",
+            "the takeover grant is invalid, expired, or already used",
+        ));
+    }
+    // Re-checked after the grant is spent: the grant proves who asked, the
+    // lease proves they still hold the Hive.
+    if !lease_is_live(&state, lease_id, crate::unix_timestamp()) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "takeover_not_active",
+            "that takeover is no longer active",
+        ));
+    }
+    let permit = Arc::clone(&state.websocket_limit)
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "federation_websocket_limit_reached",
+                "federation WebSocket capacity is exhausted",
+            )
+        })?;
+    let controlled = Arc::clone(&state);
+    let selected = format!("{TAKEOVER_GRANT_PROTOCOL_PREFIX}{grant}");
+    Ok(websocket
+        .protocols([selected])
+        .on_upgrade(move |socket| async move {
+            serve_takeover(
+                socket,
+                controlled,
+                lease_id,
+                FederationStewardTakeoverRelayRole::Source,
+            )
+            .await;
+            drop(permit);
+        }))
 }
 
 /// A member Hive attaching to a takeover it is party to.
@@ -169,15 +234,32 @@ async fn serve_takeover(
 
 /// Whether an active, unexpired lease still names this takeover.
 fn lease_is_live(state: &AppState, lease: FederationStewardTakeoverLeaseId, now: i64) -> bool {
-    crate::task_store(state).is_ok_and(|store| {
-        store
-            .federation_steward_takeover_local_state()
-            .is_ok_and(|local| {
-                local.leases.iter().any(|held| {
-                    held.id == lease
-                        && held.state == swarm_domain::FederationStewardTakeoverState::Active
-                        && held.expires_at > now
-                })
-            })
+    let Ok(store) = crate::task_store(state) else {
+        return false;
+    };
+    let live = |leases: &[swarm_domain::FederationStewardTakeoverLease]| {
+        leases.iter().any(|held| {
+            held.id == lease
+                && held.state == swarm_domain::FederationStewardTakeoverState::Active
+                && held.expires_at > now
+        })
+    };
+    // ⚠️ BOTH TABLES, BECAUSE THE TWO ROLES HOLD THE LEASE IN DIFFERENT PLACES.
+    // A member has only its local projection; Keeper has only the Apiary table
+    // and no projection of its own. Reading one would have silently dropped
+    // every Keeper-side control channel five seconds after it opened.
+    if store
+        .federation_steward_takeover_local_state()
+        .is_ok_and(|local| live(&local.leases))
+    {
+        return true;
+    }
+    store.apiary_takeover_audit(200).is_ok_and(|audit| {
+        live(
+            &audit
+                .into_iter()
+                .map(|entry| entry.lease)
+                .collect::<Vec<_>>(),
+        )
     })
 }

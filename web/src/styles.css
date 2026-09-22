@@ -258,6 +258,29 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .steward-windows li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .steward-windows li button { min-height: 44px; margin-left: auto; }
 
+/* ⚠️ LOUDER THAN THE WATCH NOTICE ON PURPOSE. Someone watching is reading your
+   screen; someone in takeover is typing on your machine. One treatment for both
+   would teach the operator to skim past the one that matters. Spans the rail at
+   every width so it is never squeezed into a column on a phone — the mobile
+   case is not a lesser case here. */
+.surface-nav .takeover-notice { display: grid; gap: 6px; margin-top: 8px; padding: 10px; border: 2px solid var(--danger, var(--warn-strong)); border-radius: 10px; background: var(--warn-soft); }
+.surface-nav .takeover-notice strong { color: var(--text); font-size: .84rem; }
+.surface-nav .takeover-notice small { color: var(--text-muted); font-size: .74rem; line-height: 1.35; }
+.surface-nav .takeover-notice label { display: grid; gap: 4px; color: var(--text-muted); font-size: .74rem; }
+.surface-nav .takeover-notice input { min-height: 44px; padding: 0 8px; border: 1px solid var(--accent-line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.surface-nav .takeover-notice button { min-height: 44px; }
+
+/* ⚠️ VISUALLY DISTINCT FROM THE WATCH WINDOW, because one reads and the other
+   types. A controller who cannot tell at a glance which window they are in is
+   one keystroke from acting on somebody else's machine by accident. */
+.takeover-window { display: grid; gap: 8px; margin-top: 10px; padding: 10px; border: 2px solid var(--warn-strong); border-radius: 10px; background: var(--warn-soft); }
+.takeover-window header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.takeover-window header h4 { margin: 0; }
+.takeover-window header button { min-height: 44px; margin-left: auto; }
+.takeover-window header [role="status"] { font-size: .74rem; color: var(--text-muted); }
+.takeover-window-surface { min-height: 240px; overflow: hidden; border-radius: 8px; background: var(--terminal-frame); }
+.takeover-window small { color: var(--text-muted); font-size: .74rem; line-height: 1.35; }
+
 /* A window into another Hive. Bordered and labelled rather than chromeless: it
    should never be mistakable for this Hive's own terminal, because the thing on
    screen belongs to somebody else. */
@@ -298,6 +321,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    rather than duplicated into the media query — and it protects the panels if
    the nav ever gains columns at another width. */
 .surface-nav .stale-bundle-notice,
+.surface-nav .takeover-notice,
 .surface-nav .watched-by-notice,
 .surface-nav .public-address-warning { grid-column: 1 / -1; }
 /* The actions wrap rather than overflow when the panel is still narrow. */
