@@ -164,26 +164,12 @@ fn expand_workspace_home(workspace: &str, home: &Path) -> String {
 /// were sitting there. A path with no dot works fine under the wrong encoding,
 /// so a bad copy passes every test it is likely to be given until it meets a
 /// dotted one.
-#[must_use]
-pub fn claude_project_slugs(workspace: &str) -> [String; 2] {
-    [
-        workspace.replace(['/', '.'], "-"),
-        workspace.replace('/', "-"),
-    ]
-}
-
-/// The directory Claude actually stored this workspace's transcripts in, if any.
-///
-/// Returns `None` only when NEITHER encoding names an existing directory, which
-/// is what lets a caller tell "no such workspace" from "no transcripts yet" —
-/// the ambiguity that made the wrong slug look like a finding rather than a bug.
-#[must_use]
-pub fn claude_project_directory(root: &Path, workspace: &str) -> Option<std::path::PathBuf> {
-    claude_project_slugs(workspace)
-        .into_iter()
-        .map(|slug| root.join(slug))
-        .find(|path| path.is_dir())
-}
+// ⚠️ ONE OWNER, AND IT IS NOT HERE ANY MORE (ADR 0109). The terminal host needs
+// the same encoding to find something to resume, and it cannot depend on this
+// crate. Re-exported rather than copied: a second copy that forgets the `.`
+// variant names a directory that does not exist and returns an empty listing,
+// which every caller reads as "no transcripts".
+pub use swarm_domain::{claude_project_directory, claude_project_slugs};
 
 fn discover_claude_conversation(workspace: &str) -> Option<String> {
     let root = std::env::var_os("HOME")

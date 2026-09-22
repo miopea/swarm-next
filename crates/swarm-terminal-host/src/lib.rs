@@ -58,9 +58,42 @@ struct ClaudeStartSelection {
 /// Every other probe outcome retains the exact attempt: an inconclusive
 /// preflight is not evidence that the interactive provider cannot restore it.
 /// Selecting Continue is an attempt, not proof of restored context.
+/// How many stale conversations are offered to Claude before giving up.
+///
+/// ⚠️ BOUNDED BECAUSE EACH ONE SPAWNS CLAUDE. A workspace with a hundred old
+/// transcripts must not turn one failed start into a hundred subprocesses on a
+/// machine that is already not starting a worker. Newest first, so the few that
+/// are tried are the ones most likely to be wanted.
+const MAX_RESUME_CANDIDATES: usize = 3;
+
+/// The conversations Claude holds for this workspace, newest first.
+///
+/// Candidates only: each still has to be confirmed with Claude, because a
+/// transcript on disk is not a promise that Claude will open it.
+fn workspace_conversations(workspace: &Path) -> Vec<ProviderConversationId> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let projects = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map_or_else(|| home.join(".claude"), PathBuf::from)
+        .join("projects");
+    let Some(workspace) = workspace.to_str() else {
+        return Vec::new();
+    };
+    swarm_domain::claude_conversations_newest_first(&projects, workspace)
+        .into_iter()
+        .filter_map(|id| id.parse::<ProviderConversationId>().ok())
+        .collect()
+}
+
+/// ⚠️ THE CANDIDATE LIST IS A PARAMETER, not something this reads for itself,
+/// so the fallback can be tested without a Claude installation or a transcript
+/// directory. What matters is WHICH candidate is chosen and how many are asked
+/// about, and neither needs a real filesystem to pin down.
 fn conversation_claude_can_open(
     conversation: ClaudeConversationStart,
     holds_no_such_conversation: impl Fn(ProviderConversationId) -> bool,
+    candidates: impl Fn() -> Vec<ProviderConversationId>,
 ) -> ClaudeStartSelection {
     let selected = match conversation {
         ClaudeConversationStart::Resume { session_id } => Some(session_id),
@@ -72,9 +105,42 @@ fn conversation_claude_can_open(
             };
         }
     };
+    // ⚠️ THE SECOND TIER (ADR 0109). A pin Claude cannot open used to fall
+    // straight to `--continue`, which asks Claude to pick the newest
+    // conversation and fails outright when Claude's own view of the directory
+    // is empty — leaving the worker with no second idea and nothing to pin even
+    // when it worked. Instead, the conversations that DO exist for this
+    // workspace are offered, newest first, and the first one Claude confirms it
+    // can open is resumed. Existence of a transcript is never taken as
+    // evidence: each candidate is confirmed with the same read-only probe used
+    // for the pin, because a file on disk is not a promise.
+    //
+    // ⚠️ EVERY CONVERSATION IS ASKED ABOUT AT MOST ONCE, and that is an
+    // invariant with a test of its own. Each probe spawns Claude, so re-asking
+    // about the one just chosen doubles the cost of the common case for no
+    // answer that was not already in hand.
+    let (selected, context_unavailable) = match selected {
+        None => (None, false),
+        Some(pinned) if !holds_no_such_conversation(pinned) => (Some(pinned), false),
+        Some(pinned) => candidates()
+            .into_iter()
+            .filter(|candidate| *candidate != pinned)
+            .take(MAX_RESUME_CANDIDATES)
+            .find(|candidate| !holds_no_such_conversation(*candidate))
+            .map_or(
+                // Nothing openable. The ladder takes it from here, exactly as
+                // it did before there was a second tier.
+                (Some(pinned), true),
+                |recovered| (Some(recovered), false),
+            ),
+    };
+    let conversation = match selected {
+        Some(session_id) => ClaudeConversationStart::Resume { session_id },
+        None => conversation,
+    };
     let mut recovery = ConversationRecovery::new(selected, true);
     if let Some(session_id) = selected
-        && holds_no_such_conversation(session_id)
+        && context_unavailable
     {
         if let ConversationRecoveryState::Attempt { attempt } = recovery.state() {
             recovery.observe(attempt, ConversationRecoveryEvidence::ContextUnavailable);
@@ -898,9 +964,16 @@ fn start_claude_session(
     mcp_config: Option<&Path>,
     allow_outside_roots: bool,
 ) -> Result<HostResponse, String> {
-    let selection = conversation_claude_can_open(conversation, |session_id| {
-        claude_holds_no_such_conversation(session_id, workspace)
-    });
+    let selection = conversation_claude_can_open(
+        conversation,
+        |session_id| claude_holds_no_such_conversation(session_id, workspace),
+        // ⚠️ READ IN THIS PROCESS'S ENVIRONMENT, WHICH IS CLAUDE'S (ADR 0109).
+        // swarm-api has its own CLAUDE_CONFIG_DIR and Claude inherits the
+        // terminal host's, so a scan from the API can report a conversation
+        // gone that Claude would open — the exact bug the `New` arm exists to
+        // prevent. Enumerating here is what makes the answer trustworthy.
+        || workspace_conversations(workspace),
+    );
     let settings = claude_settings_for(mcp_config);
     let model = worker_model_beside(mcp_config);
     let command = ClaudeCodeAdapter
@@ -968,6 +1041,111 @@ mod tests {
 
     use swarm_terminal::{HostClient, JournalLimits, ProviderCommand, Resume, TerminalSize};
     use tempfile::TempDir;
+
+    /// ⚠️ THE THREE TIERS (ADR 0109), in the operator's words on 2026-09-22:
+    /// "If a worker tries to open and there is no conversation found, then it
+    /// should fall back to resume with a list built using the built-in
+    /// functionality. If that fails, it falls back to creating a new session."
+    ///
+    /// Before this, a pin Claude could not open fell straight to `--continue`,
+    /// which asks Claude to choose and fails outright when Claude's own view of
+    /// the directory is empty. That left the worker with no second idea, and
+    /// nothing to pin even when it worked.
+    #[test]
+    fn a_pin_claude_cannot_open_resumes_the_newest_one_it_can() {
+        let pinned = ProviderConversationId::new();
+        let newest = ProviderConversationId::new();
+        let older = ProviderConversationId::new();
+        let asked = std::cell::RefCell::new(Vec::new());
+
+        let selection = super::conversation_claude_can_open(
+            ClaudeConversationStart::Resume { session_id: pinned },
+            |id| {
+                asked.borrow_mut().push(id);
+                id != newest
+            },
+            || vec![newest, older],
+        );
+
+        assert_eq!(
+            selection.conversation,
+            ClaudeConversationStart::Resume { session_id: newest },
+            "the first candidate Claude confirms is the one resumed"
+        );
+        // The pin is asked about first, and the search stops at the first
+        // candidate that opens rather than probing the rest.
+        assert_eq!(*asked.borrow(), vec![pinned, newest]);
+    }
+
+    /// A transcript on disk is not a promise. When Claude will open none of
+    /// them, the existing ladder is left to reach a fresh conversation.
+    #[test]
+    fn candidates_claude_also_refuses_do_not_displace_the_pin() {
+        let pinned = ProviderConversationId::new();
+        let candidates = vec![ProviderConversationId::new(), ProviderConversationId::new()];
+        let selection = super::conversation_claude_can_open(
+            ClaudeConversationStart::Resume { session_id: pinned },
+            |_| true,
+            {
+                let candidates = candidates.clone();
+                move || candidates.clone()
+            },
+        );
+        assert!(
+            matches!(
+                selection.recovery_attempt.map(|attempt| attempt.step),
+                Some(swarm_domain::ConversationRecoveryStep::Continue)
+            ),
+            "with nothing openable it must fall through as it did before"
+        );
+    }
+
+    /// ⚠️ EACH PROBE SPAWNS CLAUDE. A workspace with a long history must not
+    /// turn one failed start into a subprocess per transcript, on a machine
+    /// that is already failing to start a worker.
+    #[test]
+    fn only_a_few_candidates_are_ever_asked_about() {
+        let pinned = ProviderConversationId::new();
+        let many: Vec<_> = (0..50).map(|_| ProviderConversationId::new()).collect();
+        let asked = std::cell::RefCell::new(0_usize);
+        let _ = super::conversation_claude_can_open(
+            ClaudeConversationStart::Resume { session_id: pinned },
+            |_| {
+                *asked.borrow_mut() += 1;
+                true
+            },
+            {
+                let many = many.clone();
+                move || many.clone()
+            },
+        );
+        // The pin, then at most MAX_RESUME_CANDIDATES of them, and the final
+        // re-check of the unchanged pin.
+        assert!(
+            *asked.borrow() <= 2 + super::MAX_RESUME_CANDIDATES,
+            "{}",
+            asked.borrow()
+        );
+    }
+
+    /// A start that already knows it is new asks Claude nothing at all — the
+    /// success path must not pay for the failure path.
+    #[test]
+    fn a_new_start_enumerates_nothing_and_probes_nothing() {
+        let listed = std::cell::RefCell::new(0_usize);
+        let selection = super::conversation_claude_can_open(
+            ClaudeConversationStart::New {
+                session_id: ProviderConversationId::new(),
+            },
+            |_| panic!("a new start must not probe Claude"),
+            || {
+                *listed.borrow_mut() += 1;
+                Vec::new()
+            },
+        );
+        assert!(selection.recovery_attempt.is_none());
+        assert_eq!(*listed.borrow(), 0);
+    }
 
     #[test]
     fn coordination_control_hold_is_definitive_and_recovers_after_release() {
@@ -1870,6 +2048,12 @@ mod worker_model_tests {
 
 #[cfg(test)]
 mod conversation_oracle_tests {
+    /// No transcripts to fall back to, which is what these tests are about:
+    /// the choice made from the pin alone.
+    fn no_candidates() -> Vec<ProviderConversationId> {
+        Vec::new()
+    }
+
     use super::*;
     use swarm_domain::ProviderConversationId;
 
@@ -1924,8 +2108,12 @@ mod conversation_oracle_tests {
     fn missing_exact_conversation_attempts_native_continue_before_fresh() {
         let session_id = pinned();
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| true)
-                .conversation,
+            conversation_claude_can_open(
+                ClaudeConversationStart::Resume { session_id },
+                |_| true,
+                no_candidates,
+            )
+            .conversation,
             ClaudeConversationStart::Continue,
             "missing exact context must not skip native continuation or reuse the pin for fresh context"
         );
@@ -1942,6 +2130,7 @@ mod conversation_oracle_tests {
                 calls.set(calls.get() + 1);
                 true
             },
+            no_candidates,
         );
         let attempt = start
             .recovery_attempt
@@ -1979,8 +2168,12 @@ mod conversation_oracle_tests {
     fn anything_short_of_an_explicit_no_still_resumes() {
         let session_id = pinned();
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::Resume { session_id }, |_| false)
-                .conversation,
+            conversation_claude_can_open(
+                ClaudeConversationStart::Resume { session_id },
+                |_| false,
+                no_candidates,
+            )
+            .conversation,
             ClaudeConversationStart::Resume { session_id },
             "an unanswered question is not an answer"
         );
@@ -2003,7 +2196,7 @@ mod conversation_oracle_tests {
                 true,
             ),
         ] {
-            let selection = conversation_claude_can_open(start, |_| false);
+            let selection = conversation_claude_can_open(start, |_| false, no_candidates);
             assert_eq!(selection.conversation, start);
             let attempt = selection
                 .recovery_attempt
@@ -2036,6 +2229,7 @@ mod conversation_oracle_tests {
                 session_id: pinned(),
             },
             |_| panic!("new context must not be probed"),
+            no_candidates,
         );
         assert!(selection.recovery_attempt.is_none());
     }
@@ -2052,12 +2246,17 @@ mod conversation_oracle_tests {
             true
         };
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::New { session_id }, spy)
-                .conversation,
+            conversation_claude_can_open(
+                ClaudeConversationStart::New { session_id },
+                spy,
+                no_candidates,
+            )
+            .conversation,
             ClaudeConversationStart::New { session_id }
         );
         assert_eq!(
-            conversation_claude_can_open(ClaudeConversationStart::Continue, spy).conversation,
+            conversation_claude_can_open(ClaudeConversationStart::Continue, spy, no_candidates)
+                .conversation,
             ClaudeConversationStart::Continue
         );
         assert!(
