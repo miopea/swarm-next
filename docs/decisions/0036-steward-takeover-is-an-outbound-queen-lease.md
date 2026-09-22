@@ -37,8 +37,27 @@ hardest failure here to diagnose. So a lease survives a restart only if a Queen
 session is still running to be controlled through it; anything else is ended as
 `Expired`, which is what releases automation.
 
+Automation recovery is now a real gate rather than a sentence. Measured first:
+automation resumed the instant the lease row closed, so a Steward could leave a
+half-typed command in the terminal, release, and have Queen inject into it on
+the next tick. The row closing WAS the resume, and "only after local
+reconciliation" was implemented by nothing.
+
+A takeover that ends now records a durable debt, derived from the closed lease
+rows rather than hooked into each closing path — a takeover ends by release,
+reclaim, expiry, revocation, departure or restart, and a hook on each is six
+places to forget one. Queen automation stays paused while a debt stands. The
+debt is durable because the process is not: a crash must not be a way to skip
+the reconciliation.
+
+⚠️ THE DEBT HAS TO BE PAYABLE OR IT IS ITSELF A WEDGE. It is settled by clearing
+the terminal host's authority, at boot and on every federation pass, and ONLY
+when the host answers — released, or nothing there to release. An unreachable
+host leaves the debt standing and the next pass retries, because marking it paid
+on a failed call would quietly restore the gap this closes.
+
 Outstanding, and the refusal to ship a partial takeover behind a flag stands:
-automation recovery, audit presentation, and desktop/mobile control.
+audit presentation, and desktop/mobile control.
 
 ## Context
 

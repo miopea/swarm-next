@@ -194,6 +194,81 @@ impl TaskStore {
         Ok(FederationStewardTakeoverRelayAuthorization { lease, role })
     }
 
+    /// Records a reconciliation debt for every local takeover that has ended.
+    ///
+    /// ⚠️ DERIVED FROM THE LEASE TABLE RATHER THAN HOOKED INTO EACH CLOSING
+    /// PATH. A takeover ends by release, reclaim, expiry, revocation, departure
+    /// or a restart, and a hook on each is six places to forget one. Reading
+    /// the closed rows means a path added later is covered before anybody
+    /// remembers it needs to be.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn record_owed_takeover_recovery(&self, now: i64) -> Result<(), TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        self.connection()?.execute(
+            "INSERT OR IGNORE INTO local_takeover_recovery
+                 (lease_id, target_hive_id, ended_at, reconciled_at)
+             SELECT lease_id, target_hive_id, COALESCE(ended_at, ?2), NULL
+             FROM local_federation_steward_takeover_leases
+             WHERE target_hive_id = ?1 AND state NOT IN ('requested','active')",
+            params![identity.hive.id.to_string(), now],
+        )?;
+        Ok(())
+    }
+
+    /// What this Hive still owes before Queen automation may resume.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn owed_takeover_recovery(
+        &self,
+    ) -> Result<Vec<(FederationStewardTakeoverLeaseId, u64)>, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        // The revision comes along because clearing the host's authority needs
+        // the exact lease it was installed under; a debt you cannot act on is
+        // just a pause with extra steps.
+        let mut statement = connection.prepare(
+            "SELECT recovery.lease_id, COALESCE(lease.revision, 0)
+             FROM local_takeover_recovery recovery
+             LEFT JOIN local_federation_steward_takeover_leases lease
+               ON lease.lease_id = recovery.lease_id
+             WHERE recovery.target_hive_id = ?1 AND recovery.reconciled_at IS NULL
+             ORDER BY recovery.ended_at",
+        )?;
+        let rows = statement.query_map(params![identity.hive.id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?;
+        let mut owed = Vec::new();
+        for row in rows {
+            let (id, revision) = row?;
+            owed.push((parse_domain_id(&id)?, revision));
+        }
+        Ok(owed)
+    }
+
+    /// Records that this Hive has put its own terminal back in order.
+    ///
+    /// ⚠️ CALLED ONLY AFTER THE HOST AUTHORITY IS ACTUALLY GONE. Marking this
+    /// on the strength of the lease row being closed would restore exactly the
+    /// gap it exists to close — the row closing is the QUESTION, not the answer.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn complete_takeover_recovery(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        self.connection()?.execute(
+            "UPDATE local_takeover_recovery SET reconciled_at = ?2
+             WHERE lease_id = ?1 AND reconciled_at IS NULL",
+            params![lease_id.to_string(), now],
+        )?;
+        Ok(())
+    }
+
     /// Reconciles this Hive's own takeover state after a restart.
     ///
     /// ⚠️ A DURABLE LEASE CAN OUTLIVE THE AUTHORITY THAT ENFORCES IT, and that
@@ -249,6 +324,16 @@ impl TaskStore {
                 params![now, identity.hive.id.to_string()],
             )?;
         }
+        // Anything this pass just ended owes a reconciliation before automation
+        // may resume, and so does anything that ended while the process was down.
+        transaction.execute(
+            "INSERT OR IGNORE INTO local_takeover_recovery
+                 (lease_id, target_hive_id, ended_at, reconciled_at)
+             SELECT lease_id, target_hive_id, COALESCE(ended_at, ?2), NULL
+             FROM local_federation_steward_takeover_leases
+             WHERE target_hive_id = ?1 AND state NOT IN ('requested','active')",
+            params![identity.hive.id.to_string(), now],
+        )?;
         let survivors = read_leases(
             &transaction,
             "local_federation_steward_takeover_leases",
@@ -1368,6 +1453,43 @@ fn valid_lease(lease: &FederationStewardTakeoverLease, now: i64) -> bool {
         && lease.state.is_open() == lease.ended_at.is_none()
 }
 
+/// Automation resumes only after the Hive has reconciled locally.
+///
+/// ⚠️ THE GAP THIS CLOSES WAS MEASURED, NOT SUSPECTED. Before this, Queen
+/// automation resumed the instant the lease row closed — so a Steward could
+/// leave a half-typed command in the terminal, release, and have Queen inject
+/// into it on the next tick. ADR 0036 says every ending "resumes normal
+/// automation only after local reconciliation"; nothing implemented that.
+///
+/// One row per ended takeover, cleared when this Hive has confirmed the
+/// terminal authority is gone. Durable because the thing it guards is durable:
+/// a process restart must not be a way to skip the reconciliation.
+pub(super) fn migrate_takeover_recovery(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_takeover_recovery (
+             lease_id TEXT PRIMARY KEY,
+             target_hive_id TEXT NOT NULL,
+             ended_at INTEGER NOT NULL,
+             reconciled_at INTEGER
+         );
+         CREATE INDEX IF NOT EXISTS local_takeover_recovery_owed
+             ON local_takeover_recovery(target_hive_id) WHERE reconciled_at IS NULL;",
+    )?;
+    // ⚠️ EVERY LEASE THAT ALREADY ENDED COUNTS AS RECONCILED. They closed before
+    // this gate existed, so their terminals were put back long ago — and a Hive
+    // that upgraded into an automation pause it could never clear would be
+    // exactly the wedge this whole item is about.
+    transaction.execute(
+        "INSERT OR IGNORE INTO local_takeover_recovery
+             (lease_id, target_hive_id, ended_at, reconciled_at)
+         SELECT lease_id, target_hive_id, COALESCE(ended_at, 0), COALESCE(ended_at, 0)
+         FROM local_federation_steward_takeover_leases
+         WHERE state NOT IN ('requested','active')",
+        [],
+    )?;
+    transaction.pragma_update(None, "user_version", crate::TAKEOVER_RECOVERY_SCHEMA_MARKER)
+}
+
 /// Keeper may take over, so a lease need not name a stewardship.
 ///
 /// ⚠️ A TABLE REBUILD, because `SQLite` cannot drop a `NOT NULL`. Both lease tables
@@ -1621,6 +1743,156 @@ mod tests {
         active
     }
 
+    /// ⚠️ A RELEASED TAKEOVER MUST NOT HAND THE TERMINAL STRAIGHT TO QUEEN.
+    ///
+    /// ADR 0036: every ending "resumes normal automation ONLY AFTER local
+    /// reconciliation". Measured before this was built: automation resumed the
+    /// instant the lease row closed, so a Steward could leave a half-typed
+    /// command in the terminal, release, and have Queen inject into it on the
+    /// next tick. The row closing was the resume.
+    #[test]
+    fn automation_stays_paused_until_the_hive_has_reconciled_locally() {
+        let now = 700_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let lease = keeper
+            .open_keeper_takeover(target_hive_id, "Incident.", now + 53)
+            .expect("keeper takeover");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 54)
+            .expect("target poll");
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 55)
+            .expect("projection");
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(
+                lease.id,
+                inbox.leases[0].revision,
+                now + 56,
+            )
+            .expect("journal acknowledgement");
+        keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &acknowledgement.command,
+                now + 57,
+            )
+            .expect("acknowledge");
+        let active = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 58)
+            .expect("poll");
+        target
+            .apply_federation_steward_takeover_inbox(&active, now + 58)
+            .expect("projection");
+        assert!(
+            !target
+                .worker_accepts_injection(queen.id, now + 58)
+                .expect("guard"),
+            "paused during the takeover"
+        );
+
+        // Keeper releases. The target learns on its next poll.
+        keeper
+            .transition_keeper_takeover(
+                lease.id,
+                FederationStewardTakeoverState::Released,
+                now + 59,
+            )
+            .expect("release");
+        let after = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 60)
+            .expect("poll");
+        target
+            .apply_federation_steward_takeover_inbox(&after, now + 60)
+            .expect("projection");
+
+        target
+            .record_owed_takeover_recovery(now + 60)
+            .expect("record what is owed");
+        assert_eq!(
+            target
+                .owed_takeover_recovery()
+                .expect("owed")
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            vec![lease.id],
+            "the ended takeover is owed a reconciliation"
+        );
+        assert!(
+            !target
+                .worker_accepts_injection(queen.id, now + 60)
+                .expect("guard"),
+            "the row closing is the QUESTION, not the answer"
+        );
+
+        // Only once this Hive has actually put its terminal back in order.
+        target
+            .complete_takeover_recovery(lease.id, now + 61)
+            .expect("reconciled");
+        assert!(
+            target.owed_takeover_recovery().expect("owed").is_empty(),
+            "nothing is owed once it is reconciled"
+        );
+        assert!(
+            target
+                .worker_accepts_injection(queen.id, now + 61)
+                .expect("guard"),
+            "and only then does automation resume"
+        );
+    }
+
+    /// ⚠️ A RESTART MUST NOT BE A WAY TO SKIP THE RECONCILIATION. The debt is
+    /// durable precisely because the process is not: a Hive that crashed while
+    /// a Steward held its terminal comes back owing the same reconciliation it
+    /// owed before, rather than waking up free.
+    #[test]
+    fn a_restart_does_not_clear_what_reconciliation_is_owed() {
+        let now = 700_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let lease = keeper
+            .open_keeper_takeover(target_hive_id, "Incident.", now + 53)
+            .expect("keeper takeover");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 54)
+            .expect("target poll");
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 55)
+            .expect("projection");
+
+        // The lease lapses while nobody is looking, which a restart discovers.
+        let after = now + 55 + REQUEST_LIFETIME_SECONDS + 1;
+        let survivors = target.reconcile_local_takeovers(after).expect("reconcile");
+        assert!(survivors.is_empty());
+        assert_eq!(
+            target
+                .owed_takeover_recovery()
+                .expect("owed")
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            vec![lease.id],
+            "reconciliation is owed for a takeover that ended while the Hive was down"
+        );
+        assert!(
+            !target
+                .worker_accepts_injection(queen.id, after)
+                .expect("guard"),
+            "so automation does not simply resume on boot"
+        );
+    }
+
     /// ⚠️ A RESTART MUST NOT LEAVE A HIVE PAUSED FOR A TAKEOVER THAT IS NOT
     /// HAPPENING. The pause on Queen automation is derived from the durable
     /// lease row; the authority that makes a takeover real lives in the
@@ -1706,11 +1978,27 @@ mod tests {
             survivors.is_empty(),
             "nothing survives with no Queen to control"
         );
+        // ⚠️ AND STILL DOES NOT RESUME YET. The lease is over, but ADR 0036
+        // resumes automation only after LOCAL RECONCILIATION — so ending the
+        // lease removes the takeover and settling the debt removes the pause.
+        // This assertion changed when that gate was built: it used to say
+        // automation resumed right here, which was precisely the gap.
         assert!(
-            target
+            !target
                 .worker_accepts_injection(queen.id, now + 61)
                 .expect("automation guard"),
-            "and automation resumes rather than waiting out the lease"
+            "the lease ending is not by itself the resume"
+        );
+        for (owed, _) in target.owed_takeover_recovery().expect("owed") {
+            target
+                .complete_takeover_recovery(owed, now + 62)
+                .expect("reconciled");
+        }
+        assert!(
+            target
+                .worker_accepts_injection(queen.id, now + 62)
+                .expect("automation guard"),
+            "and once reconciled it resumes rather than waiting out the lease"
         );
     }
 

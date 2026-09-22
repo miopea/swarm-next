@@ -468,6 +468,13 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
         let state = federation_reconciler.clone();
         async move {
             state.reconcile_federation().await;
+            // ⚠️ ON EVERY PASS, BECAUSE THE DEBT PAUSES AUTOMATION. A takeover
+            // that ended owes a local reconciliation before Queen may inject
+            // again; if nothing settled it, the pause would be permanent and
+            // this Hive would look exactly like one that had stopped for no
+            // reason. Settling needs the terminal host to answer, so it retries
+            // here rather than only at boot.
+            state.settle_takeover_recovery().await;
         }
     });
     // One outbound event socket per Hive. The period is the gap BETWEEN passes;

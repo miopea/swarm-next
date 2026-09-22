@@ -352,7 +352,9 @@ const FLEET_VERSION_SCHEMA_MARKER: i64 = 187;
 const APIARY_WATCH_SCHEMA_MARKER: i64 = 188;
 /// Keeper may take over, so a takeover lease need not name a stewardship.
 const KEEPER_TAKEOVER_SCHEMA_MARKER: i64 = 189;
-const CURRENT_SCHEMA_VERSION: i64 = KEEPER_TAKEOVER_SCHEMA_MARKER;
+/// A takeover that ended owes a local reconciliation before automation resumes.
+const TAKEOVER_RECOVERY_SCHEMA_MARKER: i64 = 190;
+const CURRENT_SCHEMA_VERSION: i64 = TAKEOVER_RECOVERY_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4593,6 +4595,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < KEEPER_TAKEOVER_SCHEMA_MARKER {
         crate::federation_steward_takeovers::migrate_keeper_takeover_authority(transaction)?;
+    }
+    if schema_version < TAKEOVER_RECOVERY_SCHEMA_MARKER {
+        crate::federation_steward_takeovers::migrate_takeover_recovery(transaction)?;
     }
     Ok(())
 }
@@ -10399,8 +10404,6 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('apiary_watches', 'local_federation_watches')",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "apiary_steward_takeover_leases",
             artifact: "",
@@ -10441,6 +10444,15 @@ mod tests {
                      RENAME TO local_federation_steward_takeover_leases",
             probe_sql: "SELECT EXISTS(SELECT 1 FROM pragma_table_info('apiary_steward_takeover_leases')
                 WHERE name = 'stewardship_id' AND \"notnull\" = 0)",
+        },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "local_takeover_recovery",
+            artifact: "",
+            undo_sql: "DROP TABLE local_takeover_recovery",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'local_takeover_recovery'",
         },
     ];
 

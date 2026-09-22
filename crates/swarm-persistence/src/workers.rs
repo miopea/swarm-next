@@ -1778,7 +1778,22 @@ impl TaskStore {
             params![worker_id.to_string(), now],
             |row| row.get::<_, bool>(0),
         )?;
-        Ok(!engaged && !takeover)
+        // ⚠️ AND NOT WHILE A FINISHED TAKEOVER IS STILL OWED A RECONCILIATION.
+        // ADR 0036 resumes automation "only after local reconciliation", and
+        // before this the row closing WAS the resume — so a Steward could leave
+        // a half-typed command in the terminal, release, and have Queen inject
+        // into it on the next tick.
+        let owed_recovery = connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM worker_profiles p
+                 JOIN local_takeover_recovery recovery
+                   ON recovery.target_hive_id = p.hive_id
+                 WHERE p.id = ?1 AND p.role = 'queen' AND recovery.reconciled_at IS NULL
+             )",
+            params![worker_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(!engaged && !takeover && !owed_recovery)
     }
 
     /// The Hive's Queen, for records that must name an asker rather than nobody.

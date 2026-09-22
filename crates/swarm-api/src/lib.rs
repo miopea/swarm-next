@@ -1080,10 +1080,74 @@ impl AppState {
     /// Returns an error when persistence is unavailable.
     pub fn reconcile_takeovers_after_restart(&self) -> Result<usize, String> {
         let store = task_store(self).map_err(|_| "task store unavailable".to_owned())?;
+        let now = unix_timestamp();
         let survivors = store
-            .reconcile_local_takeovers(unix_timestamp())
+            .reconcile_local_takeovers(now)
+            .map_err(|error| error.to_string())?;
+        // Record the debt synchronously at boot so the pause is never a
+        // surprise gap between reconciling and the first federation pass.
+        store
+            .record_owed_takeover_recovery(now)
             .map_err(|error| error.to_string())?;
         Ok(survivors.len())
+    }
+
+    /// Clears the terminal authority a finished takeover left behind, and only
+    /// then lets Queen automation resume.
+    ///
+    /// ⚠️ THE DEBT MUST BE PAYABLE, OR THIS IS THE WEDGE IT GUARDS AGAINST.
+    /// Automation stays paused while a reconciliation is owed, so something has
+    /// to actually settle it — this runs at boot and on every federation pass.
+    ///
+    /// ⚠️ AND IT IS SETTLED ONLY WHEN THE HOST ANSWERS. A host that is
+    /// unreachable has not confirmed anything, so the debt stands and the next
+    /// pass tries again; marking it paid on a failed call would restore exactly
+    /// the gap this closes, quietly.
+    pub async fn settle_takeover_recovery(&self) {
+        let Ok(store) = task_store(self) else {
+            return;
+        };
+        let now = unix_timestamp();
+        if store.record_owed_takeover_recovery(now).is_err() {
+            return;
+        }
+        let Ok(owed) = store.owed_takeover_recovery() else {
+            return;
+        };
+        if owed.is_empty() {
+            return;
+        }
+        let Ok(Some(session)) = store.active_queen_session_id() else {
+            // No Queen session means no authority can be installed against one,
+            // so there is nothing left to clear and the debt is settled.
+            for (lease, _) in owed {
+                let _ = store.complete_takeover_recovery(lease, now);
+            }
+            return;
+        };
+        let Some(host) = self.terminal_host.as_ref() else {
+            return;
+        };
+        for (lease, revision) in owed {
+            // Any ANSWER settles it: released, or nothing there to release.
+            // Only an unreachable host leaves the debt standing.
+            if host
+                .request(&swarm_terminal::HostRequest::ReleaseTakeover {
+                    session_id: session,
+                    lease_id: lease,
+                    revision,
+                })
+                .await
+                .is_ok()
+            {
+                let _ = store.complete_takeover_recovery(lease, now);
+            } else {
+                tracing::warn!(
+                    %lease,
+                    "the terminal host did not answer, so this Hive still owes a takeover reconciliation and automation stays paused"
+                );
+            }
+        }
     }
 
     /// Sends this Hive's terminal to whoever it has acknowledged watching it.
