@@ -119,7 +119,12 @@ test("a refused grant is waited out and then explained", async () => {
   const opening = stream.open();
   await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(0);
-  expect(handlers.onState).toHaveBeenCalledWith("connecting", "Waiting for that Hive to accept…");
+  // The wording must not read as a prompt: nobody at the watched Hive presses
+  // anything, and an operator who believes otherwise goes hunting for a button.
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "connecting",
+    expect.stringContaining("no approval needed"),
+  );
   await vi.advanceTimersByTimeAsync(61_000);
   await opening;
   expect(handlers.onState).toHaveBeenCalledWith("closed", "That Hive did not accept the watch.");

@@ -104,7 +104,15 @@ export class WatchStream {
           : watchGrantFailure(status));
         return;
       }
-      handlers.onState("connecting", "Waiting for that Hive to accept…");
+      // ⚠️ IT SAYS ACCEPTANCE IS AUTOMATIC, BECAUSE THE OLD WORDING READ AS A
+      // PROMPT. "Waiting for that Hive to accept" implies somebody over there
+      // has to press something, and nobody does — the Hive acknowledges on its
+      // own as soon as it hears about the watch. An operator on 2026-09-22 went
+      // looking for the approval, pressed "Resume Here" on the watched machine,
+      // saw the window come alive around the same moment and reported it as the
+      // thing that made watching work: "it wasn't really an approval". It was
+      // not, and this should never have suggested it was.
+      handlers.onState("connecting", "Waiting for that Hive to accept — it does this on its own, no approval needed…");
       await new Promise((resolve) => { setTimeout(resolve, ACKNOWLEDGEMENT_POLL_MS); });
     }
     if (this.#closed || grant === undefined || path === undefined) return;
