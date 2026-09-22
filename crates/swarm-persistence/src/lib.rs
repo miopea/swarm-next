@@ -356,7 +356,9 @@ const KEEPER_TAKEOVER_SCHEMA_MARKER: i64 = 189;
 const TAKEOVER_RECOVERY_SCHEMA_MARKER: i64 = 190;
 /// A member can file work for a repository another Hive owns.
 const CROSS_HIVE_FILING_SCHEMA_MARKER: i64 = 191;
-const CURRENT_SCHEMA_VERSION: i64 = CROSS_HIVE_FILING_SCHEMA_MARKER;
+/// A closure carries the evidence the closing Hive stood on.
+const CLOSURE_EVIDENCE_SCHEMA_MARKER: i64 = 192;
+const CURRENT_SCHEMA_VERSION: i64 = CLOSURE_EVIDENCE_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4603,6 +4605,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < CROSS_HIVE_FILING_SCHEMA_MARKER {
         crate::federation_tasks::migrate_cross_hive_filing(transaction)?;
+    }
+    if schema_version < CLOSURE_EVIDENCE_SCHEMA_MARKER {
+        crate::federation_tasks::migrate_closure_evidence(transaction)?;
     }
     Ok(())
 }
@@ -10183,6 +10188,14 @@ mod tests {
                 AND name IN ('apiary_tasks','local_apiary_task_commands','local_apiary_task_lifecycle_intents')
                 AND sql LIKE '%awaiting_release%' AND sql LIKE '%abandoned%'",
         },
+        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
+        // anywhere else it leaves the list ending below the ceiling.
+        SchemaStep {
+            table: "apiary_tasks",
+            artifact: "closure_evidence",
+            undo_sql: "",
+            probe_sql: "",
+        },
         SchemaStep {
             table: "apiary_federation_memberships",
             artifact: "active_federation_hive",
@@ -10457,8 +10470,6 @@ mod tests {
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'local_takeover_recovery'",
         },
-        // ⚠️ LAST, because the ceiling test rewinds exactly this entry. Filed
-        // anywhere else it leaves the list ending below the ceiling.
         SchemaStep {
             table: "local_apiary_task_commands",
             artifact: "",

@@ -273,6 +273,33 @@ pub enum ApiaryTaskSource {
 /// Keeper-canonical shared work created inside Swarm. The home Hive is absent
 /// until the Keeper or a governed claim assigns it. Worker assignment remains
 /// private to the home Hive and therefore never appears here.
+/// What a Hive is standing on when it says shared work is finished.
+///
+/// ⚠️ THIS TRAVELS WITH THE CLOSURE OR THE CLOSURE IS AN ASSERTION. The member
+/// closes and Keeper mirrors; a dependent Hive elsewhere then resumes on that
+/// conclusion. If the evidence stays on the closing Hive, every other Hive is
+/// taking its word — and the task that chose this design named the residual
+/// risk plainly: one Hive's closure unblocks dependents with no second check,
+/// so a wrong no-deployment claim propagates. Mirroring the evidence makes that
+/// RECOVERABLE, not impossible, and that is the whole value.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryClosureEvidence {
+    /// Commit SHAs the closing Hive reported, as it reported them.
+    #[serde(default)]
+    pub commits: Vec<String>,
+    /// Deployment references recorded against the work.
+    #[serde(default)]
+    pub deployments: Vec<String>,
+    /// The approved reason nothing shipped, when that is the claim.
+    ///
+    /// ⚠️ EMPTY COMMITS AND NO REASON IS ITSELF LEGIBLE. A reader can tell
+    /// "closed with nothing behind it" from "closed with a reason somebody
+    /// approved", which is exactly the distinction a dependent Hive needs and
+    /// cannot make from a state alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_deployment_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApiaryTask {
     pub id: ApiaryTaskId,
@@ -285,6 +312,12 @@ pub struct ApiaryTask {
     pub home_node_id: Option<FederationNodeId>,
     pub home_hive_id: Option<HiveId>,
     pub revision: u64,
+    /// What the closing Hive stood on, mirrored from it.
+    ///
+    /// `None` until the work closes. Defaulted so a Hive running an older build
+    /// still reads the rest of the task rather than failing the whole feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure_evidence: Option<ApiaryClosureEvidence>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -420,6 +453,13 @@ pub struct FederationTaskCommand {
     /// safe to add without a protocol break.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filing: Option<FederationTaskFiling>,
+    /// What the closing Hive stood on, sent WITH the closure.
+    ///
+    /// ⚠️ ON THE SAME COMMAND ON PURPOSE. Sending evidence separately would
+    /// leave a window where a dependent Hive sees the closure and not what is
+    /// behind it, and that window is exactly when it resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure: Option<ApiaryClosureEvidence>,
     pub created_at: i64,
 }
 

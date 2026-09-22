@@ -315,7 +315,8 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, apiary_id, source, title, description, priority, state,
-                    home_node_id, home_hive_id, revision, created_at, updated_at
+                    home_node_id, home_hive_id, revision, created_at, updated_at,
+                    closure_evidence
              FROM apiary_tasks WHERE apiary_id = ?1
              ORDER BY CASE state WHEN 'completed' THEN 1 ELSE 0 END, updated_at DESC, id",
         )?;
@@ -574,7 +575,8 @@ impl TaskStore {
         let mut task = transaction
             .query_row(
                 "SELECT id, apiary_id, source, title, description, priority, state,
-                        home_node_id, home_hive_id, revision, created_at, updated_at
+                        home_node_id, home_hive_id, revision, created_at, updated_at,
+                        closure_evidence
                  FROM apiary_tasks WHERE apiary_id = ?1 AND id = ?2",
                 params![member.apiary.to_string(), command.task_id.to_string()],
                 apiary_task_from_row,
@@ -647,6 +649,20 @@ impl TaskStore {
                 .checked_add(1)
                 .ok_or(TaskStoreError::InvalidFederationTask)?;
             task.updated_at = now;
+            // ⚠️ THE EVIDENCE LANDS IN THE SAME UPDATE AS THE CLOSURE, so no
+            // reader can ever see one without the other. Written only when the
+            // command carries it, so an ordinary transition cannot blank what a
+            // closure already recorded.
+            if task.state == TaskState::Completed
+                && let Some(evidence) = command.closure.as_ref()
+                && let Ok(encoded) = serde_json::to_string(evidence)
+            {
+                task.closure_evidence = Some(evidence.clone());
+                transaction.execute(
+                    "UPDATE apiary_tasks SET closure_evidence = ?1 WHERE id = ?2",
+                    params![encoded, task.id.to_string()],
+                )?;
+            }
             let changed = transaction.execute(
                 "UPDATE apiary_tasks SET state = ?1, home_node_id = ?2,
                         home_hive_id = ?3, revision = ?4, updated_at = ?5
@@ -743,7 +759,8 @@ impl TaskStore {
         let lapsed = transaction
             .prepare(
                 "SELECT id, apiary_id, source, title, description, priority, state,
-                        home_node_id, home_hive_id, revision, created_at, updated_at
+                        home_node_id, home_hive_id, revision, created_at, updated_at,
+                        closure_evidence
                  FROM apiary_tasks
                  WHERE apiary_id = ?1 AND home_node_id IS NOT NULL
                    AND state IN ('draft','ready') AND updated_at <= ?2",
@@ -838,6 +855,7 @@ impl TaskStore {
             expected_revision: 0,
             kind: FederationTaskCommandKind::File,
             target_state: None,
+            closure: None,
             filing: Some(swarm_domain::FederationTaskFiling {
                 title: title.to_owned(),
                 description: description.to_owned(),
@@ -1102,6 +1120,7 @@ impl TaskStore {
             kind,
             target_state,
             filing: None,
+            closure: closure_evidence_for(&transaction, task_id, target_state)?,
             created_at: now,
         };
         let command_json =
@@ -1359,6 +1378,8 @@ pub(crate) fn insert_apiary_task_for_hive(
         home_node_id,
         home_hive_id,
         revision: 1,
+        // Nothing is closed at creation, so there is nothing to stand on yet.
+        closure_evidence: None,
         created_at: now,
         updated_at: now,
     };
@@ -1638,6 +1659,11 @@ fn insert_local_lifecycle_command(
         kind: FederationTaskCommandKind::Transition,
         target_state: Some(target_state),
         filing: None,
+        // ⚠️ THE CLOSURE PATH RUNS THROUGH HERE, not the queue-a-transition
+        // builder. Wiring the evidence to only one of the two left the real
+        // closure carrying nothing, and the test caught it — a mechanism that
+        // exists on the path nobody takes is worth exactly nothing.
+        closure: closure_evidence_for(transaction, task_id, Some(target_state))?,
         created_at: now,
     };
     let command_json =
@@ -1728,6 +1754,11 @@ fn apiary_task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryTask>
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         state: TaskState::from_str(&row.get::<_, String>(6)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        closure_evidence: row
+            .get::<_, Option<String>>(12)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok()),
         home_node_id: row
             .get::<_, Option<String>>(7)?
             .map(|value| parse_domain_id(&value))
@@ -1903,7 +1934,17 @@ pub(super) fn migrate_complete_lifecycle_states(
              updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
              CHECK ((home_node_id IS NULL) = (home_hive_id IS NULL))
          );
-         INSERT INTO apiary_tasks_v167 SELECT * FROM apiary_tasks;
+         -- ⚠️ NAMED COLUMNS, NOT `SELECT *`. A star here copies whatever the
+         -- table happens to have, so the first column added by ANY later
+         -- migration breaks this one — which is exactly what happened when
+         -- closure_evidence landed. A historical rebuild must describe the
+         -- shape it was written for.
+         INSERT INTO apiary_tasks_v167
+             (id, apiary_id, source, title, description, priority, state,
+              home_node_id, home_hive_id, revision, created_at, updated_at)
+         SELECT id, apiary_id, source, title, description, priority, state,
+                home_node_id, home_hive_id, revision, created_at, updated_at
+           FROM apiary_tasks;
          DROP TABLE apiary_tasks;
          ALTER TABLE apiary_tasks_v167 RENAME TO apiary_tasks;
          CREATE INDEX apiary_tasks_by_apiary_state
@@ -2337,6 +2378,88 @@ impl TaskStore {
     }
 }
 
+/// Gathers what this Hive stands on, at the moment it closes shared work.
+///
+/// ⚠️ READ HERE RATHER THAN PASSED IN, so the evidence is whatever the local
+/// records actually say when the closure is journalled. A caller supplying it
+/// could supply anything, and the point of mirroring is that a dependent Hive
+/// can INSPECT the conclusion rather than take a Hive's word for it.
+///
+/// Returns `None` for anything that is not a closure — most transitions are
+/// not, and attaching evidence to them would be noise that eventually reads as
+/// meaning something.
+fn closure_evidence_for(
+    transaction: &rusqlite::Transaction<'_>,
+    apiary_task_id: ApiaryTaskId,
+    target_state: Option<TaskState>,
+) -> Result<Option<swarm_domain::ApiaryClosureEvidence>, TaskStoreError> {
+    if target_state != Some(TaskState::Completed) {
+        return Ok(None);
+    }
+    let local: Option<String> = transaction
+        .query_row(
+            "SELECT local_task_id FROM local_apiary_task_executions WHERE apiary_task_id = ?1",
+            params![apiary_task_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    // Shared work closed without ever being materialized locally has nothing to
+    // show, and saying so honestly is better than an empty structure that reads
+    // like evidence was gathered and found wanting.
+    let Some(local) = local else {
+        return Ok(None);
+    };
+    let commits = transaction
+        .prepare("SELECT sha FROM task_commits WHERE task_id = ?1 ORDER BY recorded_at, sha")?
+        .query_map(params![local.clone()], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let deployments = transaction
+        .prepare(
+            "SELECT reference FROM task_deployments WHERE task_id = ?1
+             ORDER BY deployed_at, recorded_at",
+        )?
+        .query_map(params![local.clone()], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let no_deployment_reason: Option<String> = transaction
+        .query_row(
+            "SELECT reason FROM task_completion_exemptions WHERE task_id = ?1",
+            params![local],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(Some(swarm_domain::ApiaryClosureEvidence {
+        commits,
+        deployments,
+        no_deployment_reason,
+    }))
+}
+
+/// A closure carries what the closing Hive stood on.
+///
+/// One nullable column rather than a side table: the evidence belongs to the
+/// task, every member already projects the whole task through the ordered feed,
+/// and a join would have meant teaching that feed a second thing to carry.
+pub(super) fn migrate_closure_evidence(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // ⚠️ CONDITIONAL, BECAUSE A REWOUND `user_version` IS NOT A MISSING COLUMN.
+    // Several tests model an older Hive by creating a current database and
+    // setting `user_version` backwards, so this replays against a table that
+    // already has the column. An unconditional ADD COLUMN fails there — and
+    // would fail the same way on any database whose version was ever restored
+    // from a copy, which is a real situation rather than only a test one.
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('apiary_tasks')
+         WHERE name = 'closure_evidence')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        transaction.execute_batch("ALTER TABLE apiary_tasks ADD COLUMN closure_evidence TEXT;")?;
+    }
+    transaction.pragma_update(None, "user_version", crate::CLOSURE_EVIDENCE_SCHEMA_MARKER)
+}
+
 /// A member may file work that does not exist yet, for a repo that may be
 /// nobody's.
 ///
@@ -2472,7 +2595,8 @@ fn apply_member_filing(
     )?;
     let task = transaction.query_row(
         "SELECT id, apiary_id, source, title, description, priority, state,
-                home_node_id, home_hive_id, revision, created_at, updated_at
+                home_node_id, home_hive_id, revision, created_at, updated_at,
+                closure_evidence
          FROM apiary_tasks WHERE id = ?1",
         params![command.task_id.to_string()],
         apiary_task_from_row,
@@ -3570,6 +3694,154 @@ mod tests {
     /// A bulk move retries. Minting a second shared task for the same local one
     /// would put the same work on the board twice with no way to tell which is
     /// real, so the second call returns the first result.
+    /// Materializes shared work locally and records the evidence this Hive's
+    /// own gates require, returning the local execution.
+    ///
+    /// Deployments are deliberately not recorded: the local gate refuses
+    /// deployment evidence before the work reaches review, and that ordering is
+    /// a different rule from the one under test. They travel the same way.
+    fn materialize_with_commits(
+        member: &TaskStore,
+        apiary_task_id: ApiaryTaskId,
+        now: i64,
+    ) -> swarm_domain::LocalApiaryTaskExecution {
+        let worker = member
+            .create_worker(
+                "Platform",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                0,
+            )
+            .unwrap();
+        let local = member
+            .materialize_local_apiary_task_execution(apiary_task_id, worker.id, now)
+            .unwrap();
+        member
+            .record_task_commits(
+                local.local_task_id,
+                "/workspace",
+                swarm_domain::CommitRepositoryState::Read,
+                &[swarm_domain::TaskCommit {
+                    sha: "abc1234".to_owned(),
+                    verdict: swarm_domain::CommitVerdict::Present,
+                    subject: "the fix".to_owned(),
+                    changed_paths: vec!["src/lib.rs".to_owned()],
+                    found_in: None,
+                }],
+                now + 1,
+            )
+            .unwrap();
+        local
+    }
+
+    /// ⚠️ A CLOSURE WITHOUT ITS EVIDENCE IS AN ASSERTION, and a dependent Hive
+    /// somewhere else resumes on it.
+    ///
+    /// The member closes and Keeper mirrors — chosen over Keeper-settles. The
+    /// design depends on the evidence travelling too: the task that chose it
+    /// named the residual risk plainly, that one Hive's closure unblocks
+    /// dependents with no second check, so a wrong no-deployment claim
+    /// propagates. Mirroring makes that RECOVERABLE rather than impossible, and
+    /// only if the evidence actually reaches the other Hive.
+    #[test]
+    fn a_closure_carries_its_evidence_to_every_other_hive() {
+        let now = 900_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let (watcher, watcher_acceptance) = second_member(&keeper, now + 100);
+        let task = keeper
+            .create_apiary_task("Shared work", "", TaskPriority::Normal, now + 110)
+            .unwrap();
+
+        // The member claims it, materializes it locally, and does the work.
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 111)
+            .unwrap();
+        member.apply_federation_task_page(&page, now + 111).unwrap();
+        let claim = member
+            .queue_federation_task_claim(task.id, now + 112)
+            .unwrap();
+        let claim_receipt = keeper
+            .apply_federation_task_command(&acceptance.node_credential, &claim.command, now + 113)
+            .unwrap();
+        // The outbox has to settle before the member may materialize: an
+        // unsettled command means it does not yet know it holds the work.
+        member
+            .apply_federation_task_command_receipt(&claim_receipt, now + 113)
+            .unwrap();
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 114)
+            .unwrap();
+        member.apply_federation_task_page(&page, now + 114).unwrap();
+        let local = materialize_with_commits(&member, task.id, now + 115);
+
+        // ⚠️ THE REAL CLOSURE PATH. Once the work is materialized locally, the
+        // shared task's lifecycle MIRRORS the local one — a member does not
+        // move shared work directly any more, which is the design that makes
+        // "the member closes, Keeper mirrors" true rather than parallel.
+        let mut at = now + 120;
+        for target in [TaskState::Active, TaskState::Review, TaskState::Completed] {
+            member.transition_task(local.local_task_id, target).unwrap();
+            // Returns how many it staged; the commands themselves come off the
+            // outbox.
+            member
+                .prepare_local_apiary_task_lifecycle_commands(at)
+                .unwrap();
+            for entry in member
+                .list_federation_task_outbox()
+                .unwrap()
+                .into_iter()
+                .filter(|entry| entry.state == FederationTaskOutboxState::Queued)
+            {
+                if entry.command.target_state == Some(TaskState::Completed) {
+                    let carried = entry.command.closure.as_ref().expect("closure evidence");
+                    assert_eq!(carried.commits, vec!["abc1234".to_owned()]);
+                } else {
+                    assert!(
+                        entry.command.closure.is_none(),
+                        "only a closure carries evidence; an ordinary move is not one"
+                    );
+                }
+                let receipt = keeper
+                    .apply_federation_task_command(
+                        &acceptance.node_credential,
+                        &entry.command,
+                        at + 1,
+                    )
+                    .unwrap();
+                member
+                    .apply_federation_task_command_receipt(&receipt, at + 1)
+                    .unwrap();
+            }
+            let page = keeper
+                .federation_task_page(&acceptance.node_credential, 0, at + 2)
+                .unwrap();
+            member.apply_federation_task_page(&page, at + 2).unwrap();
+            at += 10;
+        }
+
+        // ⚠️ AND A HIVE THAT DID NONE OF THE WORK CAN INSPECT IT.
+        let page = keeper
+            .federation_task_page(&watcher_acceptance.node_credential, 0, now + 130)
+            .unwrap();
+        watcher
+            .apply_federation_task_page(&page, now + 130)
+            .unwrap();
+        let seen = watcher
+            .list_visible_apiary_tasks()
+            .unwrap()
+            .into_iter()
+            .find(|held| held.id == task.id)
+            .expect("the other Hive sees the shared task");
+        assert_eq!(seen.state, TaskState::Completed);
+        let evidence = seen
+            .closure_evidence
+            .expect("a closure a dependent Hive cannot inspect is an assertion");
+        assert_eq!(evidence.commits, vec!["abc1234".to_owned()]);
+        assert!(evidence.deployments.is_empty());
+        assert_eq!(evidence.no_deployment_reason, None);
+    }
+
     /// ⚠️ UNRESERVED SHARED WORK IS READ ONLY — the operator's decision of
     /// 2026-09-21, and Keeper is where it is enforced rather than trusted.
     ///
@@ -3605,6 +3877,7 @@ mod tests {
             kind: FederationTaskCommandKind::Transition,
             target_state: Some(TaskState::Active),
             filing: None,
+            closure: None,
             created_at: now + 112,
         };
         assert_eq!(
@@ -3646,6 +3919,7 @@ mod tests {
             kind: FederationTaskCommandKind::Transition,
             target_state: Some(TaskState::Active),
             filing: None,
+            closure: None,
             created_at: now + 116,
         };
         assert_eq!(
