@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.13.3
+
+### Fixes
+- A worker whose first start cannot find a conversation now starts a new session instead of going back to sleep. The repair shipped in 1.13.1 was real but unreachable: it sat behind a check that still required the provider's exact wording, so nothing an operator could see had changed. (after the worker engine update)
+
 ## 1.13.2
 
 ### Fixes
