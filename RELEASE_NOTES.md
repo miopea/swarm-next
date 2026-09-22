@@ -12,6 +12,24 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.13.0
+
+### New features
+- A Keeper can watch any Hive in the Apiary live, and a Steward can watch the Hives in their scope, at exactly the same depth. The window shows what is on screen now and records none of it.
+- A Hive being watched always says so, on every screen, naming who is watching. It says so from the moment a watch is requested, before anyone can see anything, and it can be ended from the watched machine.
+- A Keeper or a Steward can now take over a Hive's Queen: a reasoned, five-minute, exclusive lease over its terminal. The Hive being held shows that too, and the person at that keyboard can take it back at any moment with a reason of their own. Every takeover and every reclaim is recorded.
+- Work filed against a repository another Hive owns now reaches that Hive, instead of sitting as a draft where nobody who could do it would ever see it.
+- The Apiary shows what version every Hive is running, and raises one that has fallen behind the current release rather than leaving the number in a column for somebody to notice.
+- Shared work that a Hive claimed and never started returns to the board, so a Hive that sleeps mid-pickup no longer holds it forever.
+- When shared work is finished, the evidence behind that conclusion travels with it, so another Hive depending on it can inspect what it was closed on rather than taking the word of the Hive that closed it.
+- Cross-Hive work waiting on something nobody will ever do now stops waiting and is raised, instead of sitting blocked and invisible.
+
+### Fixes
+- The person at a machine can now always take back control of their own Queen. A takeover that was being actively renewed could refuse them, which meant the busier the remote operator was, the more reliably the owner was told no.
+- A Hive that restarted while under takeover no longer sits paused on behalf of a takeover that is no longer happening.
+- Automation no longer resumes the instant a takeover ends. The Hive puts its own terminal back in order first, so nothing types into a half-finished command.
+- A development Hive whose checkout was rebased no longer reports its reload as blocked when the work is genuinely present.
+
 ## 1.12.0
 
 ⚠️ This release carries six schema migrations, 177 through 182. Two of them
