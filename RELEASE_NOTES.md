@@ -12,6 +12,12 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.14.1
+
+### Fixes
+- A join that failed once is no longer stuck forever. Any problem except an unreachable Keeper parked the request, nothing ever retried a parked one, and there was no way out but cancelling and starting over — so the screen kept showing the first failure's message for days, unchanged even after the cause was fixed. Parked requests now offer "Try again", which keeps the link and the terms you already accepted.
+- A join that cannot finish now says which of five reasons it is, and what to do about each. "This Hive already belongs to an Apiary" and "the invitation does not match your link" need opposite actions and used to look identical.
+
 ## 1.14.0
 
 ### New features
