@@ -42,19 +42,37 @@ const RELAY_FRAME_BUFFER: usize = 64;
 /// from the watched machine at any moment.
 pub(crate) const RELAY_LIVENESS_CHECK_SECONDS: u64 = 15;
 
-/// Per-watch fan-out. Memory only, for the lifetime of this process.
-#[derive(Debug, Default)]
-pub(crate) struct WatchRelay {
-    channels: Mutex<HashMap<ApiaryWatchId, broadcast::Sender<Vec<u8>>>>,
+/// Bounded, memory-only fan-out of opaque frames, keyed by whatever names one
+/// live connection.
+///
+/// ⚠️ GENERIC BECAUSE TAKEOVER NEEDS THE SAME THING AND MUST NOT GROW A SECOND
+/// ONE. Watching is keyed by watch, takeover by lease, and the safety property
+/// — frames pass through and are never kept — is identical. Two copies would be
+/// two places for that property to stop being true, and only one of them would
+/// get the next fix.
+#[derive(Debug)]
+pub(crate) struct FrameRelay<K> {
+    channels: Mutex<HashMap<K, broadcast::Sender<Vec<u8>>>>,
 }
 
-impl WatchRelay {
+impl<K> Default for FrameRelay<K> {
+    fn default() -> Self {
+        Self {
+            channels: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+/// The relay carrying one watched Hive's screen to whoever is watching.
+pub(crate) type WatchRelay = FrameRelay<ApiaryWatchId>;
+
+impl<K: Copy + Eq + std::hash::Hash> FrameRelay<K> {
     /// Publishes one frame to whoever is currently watching.
     ///
     /// Returns without error when nobody is attached: a Hive whose watcher has
     /// closed their window is ordinary rather than a failure, and the member
     /// stops producing on its own when the watch ends.
-    pub(crate) fn publish(&self, watch: ApiaryWatchId, frame: Vec<u8>) {
+    pub(crate) fn publish(&self, watch: K, frame: Vec<u8>) {
         let Ok(channels) = self.channels.lock() else {
             return;
         };
@@ -64,7 +82,7 @@ impl WatchRelay {
     }
 
     /// Attaches a viewer, creating the channel if this is the first one.
-    pub(crate) fn subscribe(&self, watch: ApiaryWatchId) -> broadcast::Receiver<Vec<u8>> {
+    pub(crate) fn subscribe(&self, watch: K) -> broadcast::Receiver<Vec<u8>> {
         let mut channels = match self.channels.lock() {
             Ok(channels) => channels,
             // A poisoned lock must not take the relay down: the honest failure
@@ -83,7 +101,7 @@ impl WatchRelay {
     /// Called when a watch ends, so a relay that nobody closed cannot keep a
     /// channel alive indefinitely — the map is the only unbounded thing here,
     /// and this is what bounds it.
-    pub(crate) fn retire(&self, watch: ApiaryWatchId) {
+    pub(crate) fn retire(&self, watch: K) {
         let mut channels = match self.channels.lock() {
             Ok(channels) => channels,
             Err(poisoned) => poisoned.into_inner(),

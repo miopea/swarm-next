@@ -23,6 +23,7 @@ mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
 mod federation_events;
+mod takeover_relay;
 mod watch_producer;
 mod watch_relay;
 pub use federation_events::poll_member_events;
@@ -445,6 +446,7 @@ pub struct AppState {
     federation_events: federation_events::FederationEventBus,
     watch_relay: Arc<watch_relay::WatchRelay>,
     watch_grants: Arc<watch_relay::WatchGrantStore>,
+    takeover_relay: Arc<takeover_relay::TakeoverRelay>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -577,6 +579,7 @@ impl AppState {
             federation_events: federation_events::FederationEventBus::new(),
             watch_relay: Arc::new(watch_relay::WatchRelay::default()),
             watch_grants: Arc::new(watch_relay::WatchGrantStore::default()),
+            takeover_relay: Arc::new(takeover_relay::TakeoverRelay::default()),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -4199,6 +4202,15 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/watches/{watch_id}/stream",
             get(watch_relay::federation_watch_stream),
+        )
+        // ⚠️ REGISTERED, BUT TAKEOVER IS STILL NOT AVAILABLE. ADR 0036 forbids
+        // shipping a partial takeover; this route is inert because it demands
+        // an ACTIVE acknowledged lease, and no operator surface exists to
+        // create one. The gate is about the capability being usable, not about
+        // whether a Hive-to-Hive endpoint answers 403.
+        .route(
+            "/api/v1/federation/takeovers/{lease_id}/relay",
+            get(takeover_relay::federation_takeover_relay),
         )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
@@ -12949,6 +12961,213 @@ mod tests {
             .is_err(),
             "and a bearer header is not a substitute for a grant"
         );
+    }
+
+    /// One acknowledged Steward takeover, with every party projecting it.
+    ///
+    /// Returns the two member credentials, the lease and its active revision.
+    /// Extracted because reaching an active takeover is a dozen round trips
+    /// that say nothing about what a test is actually checking.
+    fn active_steward_takeover(
+        keeper: &TaskStore,
+        endpoint: &str,
+        now: i64,
+    ) -> (
+        TaskStore,
+        String,
+        TaskStore,
+        String,
+        swarm_domain::FederationStewardTakeoverLeaseId,
+        u64,
+    ) {
+        let target = TaskStore::in_memory().unwrap();
+        let target_card = target.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&target_card, now).unwrap();
+        let target_credential = complete_join(keeper, &target, &target_card, endpoint, now);
+        let steward = TaskStore::in_memory().unwrap();
+        let steward_card = steward.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&steward_card, now).unwrap();
+        let steward_credential = complete_join(keeper, &steward, &steward_card, endpoint, now);
+
+        let target_hive = target.local_hive_identity().unwrap().hive.id;
+        keeper
+            .set_stewardship(
+                steward.local_hive_identity().unwrap().operator.id,
+                &[target_hive],
+                &[
+                    swarm_domain::StewardCapability::Observe,
+                    swarm_domain::StewardCapability::Takeover,
+                ],
+                now,
+            )
+            .unwrap();
+        let scope = keeper
+            .federation_stewardship_snapshot(&steward_credential, now)
+            .unwrap();
+        steward
+            .apply_federation_stewardship_snapshot(&scope, now)
+            .unwrap();
+
+        let request = steward
+            .queue_federation_steward_takeover(target_hive, "Release is blocked.", now)
+            .unwrap();
+        keeper
+            .apply_federation_steward_takeover_command(&steward_credential, &request.command, now)
+            .unwrap();
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_credential, now)
+            .unwrap();
+        let queen = target.ensure_queen("/workspace/queen").unwrap();
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now)
+            .unwrap();
+        let lease_id = inbox.leases[0].id;
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(
+                lease_id,
+                inbox.leases[0].revision,
+                now,
+            )
+            .unwrap();
+        let active = keeper
+            .apply_federation_steward_takeover_command(
+                &target_credential,
+                &acknowledgement.command,
+                now,
+            )
+            .unwrap();
+        let revision = active.lease.as_ref().unwrap().revision;
+        // ⚠️ BOTH SIDES MUST PROJECT THE ACTIVE LEASE. The relay's liveness
+        // check reads the LOCAL projection on purpose, so that a reclaim on the
+        // target's own machine stops input arriving without waiting for Keeper.
+        for (store, credential) in [
+            (&target, &target_credential),
+            (&steward, &steward_credential),
+        ] {
+            let refreshed = keeper
+                .federation_steward_takeover_inbox(credential, now)
+                .unwrap();
+            store
+                .apply_federation_steward_takeover_inbox(&refreshed, now)
+                .unwrap();
+        }
+        (
+            target,
+            target_credential,
+            steward,
+            steward_credential,
+            lease_id,
+            revision,
+        )
+    }
+
+    /// ⚠️ THE INPUT PATH IS WHAT MAKES THIS TAKEOVER RATHER THAN WATCHING, so
+    /// the round trip is the thing worth proving over real sockets: a keystroke
+    /// reaches the target AND the target's screen comes back, both under one
+    /// acknowledged lease.
+    ///
+    /// Direction is decided by the LEASE, not claimed by the caller: both sides
+    /// open the same endpoint and get opposite pipes. A Steward-sourced lease is
+    /// used because both ends must be members to reach a federation endpoint —
+    /// Keeper's own controller side attaches through its operator surface, which
+    /// the release gate has not built yet.
+    #[tokio::test]
+    async fn a_takeover_carries_keystrokes_in_and_the_screen_out_under_one_lease() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let (endpoint, _bus, _server) = start_keeper_event_server(keeper.clone()).await;
+        let (_target, target_credential, _steward, steward_credential, lease_id, revision) =
+            active_steward_takeover(&keeper, &endpoint, now);
+
+        let socket_base = endpoint.replace("http://", "ws://");
+        let dial = |bearer: String, revision: u64| {
+            let url = format!(
+                "{socket_base}/api/v1/federation/takeovers/{lease_id}/relay?revision={revision}"
+            );
+            async move {
+                let mut request = url.into_client_request().unwrap();
+                request.headers_mut().insert(
+                    header::AUTHORIZATION,
+                    axum::http::HeaderValue::from_str(&format!("Bearer {bearer}")).unwrap(),
+                );
+                tokio_tungstenite::connect_async(request).await
+            }
+        };
+        let (mut target_socket, _) = dial(target_credential, revision)
+            .await
+            .expect("the target attaches to the takeover of itself");
+        let (mut steward_socket, _) = dial(steward_credential.clone(), revision)
+            .await
+            .expect("the Steward attaches to the takeover they hold");
+
+        let mut keystroke = vec![9u8];
+        keystroke.extend_from_slice(b"ls\n");
+        let mut screen = vec![1u8];
+        screen.extend_from_slice(&7u64.to_be_bytes());
+        screen.extend_from_slice(b"prompt$ ");
+
+        // ⚠️ IN: the controller types, the target receives.
+        let received = pump(&mut steward_socket, &mut target_socket, &keystroke).await;
+        assert_eq!(
+            received.as_slice(),
+            keystroke.as_slice(),
+            "carried byte for byte"
+        );
+
+        // ⚠️ OUT: the target's screen, back to the controller.
+        let drawn = pump(&mut target_socket, &mut steward_socket, &screen).await;
+        assert_eq!(drawn.as_slice(), screen.as_slice());
+
+        // A stale revision does not attach. That is the one place a revision
+        // fence belongs: it is not the local operator being kept off their own
+        // machine, it is a client acting under a lease that has moved on.
+        assert!(
+            dial(steward_credential, revision + 5).await.is_err(),
+            "a superseded lease grants no control channel"
+        );
+        assert!(
+            dial("not-a-credential".to_owned(), revision).await.is_err(),
+            "and an unauthenticated caller gets none at all"
+        );
+    }
+
+    /// Sends until the other end receives, and returns what arrived.
+    ///
+    /// Retried because the receiving side's subscription is established inside
+    /// its upgrade task, so the first send can land before it attaches. A live
+    /// relay keeps no backlog, so resending is what any real client does.
+    async fn pump<S, R>(from: &mut S, to: &mut R, frame: &[u8]) -> Vec<u8>
+    where
+        S: futures_util::SinkExt<ClientMessage> + Unpin,
+        <S as futures_util::Sink<ClientMessage>>::Error: std::fmt::Debug,
+        R: futures_util::StreamExt<
+                Item = Result<ClientMessage, tokio_tungstenite::tungstenite::Error>,
+            > + Unpin,
+    {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                from.send(ClientMessage::Binary(frame.to_vec().into()))
+                    .await
+                    .expect("send");
+                if let Ok(Some(Ok(ClientMessage::Binary(payload)))) =
+                    tokio::time::timeout(Duration::from_millis(200), to.next()).await
+                {
+                    return payload.to_vec();
+                }
+            }
+        })
+        .await
+        .expect("the frame must reach the other side")
     }
 
     /// ⚠️ THE TITLE'S OWN PROMISE: "same depth for Keeper and Steward". Three

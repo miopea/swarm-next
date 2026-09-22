@@ -11,13 +11,26 @@ federation route exposes them yet. Outbound relay, restart reconciliation,
 automation recovery, audit presentation, and desktop/mobile control remain the
 release gate.
 
-Checkpoint (2026-09-21): the outbound relay half of the gate now exists — ADR
-0107's watch relay is bounded, memory-only and never persists a frame, and
-takeover should reuse it rather than grow a second one. The reclaim rule below
-was amended after a proven defect. Still no route exposes takeover, and the gate
-is otherwise unchanged: restart reconciliation, automation recovery, audit
-presentation and desktop/mobile control remain outstanding, and the ADR's
-refusal to ship a partial takeover behind a flag stands.
+Checkpoint (2026-09-22): Keeper may now take over on its own authority, and the
+relay carries both directions. The reclaim rule below was amended after a proven
+defect.
+
+The relay is the SAME bounded, memory-only fan-out ADR 0107 built for watching,
+generalised over its key rather than copied — the "frames pass through and are
+never kept" property has one home, because two copies would be two places for it
+to stop being true and only one of them would get the next fix. The input path
+is the whole difference between takeover and watching, and it runs on a separate
+channel from the screen so that delivering a keystroke to a watcher, or a screen
+frame to a keyboard, is unrepresentable rather than merely unlikely.
+
+One Hive-to-Hive relay endpoint is registered and is INERT: it demands an active
+acknowledged lease, and no operator surface exists to create one. The gate is
+about the capability being usable, not about whether a federation endpoint
+answers 403.
+
+Outstanding, and the refusal to ship a partial takeover behind a flag stands:
+restart reconciliation, automation recovery, audit presentation, and
+desktop/mobile control.
 
 ## Context
 
