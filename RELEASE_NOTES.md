@@ -12,6 +12,13 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.14.3
+
+### Fixes
+- A takeover can be ended. "Hand back" closed the window and left the Hive held: it kept telling its operator someone else was controlling it, and because a Hive can only be under one takeover at a time, every later attempt was refused. The only way out was taking control back at that keyboard and then stopping it.
+- Stopping a takeover stays stopped. Taking back control wrote the decision down but never sent it, so the Hive that held the lease never learned, and the next sync re-established the takeover about half a minute later — with nothing the person at the keyboard could do about it.
+- Watching a Hive now opens a full window with its own controls, including taking over from the moment you decide to. It was a narrow panel inside the Hive list with no control but closing it.
+
 ## 1.14.2
 
 ### Fixes
