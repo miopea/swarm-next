@@ -9,7 +9,7 @@ use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     HIVE_CAPABILITY_SCHEMA_VERSION, HiveCapabilityPayload, HiveCapabilityUpdate,
-    HiveCapabilityWorker, PublicHiveIdentity,
+    HiveCapabilityWorker, HiveId, PublicHiveIdentity,
 };
 
 use crate::{TaskStore, TaskStoreError};
@@ -370,6 +370,58 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns corrupt stored evidence rather than a partial fleet.
+    /// Which Hive in the Apiary reports a worker for this repository.
+    ///
+    /// ⚠️ MATCHED ON THE REMOTE, NEVER ON A PATH. Capability reports carry a
+    /// repository URL and deliberately no filesystem path, so two Hives that
+    /// check the same repo out to different directories still agree on what it
+    /// is. Matching on a path would route by an accident of local layout.
+    ///
+    /// Returns `None` when nobody reports it, which is the ordinary case for a
+    /// repository only this Hive has — and it must stay ordinary rather than an
+    /// error, or filing local work would start failing.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn apiary_hive_for_repository(
+        &self,
+        remote: &str,
+    ) -> Result<Option<HiveId>, TaskStoreError> {
+        let remote = remote.trim();
+        if remote.is_empty() {
+            return Ok(None);
+        }
+        let local = self.local_hive_identity()?.hive.id;
+        for held in self.federation_hive_capabilities()? {
+            // ⚠️ THIS HIVE IS SKIPPED EVEN IF IT REPORTS THE REPO. Routing work
+            // to yourself through Keeper would turn every ordinary local filing
+            // into a shared ticket, which is the opposite of the bug being
+            // fixed here.
+            if held.payload.identity.hive_id == local {
+                continue;
+            }
+            if held
+                .payload
+                .workers
+                .iter()
+                .any(|worker| worker.repository.as_deref() == Some(remote))
+            {
+                return Ok(Some(held.payload.identity.hive_id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Every member capability report this Hive holds, newest observation first.
+    ///
+    /// ⚠️ `observed_at` AND `received_at` ARE BOTH RETURNED ON PURPOSE. A caller
+    /// that knows only "there is a report" cannot tell a Hive that went quiet a
+    /// week ago from one that answered a minute ago, and those demand opposite
+    /// reactions. The acceptance for this work says a stale report must be
+    /// distinguishable from a missing one; this is where that is possible.
+    ///
+    /// # Errors
+    /// Returns corrupt stored evidence rather than a partial fleet.
     pub fn federation_hive_capabilities(
         &self,
     ) -> Result<Vec<StoredHiveCapability>, TaskStoreError> {
@@ -692,6 +744,100 @@ mod policy_drift_tests {
             repository: Some("git@github.com:rcg/platform.git".to_owned()),
             awake: false,
         }
+    }
+
+    /// ⚠️ THE LOOKUP THE MOTIVATING FAILURE NEEDED. On 2026-09-20 a worker
+    /// filed bfg-watchfaces work naming the foreign workspace correctly, and it
+    /// landed as a draft on the FILING Hive's board — the Hive that owns that
+    /// repository never learned of it. Knowing WHO owns a repository is the
+    /// first thing routing needs, and nothing could answer it until the
+    /// capability report existed.
+    #[test]
+    fn keeper_can_tell_which_hive_owns_a_repository() {
+        let now = 120_000;
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let report = member
+            .seal_local_hive_capability(
+                &[HiveCapabilityWorker {
+                    name: "Watchfaces".to_owned(),
+                    provider: ProviderKind::ClaudeCode,
+                    repository: Some("git@github.com:rcg/bfg-watchfaces.git".to_owned()),
+                    // Asleep on purpose — see the assertion below.
+                    awake: false,
+                }],
+                false,
+                "1.12.0",
+                190,
+                now + 9,
+            )
+            .unwrap();
+        keeper
+            .accept_hive_capability(&credential, &report, now + 10)
+            .unwrap();
+
+        assert_eq!(
+            keeper
+                .apiary_hive_for_repository("git@github.com:rcg/bfg-watchfaces.git")
+                .unwrap(),
+            Some(member.local_hive_identity().unwrap().hive.id),
+            "the Hive that reported the repo is the one that should hear about the work"
+        );
+        // ⚠️ A SLEEPING WORKER STILL COUNTS. The capability report carries
+        // sleeping workers on purpose: a Hive that owns a repo owns it whether
+        // or not anyone is awake in it, and routing on liveness would send work
+        // to whoever happened to be up rather than whoever can do it.
+        assert!(
+            !report.payload.workers[0].awake,
+            "this fixture's worker is asleep, and it still answered"
+        );
+        assert_eq!(
+            keeper
+                .apiary_hive_for_repository("git@github.com:rcg/nobody-has-this.git")
+                .unwrap(),
+            None,
+            "a repository nobody reports is ordinary, not an error"
+        );
+    }
+
+    /// ⚠️ THIS HIVE IS NEVER THE ANSWER, even when it reports the repo. Routing
+    /// local work to yourself through Keeper would turn every ordinary filing
+    /// into a shared ticket — the opposite of the bug being fixed.
+    #[test]
+    fn a_hive_is_never_routed_its_own_repository() {
+        let now = 120_000;
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let shared = "git@github.com:rcg/platform.git";
+        let report = member
+            .seal_local_hive_capability(
+                &[HiveCapabilityWorker {
+                    name: "Platform".to_owned(),
+                    provider: ProviderKind::ClaudeCode,
+                    repository: Some(shared.to_owned()),
+                    awake: true,
+                }],
+                false,
+                "1.12.0",
+                190,
+                now + 9,
+            )
+            .unwrap();
+        keeper
+            .accept_hive_capability(&credential, &report, now + 10)
+            .unwrap();
+        // Asked ON THE MEMBER, about the member's own repository.
+        assert_eq!(
+            member.apiary_hive_for_repository(shared).unwrap(),
+            None,
+            "a Hive filing against its own repository routes nowhere"
+        );
     }
 
     /// ⚠️ THE DONE WHEN'S SECOND HALF: drift visible to KEEPER, not just the
