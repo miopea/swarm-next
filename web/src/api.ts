@@ -1531,6 +1531,33 @@ export async function fetchWatchedBy(operatorToken: string, signal?: AbortSignal
   return response.json() as Promise<ApiaryWatch[]>;
 }
 
+/** One takeover, as the Apiary shows it. */
+export type TakeoverAuditEntry = {
+  lease: {
+    id: string;
+    apiary_id: string;
+    source_hive_id: string;
+    target_hive_id: string;
+    source_operator_id: string;
+    /** Null means Keeper's own authority rather than a stewardship. */
+    stewardship_id: string | null;
+    reason: string;
+    state: "requested" | "active" | "released" | "reclaimed" | "expired";
+    revision: number;
+    requested_at: number;
+    acknowledged_at: number | null;
+    expires_at: number;
+    ended_at: number | null;
+  };
+  /** The local operator's account of taking their machine back. */
+  reclaim_reason: string | null;
+};
+
+export async function fetchTakeoverAudit(operatorToken: string, signal?: AbortSignal): Promise<TakeoverAuditEntry[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/takeover-audit", { signal });
+  return response.json() as Promise<TakeoverAuditEntry[]>;
+}
+
 /** Opens a live window into a member Hive. */
 export async function openApiaryWatch(operatorToken: string, targetHiveId: string): Promise<ApiaryWatch> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/watches", {

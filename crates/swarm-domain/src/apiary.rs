@@ -809,6 +809,28 @@ impl FromStr for FederationStewardTakeoverState {
 
 /// Public Apiary control-plane evidence. It deliberately contains no worker
 /// identity, provider conversation, terminal output, or terminal frame.
+/// One takeover, as the Apiary may show it.
+///
+/// ⚠️ EVERY FIELD HERE IS ALREADY PUBLIC APIARY DATA. ADR 0036 limits the audit
+/// to "Apiary, source Hive, target Hive, actor, reason, state, revision, and
+/// timestamps", and this carries exactly that plus the reclaim reason, which is
+/// the operator's own words about their own machine. No worker identity, no
+/// repository, no terminal content — the audit says WHO held a Hive and WHY,
+/// never what they did while holding it. That last part is the whole reason
+/// frames are never stored.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TakeoverAuditEntry {
+    pub lease: FederationStewardTakeoverLease,
+    /// Why the local operator took their machine back, when they did.
+    ///
+    /// ⚠️ THE ONE THING THIS AUDIT CAN ANSWER THAT THE WATCH AUDIT CANNOT.
+    /// Watching deliberately requires no reason (ADR 0107); takeover requires
+    /// one both to start and to reclaim, and this is the reclaim half. A
+    /// reclaimed lease with no reason here would mean the record lost it, not
+    /// that none was given — it is enforced at the command boundary.
+    pub reclaim_reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FederationStewardTakeoverLease {
     pub id: FederationStewardTakeoverLeaseId,

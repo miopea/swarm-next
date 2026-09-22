@@ -345,6 +345,63 @@ impl TaskStore {
         Ok(survivors)
     }
 
+    /// Who took over which Hive, when, why, and why it ended.
+    ///
+    /// ⚠️ AN AUDIT NOBODY CAN READ IS NOT AN AUDIT, which is why this is part of
+    /// ADR 0036's release gate rather than a nice-to-have. Takeover is the one
+    /// Apiary capability that lets someone type into another operator's
+    /// machine; the record of who did that, and of the operator taking it back,
+    /// is the thing that makes the capability accountable rather than merely
+    /// powerful.
+    ///
+    /// Newest first, bounded. Keeper-side, because Keeper is the authority that
+    /// granted every one of them.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn apiary_takeover_audit(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<swarm_domain::TakeoverAuditEntry>, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let leases = read_leases(
+            &transaction,
+            "apiary_steward_takeover_leases",
+            "ORDER BY requested_at DESC, lease_id DESC LIMIT ?1",
+            params![limit.min(200)],
+        )?;
+        let mut entries = Vec::with_capacity(leases.len());
+        for lease in leases {
+            // The reclaim reason lives in the command that ended it, not on the
+            // lease: the lease's own reason is why the takeover STARTED, and
+            // collapsing the two would lose the operator's account of taking
+            // their machine back.
+            let reclaim_reason = transaction
+                .query_row(
+                    "SELECT command_json FROM apiary_steward_takeover_commands
+                     WHERE lease_id = ?1 AND outcome = 'applied'
+                     ORDER BY processed_at DESC",
+                    params![lease.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .and_then(|json| {
+                    serde_json::from_str::<FederationStewardTakeoverCommand>(&json).ok()
+                })
+                .and_then(|command| match command.action {
+                    FederationStewardTakeoverAction::Reclaim { reason, .. } => Some(reason),
+                    _ => None,
+                });
+            entries.push(swarm_domain::TakeoverAuditEntry {
+                lease,
+                reclaim_reason,
+            });
+        }
+        transaction.commit()?;
+        Ok(entries)
+    }
+
     /// Keeper taking over a member Hive, on its own authority.
     ///
     /// ⚠️ KEEPER DOES NOT TRAVEL THE MEMBER COMMAND PATH. That path exists so a
@@ -1741,6 +1798,126 @@ mod tests {
                 .expect("projection");
         }
         active
+    }
+
+    /// ⚠️ THE AUDIT MUST CARRY BOTH REASONS, AND THEY ARE DIFFERENT CLAIMS. The
+    /// lease's reason is why someone took the Hive; the reclaim reason is the
+    /// local operator's account of taking it back. Collapsing them would lose
+    /// the half that matters most when the question is whether a takeover
+    /// should have happened at all.
+    #[test]
+    fn the_audit_records_who_took_over_why_and_why_it_ended() {
+        let now = 700_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let lease = keeper
+            .open_keeper_takeover(target_hive_id, "Incident: operator unreachable.", now + 53)
+            .expect("keeper takeover");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 54)
+            .expect("target poll");
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 55)
+            .expect("projection");
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(
+                lease.id,
+                inbox.leases[0].revision,
+                now + 56,
+            )
+            .expect("journal acknowledgement");
+        keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &acknowledgement.command,
+                now + 57,
+            )
+            .expect("acknowledge");
+
+        // Mid-takeover, the audit already names who holds the Hive and why.
+        let live = keeper.apiary_takeover_audit(10).expect("audit");
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].lease.reason, "Incident: operator unreachable.");
+        assert_eq!(
+            live[0].lease.stewardship_id, None,
+            "Keeper's own authority is legible in the record"
+        );
+        assert_eq!(live[0].lease.state, FederationStewardTakeoverState::Active);
+        assert_eq!(
+            live[0].reclaim_reason, None,
+            "nothing has been reclaimed yet"
+        );
+
+        // The person at the machine takes it back, and says why.
+        let refreshed = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 58)
+            .expect("poll");
+        target
+            .apply_federation_steward_takeover_inbox(&refreshed, now + 58)
+            .expect("projection");
+        let projected = target
+            .federation_steward_takeover_local_state()
+            .expect("local")
+            .leases
+            .into_iter()
+            .find(|held| held.id == lease.id)
+            .expect("projected");
+        let reclaim = target
+            .queue_federation_steward_takeover_reclaim(
+                lease.id,
+                projected.revision,
+                "Mid-deploy; taking my machine back.",
+                now + 59,
+            )
+            .expect("journal reclaim");
+        keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &reclaim.command,
+                now + 60,
+            )
+            .expect("reclaim");
+
+        let audit = keeper.apiary_takeover_audit(10).expect("audit");
+        assert_eq!(audit.len(), 1);
+        assert_eq!(
+            audit[0].lease.state,
+            FederationStewardTakeoverState::Reclaimed
+        );
+        assert_eq!(
+            audit[0].lease.reason, "Incident: operator unreachable.",
+            "why it started"
+        );
+        assert_eq!(
+            audit[0].reclaim_reason.as_deref(),
+            Some("Mid-deploy; taking my machine back."),
+            "and why it ended, in the operator's own words"
+        );
+    }
+
+    /// ⚠️ EVERY RECLAIM CARRIES A REASON BECAUSE THE BOUNDARY REFUSES ONE
+    /// WITHOUT. The operator's ruling is that reclaim is always available and
+    /// always audited; "always audited" is only true if a blank reason cannot
+    /// get through, so this pins the refusal rather than trusting the caller.
+    #[test]
+    fn a_reclaim_without_a_reason_is_refused_rather_than_recorded_blank() {
+        let now = 700_000;
+        let (_keeper, _steward, _steward_acceptance, target, _target_acceptance) =
+            setup_takeover(now);
+        let lease_id = FederationStewardTakeoverLeaseId::new();
+        for blank in ["", "   ", "\n\t"] {
+            assert!(
+                target
+                    .queue_federation_steward_takeover_reclaim(lease_id, 2, blank, now + 60)
+                    .is_err(),
+                "a reclaim with no account of itself is not recorded"
+            );
+        }
     }
 
     /// ⚠️ A RELEASED TAKEOVER MUST NOT HAND THE TERMINAL STRAIGHT TO QUEEN.

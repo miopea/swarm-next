@@ -1,20 +1,21 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
-  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, openApiaryWatch, endApiaryWatch,
-  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type Stewardship,
+  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchTakeoverAudit, openApiaryWatch, endApiaryWatch,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type TakeoverAuditEntry, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
 import SharedProfileHint from "./SharedProfileHint";
 import FleetVersions from "./FleetVersions";
 import WatchWindow from "./WatchWindow";
+import TakeoverAudit from "./TakeoverAudit";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
-type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[]; fleet?: Fleet };
-const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [], fleet: undefined };
-const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs", "fleet"] as const;
+type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[]; fleet?: Fleet; takeovers: TakeoverAuditEntry[] };
+const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [], fleet: undefined, takeovers: [] };
+const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs", "fleet", "takeovers"] as const;
 
 export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
@@ -35,6 +36,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         fetchApiaryStewardTaskAudit(operatorToken, signal),
         fetchApiaryClaimHandoffs(operatorToken, signal),
         fetchFleetVersions(operatorToken, signal),
+        fetchTakeoverAudit(operatorToken, signal),
       ]);
       if (signal.aborted) {
         if (signal.reason?.name === "TimeoutError") {
@@ -43,7 +45,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         }
         return;
       }
-      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs, fleet] = results;
+      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs, fleet, takeovers] = results;
       setObserved((current) => new Set([...current, ...snapshotKeys.filter((_, index) => results[index].status === "fulfilled")]));
       setFailed(new Set(snapshotKeys.filter((_, index) => results[index].status === "rejected")));
       setSnapshot((current) => ({
@@ -55,6 +57,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         stewardAudit: stewardAudit.status === "fulfilled" && Array.isArray(stewardAudit.value) ? stewardAudit.value : current.stewardAudit,
         handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
         fleet: fleet.status === "fulfilled" ? fleet.value : current.fleet,
+        takeovers: takeovers.status === "fulfilled" && Array.isArray(takeovers.value) ? takeovers.value : current.takeovers,
       }));
       setState(results.some((result) => result.status === "rejected") ? "error" : "ready");
   }, [operatorToken]);
@@ -131,6 +134,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
           {section("handoffs", "Work handoffs", <>{activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}</>)}
         </article>
         {section("fleet", "Swarm versions", <FleetVersions fleet={snapshot.fleet} nameFor={(hiveId) => memberByHive.get(hiveId)?.hive_name} />)}
+        {section("takeovers", "Takeover history", <TakeoverAudit entries={snapshot.takeovers} nameFor={(hiveId) => memberByHive.get(hiveId)?.hive_name} />)}
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Optional Jira work</p><h4>Promoted Jira projects</h4></div><small>Each Hive uses only projects its operator can access</small></header>
           {section("projects", "Jira projects", <>

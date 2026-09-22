@@ -4182,6 +4182,7 @@ fn api_router(state: AppState) -> Router {
             post(renew_apiary_watch),
         )
         .route("/api/v1/apiary/watched-by", get(apiary_watched_by))
+        .route("/api/v1/apiary/takeover-audit", get(apiary_takeover_audit))
         .route(
             "/api/v1/apiary/watches/{watch_id}/stream",
             get(watch_relay::apiary_watch_stream),
@@ -5643,6 +5644,22 @@ async fn apiary_watch_grant(
         }),
     )
         .into_response())
+}
+
+/// Who took over which Hive, when, why, and why it ended.
+///
+/// ⚠️ PART OF ADR 0036'S RELEASE GATE, not a report. Takeover is the one Apiary
+/// capability that lets someone type into another operator's machine, and an
+/// audit nobody can read would leave that accountable only in principle.
+async fn apiary_takeover_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entries = task_store(&state)?
+        .apiary_takeover_audit(50)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(entries)).into_response())
 }
 
 /// Who looked, and when.

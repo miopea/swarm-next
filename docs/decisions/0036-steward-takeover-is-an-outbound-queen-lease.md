@@ -56,8 +56,23 @@ when the host answers — released, or nothing there to release. An unreachable
 host leaves the debt standing and the next pass retries, because marking it paid
 on a failed call would quietly restore the gap this closes.
 
+Audit presentation is built: a Keeper-side reader and a panel showing who held
+which Hive, on whose authority, why it started and why it ended. Both reasons
+are carried because they are different claims — the lease's reason is why a
+takeover began, the reclaim reason is the local operator's account of taking
+their machine back, and the second is what matters when the question is whether
+the first should have happened. Keeper's own authority reads as Keeper rather
+than as a blank stewardship.
+
+The audit carries exactly what this ADR permits — Apiary, source Hive, target
+Hive, actor, reason, state, revision, timestamps — plus the reclaim reason,
+which is the operator's own words about their own machine. It says WHO held a
+Hive and never what they did while holding it; that second part is why frames
+are not stored at all.
+
 Outstanding, and the refusal to ship a partial takeover behind a flag stands:
-audit presentation, and desktop/mobile control.
+desktop/mobile control, which is also the only remaining reason the capability
+is unreachable — no operator surface can start a takeover.
 
 ## Context
 
