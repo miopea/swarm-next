@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.15.0
+
+### New features
+- A worker whose saved conversation has gone now tries the conversations it actually has, newest first, before starting over. Swarm used to ask the provider to "continue", which fails outright when the provider sees nothing to continue and tells Swarm nothing it can remember even when it works — so the same worker needed rescuing again next time. It now resumes a real conversation and keeps it. Starting fresh is still the last resort, unchanged. (after the worker engine update)
+
 ## 1.14.5
 
 ### Fixes
