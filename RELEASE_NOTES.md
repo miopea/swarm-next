@@ -12,6 +12,15 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.14.0
+
+### New features
+- A Keeper can remove a Hive from the Apiary. Until now a Hive could only leave using its own credential, so one that had been reinstalled, decommissioned or lost — or whose credential had simply lapsed — stayed on the roster with nothing able to take it off. Removal is refused while that Hive still holds shared work, and says what to clear. The Hive keeps its own workers, tasks and repositories; only its place in the Apiary ends.
+
+### Fixes
+- Joining an Apiary now says why it was refused instead of showing an unclassifiable code. "The invitation expired; ask your Keeper for a new one" is something you can act on; `apiary_join_not_ready (409)` was not, and it stood for about twenty different causes.
+- A worker that cannot be recovered now says which check stopped it, rather than one sentence that covered eight different situations and named none of them.
+
 ## 1.13.3
 
 ### Fixes
