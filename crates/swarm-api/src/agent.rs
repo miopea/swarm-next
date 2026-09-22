@@ -9260,9 +9260,17 @@ mod tests {
                     urgency: swarm_domain::DecisionUrgency::Normal,
                     title: &format!("Decision {index}"),
                     summary: "Short by construction.",
+                    // ⚠️ NONE OF THESE SENTINELS MAY BE A HEX DIGIT. The index
+                    // carries decision and worker IDS, which are UUIDs — so a
+                    // hex-letter sentinel can appear in the render by pure
+                    // chance, with nothing to do with the field it is standing
+                    // for. `e` was one, and made this test fail roughly once in
+                    // 230 runs; `r` and `k` cannot occur in a UUID at all,
+                    // which is exactly why only the evidence assertion ever
+                    // failed.
                     reason: &"r".repeat(4_000),
                     risk: &"k".repeat(4_000),
-                    evidence: &"e".repeat(4_000),
+                    evidence: &"z".repeat(4_000),
                     suggested_action: "Proceed",
                     allowed_actions: &actions,
                     operator_actions: &[],
@@ -9298,7 +9306,7 @@ mod tests {
         );
         assert!(!rendered.contains("rrrr"), "reason must not be listed");
         assert!(!rendered.contains("kkkk"), "risk must not be listed");
-        assert!(!rendered.contains("eeee"), "evidence must not be listed");
+        assert!(!rendered.contains("zzzz"), "evidence must not be listed");
         // Still enough to recognise one and go and read it.
         assert!(rendered.contains("Decision 7"), "{rendered}");
         assert!(content["next"].as_str().unwrap().contains("decision_id"));
