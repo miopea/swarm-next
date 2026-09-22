@@ -825,6 +825,12 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    size to their text. */
 .keeper-hive-list .hive-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; grid-column: 2 / -1; }
 .keeper-hive-list .hive-standing { margin-right: auto; color: var(--muted); font-size: .7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ⚠️ A RAISED HIVE MUST NOT READ LIKE AN UP-TO-DATE ONE. Looking at the roster
+   at 1280px showed a schema-behind Hive in the same muted grey as a current
+   one, so the only row that needed attention was the one that asked for none.
+   The fleet panel raises it; the roster is where the decision to watch or take
+   over is actually made. */
+.keeper-hive-list .hive-standing.raised { color: var(--warn-strong); font-weight: 600; }
 .keeper-hive-list .hive-actions button { min-height: 36px; padding: 0 12px; flex: 0 0 auto; }
 /* Takeover types on somebody else's machine. It reads as the weightier action
    rather than the default one, which is what the first build got backwards. */

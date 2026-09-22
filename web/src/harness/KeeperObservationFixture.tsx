@@ -20,8 +20,31 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
         : url.endsWith("/task-outbox-status") ? { queued_count: 0, conflict_count: 0, rejected_count: 0 }
         : url.endsWith("/my-stewardship") ? null
         : url.endsWith("/steward/assists") ? { incoming: [], outbox: [] }
+        // ⚠️ THIS USED TO RETURN THE LOCAL HIVE ALONE, so the roster's action
+        // row — Watch, Take over, and the version line beside them — never
+        // rendered here at all. That is why the surface built to let somebody
+        // LOOK at this page could not have caught the clipped button shipped in
+        // 1.13.0. A roster fixture with nothing to act on is a fixture of a
+        // different page. Remote Hives now appear, in the standings an operator
+        // has to be able to tell apart at a glance.
         : url.endsWith("/members")
-        ? [{ hive_id: "fictional", hive_name: "Meadow Hive", operator_id: "fictional", operator_display_name: "Bea", role: "keeper", is_local: true }]
+        ? [
+            { hive_id: "fictional", hive_name: "Meadow Hive", operator_id: "fictional", operator_display_name: "Bea", role: "keeper", is_local: true },
+            { hive_id: "clover", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", operator_email: "cora@example.invalid", role: "member", is_local: false },
+            { hive_id: "thistle", hive_name: "Thistle Hive", operator_id: "operator-3", operator_display_name: "Wren", operator_email: "wren@example.invalid", role: "member", is_local: false },
+            { hive_id: "heather", hive_name: "Heather Hive", operator_id: "operator-4", operator_display_name: "Fen", role: "member", is_local: false },
+          ]
+        : url.endsWith("/fleet-versions")
+        ? {
+            expected_release: "1.13.1", expected_release_first_seen_at: 100, expected_schema_version: 192,
+            hives: [
+              { hive_id: "fictional", node_id: "node-1", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false },
+              { hive_id: "clover", node_id: "node-2", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false },
+              { hive_id: "thistle", node_id: "node-3", swarm_version: "1.11.0", database_schema_version: 188, observed_at: 100, standing: "schema_behind", raises: true },
+              // Heather reports no version at all, which is the case that has to
+              // read as "unknown" rather than as an empty gap in the row.
+            ],
+          }
         : [];
       return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
     };
