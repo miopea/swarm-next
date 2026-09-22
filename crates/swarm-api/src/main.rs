@@ -537,6 +537,18 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
             "crash-interrupted Queen handoffs require operator review"
         );
     }
+    // ⚠️ RUN AT BOOT, BECAUSE A TAKEOVER'S AUTHORITY DOES NOT SURVIVE ONE. The
+    // durable lease holds Queen automation down; the terminal authority that
+    // makes the takeover real does not outlive the host process. Without this,
+    // a restart leaves the Hive paused on behalf of nobody — visible as a Hive
+    // that has simply stopped, which is the hardest failure here to diagnose.
+    let surviving_takeovers = state.reconcile_takeovers_after_restart()?;
+    if surviving_takeovers > 0 {
+        tracing::warn!(
+            surviving_takeovers,
+            "this Hive restarted while under takeover; its terminal authority must be reinstalled before input resumes"
+        );
+    }
     let recovered_queen_automation = state.recover_queen_automation()?;
     if recovered_queen_automation > 0 {
         tracing::warn!(

@@ -1065,6 +1065,27 @@ impl AppState {
     /// Jira is deliberately absent from this path: every Hive continues to
     /// synchronize canonical Jira work directly with Jira.
     #[allow(clippy::too_many_lines)]
+    /// Reconciles this Hive's takeover state after a restart.
+    ///
+    /// ⚠️ THE FAILURE THIS PREVENTS IS A HIVE PAUSED FOR NOBODY. Queen
+    /// automation is held down by the durable lease row, while the authority
+    /// that makes a takeover real lives in the terminal host's memory — so a
+    /// host restart leaves the row without the authority, and the Hive stops
+    /// working on behalf of a takeover that is not happening.
+    ///
+    /// Returns how many leases survived. Anything that did not is ended in the
+    /// record, which is what releases automation.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn reconcile_takeovers_after_restart(&self) -> Result<usize, String> {
+        let store = task_store(self).map_err(|_| "task store unavailable".to_owned())?;
+        let survivors = store
+            .reconcile_local_takeovers(unix_timestamp())
+            .map_err(|error| error.to_string())?;
+        Ok(survivors.len())
+    }
+
     /// Sends this Hive's terminal to whoever it has acknowledged watching it.
     ///
     /// Returns promptly when nobody is watching, which is the ordinary case.

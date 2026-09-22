@@ -194,6 +194,72 @@ impl TaskStore {
         Ok(FederationStewardTakeoverRelayAuthorization { lease, role })
     }
 
+    /// Reconciles this Hive's own takeover state after a restart.
+    ///
+    /// ⚠️ A DURABLE LEASE CAN OUTLIVE THE AUTHORITY THAT ENFORCES IT, and that
+    /// asymmetry is the whole reason this exists. The pause on Queen automation
+    /// is derived from the durable lease row, but the terminal authority that
+    /// makes a takeover real lives in the terminal host's memory. Restart the
+    /// host and the row survives while the authority does not: automation stays
+    /// paused for a takeover that is no longer happening, and the Hive sits
+    /// doing nothing on behalf of nobody.
+    ///
+    /// So a lease is kept only if something could still be controlled through
+    /// it. Anything past its expiry, and anything naming this Hive as target
+    /// while no Queen session is running, is ended as `Expired` — the lease did
+    /// not survive, which is exactly what that state means.
+    ///
+    /// Returns the leases that DID survive and still name this Hive as target,
+    /// so the caller can reinstall their terminal authority. An empty result
+    /// means automation is free to resume.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn reconcile_local_takeovers(
+        &self,
+        now: i64,
+    ) -> Result<Vec<FederationStewardTakeoverLease>, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "UPDATE local_federation_steward_takeover_leases
+             SET state = 'expired', ended_at = COALESCE(ended_at, ?1), synced_at = ?1
+             WHERE state IN ('requested','active') AND expires_at <= ?1",
+            params![now],
+        )?;
+        let queen_session_exists = transaction
+            .query_row(
+                "SELECT 1 FROM worker_profiles p
+                 JOIN worker_sessions s ON s.worker_id = p.id AND s.ended_at IS NULL
+                 WHERE p.role = 'queen' AND p.archived_at IS NULL LIMIT 1",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !queen_session_exists {
+            // ⚠️ NOTHING TO TAKE OVER MEANS NO TAKEOVER. Keeping the lease would
+            // hold this Hive's automation down waiting for a Queen that is not
+            // running, which is indistinguishable from being wedged.
+            transaction.execute(
+                "UPDATE local_federation_steward_takeover_leases
+                 SET state = 'expired', ended_at = COALESCE(ended_at, ?1), synced_at = ?1
+                 WHERE state IN ('requested','active') AND target_hive_id = ?2",
+                params![now, identity.hive.id.to_string()],
+            )?;
+        }
+        let survivors = read_leases(
+            &transaction,
+            "local_federation_steward_takeover_leases",
+            "WHERE state = 'active' AND target_hive_id = ?1 AND expires_at > ?2
+             ORDER BY requested_at",
+            params![identity.hive.id.to_string(), now],
+        )?;
+        transaction.commit()?;
+        Ok(survivors)
+    }
+
     /// Keeper taking over a member Hive, on its own authority.
     ///
     /// ⚠️ KEEPER DOES NOT TRAVEL THE MEMBER COMMAND PATH. That path exists so a
@@ -1553,6 +1619,137 @@ mod tests {
                 .expect("projection");
         }
         active
+    }
+
+    /// ⚠️ A RESTART MUST NOT LEAVE A HIVE PAUSED FOR A TAKEOVER THAT IS NOT
+    /// HAPPENING. The pause on Queen automation is derived from the durable
+    /// lease row; the authority that makes a takeover real lives in the
+    /// terminal host's memory. Restart the host and the row outlives the
+    /// authority, so the Hive sits doing nothing on behalf of nobody — which
+    /// from the outside is indistinguishable from being wedged, and this Hive
+    /// has already lost a day to one of those.
+    #[test]
+    fn a_restart_ends_a_takeover_that_has_nothing_left_to_control() {
+        let now = 700_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let lease = keeper
+            .open_keeper_takeover(target_hive_id, "Incident.", now + 53)
+            .expect("keeper takeover");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 54)
+            .expect("target poll");
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        let session = swarm_domain::WorkerSessionId::new();
+        target.bind_worker_session(queen.id, session).expect("bind");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 55)
+            .expect("target projection");
+        assert!(
+            !target
+                .worker_accepts_injection(queen.id, now + 55)
+                .expect("automation guard"),
+            "automation is paused while the takeover stands"
+        );
+
+        // A restart with the Queen session still running keeps the takeover,
+        // and hands it back so its terminal authority can be reinstalled.
+        let survivors = target
+            .reconcile_local_takeovers(now + 56)
+            .expect("reconcile");
+        assert!(
+            survivors.is_empty(),
+            "a requested lease is not yet active, so there is nothing to reinstall"
+        );
+
+        // Acknowledge, so the lease is genuinely active.
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(
+                lease.id,
+                inbox.leases[0].revision,
+                now + 57,
+            )
+            .expect("journal acknowledgement");
+        let active = keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &acknowledgement.command,
+                now + 58,
+            )
+            .expect("acknowledge");
+        let refreshed = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 59)
+            .expect("target poll");
+        target
+            .apply_federation_steward_takeover_inbox(&refreshed, now + 59)
+            .expect("projection");
+        let survivors = target
+            .reconcile_local_takeovers(now + 60)
+            .expect("reconcile");
+        assert_eq!(
+            survivors.len(),
+            1,
+            "an active takeover with a live Queen survives a restart"
+        );
+        assert_eq!(survivors[0].id, active.lease.as_ref().unwrap().id);
+
+        // ⚠️ THE HOST RESTARTED: the Queen session is gone, so nothing can be
+        // controlled through this lease any more.
+        target
+            .release_worker_session(session)
+            .expect("session ended");
+        let survivors = target
+            .reconcile_local_takeovers(now + 61)
+            .expect("reconcile");
+        assert!(
+            survivors.is_empty(),
+            "nothing survives with no Queen to control"
+        );
+        assert!(
+            target
+                .worker_accepts_injection(queen.id, now + 61)
+                .expect("automation guard"),
+            "and automation resumes rather than waiting out the lease"
+        );
+    }
+
+    /// An expired lease is ended by reconciliation rather than left to be
+    /// noticed, so a restart never resumes into a stale pause.
+    #[test]
+    fn a_restart_expires_a_lease_whose_time_had_already_run_out() {
+        let now = 700_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        keeper
+            .open_keeper_takeover(target_hive_id, "Incident.", now + 53)
+            .expect("keeper takeover");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 54)
+            .expect("target poll");
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 55)
+            .expect("projection");
+
+        let after_expiry = now + 55 + REQUEST_LIFETIME_SECONDS + 1;
+        let survivors = target
+            .reconcile_local_takeovers(after_expiry)
+            .expect("reconcile");
+        assert!(survivors.is_empty());
+        let local = target
+            .federation_steward_takeover_local_state()
+            .expect("local state");
+        assert_eq!(
+            local.leases[0].state,
+            FederationStewardTakeoverState::Expired,
+            "the lease is ended in the record, not merely ignored by a query"
+        );
+        assert_eq!(local.leases[0].ended_at, Some(after_expiry));
     }
 
     /// ⚠️ KEEPER TAKES OVER ON THE SAME TERMS AS A STEWARD, which the

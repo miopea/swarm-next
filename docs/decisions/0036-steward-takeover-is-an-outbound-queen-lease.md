@@ -28,9 +28,17 @@ acknowledged lease, and no operator surface exists to create one. The gate is
 about the capability being usable, not about whether a federation endpoint
 answers 403.
 
+Restart reconciliation now runs at boot. The asymmetry it exists for: Queen
+automation is held down by the DURABLE lease row, while the authority that makes
+a takeover real lives in the terminal host's MEMORY. Restart the host and the
+row outlives the authority, leaving the Hive paused on behalf of a takeover that
+is not happening — visible only as a Hive that has stopped working, which is the
+hardest failure here to diagnose. So a lease survives a restart only if a Queen
+session is still running to be controlled through it; anything else is ended as
+`Expired`, which is what releases automation.
+
 Outstanding, and the refusal to ship a partial takeover behind a flag stands:
-restart reconciliation, automation recovery, audit presentation, and
-desktop/mobile control.
+automation recovery, audit presentation, and desktop/mobile control.
 
 ## Context
 
