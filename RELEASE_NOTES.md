@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.14.2
+
+### Fixes
+- Installing an update no longer fails because a background maintenance pass happened to be running. That check runs every two minutes and took the same lock, so an install that collided with it was refused outright — and because the request is consumed before the install starts, it never retried. An install now waits for maintenance to finish instead of failing against it.
+
 ## 1.14.1
 
 ### Fixes
