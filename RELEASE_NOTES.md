@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.13.2
+
+### Fixes
+- A Hive that has fallen behind now stands out on the Apiary roster instead of reading exactly like one that is up to date, so the row that needs attention is the one that looks like it.
+
 ## 1.13.1
 
 ### Fixes
