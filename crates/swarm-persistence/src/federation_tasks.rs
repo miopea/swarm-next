@@ -695,6 +695,90 @@ impl TaskStore {
         self.queue_federation_task_command(task_id, FederationTaskCommandKind::Claim, None, now)
     }
 
+    /// Returns claimed work that was never actually started, so a Hive that
+    /// slept or died holding it does not hold it forever.
+    ///
+    /// ⚠️ THE CLAIM WAS A PERMANENT HOLD UNTIL THIS EXISTED. `Claim` set
+    /// `home_node_id` and nothing ever cleared it — no expiry, no release. This
+    /// task's own description asks for "EXPIRY RECOVERY when a Hive sleeps or
+    /// dies mid-work" and calls it "what stops a reservation becoming a
+    /// permanent hold"; it was exactly that permanent hold.
+    ///
+    /// ⚠️ ONLY WORK THAT NEVER STARTED IS RECLAIMED, which is the whole safety
+    /// of it. A claim is the first phase; the Hive CONFIRMS it by moving the
+    /// task out of `draft`/`ready` into real work, and from then on the hold is
+    /// durable and this never touches it. Reclaiming active work would yank a
+    /// task off a Hive mid-deploy, which is a worse failure than the one being
+    /// fixed.
+    ///
+    /// ⚠️ A NOTE ON THE BOUND, because an amendment says to reuse the Jira
+    /// claim number and I am not. `FEDERATION_CLAIM_RESERVATION_SECONDS` is two
+    /// minutes, and that is a reserve-then-confirm handshake between machines —
+    /// not the time a Hive needs to pick work up. The federation pass alone is
+    /// paced at sixty seconds, so two minutes would routinely strip claims off
+    /// Hives that were doing nothing wrong. What IS reused is the two-PHASE
+    /// SHAPE. The number is anchored instead to `STALE_OWNED_WORK_SECONDS`, the
+    /// thirty minutes this fleet already uses to call owned work stale, so a
+    /// claim lapses on the same clock the local board already judges by rather
+    /// than a second one invented here.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn reclaim_unstarted_apiary_claims(&self, now: i64) -> Result<usize, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let keeper = transaction
+            .query_row(
+                "SELECT id FROM apiaries WHERE keeper_operator_id = ?1 AND collapsed_at IS NULL",
+                params![identity.operator.id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(apiary_id) = keeper else {
+            // Only Keeper owns these rows. A member reclaiming from its own
+            // projection would be deciding for the Apiary.
+            return Ok(0);
+        };
+        let lapsed = transaction
+            .prepare(
+                "SELECT id, apiary_id, source, title, description, priority, state,
+                        home_node_id, home_hive_id, revision, created_at, updated_at
+                 FROM apiary_tasks
+                 WHERE apiary_id = ?1 AND home_node_id IS NOT NULL
+                   AND state IN ('draft','ready') AND updated_at <= ?2",
+            )?
+            .query_map(
+                params![apiary_id, now.saturating_sub(UNSTARTED_CLAIM_SECONDS)],
+                apiary_task_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut released = 0;
+        for mut task in lapsed {
+            task.home_node_id = None;
+            task.home_hive_id = None;
+            task.revision = task
+                .revision
+                .checked_add(1)
+                .ok_or(TaskStoreError::InvalidFederationTask)?;
+            task.updated_at = now;
+            transaction.execute(
+                "UPDATE apiary_tasks
+                 SET home_node_id = NULL, home_hive_id = NULL, revision = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![task.revision, now, task.id.to_string()],
+            )?;
+            // ⚠️ AN EVENT, NOT A QUIET UPDATE. Every member syncs the board from
+            // this feed, so a release that wrote no event would leave every
+            // other Hive believing the work is still taken — which is the
+            // permanent hold again, distributed.
+            insert_task_event(&transaction, &task, now)?;
+            released += 1;
+        }
+        transaction.commit()?;
+        Ok(released)
+    }
+
     /// Queues one cross-Hive filing: work that belongs to a repository some
     /// other Hive owns.
     ///
@@ -2428,6 +2512,13 @@ fn repository_owner(
     Ok(None)
 }
 
+/// How long a claimed-but-unstarted task stays held.
+///
+/// Anchored to `STALE_OWNED_WORK_SECONDS` in swarm-api — the thirty minutes
+/// this fleet already uses to call owned work stale — rather than inventing a
+/// second number for the same judgement.
+const UNSTARTED_CLAIM_SECONDS: i64 = 30 * 60;
+
 /// Matches `task_prerequisites.reason` at the Hive, so a relocated edge keeps
 /// the sentence that explains why the ordering exists rather than truncating it.
 const MAX_APIARY_PREREQUISITE_REASON_BYTES: usize = 2048;
@@ -3479,6 +3570,116 @@ mod tests {
     /// A bulk move retries. Minting a second shared task for the same local one
     /// would put the same work on the board twice with no way to tell which is
     /// real, so the second call returns the first result.
+    /// ⚠️ A CLAIM WAS A PERMANENT HOLD. Claim set `home_node_id` and nothing ever
+    /// cleared it, so a Hive that slept holding work held it forever — the
+    /// exact thing this task's title says must never happen.
+    ///
+    /// The safety is that only work which never STARTED comes back. A Hive
+    /// confirms its claim by moving the task into real work, and from then on
+    /// the hold is durable: reclaiming active work would yank a task off a Hive
+    /// mid-deploy, which is worse than the failure being fixed.
+    #[test]
+    fn a_claim_nobody_ever_started_returns_to_the_board_and_started_work_does_not() {
+        let now = 900_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let slept_on = keeper
+            .create_apiary_task("Claimed then slept on", "", TaskPriority::Normal, now + 10)
+            .unwrap();
+        let worked_on = keeper
+            .create_apiary_task("Claimed and started", "", TaskPriority::Normal, now + 11)
+            .unwrap();
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 12)
+            .unwrap();
+        member.apply_federation_task_page(&page, now + 12).unwrap();
+
+        for task in [slept_on.id, worked_on.id] {
+            let claim = member.queue_federation_task_claim(task, now + 13).unwrap();
+            let receipt = keeper
+                .apply_federation_task_command(
+                    &acceptance.node_credential,
+                    &claim.command,
+                    now + 14,
+                )
+                .unwrap();
+            assert_eq!(receipt.outcome, FederationTaskCommandOutcome::Applied);
+        }
+
+        // One of them is actually started; the other is only claimed.
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 15)
+            .unwrap();
+        member.apply_federation_task_page(&page, now + 15).unwrap();
+        let start = member
+            .queue_federation_task_transition(worked_on.id, TaskState::Active, now + 16)
+            .unwrap();
+        keeper
+            .apply_federation_task_command(&acceptance.node_credential, &start.command, now + 17)
+            .unwrap();
+
+        // Nothing lapses while the window is open.
+        assert_eq!(
+            keeper.reclaim_unstarted_apiary_claims(now + 18).unwrap(),
+            0,
+            "a fresh claim is not stripped from a Hive doing nothing wrong"
+        );
+
+        let lapsed = now + 20 + UNSTARTED_CLAIM_SECONDS;
+        assert_eq!(
+            keeper.reclaim_unstarted_apiary_claims(lapsed).unwrap(),
+            1,
+            "only the claim nobody ever started comes back"
+        );
+        // Keeper's own table, not the member projection it does not keep.
+        let board = keeper.list_visible_apiary_tasks().unwrap();
+        let returned = board.iter().find(|task| task.id == slept_on.id).unwrap();
+        let held = board.iter().find(|task| task.id == worked_on.id).unwrap();
+        assert_eq!(
+            returned.home_hive_id, None,
+            "available to whoever can take it"
+        );
+        assert!(
+            held.home_hive_id.is_some(),
+            "started work stays with its Hive"
+        );
+
+        // ⚠️ THE RELEASE IS AN EVENT, or every other Hive still believes the
+        // work is taken — the permanent hold again, distributed.
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, lapsed + 1)
+            .unwrap();
+        member
+            .apply_federation_task_page(&page, lapsed + 1)
+            .unwrap();
+        assert_eq!(
+            member
+                .list_visible_apiary_tasks()
+                .unwrap()
+                .into_iter()
+                .find(|task| task.id == slept_on.id)
+                .unwrap()
+                .home_hive_id,
+            None,
+            "the member's own board learns the work is free again"
+        );
+
+        // And it is claimable again, which is the point of releasing it.
+        let reclaim = member
+            .queue_federation_task_claim(slept_on.id, lapsed + 2)
+            .unwrap();
+        assert_eq!(
+            keeper
+                .apply_federation_task_command(
+                    &acceptance.node_credential,
+                    &reclaim.command,
+                    lapsed + 3
+                )
+                .unwrap()
+                .outcome,
+            FederationTaskCommandOutcome::Applied
+        );
+    }
+
     /// ⚠️ THE MOTIVATING FAILURE, FIXED AND PINNED. On 2026-09-20 a worker
     /// filed bfg-watchfaces work with the foreign workspace named correctly,
     /// and it landed as a draft on the FILING Hive's board — the Hive that owns
