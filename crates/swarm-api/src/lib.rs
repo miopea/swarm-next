@@ -1258,6 +1258,12 @@ impl AppState {
             tracing::warn!(%error, "this Hive could not learn who is watching it");
         }
         if let Some(store) = self.task_store.as_ref()
+            && let Err(error) =
+                reconcile_apiary_takeovers(store, &client, &connection.node_credential, now).await
+        {
+            tracing::warn!(%error, "this Hive could not learn whether it is under takeover");
+        }
+        if let Some(store) = self.task_store.as_ref()
             && let Err(error) = reconcile_hive_capability(
                 &service,
                 store,
@@ -4316,6 +4322,18 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/takeovers/{lease_id}/relay",
             get(takeover_relay::federation_takeover_relay),
         )
+        // ⚠️ WITHOUT THESE TWO, TAKEOVER CANNOT WORK BETWEEN MACHINES AT ALL.
+        // The control plane and the relay both existed and neither had a route
+        // a member could reach, so a Keeper's lease sat `requested` forever and
+        // the relay refused it — correctly. Reported from the field 2026-09-22.
+        .route(
+            "/api/v1/federation/takeovers",
+            get(federation_takeover_inbox),
+        )
+        .route(
+            "/api/v1/federation/takeovers/commands",
+            post(apply_federation_takeover_command),
+        )
         .route("/api/v1/apiary/directory", get(local_apiary_directory))
         .route(
             "/api/v1/federation/departure-readiness",
@@ -5867,6 +5885,31 @@ async fn apiary_watched_by(
 }
 
 /// Served to a member about ITSELF: who is watching it right now.
+/// The takeovers an authenticated member is party to.
+async fn federation_takeover_inbox(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let inbox = task_store(&state)?
+        .federation_steward_takeover_inbox(credential, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(inbox)).into_response())
+}
+
+/// One member takeover command: acknowledge, renew, release or reclaim.
+async fn apply_federation_takeover_command(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(command): Json<swarm_domain::FederationStewardTakeoverCommand>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let receipt = task_store(&state)?
+        .apply_federation_steward_takeover_command(credential, &command, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
 async fn federation_watches(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -8852,6 +8895,62 @@ async fn reconcile_federation_directory(
 /// which is an ordinary rolling-update state. And storing the defaults changes
 /// no local setting — it records what the Apiary expects so drift becomes
 /// computable. Losing it costs visibility, never correctness.
+/// Learns what takeovers this Hive is party to, and acknowledges the ones
+/// being done TO it.
+///
+/// ⚠️ NOTHING CALLED THIS BEFORE, AND THAT IS WHY TAKEOVER DID NOT WORK. ADR
+/// 0036's step 3 is the target retrieving the request on its own outbound
+/// connection and acknowledging the exact lease revision; only after that does
+/// Keeper mark the lease active and relay anything. The control plane, the
+/// relay and the surfaces were all built and this step was not, so a Keeper's
+/// lease sat `requested` forever and the window reported the takeover ended.
+///
+/// The acknowledgement is sent AFTER the local projection is written, for the
+/// same reason it is for a watch: acknowledging first would tell Keeper this
+/// Hive is under takeover before its own operator could see it.
+async fn reconcile_apiary_takeovers(
+    store: &TaskStore,
+    client: &federation_http::FederationHttpClient,
+    credential: &str,
+    now: i64,
+) -> Result<(), String> {
+    let inbox = match client.takeover_inbox(credential).await {
+        Ok(inbox) => inbox,
+        Err(federation_http::FederationHttpError::RemoteRejected(404 | 405)) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let local_hive = store
+        .local_hive_identity()
+        .map_err(|error| error.to_string())?
+        .hive
+        .id;
+    store
+        .apply_federation_steward_takeover_inbox(&inbox, now)
+        .map_err(|_| "takeover projection could not be saved".to_owned())?;
+    for lease in inbox.leases.iter().filter(|lease| {
+        lease.target_hive_id == local_hive
+            && lease.state == swarm_domain::FederationStewardTakeoverState::Requested
+    }) {
+        // Already journalled, or no longer acknowledgeable. Not an error: the
+        // next pass reads the state again.
+        let Ok(queued) =
+            store.queue_federation_steward_takeover_acknowledgement(lease.id, lease.revision, now)
+        else {
+            continue;
+        };
+        match client
+            .submit_takeover_command(credential, &queued.command)
+            .await
+        {
+            Ok(receipt) => {
+                let _ = store.apply_federation_steward_takeover_receipt(&receipt, now);
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
 /// Learns who is watching this Hive, and tells Keeper it knows.
 ///
 /// ⚠️ THE ACKNOWLEDGEMENT IS SENT ONLY AFTER THE LOCAL MIRROR IS WRITTEN. That

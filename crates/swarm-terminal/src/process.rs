@@ -1176,9 +1176,29 @@ impl SessionRegistry {
         let mut child = lock(&session.child)?;
         let capture = lock(&session.startup_failure)?;
         let exit = child.try_wait().map_err(terminal_error)?;
+        // ⚠️ THE EXACT MESSAGE IS NO LONGER REQUIRED, and this is the fix for a
+        // Hive whose Queen was stuck on 2026-09-22. The gate used to demand the
+        // captured startup bytes be EXACTLY the provider's wording; a prefix, a
+        // full stop, or a second line and it refused — leaving the ONLY route
+        // out of a Continue start closed, permanently, because every restart
+        // chooses the same branch again.
+        //
+        // ⚠️ NOTHING IS AT RISK ON THIS PATH, which is what makes that safe. A
+        // continuation launch is only ever retained for a Continue start, and a
+        // Continue start is one where Swarm holds NO conversation id at all.
+        // The exactness was protecting a known conversation from being replaced
+        // — and on this path there is no known conversation to protect.
+        //
+        // What still has to be true is structural rather than textual: the
+        // provider never produced a usable terminal (the reader never ran) and
+        // the process died. Any non-zero exit counts, because a Hive stuck
+        // forever is worse than one fresh conversation, and the exact code a
+        // provider chooses for this is not something Swarm should depend on.
+        // `capture` remains for what it is actually good at: telling the
+        // operator WHY, not deciding whether to recover.
         if session.reader_running()
-            || !capture.missing_continuation()
-            || !exit.is_some_and(|exit| exit.signal().is_none() && exit.exit_code() == 1)
+            || !capture.failed_before_anyone_used_it()
+            || !exit.is_some_and(|exit| exit.signal().is_none() && exit.exit_code() != 0)
         {
             return Err(SessionRegistryError::RecoveryRefused);
         }
@@ -3197,6 +3217,68 @@ mod tests {
             FreshRecoveryLaunch::new(fresh, TerminalSize::default(), false,).unwrap()
         ));
         (session, attempt)
+    }
+
+    /// ⚠️ A CONTINUE START THAT DIES MUST NOT STRAND THE WORKER FOREVER.
+    ///
+    /// Reported 2026-09-22: a Hive's Queen showed "No conversation found to
+    /// continue", the session closed, and every restart did it again. That
+    /// branch is chosen when Swarm holds NO conversation id but the worker has
+    /// run before, and the only way out is this fallback — so a fallback that
+    /// declines is a permanent trap, not a missed optimisation.
+    ///
+    /// The fallback used to require the captured startup bytes to be EXACTLY
+    /// the provider's message. Any prefix, any punctuation, any second line and
+    /// it refused. This fixture prints a realistic variation of the same
+    /// failure.
+    ///
+    /// ⚠️ NOTHING IS AT RISK IN THIS CASE, which is what makes relaxing it
+    /// safe. A continuation launch is only ever retained for a Continue start,
+    /// and a Continue start is one where Swarm has no conversation id at all.
+    /// There is no known conversation for a fresh relaunch to lose — the
+    /// exactness was protecting something that does not exist on this path.
+    #[test]
+    fn a_continue_start_that_died_recovers_even_when_the_message_is_not_exact() {
+        let registry = SessionRegistry::new(
+            JournalLimits::new(4096, 64),
+            2,
+            [env::temp_dir().canonicalize().unwrap()],
+        )
+        .unwrap();
+        let (old, attempt) = recoverable_fixture(
+            &registry,
+            "printf 'Error: No conversation found to continue.\\n'; exit 1",
+            shell_command("read value; printf 'fresh:%s' \"$value\""),
+        );
+        wait_for_fixture_exit(&old);
+
+        let successor = registry
+            .recover_continuation(old.id(), attempt)
+            .expect("a dead continuation start must fall back to a fresh one");
+        assert_ne!(successor, old.id(), "a new session, not the dead one");
+    }
+
+    /// ⚠️ AND A START THAT ACTUALLY WORKED IS NEVER REPLACED. The relaxation
+    /// above must not turn any exit into a reason to discard a live session:
+    /// the reader running at all means the provider produced a usable terminal.
+    #[test]
+    fn a_continue_start_that_ran_is_never_replaced_by_a_fresh_one() {
+        let registry = SessionRegistry::new(
+            JournalLimits::new(4096, 64),
+            2,
+            [env::temp_dir().canonicalize().unwrap()],
+        )
+        .unwrap();
+        let (old, attempt) = recoverable_fixture(
+            &registry,
+            "printf 'ready\\n'; exit 0",
+            shell_command("read value"),
+        );
+        wait_for_fixture_exit(&old);
+        assert!(
+            registry.recover_continuation(old.id(), attempt).is_err(),
+            "a start that exited cleanly is not a failed continuation"
+        );
     }
 
     #[test]

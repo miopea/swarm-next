@@ -817,6 +817,23 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .keeper-hive-list li > span:nth-child(2), .keeper-work-list li > span, .keeper-steward-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
 .keeper-hive-list strong, .keeper-hive-list small, .keeper-work-list strong, .keeper-work-list small, .keeper-steward-list strong, .keeper-steward-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .keeper-hive-list small, .keeper-work-list small, .keeper-steward-list small { color: var(--muted); font-size: .7rem; }
+/* ⚠️ THE ACTIONS GET THEIR OWN ROW. They were appended as extra children of a
+   three-column grid (42px | name | badge), so they auto-placed outside the
+   template — "Watch" was clipped to its border and "Take over" stretched across
+   the row, making the rarer and more serious action the visually dominant one.
+   Spanning a row of their own keeps the name row readable and lets both buttons
+   size to their text. */
+.keeper-hive-list .hive-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; grid-column: 2 / -1; }
+.keeper-hive-list .hive-standing { margin-right: auto; color: var(--muted); font-size: .7rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.keeper-hive-list .hive-actions button { min-height: 36px; padding: 0 12px; flex: 0 0 auto; }
+/* Takeover types on somebody else's machine. It reads as the weightier action
+   rather than the default one, which is what the first build got backwards. */
+.keeper-hive-list .hive-takeover-button { min-height: 36px; padding: 0 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); color: var(--warn-strong); font-size: .78rem; }
+@media (max-width: 680px) {
+  .keeper-hive-list .hive-actions { grid-column: 1 / -1; }
+  .keeper-hive-list .hive-standing { flex: 1 0 100%; margin-right: 0; }
+}
+
 .keeper-role-badge { padding: 3px 7px; border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .6rem; font-weight: 700; text-transform: uppercase; }
 .keeper-role-badge.keeper { color: var(--blocked); background: var(--blocked-soft); }
 .keeper-role-badge.steward { color: var(--accent-strong); background: var(--accent-soft); }

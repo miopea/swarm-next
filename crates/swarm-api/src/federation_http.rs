@@ -98,6 +98,46 @@ impl FederationHttpClient {
         .await
     }
 
+    /// The takeovers Keeper says this Hive is party to.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn takeover_inbox(
+        &self,
+        credential: &str,
+    ) -> Result<swarm_domain::FederationStewardTakeoverInbox, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/takeovers",
+            Some(credential),
+            None,
+        )
+        .await
+    }
+
+    /// Sends one takeover command — acknowledge, renew, release or reclaim.
+    ///
+    /// ⚠️ ACKNOWLEDGEMENT IS WHAT MAKES A TAKEOVER REAL. Until the target sends
+    /// it, Keeper holds a `requested` lease that authorises nothing and the
+    /// relay refuses. There was no route for this at all until 2026-09-22, so
+    /// takeover between machines could never have worked.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn submit_takeover_command(
+        &self,
+        credential: &str,
+        command: &swarm_domain::FederationStewardTakeoverCommand,
+    ) -> Result<swarm_domain::FederationStewardTakeoverReceipt, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            "api/v1/federation/takeovers/commands",
+            Some(credential),
+            Some(command),
+        )
+        .await
+    }
+
     /// The watches Keeper says are open on this Hive.
     ///
     /// Pulled by the member about ITSELF. The member has to know it is being

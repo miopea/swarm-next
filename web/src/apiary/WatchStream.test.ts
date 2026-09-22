@@ -107,11 +107,27 @@ test("a closed window says the window closed, not that something failed", async 
   expect(handlers.onState).toHaveBeenCalledWith("closed", "The window closed.");
 });
 
-test("a refused grant is explained rather than shown as a status code", async () => {
+/**
+ * ⚠️ A REFUSAL IS RETRIED BEFORE IT IS BELIEVED. A watch is not live until the
+ * watched Hive acknowledges it, and that Hive learns on its own federation
+ * pass — so asking once and giving up reported "no longer live" for a watch a
+ * second old. Fake timers here because the real wait is a minute.
+ */
+test("a refused grant is waited out and then explained", async () => {
+  vi.useFakeTimers();
   const { stream, sockets, handlers } = harness({ ok: false, status: 403 });
-  await stream.open();
-  expect(handlers.onState).toHaveBeenCalledWith("closed", "That watch is no longer live.");
+  const opening = stream.open();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(handlers.onState).toHaveBeenCalledWith("connecting", "Waiting for that Hive to accept…");
+  await vi.advanceTimersByTimeAsync(61_000);
+  await opening;
+  expect(handlers.onState).toHaveBeenCalledWith("closed", "That Hive did not accept the watch.");
   expect(sockets).toHaveLength(0);
+  vi.useRealTimers();
+});
+
+test("the failure words are written for a person, not a status code", () => {
   expect(watchGrantFailure(429)).toBe("Too many windows are open right now.");
   expect(watchGrantFailure(503)).toBe("This Hive is restarting; try again in a moment.");
   expect(watchGrantFailure(418)).toBe("The window could not be opened (418).");

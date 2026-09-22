@@ -13,6 +13,14 @@
 const OUTPUT_FRAME_TYPE = 1;
 const SNAPSHOT_FRAME_TYPE = 2;
 const GRANT_PROTOCOL_PREFIX = "swarm-watch.";
+/**
+ * How long to wait for the watched Hive to accept.
+ *
+ * Its federation pass is paced at sixty seconds, so anything shorter routinely
+ * declares a healthy watch dead.
+ */
+const ACKNOWLEDGEMENT_WAIT_MS = 60_000;
+const ACKNOWLEDGEMENT_POLL_MS = 2_000;
 
 export type WatchStreamState = "connecting" | "live" | "closed";
 
@@ -62,29 +70,44 @@ export class WatchStream {
     handlers.onState("connecting");
     const origin = this.#options.locationOrigin ?? window.location.origin;
     const request = this.#options.fetch ?? window.fetch.bind(window);
-    let grant: string;
-    let path: string;
-    try {
-      const response = await request(`${origin}/api/v1/apiary/watches/${encodeURIComponent(watchId)}/grant`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${operatorToken}` },
-      });
-      if (!response.ok) {
-        handlers.onState("closed", watchGrantFailure(response.status));
+    // ⚠️ A WATCH IS NOT LIVE UNTIL THE WATCHED HIVE ACKNOWLEDGES IT, and that
+    // Hive learns on its own federation pass. Asking once and giving up
+    // reported "no longer live" for a watch a second old — a working feature
+    // reading as a broken one, which is exactly what the field saw on
+    // 2026-09-22. The takeover window already waited; this one did not.
+    let grant: string | undefined;
+    let path: string | undefined;
+    const deadline = Date.now() + ACKNOWLEDGEMENT_WAIT_MS;
+    while (!this.#closed && grant === undefined) {
+      let status = 0;
+      try {
+        const response = await request(`${origin}/api/v1/apiary/watches/${encodeURIComponent(watchId)}/grant`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${operatorToken}` },
+        });
+        status = response.status;
+        if (response.ok) {
+          const body = (await response.json()) as { grant?: string; websocket_path?: string };
+          if (body?.grant && body?.websocket_path) {
+            grant = body.grant;
+            path = body.websocket_path;
+            break;
+          }
+        }
+      } catch {
+        handlers.onState("closed", "This Hive could not be reached.");
         return;
       }
-      const body = (await response.json()) as { grant?: string; websocket_path?: string };
-      if (!body?.grant || !body?.websocket_path) {
-        handlers.onState("closed", "The window could not be opened.");
+      if (Date.now() >= deadline) {
+        handlers.onState("closed", status === 403
+          ? "That Hive did not accept the watch."
+          : watchGrantFailure(status));
         return;
       }
-      grant = body.grant;
-      path = body.websocket_path;
-    } catch {
-      handlers.onState("closed", "This Hive could not be reached.");
-      return;
+      handlers.onState("connecting", "Waiting for that Hive to accept…");
+      await new Promise((resolve) => { setTimeout(resolve, ACKNOWLEDGEMENT_POLL_MS); });
     }
-    if (this.#closed) return;
+    if (this.#closed || grant === undefined || path === undefined) return;
 
     const url = `${origin.replace(/^http/, "ws")}${path}`;
     const factory = this.#options.websocketFactory ?? ((target, protocols) => new WebSocket(target, protocols));

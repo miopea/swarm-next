@@ -7,6 +7,17 @@ const MISSING_CONTINUATION: &[u8] = b"No conversation found to continue";
 pub(crate) struct StartupFailureCapture {
     bytes: Option<Vec<u8>>,
     missing: bool,
+    /// Whether anything happened that makes this session the operator's.
+    ///
+    /// ⚠️ KEPT SEPARATE FROM `missing` DELIBERATELY. Both used to be cleared by
+    /// the same `disarm`, so one flag was carrying two unrelated facts: "the
+    /// provider's exact words were not seen" and "a human has engaged with this
+    /// terminal". Recovery must ignore the first and must ALWAYS respect the
+    /// second — typing into a session makes it yours, and no fallback may
+    /// replace it afterwards.
+    engaged: bool,
+    /// Whether the startup stream ran to completion without being disarmed.
+    failed_at_startup: bool,
 }
 
 impl StartupFailureCapture {
@@ -14,12 +25,24 @@ impl StartupFailureCapture {
         Self {
             bytes: enabled.then(Vec::new),
             missing: false,
+            engaged: false,
+            failed_at_startup: false,
         }
     }
 
     pub(crate) fn disarm(&mut self) {
         self.bytes = None;
         self.missing = false;
+        self.engaged = true;
+        self.failed_at_startup = false;
+    }
+
+    /// Whether this session died during startup having never been engaged with.
+    ///
+    /// The structural question recovery actually needs, as opposed to whether
+    /// the provider's wording matched byte for byte.
+    pub(crate) fn failed_before_anyone_used_it(&self) -> bool {
+        self.failed_at_startup && !self.engaged
     }
 
     pub(crate) fn push(&mut self, bytes: &[u8]) {
@@ -39,7 +62,11 @@ impl StartupFailureCapture {
 
     pub(crate) fn finish(&mut self, complete: bool) {
         let bytes = self.bytes.take();
+        // `missing` stays exact: it is what TELLS the operator the provider had
+        // no conversation, and a loose match there would put words in the
+        // provider's mouth. Recovery no longer depends on it.
         self.missing = complete && bytes.as_deref().is_some_and(exact_missing_message);
+        self.failed_at_startup = complete && !self.engaged;
     }
 }
 
