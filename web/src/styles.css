@@ -3441,3 +3441,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    and assistive technology while looking like the text it opens. */
 .linklike { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
 .linklike:hover { text-decoration: none; }
+
+/* The removal confirmation sits under the roster it acts on, so the Hive being
+   removed and the sentence about it are read together. */
+.keeper-remove-confirm { display: grid; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
+.keeper-remove-confirm p { margin: 0; font-size: .8rem; }
+/* Removal is rarer and more serious than watching, and less immediate than a
+   takeover: it reads as an ordinary control until the confirmation. */
+.keeper-hive-list .hive-remove-button { min-height: 36px; padding: 0 12px; flex: 0 0 auto; }

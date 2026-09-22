@@ -449,6 +449,8 @@ pub enum TaskStoreError {
     ApiaryInvitationNotFound,
     #[error("Apiary invitation is no longer pending")]
     ApiaryInvitationResolved,
+    #[error("no Hive with that identity is a member of this Apiary")]
+    ApiaryMemberNotFound,
     #[error("Apiary join readiness is incomplete")]
     ApiaryJoinNotReady,
     /// ⚠️ CARRIES THE REASONS, BECAUSE THE DOMAIN ALREADY KNEW THEM.

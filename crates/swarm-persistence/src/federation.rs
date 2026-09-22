@@ -2414,6 +2414,66 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let context = departure_member_context(&transaction, &identity, &credential, now)?;
+        Self::finish_departure(transaction, &identity, &local_node, &context, now)
+    }
+
+    /// Ends one membership the KEEPER names, for a Hive that cannot ask.
+    ///
+    /// ⚠️ THE ONLY DIFFERENCE FROM A MEMBER LEAVING IS HOW IT IS FOUND
+    /// (ADR 0108). The same readiness blockers apply, the same signed receipt is
+    /// written, the same membership departs and the same Hive is detached — so a
+    /// member that returns applies the receipt exactly as if it had asked, and
+    /// its private work was never touched. Nothing is sent to the member and no
+    /// connection is opened to it; only the Keeper's own roster changes.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown members, outstanding shared work and
+    /// corrupt durable state.
+    pub fn remove_apiary_member(
+        &self,
+        member_hive: swarm_domain::HiveId,
+        now: i64,
+    ) -> Result<FederationDepartureReceipt, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        let identity = self.local_hive_identity()?;
+        let local_node = self.local_federation_identity(now)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let context = departure_member_context_for_hive(&transaction, &identity, member_hive, now)?;
+        Self::finish_departure(transaction, &identity, &local_node, &context, now)
+    }
+
+    /// What still holds this member to the Apiary, named by the Keeper's own id.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown members and corrupt durable state.
+    pub fn remove_apiary_member_readiness(
+        &self,
+        member_hive: swarm_domain::HiveId,
+        now: i64,
+    ) -> Result<FederationDepartureReadiness, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        let context = departure_member_context_for_hive(&connection, &identity, member_hive, now)?;
+        keeper_departure_readiness(&connection, &context.member, now)
+    }
+
+    /// The one transaction both departures perform, from the point the
+    /// membership is known. Shared so a Keeper-initiated removal cannot drift
+    /// from a member leaving: the receipt, the readiness and the detach are the
+    /// same or they are two different features wearing one name.
+    fn finish_departure(
+        transaction: rusqlite::Transaction<'_>,
+        identity: &swarm_domain::HiveIdentity,
+        local_node: &LocalFederationIdentity,
+        context: &DepartureMemberContext,
+        now: i64,
+    ) -> Result<FederationDepartureReceipt, TaskStoreError> {
         if context.state == "departed" {
             return departure_receipt_for_membership(
                 &transaction,
@@ -2529,7 +2589,17 @@ impl TaskStore {
             .ok_or(TaskStoreError::InvalidFederationDeparture)?;
         let membership: FederationMembershipReceipt = serde_json::from_str(&stored.0)
             .map_err(|_| TaskStoreError::InvalidFederationDeparture)?;
-        if stored.2 != "departing"
+        // ⚠️ `active` IS ACCEPTED TOO, BECAUSE A KEEPER MAY REMOVE A MEMBER THAT
+        // NEVER ASKED TO LEAVE (ADR 0108). Requiring `departing` meant only a
+        // departure this Hive had itself begun could ever be applied — so a
+        // Keeper-initiated removal produced a receipt the member could not
+        // accept, and the two disagreed about membership permanently. Nothing
+        // is relaxed about PROOF: the receipt is still verified below against
+        // the Keeper public key pinned at invitation and against this exact
+        // membership, and any other local state is still refused. Private
+        // workers, tasks and repositories are untouched either way; only shared
+        // projections and the federation credential leave.
+        if !matches!(stored.2.as_str(), "departing" | "active")
             || membership.payload.member_hive_id != identity.hive.id
             || membership.payload.member_operator_id != identity.operator.id
         {
@@ -2571,7 +2641,7 @@ impl TaskStore {
         }
         if transaction.execute(
             "DELETE FROM local_federation_membership
-             WHERE singleton = 1 AND state = 'departing'",
+             WHERE singleton = 1 AND state IN ('departing','active')",
             [],
         )? != 1
         {
@@ -3059,6 +3129,80 @@ pub(crate) fn authenticate_member_credential(
         )
         .optional()?
         .ok_or(TaskStoreError::InvalidFederationCredential)
+}
+
+/// The same membership, found by the HIVE ID the Keeper can see.
+///
+/// ⚠️ NO CREDENTIAL AND NO EXPIRY, AND THAT IS THE WHOLE POINT (ADR 0108). The
+/// credential lookup beside this is how a member proves who it is, and it is
+/// correct there. Reached through it, departure became something a member DOES
+/// rather than something that can be done ABOUT it — so a reinstalled,
+/// decommissioned or lost Hive stayed on the roster forever, and so did one
+/// whose credential had simply lapsed, because that lookup demands an unexpired
+/// one. An operator hit exactly that on 2026-09-22 and had no way out.
+///
+/// This still refuses anyone who is not the Keeper of a live Apiary, and the
+/// caller still applies `keeper_departure_readiness`, so removal cannot strand
+/// shared work. Nothing here reaches the member: only the Keeper's own roster
+/// and its own projections change, which is what keeps ADR 0034 intact.
+fn departure_member_context_for_hive(
+    connection: &rusqlite::Connection,
+    identity: &swarm_domain::HiveIdentity,
+    member_hive: swarm_domain::HiveId,
+    _now: i64,
+) -> Result<DepartureMemberContext, TaskStoreError> {
+    let apiary_id = keeper_owned_apiary(connection, identity)?;
+    connection
+        .query_row(
+            "SELECT member_node_id, member_hive_id, member_operator_id,
+                    state, receipt_json
+             FROM apiary_federation_memberships
+             WHERE apiary_id = ?1 AND member_hive_id = ?2
+               AND state IN ('active','departed')
+             ORDER BY joined_at DESC",
+            params![apiary_id.to_string(), member_hive.to_string()],
+            |row| {
+                let receipt_json = row.get::<_, String>(4)?;
+                let receipt = serde_json::from_str(&receipt_json)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                Ok(DepartureMemberContext {
+                    member: MemberCredentialContext {
+                        apiary: apiary_id,
+                        node: parse_domain_id(&row.get::<_, String>(0)?)?,
+                        hive: parse_domain_id(&row.get::<_, String>(1)?)?,
+                        operator: parse_domain_id(&row.get::<_, String>(2)?)?,
+                    },
+                    state: row.get(3)?,
+                    receipt,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryMemberNotFound)
+}
+
+/// The live Apiary this Hive KEEPS, refusing anyone who merely belongs to one.
+fn keeper_owned_apiary(
+    connection: &rusqlite::Connection,
+    identity: &swarm_domain::HiveIdentity,
+) -> Result<swarm_domain::ApiaryId, TaskStoreError> {
+    let apiary_id = identity
+        .hive
+        .apiary_id
+        .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+    let keeper = connection
+        .query_row(
+            "SELECT keeper_operator_id FROM apiaries
+             WHERE id = ?1 AND collapsed_at IS NULL",
+            [apiary_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+    if keeper != identity.operator.id.to_string() {
+        return Err(TaskStoreError::ApiaryKeeperRequired);
+    }
+    Ok(apiary_id)
 }
 
 fn departure_member_context(
@@ -6748,6 +6892,120 @@ pub(crate) mod tests {
                 .apply_federation_directory(&snapshot, now + 400)
                 .is_err()
         );
+    }
+
+    /// The 2026-09-22 report: "I still cannot delete a hive from an apiary as I
+    /// need to add this wsl one as it is a new install." Departure was built
+    /// and reachable only through the MEMBER'S credential, which a reinstalled
+    /// machine cannot produce and which expires anyway — so the roster kept a
+    /// Hive nobody could remove. ADR 0108.
+    #[test]
+    fn a_keeper_removes_a_member_that_can_no_longer_ask_to_leave() {
+        let now = 120_000;
+        let (keeper, member) = joined_member(now);
+        let member_hive = member.local_hive_identity().unwrap().hive.id;
+        let connection = member.federation_member_connection().unwrap();
+
+        // Long past the member credential's life: the member could not depart
+        // itself now even if the machine still existed.
+        let expired = connection.credential_expires_at + 1;
+        assert!(matches!(
+            keeper.depart_federation_member(&connection.node_credential, expired),
+            Err(TaskStoreError::InvalidFederationCredential)
+        ));
+
+        assert!(
+            keeper
+                .remove_apiary_member_readiness(member_hive, expired)
+                .unwrap()
+                .can_leave()
+        );
+        let receipt = keeper.remove_apiary_member(member_hive, expired).unwrap();
+        // Retry-stable, exactly as a member-initiated departure is: an operator
+        // clicking twice must not mint a second receipt.
+        assert_eq!(
+            receipt,
+            keeper
+                .remove_apiary_member(member_hive, expired + 1)
+                .unwrap()
+        );
+        assert_eq!(receipt.payload.member_hive_id, member_hive);
+
+        // The roster no longer describes a Hive that is gone.
+        assert!(
+            !keeper
+                .list_apiary_members()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.hive_id == member_hive)
+        );
+
+        // And a member that DOES come back is told by its own receipt rather
+        // than by a surprise, keeping its private work.
+        let private_task = member
+            .create_task("Keep my private work", "/projects/private")
+            .unwrap();
+        member
+            .apply_federation_departure(&receipt, expired + 2)
+            .unwrap();
+        assert_eq!(
+            member.get_task(private_task.id).unwrap().title,
+            "Keep my private work"
+        );
+    }
+
+    /// Removal is a Keeper's tidy-up, never a way to strand another Hive's work.
+    #[test]
+    fn removing_a_member_is_refused_while_it_still_holds_shared_work() {
+        let now = 120_000;
+        let (keeper, member) = joined_member(now);
+        let member_hive = member.local_hive_identity().unwrap().hive.id;
+        let member_node = member.local_federation_identity(now).unwrap().node_id;
+        let apiary = keeper
+            .local_hive_identity()
+            .unwrap()
+            .hive
+            .apiary_id
+            .unwrap();
+        keeper
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO apiary_tasks
+                    (id, apiary_id, source, title, priority, state,
+                     home_node_id, home_hive_id, revision, created_at, updated_at)
+                 VALUES (?1, ?2, 'swarm', 'Shared work in flight', 'normal', 'ready', ?3, ?4, 1, ?5, ?5)",
+                params![
+                    uuid::Uuid::now_v7().to_string(),
+                    apiary.to_string(),
+                    member_node.to_string(),
+                    member_hive.to_string(),
+                    now
+                ],
+            )
+            .unwrap();
+
+        assert!(
+            !keeper
+                .remove_apiary_member_readiness(member_hive, now + 10)
+                .unwrap()
+                .can_leave()
+        );
+        assert!(matches!(
+            keeper.remove_apiary_member(member_hive, now + 10),
+            Err(TaskStoreError::ApiaryDepartureNotReady)
+        ));
+    }
+
+    /// A Hive that is not a member of this Apiary is not removable BY MISTAKE.
+    #[test]
+    fn removing_an_unknown_hive_says_so_rather_than_succeeding_quietly() {
+        let now = 120_000;
+        let (keeper, _member) = joined_member(now);
+        assert!(matches!(
+            keeper.remove_apiary_member(swarm_domain::HiveId::new(), now + 10),
+            Err(TaskStoreError::ApiaryMemberNotFound)
+        ));
     }
 
     #[test]

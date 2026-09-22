@@ -94,7 +94,7 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   // into yourself is a mirror — the terminal is already on this machine — and
   // the absence here is what proves the guard rather than the presence
   // elsewhere.
-  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveNo version reportedWatchTake overFern HiveFayeHiveNo version reportedWatchTake over");
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveNo version reportedWatchTake overRemoveFern HiveFayeHiveNo version reportedWatchTake overRemove");
   expect(screen.getByRole("list", { name: "Keeper shared work ownership" })).toHaveTextContent("WWD-101WWD · OwnedClover HiveCora");
   expect(screen.getByRole("list", { name: "Keeper Swarm tasks" })).toHaveTextContent("Coordinate releaseSwarm · readyFern HiveRouted by Steward Cora · revision 1");
   expect(screen.getByRole("list", { name: "Keeper promoted Jira projects" })).toHaveTextContent("WWDWebsite Development");
@@ -123,6 +123,67 @@ test("keeps task creation out of the supervisory Apiary view", async () => {
   expect(screen.getByText(/Create, route, and manage all work from Tasks/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Open Tasks" }));
   expect(onOpenTasks).toHaveBeenCalledOnce();
+});
+
+/**
+ * ADR 0108. Departure was only ever reachable through the MEMBER'S credential,
+ * so a reinstalled machine stayed on the roster forever — the operator's words
+ * on 2026-09-22: "I still cannot delete a hive from an apiary as I need to add
+ * this wsl one as it is a new install."
+ */
+test("a Hive holding shared work cannot be removed, and the roster says what holds it", async () => {
+  const removals: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "DELETE") { removals.push(url); return ok(null); }
+    if (url.endsWith("/removal-readiness")) return ok({
+      apiary_id: "apiary-1", member_node_id: "node-2", member_hive_id: "hive-2",
+      active_jira_claim_count: 0, open_swarm_task_count: 2, active_stewardship_count: 1,
+      pending_task_command_count: 0, pending_jira_claim_count: 0,
+    });
+    if (url.endsWith("/members")) return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+    ]);
+    return ok([]);
+  }));
+
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+  const dialog = await screen.findByRole("alertdialog");
+  expect(dialog).toHaveTextContent(/2 open shared tasks/);
+  expect(dialog).toHaveTextContent(/1 stewardship/);
+  // Refused BEFORE the operator commits, not after.
+  expect(screen.getByRole("button", { name: "Remove from Apiary" })).toBeDisabled();
+  expect(removals).toEqual([]);
+});
+
+test("a Hive with no shared work is removed, and is told its private work stays", async () => {
+  const removals: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "DELETE") { removals.push(url); return ok(null); }
+    if (url.endsWith("/removal-readiness")) return ok({
+      apiary_id: "apiary-1", member_node_id: "node-2", member_hive_id: "hive-2",
+      active_jira_claim_count: 0, open_swarm_task_count: 0, active_stewardship_count: 0,
+      pending_task_command_count: 0, pending_jira_claim_count: 0,
+    });
+    if (url.endsWith("/members")) return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+    ]);
+    return ok([]);
+  }));
+
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+
+  const dialog = await screen.findByRole("alertdialog");
+  // The operator has to be told what removal does NOT take away.
+  expect(dialog).toHaveTextContent(/stay on that machine/);
+  fireEvent.click(screen.getByRole("button", { name: "Remove from Apiary" }));
+  await waitFor(() => expect(removals).toEqual(["/api/v1/apiary/members/hive-2"]));
 });
 
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }

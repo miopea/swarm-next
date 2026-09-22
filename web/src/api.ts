@@ -2016,6 +2016,38 @@ export async function leaveApiary(operatorToken: string): Promise<LocalApiaryCon
   return response.json() as Promise<LocalApiaryContext>;
 }
 
+/**
+ * What still holds one Hive to this Apiary, asked BEFORE offering to remove it.
+ *
+ * The counts are the same blockers a member hits when it leaves, so the roster
+ * can say what to clear rather than refusing after the operator commits.
+ */
+export async function fetchApiaryMemberRemovalReadiness(
+  operatorToken: string,
+  hiveId: string,
+): Promise<FederationDepartureReadiness> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/members/${encodeURIComponent(hiveId)}/removal-readiness`,
+  );
+  return response.json() as Promise<FederationDepartureReadiness>;
+}
+
+/**
+ * Removes one Hive from this Keeper's Apiary (ADR 0108).
+ *
+ * ⚠️ NOT THE SAME AS `leaveApiary`, which is THIS Hive leaving one. A member
+ * can only leave using its own federation credential, so a reinstalled or
+ * decommissioned Hive — or one whose credential simply lapsed — could never be
+ * taken off the roster by anyone. Its private work is untouched; if it ever
+ * connects again it applies the signed receipt this produces.
+ */
+export async function removeApiaryMember(operatorToken: string, hiveId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/apiary/members/${encodeURIComponent(hiveId)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function fetchApiaryJiraProjects(
   operatorToken: string,
   signal?: AbortSignal,

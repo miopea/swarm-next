@@ -4141,6 +4141,14 @@ fn api_router(state: AppState) -> Router {
             post(create_apiary).put(rename_local_apiary),
         )
         .route("/api/v1/apiary/members", get(apiary_members))
+        .route(
+            "/api/v1/apiary/members/{hive_id}",
+            delete(remove_apiary_member),
+        )
+        .route(
+            "/api/v1/apiary/members/{hive_id}/removal-readiness",
+            get(apiary_member_removal_readiness),
+        )
         .route("/api/v1/apiary/stewardships", get(apiary_stewardships))
         .route(
             "/api/v1/apiary/steward-task-audit",
@@ -5166,6 +5174,41 @@ async fn apiary_members(
         .members()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(members)).into_response())
+}
+
+/// Removes one Hive from this Keeper's Apiary (ADR 0108).
+///
+/// ⚠️ OPERATOR-AUTHENTICATED, UNLIKE `/api/v1/federation/departure`. That one is
+/// a MEMBER asking to leave and is keyed on its own credential, which a
+/// reinstalled or decommissioned Hive can no longer produce — so the roster kept
+/// members nobody could remove. This is the Keeper acting on its own roster.
+/// Nothing is sent to the member; it collects its signed receipt if it ever
+/// returns.
+async fn remove_apiary_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(hive_id): Path<HiveId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let receipt = apiary_service(&state)?
+        .remove_member(hive_id, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
+/// What still holds one named Hive to this Apiary, so the roster can say why a
+/// removal would be refused BEFORE the operator commits to it.
+async fn apiary_member_removal_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(hive_id): Path<HiveId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let readiness = apiary_service(&state)?
+        .remove_member_readiness(hive_id, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(readiness)).into_response())
 }
 
 async fn apiary_stewardships(
@@ -10024,6 +10067,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::ApiaryMembershipConflict => ApiError::new(
             StatusCode::CONFLICT,
             "apiary_membership_conflict",
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryMemberNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "apiary_member_not_found",
             error.to_string(),
         ),
         TaskStoreError::ApiaryNotFound => {

@@ -255,6 +255,15 @@ provider conversations, settings, tasks, and Hive integrations remain local;
 Apiary Jira bindings become Hive-owned and shared projections are removed only
 after receipt verification.
 
+Keeper-initiated removal: a Keeper can end one membership itself, naming the
+member by Hive id rather than by the member's own federation credential, for a
+Hive that has been reinstalled, decommissioned or lost — or whose credential has
+simply lapsed, which alone was enough to make a member undepartable. It performs
+the same transaction the member-initiated departure performs, refuses on the
+same shared-work blockers, and writes the same signed receipt; the member honours
+that receipt whenever it next connects, keeping all of its private work. Nothing
+is pushed to the member and no connection is opened to it. ADR 0108.
+
 ## Platform and administration
 
 | Capability | Decision | Rationale and intended direction |

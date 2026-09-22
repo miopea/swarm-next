@@ -1466,6 +1466,36 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Removes one member the Keeper names, for a Hive that cannot ask to leave
+    /// (ADR 0108). Refuses on the same shared-work blockers a member would hit.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown members, outstanding shared work, and
+    /// corrupt state.
+    pub fn remove_member(
+        &self,
+        member_hive: swarm_domain::HiveId,
+        now: i64,
+    ) -> Result<FederationDepartureReceipt, ApplicationError> {
+        self.store
+            .remove_apiary_member(member_hive, now)
+            .map_err(Into::into)
+    }
+
+    /// What still holds one named member to this Apiary.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown members, and corrupt state.
+    pub fn remove_member_readiness(
+        &self,
+        member_hive: swarm_domain::HiveId,
+        now: i64,
+    ) -> Result<FederationDepartureReadiness, ApplicationError> {
+        self.store
+            .remove_apiary_member_readiness(member_hive, now)
+            .map_err(Into::into)
+    }
+
     /// Applies the Keeper-signed receipt and returns this installation to a
     /// personal Hive without deleting private work or integrations.
     ///

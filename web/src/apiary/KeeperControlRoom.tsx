@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
   fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
+  fetchApiaryMemberRemovalReadiness, removeApiaryMember,
   type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type TakeoverAuditEntry, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -29,6 +30,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   // asked for it.
   const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
   const [watchError, setWatchError] = useState<string>();
+  // The Hive the operator is being asked to confirm removing, with whatever
+  // still holds it to the Apiary. Confirmation is deliberate: removal is not
+  // destructive to the member's private work, but it IS visible to everyone
+  // else in the Apiary and cannot be undone without a fresh invitation.
+  const [removing, setRemoving] = useState<{ hiveId: string; hiveName: string; blockers: string[] }>();
   // The Hive this Keeper is currently controlling, if any.
   const [controlling, setControlling] = useState<{ leaseId: string; hiveName: string }>();
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
@@ -143,7 +149,48 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             } catch {
               setWatchError(`${member.hive_name} could not be taken over.`);
             }
-          }}>Take over</button></span>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+          }}>Take over</button><button type="button" className="secondary-button hive-remove-button" onClick={async () => {
+            setWatchError(undefined);
+            try {
+              // Asked BEFORE the confirmation, so the dialog can say what to
+              // clear instead of refusing after the operator has committed.
+              const readiness = await fetchApiaryMemberRemovalReadiness(operatorToken, member.hive_id);
+              const blockers = [
+                [readiness.active_jira_claim_count, "Jira claim"],
+                [readiness.open_swarm_task_count, "open shared task"],
+                [readiness.active_stewardship_count, "stewardship"],
+                [readiness.pending_task_command_count, "task command still in flight"],
+                [readiness.pending_jira_claim_count, "Jira claim still in flight"],
+              ] as const;
+              setRemoving({
+                hiveId: member.hive_id,
+                hiveName: member.hive_name,
+                blockers: blockers.filter(([count]) => count > 0)
+                  .map(([count, noun]) => `${count} ${noun}${count === 1 ? "" : "s"}`),
+              });
+            } catch {
+              setWatchError(`${member.hive_name} could not be checked for removal.`);
+            }
+          }}>Remove</button></span>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+          {removing ? <div className="keeper-remove-confirm" role="alertdialog" aria-label={`Remove ${removing.hiveName} from the Apiary`}>
+            <p><strong>Remove {removing.hiveName} from the Apiary?</strong></p>
+            {removing.blockers.length
+              ? <p>It still holds {removing.blockers.join(", ")}. Removing is refused until that work is finished or reassigned.</p>
+              : <p>Its shared work is clear. Its own workers, tasks and repositories stay on that machine; only its place in this Apiary ends. If it ever connects again it is told, and rejoining needs a fresh invitation.</p>}
+            <span className="hive-actions">
+              <button type="button" className="secondary-button" onClick={() => setRemoving(undefined)}>Cancel</button>
+              <button type="button" className="hive-takeover-button" disabled={removing.blockers.length > 0} onClick={async () => {
+                const { hiveId, hiveName } = removing;
+                setRemoving(undefined);
+                try {
+                  await removeApiaryMember(operatorToken, hiveId);
+                  await refresh();
+                } catch {
+                  setWatchError(`${hiveName} could not be removed.`);
+                }
+              }}>Remove from Apiary</button>
+            </span>
+          </div> : null}
           {watchError ? <p className="keeper-empty" role="alert">{watchError}</p> : null}
           {controlling ? <TakeoverWindow
             leaseId={controlling.leaseId}
