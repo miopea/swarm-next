@@ -2,13 +2,14 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ApiaryId, ApiaryTask, ApiaryTaskEvent, ApiaryTaskId, ApiaryTaskSource,
-    FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION, FederationNodeId,
-    FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandKind,
+    ApiaryId, ApiaryPrerequisiteStatus, ApiaryTask, ApiaryTaskEvent, ApiaryTaskId,
+    ApiaryTaskSource, FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION,
+    FederationNodeId, FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandKind,
     FederationTaskCommandOutcome, FederationTaskCommandReceipt, FederationTaskOutboxEntry,
     FederationTaskOutboxState, FederationTaskOutboxStatus, FederationTaskPage,
     FederationTaskSyncStatus, HiveId, LocalApiaryContext, LocalApiaryRole,
-    LocalApiaryTaskExecution, TaskActivityActorKind, TaskId, TaskPriority, TaskState, WorkerId,
+    LocalApiaryTaskExecution, OrphanCause, PrerequisiteStanding, TaskActivityActorKind, TaskId,
+    TaskPriority, TaskState, WorkerId, blocked_by,
 };
 
 use crate::{
@@ -1995,6 +1996,108 @@ impl TaskStore {
         Ok(())
     }
 
+    /// Where every cross-Hive dependency stands, including the dead ones.
+    ///
+    /// ⚠️ DERIVED, NEVER STORED. A standing computed from the upstream's state
+    /// and its Hive's membership cannot go stale; a column saying "orphaned"
+    /// would be a second copy of a fact that changes without anyone touching
+    /// this table — a Hive departs and every cached answer is wrong with
+    /// nothing to notice it. The whole failure this task guards against is
+    /// state that has stopped matching reality.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn apiary_prerequisite_standings(
+        &self,
+    ) -> Result<Vec<ApiaryPrerequisiteStatus>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT edge.task_id, edge.prerequisite_id, edge.reason,
+                    upstream.state, upstream.home_hive_id,
+                    EXISTS(
+                        SELECT 1 FROM apiary_federation_memberships membership
+                        WHERE membership.apiary_id = upstream.apiary_id
+                          AND membership.member_hive_id = upstream.home_hive_id
+                          AND membership.state = 'departed'
+                    ) AS home_departed
+             FROM apiary_task_prerequisites edge
+             JOIN apiary_tasks upstream ON upstream.id = edge.prerequisite_id
+             ORDER BY edge.created_at, edge.task_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, bool>(5)?,
+            ))
+        })?;
+        let mut standings = Vec::new();
+        for row in rows {
+            let (task, prerequisite, reason, state, home_hive, home_departed) = row?;
+            // ⚠️ A DEPARTED HOME OUTRANKS AN OPEN STATE, and abandonment
+            // outranks everything except completion. A completed upstream is
+            // satisfied however its Hive ended up: the work was done, and
+            // pretending otherwise because the doer later left would strand a
+            // dependent for no reason.
+            let standing = match state.as_str() {
+                "completed" => PrerequisiteStanding::Satisfied,
+                "abandoned" => PrerequisiteStanding::Orphaned {
+                    cause: OrphanCause::UpstreamAbandoned,
+                },
+                _ if home_departed => PrerequisiteStanding::Orphaned {
+                    cause: OrphanCause::HomeHiveDeparted,
+                },
+                _ => PrerequisiteStanding::Waiting,
+            };
+            standings.push(ApiaryPrerequisiteStatus {
+                task_id: ApiaryTaskId::from_str(&task)
+                    .map_err(|_| TaskStoreError::InvalidFederationTask)?,
+                prerequisite_id: ApiaryTaskId::from_str(&prerequisite)
+                    .map_err(|_| TaskStoreError::InvalidFederationTask)?,
+                reason,
+                upstream_home_hive_id: home_hive
+                    .map(|id| HiveId::from_str(&id))
+                    .transpose()
+                    .map_err(|_| TaskStoreError::InvalidFederationTask)?,
+                standing,
+            });
+        }
+        Ok(standings)
+    }
+
+    /// The dependencies that will never be met, and the tasks they stranded.
+    ///
+    /// Each one is a Queen obligation carrying WHY: the reason the ordering was
+    /// recorded, and what stopped being true about it.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn orphaned_apiary_prerequisites(
+        &self,
+    ) -> Result<Vec<ApiaryPrerequisiteStatus>, TaskStoreError> {
+        Ok(self
+            .apiary_prerequisite_standings()?
+            .into_iter()
+            .filter(|edge| edge.standing.needs_attention())
+            .collect())
+    }
+
+    /// Whether this Keeper-canonical task is still held back by live work.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn apiary_task_is_blocked(&self, task_id: ApiaryTaskId) -> Result<bool, TaskStoreError> {
+        let edges = self
+            .apiary_prerequisite_standings()?
+            .into_iter()
+            .filter(|edge| edge.task_id == task_id)
+            .collect::<Vec<_>>();
+        Ok(blocked_by(&edges))
+    }
+
     /// What one Keeper-canonical task is waiting on, oldest edge first.
     ///
     /// # Errors
@@ -3027,6 +3130,118 @@ mod tests {
     /// A bulk move retries. Minting a second shared task for the same local one
     /// would put the same work on the board twice with no way to tell which is
     /// real, so the second call returns the first result.
+    /// ⚠️ A DEPENDENCY NOBODY WILL EVER MEET UNBLOCKS RATHER THAN WAITS.
+    ///
+    /// Measured on this Hive 2026-09-20: two tasks whose state had stopped
+    /// matching reality were the only live recovery obligations and forced
+    /// EVERY Queen run to Incomplete for hours. Cross-Hive links are a better
+    /// hidden way to manufacture exactly that, because a task blocked on
+    /// another Hive's work looks correct right up until nobody is left to do it.
+    #[test]
+    fn a_prerequisite_nobody_can_meet_stops_blocking_and_is_owed_an_explanation() {
+        let now = 900_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let member_hive = acceptance.receipt.payload.member_hive_id;
+        let upstream = keeper
+            .create_apiary_task_for_hive(
+                "Ship the API",
+                "The dependent needs this first.",
+                TaskPriority::Normal,
+                Some(member_hive),
+                now + 10,
+            )
+            .unwrap();
+        let dependent = keeper
+            .create_apiary_task(
+                "Wire the client",
+                "Waits on the API.",
+                TaskPriority::Normal,
+                now + 11,
+            )
+            .unwrap();
+        keeper
+            .record_apiary_task_prerequisite(
+                dependent.id,
+                upstream.id,
+                "The client cannot be wired before the API exists.",
+                now + 12,
+            )
+            .unwrap();
+
+        // While the upstream is live, the dependent is genuinely blocked.
+        assert!(keeper.apiary_task_is_blocked(dependent.id).unwrap());
+        assert!(keeper.orphaned_apiary_prerequisites().unwrap().is_empty());
+
+        // The owning Hive gives the work up.
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 13)
+            .unwrap();
+        member.apply_federation_task_page(&page, now + 13).unwrap();
+        let abandon = member
+            .queue_federation_task_transition(upstream.id, TaskState::Abandoned, now + 14)
+            .unwrap();
+        keeper
+            .apply_federation_task_command(&acceptance.node_credential, &abandon.command, now + 15)
+            .unwrap();
+
+        assert!(
+            !keeper.apiary_task_is_blocked(dependent.id).unwrap(),
+            "work waiting on abandoned work is stranded, not blocked"
+        );
+        let orphaned = keeper.orphaned_apiary_prerequisites().unwrap();
+        assert_eq!(orphaned.len(), 1);
+        assert_eq!(orphaned[0].task_id, dependent.id);
+        assert_eq!(
+            orphaned[0].standing,
+            PrerequisiteStanding::Orphaned {
+                cause: OrphanCause::UpstreamAbandoned
+            }
+        );
+        assert_eq!(
+            orphaned[0].reason, "The client cannot be wired before the API exists.",
+            "the obligation carries WHY the ordering existed, not merely that it did"
+        );
+        assert_eq!(orphaned[0].upstream_home_hive_id, Some(member_hive));
+    }
+
+    /// ⚠️ A HIVE CANNOT WALK OUT ON OPEN SHARED WORK, which is why leaving is
+    /// not a second way to strand a dependent.
+    ///
+    /// The task description assumed two ways an upstream vanishes — "its Hive
+    /// leaves the Apiary, or the task is abandoned". Only the second is
+    /// reachable: `keeper_departure_readiness` counts open apiary tasks homed
+    /// to the departing Hive and refuses, so a Hive must finish or abandon its
+    /// shared work first, and abandonment is already the case above.
+    ///
+    /// `OrphanCause::HomeHiveDeparted` is kept anyway, and this test is the
+    /// record of why it currently cannot fire: the reader DERIVES standing from
+    /// live membership, so if that gate is ever relaxed — or a membership is
+    /// forced departed some other way — a stranded dependent is still freed
+    /// rather than waiting for somebody to notice. It costs one EXISTS.
+    #[test]
+    fn a_hive_holding_open_shared_work_cannot_leave_and_so_cannot_strand_it() {
+        let now = 900_000;
+        let (keeper, _member, acceptance) = joined_member(now);
+        let member_hive = acceptance.receipt.payload.member_hive_id;
+        keeper
+            .create_apiary_task_for_hive(
+                "Ship the API",
+                "Still open.",
+                TaskPriority::Normal,
+                Some(member_hive),
+                now + 10,
+            )
+            .unwrap();
+
+        assert!(
+            matches!(
+                keeper.depart_federation_member(&acceptance.node_credential, now + 20),
+                Err(TaskStoreError::ApiaryDepartureNotReady)
+            ),
+            "leaving while holding open shared work is refused, so the work cannot be orphaned by departure"
+        );
+    }
+
     #[test]
     fn relocating_the_same_task_twice_does_not_mint_a_second_shared_task() {
         let now = 1_700_000_000;
