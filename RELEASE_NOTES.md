@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.14.5
+
+### Fixes
+- Opening a window into another Hive no longer reads as though someone over there has to approve it. Nobody does — the Hive accepts on its own — but the old wording sent operators hunting for an approval button that does not exist.
+
 ## 1.14.4
 
 ### Fixes
