@@ -15,7 +15,7 @@ not in effect until the worker engine swaps.
 ## 1.13.1
 
 ### Fixes
-- A worker whose very first start failed could never be started again. Every attempt after it asked the provider to continue a conversation that was never created, and the way out only opened if the provider's refusal was worded exactly as expected. It now opens whenever that first start genuinely died — while still never replacing a session someone has typed into.
+- A worker whose very first start failed could never be started again. Every attempt after it asked the provider to continue a conversation that was never created, and the way out only opened if the provider's refusal was worded exactly as expected. It now opens whenever that first start genuinely died — while still never replacing a session someone has typed into. (after the worker engine update)
 - Taking over a Hive from the Apiary failed immediately, every time. The Hive being taken over had no way to receive the request or answer it, so the lease was never accepted and the window closed on a takeover that had not begun. It now completes between two machines.
 - Watching a Hive no longer reports "no longer live" a second after it starts. The watch now waits for the watched Hive to answer, which it does on its own schedule rather than instantly.
 - The Apiary roster is legible again: each Hive shows the version it is running and where it stands against the current release, the Watch button is no longer clipped to its border, and Take over no longer stretches across the row as though it were the ordinary thing to do.
