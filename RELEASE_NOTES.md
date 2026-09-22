@@ -12,6 +12,12 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.14.4
+
+### Fixes
+- Watching or holding a Hive now uses the room the window has. The other Hive's terminal sat at its own fixed size in whatever space was available and never changed when the window did. It is scaled to fit rather than reflowed, so what you see is exactly what is on their screen.
+- Taking over from a watch no longer drops back into a small panel. It gets the same full window watching does.
+
 ## 1.14.3
 
 ### Fixes
