@@ -2,11 +2,9 @@
 //! Never searches a reconstructed screen or a previous conversation transcript.
 
 const MAX_STARTUP_BYTES: usize = 4096;
-const MISSING_CONTINUATION: &[u8] = b"No conversation found to continue";
 
 pub(crate) struct StartupFailureCapture {
     bytes: Option<Vec<u8>>,
-    missing: bool,
     /// Whether anything happened that makes this session the operator's.
     ///
     /// ⚠️ KEPT SEPARATE FROM `missing` DELIBERATELY. Both used to be cleared by
@@ -18,21 +16,29 @@ pub(crate) struct StartupFailureCapture {
     engaged: bool,
     /// Whether the startup stream ran to completion without being disarmed.
     failed_at_startup: bool,
+    /// Whether this session is observed for startup failure at all.
+    ///
+    /// ⚠️ NOT DERIVABLE FROM `bytes`. An empty buffer means "armed and nothing
+    /// captured"; a missing one means "never armed" OR "disarmed". While the
+    /// only question asked here was the exact message, an unarmed capture could
+    /// never answer yes and the difference did not matter. The structural
+    /// question CAN answer yes without reading a byte, so a scratch shell — no
+    /// provider, never observed — started reporting that its startup failed.
+    armed: bool,
 }
 
 impl StartupFailureCapture {
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             bytes: enabled.then(Vec::new),
-            missing: false,
             engaged: false,
             failed_at_startup: false,
+            armed: enabled,
         }
     }
 
     pub(crate) fn disarm(&mut self) {
         self.bytes = None;
-        self.missing = false;
         self.engaged = true;
         self.failed_at_startup = false;
     }
@@ -56,59 +62,19 @@ impl StartupFailureCapture {
         }
     }
 
-    pub(crate) fn missing_continuation(&self) -> bool {
-        self.missing
-    }
-
+    /// ⚠️ THE CAPTURED BYTES ARE DROPPED WITHOUT BEING READ, and that is the
+    /// point. Until 1.13.2 they were matched against the provider's exact
+    /// refusal, and that match gated recovery — so a prefix, a full stop or a
+    /// second line meant a worker that could not start was never relaunched.
+    /// The provider owns its wording and may change it in any release; what
+    /// Swarm can actually stand on is that the startup ran to completion,
+    /// nobody engaged with it, and the process died. The buffer stays because
+    /// bounding and releasing it is what keeps a runaway startup from growing
+    /// without limit.
     pub(crate) fn finish(&mut self, complete: bool) {
-        let bytes = self.bytes.take();
-        // `missing` stays exact: it is what TELLS the operator the provider had
-        // no conversation, and a loose match there would put words in the
-        // provider's mouth. Recovery no longer depends on it.
-        self.missing = complete && bytes.as_deref().is_some_and(exact_missing_message);
-        self.failed_at_startup = complete && !self.engaged;
+        self.bytes = None;
+        self.failed_at_startup = self.armed && complete && !self.engaged;
     }
-}
-
-fn exact_missing_message(mut bytes: &[u8]) -> bool {
-    let mut matched = 0;
-    while let Some((&byte, rest)) = bytes.split_first() {
-        bytes = rest;
-        if byte == 0x1b {
-            let Some(csi) = bytes.strip_prefix(b"[") else {
-                return false;
-            };
-            // Only styling and cursor visibility are ignorable. Cursor movement,
-            // erase, OSC and unknown controls could rewrite or hide other text.
-            let Some(end) = csi
-                .iter()
-                .take(32)
-                .position(|byte| (0x40..=0x7e).contains(byte))
-            else {
-                return false;
-            };
-            let sequence = &csi[..=end];
-            let sgr = sequence[end] == b'm'
-                && sequence[..end]
-                    .iter()
-                    .all(|byte| byte.is_ascii_digit() || *byte == b';');
-            if !sgr && sequence != b"?25h" && sequence != b"?25l" {
-                return false;
-            }
-            bytes = &csi[end + 1..];
-        } else {
-            // Allow line framing, but never erase internal whitespace or prose.
-            let framing = matches!(byte, b' ' | b'\r' | b'\n');
-            if framing && (matched == 0 || matched == MISSING_CONTINUATION.len()) {
-                continue;
-            }
-            if MISSING_CONTINUATION.get(matched) != Some(&byte) {
-                return false;
-            }
-            matched += 1;
-        }
-    }
-    matched == MISSING_CONTINUATION.len()
 }
 
 #[cfg(test)]
@@ -116,66 +82,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exact_error_survives_chunk_boundaries_and_limited_styling() {
-        for size in 1..=64 {
-            let mut capture = StartupFailureCapture::new(true);
-            for chunk in b"\r\n\x1b[0m\x1b[31mNo conversation found to continue\x1b[0m\r\n\x1b[?25h"
-                .chunks(size)
-            {
-                capture.push(chunk);
-            }
-            assert!(!capture.missing_continuation(), "reader has not finished");
-            capture.finish(true);
-            assert!(capture.bytes.is_none());
-            assert!(capture.missing_continuation(), "chunk size {size}");
-        }
-    }
-
-    #[test]
-    fn other_output_and_screen_rewriting_never_prove_absence() {
+    fn a_completed_unengaged_startup_is_a_failure_whatever_it_printed() {
         for bytes in [
             b"".as_slice(),
+            b"No conversation found to continue",
+            b"Old transcript: No conversation found to continue",
+            b"No conversation found to continue.\r\n",
             b"Error: Invalid MCP configuration",
-            b"No conversation found to continue later",
-            b"Previous output: No conversation found to continue",
-            b"No conversation found to continue\nOther output",
-            b"No conversation found to continue\x1b[2J",
-            b"No conversation found to continue\x1b[1G",
-            b"No conversation found to continue\x1b]0;title\x07",
-            b"No conversation found to continue\x1b[31",
-            b"No conversation found to continue\x00",
-            b"No conversation found to continue\x0b",
         ] {
             let mut capture = StartupFailureCapture::new(true);
             capture.push(bytes);
+            assert!(
+                !capture.failed_before_anyone_used_it(),
+                "the reader has not finished"
+            );
             capture.finish(true);
-            assert!(!capture.missing_continuation());
+            assert!(capture.bytes.is_none(), "the buffer is released");
+            assert!(capture.failed_before_anyone_used_it());
         }
     }
 
     #[test]
-    fn overflow_and_disarming_are_permanent_and_release_bytes() {
+    fn an_unarmed_capture_never_reports_a_startup_failure() {
+        // A scratch shell is not observed for startup failure. Without this the
+        // structural flag answers yes for a session nothing ever watched, which
+        // the exact-message question could not do because it had no bytes to
+        // match — so the leak arrived with the change of question.
+        let mut capture = StartupFailureCapture::new(false);
+        capture.push(b"anything at all");
+        capture.finish(true);
+        assert!(!capture.failed_before_anyone_used_it());
+    }
+
+    #[test]
+    fn engagement_and_overflow_permanently_disarm_and_release_bytes() {
         let mut capture = StartupFailureCapture::new(true);
         capture.push(&vec![b' '; MAX_STARTUP_BYTES]);
-        capture.push(MISSING_CONTINUATION);
+        capture.push(b"No conversation found to continue");
         assert!(capture.bytes.is_none());
-        assert!(!capture.missing_continuation());
+        capture.finish(true);
+        assert!(!capture.failed_before_anyone_used_it());
+
+        // Typing into a terminal makes it yours, and no fallback may replace it.
         for enabled in [true, false] {
             let mut capture = StartupFailureCapture::new(enabled);
-            capture.push(MISSING_CONTINUATION);
+            capture.push(b"No conversation found to continue");
             capture.disarm();
-            capture.push(MISSING_CONTINUATION);
+            capture.push(b"No conversation found to continue");
+            capture.finish(true);
             assert!(capture.bytes.is_none());
-            assert!(!capture.missing_continuation());
+            assert!(!capture.failed_before_anyone_used_it());
         }
     }
 
     #[test]
-    fn incomplete_stream_cannot_confirm_the_exact_message() {
+    fn an_incomplete_stream_cannot_confirm_a_startup_failure() {
         let mut capture = StartupFailureCapture::new(true);
-        capture.push(MISSING_CONTINUATION);
+        capture.push(b"No conversation found to continue");
         capture.finish(false);
         assert!(capture.bytes.is_none());
-        assert!(!capture.missing_continuation());
+        assert!(!capture.failed_before_anyone_used_it());
     }
 }

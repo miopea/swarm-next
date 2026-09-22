@@ -478,9 +478,20 @@ impl ProcessTerminalSession {
         let Some(exit) = lock(&self.child)?.try_wait().map_err(terminal_error)? else {
             return Ok(false);
         };
+        // ⚠️ STRUCTURAL, NOT TEXTUAL, AND THE API GATES ON THIS BEFORE IT ASKS
+        // THE HOST TO RECOVER. Requiring the provider's exact wording and exit
+        // code exactly 1 here is what made the 1.13.1 relaxation of
+        // `recover_continuation` invisible: the fallback was reachable only
+        // through a gate that still demanded the thing it had stopped needing,
+        // so a worker printed the message and went back to sleep unchanged.
+        //
+        // A clean exit is not a failure and a signalled exit was somebody else's
+        // decision, so both still refuse. Engagement is respected through
+        // `failed_before_anyone_used_it`: a session a human typed into is never
+        // replaced, whatever it printed.
         Ok(exit.signal().is_none()
-            && exit.exit_code() == 1
-            && lock(&self.startup_failure)?.missing_continuation())
+            && exit.exit_code() != 0
+            && lock(&self.startup_failure)?.failed_before_anyone_used_it())
     }
 
     #[must_use]
@@ -3090,27 +3101,47 @@ mod tests {
         }
     }
 
+    /// ⚠️ THIS GATE IS WHAT THE API CHECKS BEFORE IT ASKS THE HOST TO RECOVER AT
+    /// ALL, and it used to demand the provider's exact wording and exit code
+    /// exactly 1. Relaxing `recover_continuation` in 1.13.1 therefore changed
+    /// nothing an operator could see: the relaxed fallback sat behind a gate
+    /// that never opened, so a worker printed "No conversation found to
+    /// continue" and went back to sleep exactly as before. Reported from the
+    /// field on 2026-09-22 against 1.13.2, with the engine confirmed swapped.
+    ///
+    /// What matters is structural and is asserted below: this was a Continue
+    /// attempt, the provider never produced a usable terminal, nobody engaged
+    /// with it, and the process died non-zero. The wording is the provider's to
+    /// change and was never Swarm's to depend on.
     #[test]
-    fn continuation_failure_requires_exact_actual_startup_and_unsignalled_exit_one() {
+    fn a_continue_start_that_died_is_recoverable_whatever_the_provider_printed() {
         for (script, expected) in [
             (
                 "printf 'No conversation found to continue\\n'; exit 1",
                 true,
             ),
+            // The message with a prefix, a different exit code, or no message at
+            // all. Every one of these is a Continue start that died without
+            // producing a terminal, which is the whole of what recovery needs.
+            (
+                "printf 'Old transcript: No conversation found to continue\\n'; exit 1",
+                true,
+            ),
+            (
+                "printf 'No conversation found to continue.\\n'; exit 2",
+                true,
+            ),
+            ("printf 'Error: Invalid MCP configuration\\n'; exit 1", true),
+            ("exit 1", true),
+            // A process that exited CLEANLY did not fail, and one killed by a
+            // signal was stopped by something outside this decision. Neither is
+            // evidence the conversation could not be continued.
             (
                 "printf 'No conversation found to continue\\n'; exit 0",
                 false,
             ),
             (
                 "printf 'No conversation found to continue\\n'; kill -TERM $$",
-                false,
-            ),
-            (
-                "printf 'Error: Invalid MCP configuration\\n'; exit 1",
-                false,
-            ),
-            (
-                "printf 'Old transcript: No conversation found to continue\\n'; exit 1",
                 false,
             ),
         ] {
