@@ -4204,6 +4204,10 @@ fn api_router(state: AppState) -> Router {
             get(apiary_takeover_status).post(open_apiary_takeover),
         )
         .route(
+            "/api/v1/apiary/takeovers/{lease_id}",
+            delete(release_apiary_takeover),
+        )
+        .route(
             "/api/v1/apiary/takeovers/{lease_id}/reclaim",
             post(reclaim_apiary_takeover),
         )
@@ -5861,6 +5865,50 @@ async fn apiary_takeover_control_grant(
 /// ADR 0036 is explicit that local reclaim wins even if Keeper has not observed
 /// it — the person at the keyboard may be mid-incident and is the only one who
 /// knows.
+/// The Keeper ending a takeover it holds.
+///
+/// ⚠️ THIS DID NOT EXIST, AND "HAND BACK" WAS THEREFORE A LIE. Closing the
+/// takeover window shut the socket and left the lease open, so the Hive went on
+/// telling its operator someone else was controlling it, with no way to clear
+/// that from either side; and because a Hive may hold only one open lease, every
+/// later takeover of it was refused with "could not be taken over". The only
+/// exit anyone found was for the person at the target keyboard to take control
+/// back and then stop it, which is a workaround for a missing button.
+///
+/// Releasing is idempotent from the operator's point of view: a lease already
+/// ended is reported as ended rather than as an error, because pressing Hand
+/// back twice is not a mistake worth surfacing.
+async fn release_apiary_takeover(
+    State(state): State<Arc<AppState>>,
+    Path(lease_id): Path<swarm_domain::FederationStewardTakeoverLeaseId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let lease = store.transition_keeper_takeover(
+        lease_id,
+        swarm_domain::FederationStewardTakeoverState::Released,
+        unix_timestamp(),
+    );
+    match lease {
+        Ok(lease) => {
+            state.control_room_notify.notify_waiters();
+            Ok(([(header::CACHE_CONTROL, "no-store")], Json(lease)).into_response())
+        }
+        // Already closed, expired, or reclaimed by the person at that keyboard.
+        // The caller asked for it to be over and it is over.
+        Err(TaskStoreError::InvalidFederationStewardTakeover) => {
+            state.control_room_notify.notify_waiters();
+            Ok((
+                StatusCode::NO_CONTENT,
+                [(header::CACHE_CONTROL, "no-store")],
+            )
+                .into_response())
+        }
+        Err(error) => Err(task_store_error(&error)),
+    }
+}
+
 async fn reclaim_apiary_takeover(
     State(state): State<Arc<AppState>>,
     Path(lease_id): Path<swarm_domain::FederationStewardTakeoverLeaseId>,
@@ -8955,6 +9003,11 @@ async fn reconcile_federation_directory(
 /// The acknowledgement is sent AFTER the local projection is written, for the
 /// same reason it is for a watch: acknowledging first would tell Keeper this
 /// Hive is under takeover before its own operator could see it.
+/// One pass' worth of queued takeover commands. Bounded so a member that has
+/// accumulated a backlog cannot hold the federation loop open indefinitely; the
+/// next pass takes the rest.
+const MAX_TAKEOVER_OUTBOX_BATCH: usize = 16;
+
 async fn reconcile_apiary_takeovers(
     store: &TaskStore,
     client: &federation_http::FederationHttpClient,
@@ -8971,6 +9024,54 @@ async fn reconcile_apiary_takeovers(
         .map_err(|error| error.to_string())?
         .hive
         .id;
+    store
+        .apply_federation_steward_takeover_inbox(&inbox, now)
+        .map_err(|_| "takeover projection could not be saved".to_owned())?;
+    // ⚠️ THE OUTBOX IS DRAINED FIRST, AND LEAVING IT UNDRAINED RESURRECTED
+    // TAKEOVERS THE OPERATOR HAD ENDED. Everything a member decides about a
+    // takeover it is under — reclaiming it, releasing it, renewing it — is
+    // journalled here and reaches Keeper only by being sent. This loop shipped
+    // in 1.13.1 sending ONLY the acknowledgements it had just queued, so
+    // "Take back control" wrote a Reclaim that was never delivered: Keeper went
+    // on believing the lease was open, the next inbox poll overwrote the
+    // member's own ended state from Keeper's, and the acknowledgement below
+    // re-established the takeover. The operator saw it "pop back up like the
+    // connection was never closed", about thirty seconds after each attempt to
+    // stop it, with no way out at all.
+    //
+    // Draining BEFORE acknowledging matters: a reclaim sent in the same pass
+    // ends the lease on Keeper, so the filter below no longer sees it as
+    // Requested and cannot immediately undo what was just asked for.
+    let pending = store
+        .pending_federation_steward_takeovers(MAX_TAKEOVER_OUTBOX_BATCH)
+        .map_err(|_| "queued takeover commands could not be read".to_owned())?;
+    for entry in pending {
+        // A delivery attempt is recorded before the request, so a lost response
+        // is visible as an attempt rather than as a command nobody ever tried.
+        if store
+            .record_federation_steward_takeover_attempt(entry.command.id, now)
+            .is_err()
+        {
+            continue;
+        }
+        match client
+            .submit_takeover_command(credential, &entry.command)
+            .await
+        {
+            Ok(receipt) => {
+                let _ = store.apply_federation_steward_takeover_receipt(&receipt, now);
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    // Re-read after the drain: a reclaim or release just applied changes which
+    // leases are still open, and acknowledging a stale one is how the loop
+    // undoes the operator's own decision.
+    let inbox = match client.takeover_inbox(credential).await {
+        Ok(inbox) => inbox,
+        Err(federation_http::FederationHttpError::RemoteRejected(404 | 405)) => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
     store
         .apply_federation_steward_takeover_inbox(&inbox, now)
         .map_err(|_| "takeover projection could not be saved".to_owned())?;

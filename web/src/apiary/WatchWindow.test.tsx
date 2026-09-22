@@ -49,10 +49,25 @@ test("frames are drawn, and a snapshot resizes and replaces rather than appendin
  * lease. This window must offer no way to send anything.
  */
 test("the window offers no way to type into the watched Hive", async () => {
-  render(<WatchWindow watchId="w1" operatorToken="token" hiveName="Paul's Hive" onClose={vi.fn()} createSurface={surface} />);
+  render(<WatchWindow watchId="w1" operatorToken="token" hiveName="Paul's Hive" onClose={vi.fn()} onTakeOver={vi.fn()} createSurface={surface} />);
   await waitFor(() => expect(opened).toHaveLength(1));
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-  expect(screen.queryAllByRole("button").map((button) => button.textContent)).toEqual(["Close window"]);
+  // ⚠️ THE CLAIM IS THAT NOTHING SENDS, NOT THAT ONE BUTTON EXISTS. This used
+  // to assert the button list was exactly ["Close window"], so adding the tools
+  // the operator asked for failed it for no reason that matters. What must stay
+  // true is that every control here either ends the watch or escalates to a
+  // takeover, which ADR 0036 governs separately — none of them writes to the
+  // watched Hive.
+  expect(screen.queryAllByRole("button").map((button) => button.textContent))
+    .toEqual(["Take over", "Stop watching"]);
+});
+
+/** Escalation is offered only when there is something to escalate to. */
+test("without an escalation the window offers only stopping", async () => {
+  render(<WatchWindow watchId="w1" operatorToken="token" hiveName="Paul's Hive" onClose={vi.fn()} createSurface={surface} />);
+  await waitFor(() => expect(opened).toHaveLength(1));
+  expect(screen.queryAllByRole("button").map((button) => button.textContent))
+    .toEqual(["Stop watching"]);
 });
 
 test("the window says what it is and that the watched Hive knows", async () => {

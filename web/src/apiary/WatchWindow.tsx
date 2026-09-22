@@ -19,6 +19,16 @@ type Props = {
   operatorToken: string;
   hiveName: string;
   onClose: () => void;
+  /**
+   * Escalate from watching to controlling, when the Keeper is allowed to.
+   *
+   * ⚠️ OFFERED HERE BECAUSE THIS IS WHERE THE DECISION IS MADE. Watching is how
+   * an operator finds out something needs hands on it; making them close the
+   * window, find the row again and press a different button is asking them to
+   * navigate at the exact moment they have decided to act. Omitted when there
+   * is nothing to escalate to.
+   */
+  onTakeOver?: () => void;
   /** Injected by tests; the default builds an xterm surface. */
   createSurface?: (host: HTMLElement) => WatchSurface;
 };
@@ -41,7 +51,7 @@ const label: Record<WatchStreamState, string> = {
  * window discards it on close, because ADR 0107's bargain is that a watch shows
  * what is on screen now rather than accumulating a record of someone's machine.
  */
-export default function WatchWindow({ watchId, operatorToken, hiveName, onClose, createSurface }: Props) {
+export default function WatchWindow({ watchId, operatorToken, hiveName, onClose, onTakeOver, createSurface }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<WatchStreamState>("connecting");
   const [detail, setDetail] = useState<string>();
@@ -81,20 +91,32 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
     };
   }, [watchId, operatorToken, createSurface]);
 
+  // ⚠️ IT FILLS THE SCREEN, AND THAT IS THE POINT. This used to render as a
+  // panel inside the Hive roster, a few hundred pixels wide, with somebody
+  // else's terminal reflowed into it and no controls but "Close window" — the
+  // operator's verdict on 2026-09-22 was "the UI for watching is terrible".
+  // A terminal you are reading over someone's shoulder needs the room a
+  // terminal needs, and the things you might do next need to be in reach of the
+  // moment you decide to do them.
   return (
-    <section className="watch-window" aria-label={`Live window into ${hiveName}`}>
-      <header>
-        <div>
-          <p className="eyebrow">Watching</p>
-          <h4>{hiveName}</h4>
-        </div>
-        <span className={`watch-window-state ${state}`} role="status">{detail ?? label[state]}</span>
-        <button type="button" onClick={onClose}>Close window</button>
-      </header>
-      {/* Read-only. Nothing typed here goes anywhere, because nothing listens. */}
-      <div className="watch-window-surface" ref={host} />
-      <small>A live view. Nothing here is recorded, and {hiveName} is showing that you are watching.</small>
-    </section>
+    <div className="watch-overlay" role="dialog" aria-modal="true" aria-label={`Live window into ${hiveName}`}>
+      <section className="watch-window">
+        <header>
+          <div>
+            <p className="eyebrow">Watching</p>
+            <h4>{hiveName}</h4>
+          </div>
+          <span className={`watch-window-state ${state}`} role="status">{detail ?? label[state]}</span>
+          <span className="watch-window-tools">
+            {onTakeOver ? <button type="button" className="hive-takeover-button" onClick={onTakeOver}>Take over</button> : null}
+            <button type="button" className="secondary-button" onClick={onClose}>Stop watching</button>
+          </span>
+        </header>
+        {/* Read-only. Nothing typed here goes anywhere, because nothing listens. */}
+        <div className="watch-window-surface" ref={host} />
+        <small>A live view. Nothing here is recorded, and {hiveName} is showing that you are watching. Stopping takes the notice off their screen.</small>
+      </section>
+    </div>
   );
 }
 

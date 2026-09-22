@@ -186,5 +186,40 @@ test("a Hive with no shared work is removed, and is told its private work stays"
   await waitFor(() => expect(removals).toEqual(["/api/v1/apiary/members/hive-2"]));
 });
 
+/**
+ * ⚠️ "HAND BACK" USED TO CLOSE THE WINDOW AND LEAVE THE HIVE HELD. The target
+ * went on telling its operator someone else was controlling it, with no way to
+ * clear it from either side, and because a Hive may hold only one open lease,
+ * every later takeover was refused with "could not be taken over". Reported on
+ * 2026-09-22: "once I do it once, I cannot take control again."
+ */
+test("handing a Hive back ends the lease rather than only hiding the window", async () => {
+  const released: string[] = [];
+  vi.stubGlobal("prompt", () => "Testing");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "DELETE" && url.includes("/takeovers/")) { released.push(url); return ok(null); }
+    if (init?.method === "POST" && url.endsWith("/takeovers")) return ok(null);
+    // The lease is read back from status, because the target must acknowledge
+    // before anything is controllable.
+    if (url.endsWith("/takeovers")) return ok({
+      held_by_me: [{ id: "lease-1", target_hive_id: "hive-2", state: "active", revision: 2 }],
+      held_over_me: null,
+    });
+    if (url.endsWith("/members")) return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+    ]);
+    return ok([]);
+  }));
+
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="fictional" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Take over" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Hand back" }));
+
+  await waitFor(() => expect(released)
+    .toEqual(["/api/v1/apiary/takeovers/lease-1"]));
+});
+
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }
 function ok(payload: unknown) { return { ok: true, status: 200, json: async () => payload }; }

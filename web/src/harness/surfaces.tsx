@@ -22,6 +22,7 @@ import InvitationRecoveryFixture from "./InvitationRecoveryFixture";
 import JoinApiaryFixture from "./JoinApiaryFixture";
 import ApiarySetupStatusFixture from "./ApiarySetupStatusFixture";
 import KeeperObservationFixture from "./KeeperObservationFixture";
+import ApiaryWatchFixture from "./ApiaryWatchFixture";
 import HandoffRecoveryFixture from "./HandoffRecoveryFixture";
 
 import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, UnansweredEmailTask } from "../api";
@@ -232,6 +233,7 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
 export const SURFACES: Surface[] = [
+  { id: "apiary-watch", title: "Watching a Hive", why: "Fictional live window; no stream and no Hive. The frame, the tools, and how much room the terminal gets.", render: () => <ApiaryWatchFixture /> },
   { id: "keeper-observations", title: "Keeper observation recovery", why: "Fictional unavailable, retained and recovered Apiary information.", render: () => <KeeperObservationFixture /> },
   { id: "member-observations", title: "Member observation recovery", why: "Fictional missing status and recovery without reconnecting membership.", render: () => <KeeperObservationFixture member /> },
   { id: "handoff-recovery", title: "Handoff failure and recovery", why: "Fictional lost command replies, retained drafts and explicit status checks.", render: () => <HandoffRecoveryFixture /> },

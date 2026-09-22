@@ -284,14 +284,24 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 /* A window into another Hive. Bordered and labelled rather than chromeless: it
    should never be mistakable for this Hive's own terminal, because the thing on
    screen belongs to somebody else. */
-.watch-window { display: grid; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-soft); }
+/* ⚠️ THE WATCH WINDOW LEFT THE ROSTER. It used to be a panel a few hundred
+   pixels wide inside the Hive list, with someone else's terminal reflowed into
+   it and no control but "Close window". Reading a terminal needs the room a
+   terminal needs. */
+.watch-overlay { position: fixed; inset: 0; z-index: 60; display: grid; padding: 16px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(2px); }
+.watch-window { display: grid; grid-template-rows: auto 1fr auto; gap: 8px; min-height: 0; padding: 12px; border: 1px solid var(--accent-line); border-radius: 12px; background: var(--accent-soft); }
 .watch-window header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .watch-window header h4 { margin: 0; }
-.watch-window header button { min-height: 44px; margin-left: auto; }
+.watch-window-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.watch-window-tools button { min-height: 44px; flex: 0 0 auto; }
 .watch-window-state { font-size: .74rem; color: var(--text-muted); }
 .watch-window-state.live { color: var(--good); }
-.watch-window-surface { min-height: 240px; overflow: hidden; border-radius: 8px; background: var(--terminal-frame); }
+.watch-window-surface { min-height: 240px; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--terminal-frame); }
 .watch-window small { color: var(--text-muted); font-size: .74rem; line-height: 1.35; }
+@media (max-width: 680px) {
+  .watch-overlay { padding: 8px; }
+  .watch-window-tools { flex: 1 0 100%; margin-left: 0; }
+}
 
 /* Scoped into the rail for the same reason, and styled as a warning rather than
    a neutral note on purpose: somebody is looking at this Hive right now, and

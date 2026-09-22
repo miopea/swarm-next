@@ -494,7 +494,20 @@ impl TaskStore {
                     && lease.source_hive_id == identity.hive.id
                     && lease.source_operator_id == identity.operator.id
                     && lease.stewardship_id.is_none()
-                    && lease.state == FederationStewardTakeoverState::Active
+                    // ⚠️ RELEASING ACCEPTS ANY OPEN LEASE, NOT ONLY AN ACTIVE
+                    // ONE. Requiring Active meant a request the target had not
+                    // taken up yet could not be withdrawn — and a Keeper that
+                    // closes the window before acknowledgement left the target
+                    // holding a `Requested` lease that nothing could end,
+                    // blocking every later takeover of that Hive with
+                    // "could not be taken over". Extending still requires a
+                    // lease that is actually Active, because there is nothing
+                    // to extend otherwise.
+                    && if to == FederationStewardTakeoverState::Released {
+                        lease.state.is_open()
+                    } else {
+                        lease.state == FederationStewardTakeoverState::Active
+                    }
             })
             .ok_or(TaskStoreError::InvalidFederationStewardTakeover)?;
         let expires_at = if to == FederationStewardTakeoverState::Active {

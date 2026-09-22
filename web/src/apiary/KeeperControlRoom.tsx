@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
   fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
-  fetchApiaryMemberRemovalReadiness, removeApiaryMember,
+  fetchApiaryMemberRemovalReadiness, removeApiaryMember, releaseApiaryTakeover,
   type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type TakeoverAuditEntry, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -196,12 +196,39 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             leaseId={controlling.leaseId}
             operatorToken={operatorToken}
             hiveName={controlling.hiveName}
-            onClose={() => setControlling(undefined)}
+            onClose={() => {
+              // ⚠️ ENDED, NOT MERELY HIDDEN — the same lesson the watch window
+              // already carries three lines below. Closing this used to leave
+              // the lease open: the Hive went on telling its operator someone
+              // else was controlling it, and every later takeover of it was
+              // refused, because a Hive may hold only one open lease.
+              void releaseApiaryTakeover(operatorToken, controlling.leaseId).catch(() => undefined);
+              setControlling(undefined);
+            }}
           /> : null}
           {watching ? <WatchWindow
             watchId={watching.watch.id}
             operatorToken={operatorToken}
             hiveName={watching.hiveName}
+            onTakeOver={() => {
+              // Watching is how an operator finds out a Hive needs hands on it.
+              // The escalation belongs here rather than back in the roster.
+              const member = members.find((entry) => entry.hive_name === watching.hiveName);
+              const reason = window.prompt(`Why are you taking over ${watching.hiveName}?`)?.trim();
+              if (!member || !reason) return;
+              void endApiaryWatch(operatorToken, watching.watch.id).catch(() => undefined);
+              setWatching(undefined);
+              void (async () => {
+                try {
+                  await openApiaryTakeover(operatorToken, member.hive_id, reason);
+                  const status = await fetchTakeoverStatus(operatorToken);
+                  const lease = status.held_by_me.find((held) => held.target_hive_id === member.hive_id);
+                  if (lease) setControlling({ leaseId: lease.id, hiveName: member.hive_name });
+                } catch {
+                  setWatchError(`${watching.hiveName} could not be taken over.`);
+                }
+              })();
+            }}
             onClose={() => {
               // Ended rather than merely hidden. A closed window that left the
               // watch open would keep the other operator's notice up while

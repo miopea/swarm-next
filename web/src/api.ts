@@ -1559,6 +1559,24 @@ export async function openApiaryTakeover(operatorToken: string, targetHiveId: st
   });
 }
 
+/**
+ * Ends a takeover this Hive holds.
+ *
+ * ⚠️ NOT `reclaimApiaryTakeover`, WHICH IS THE OTHER DIRECTION. That one is the
+ * person at the target keyboard taking their own machine back, and needs a
+ * reason. This is the Keeper letting go of something it holds — until it
+ * existed, closing the window left the lease open, the target kept saying
+ * someone else was controlling it, and every later takeover of that Hive was
+ * refused because a Hive may hold only one open lease.
+ */
+export async function releaseApiaryTakeover(operatorToken: string, leaseId: string): Promise<void> {
+  await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/takeovers/${encodeURIComponent(leaseId)}`,
+    { method: "DELETE" },
+  );
+}
+
 /** The local operator taking their machine back. Takes effect here at once. */
 export async function reclaimApiaryTakeover(operatorToken: string, leaseId: string, reason: string): Promise<void> {
   await authenticatedFetch(operatorToken, `/api/v1/apiary/takeovers/${encodeURIComponent(leaseId)}/reclaim`, {
