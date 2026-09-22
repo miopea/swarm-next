@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
 import { WatchStream, type WatchStreamState } from "./WatchStream";
+import { observeMirrorFit } from "./mirrorScale";
 
 /**
  * What a window draws into. An interface so the window can be tested without
@@ -53,6 +54,7 @@ const label: Record<WatchStreamState, string> = {
  */
 export default function WatchWindow({ watchId, operatorToken, hiveName, onClose, onTakeOver, createSurface }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<WatchStreamState>("connecting");
   const [detail, setDetail] = useState<string>();
 
@@ -85,7 +87,16 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
       },
     });
     void stream.open();
+    // ⚠️ THE MIRROR IS SCALED, NOT REFLOWED. Without this the watched Hive's
+    // terminal sat at its own pixel size in whatever room this window had and
+    // never changed — the operator's "it doesn't do a redraw like it does on
+    // mobile". Reflowing it to fit is the one thing that must not happen here:
+    // this window does not own that grid.
+    const stopFitting = frame.current
+      ? observeMirrorFit(frame.current, element)
+      : () => {};
     return () => {
+      stopFitting();
       stream.close();
       surface?.dispose();
     };
@@ -113,7 +124,9 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
           </span>
         </header>
         {/* Read-only. Nothing typed here goes anywhere, because nothing listens. */}
-        <div className="watch-window-surface" ref={host} />
+        <div className="watch-window-frame" ref={frame}>
+          <div className="watch-window-surface" ref={host} />
+        </div>
         <small>A live view. Nothing here is recorded, and {hiveName} is showing that you are watching. Stopping takes the notice off their screen.</small>
       </section>
     </div>

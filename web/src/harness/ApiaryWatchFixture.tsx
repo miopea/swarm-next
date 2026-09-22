@@ -19,7 +19,8 @@ export default function ApiaryWatchFixture() {
     onTakeOver={() => {}}
     createSurface={(host) => {
       const pre = document.createElement("pre");
-      pre.style.cssText = "margin:0;padding:12px;color:#d9e7d4;font:12px/1.4 monospace;white-space:pre-wrap";
+      pre.className = "xterm-screen";
+      pre.style.cssText = "margin:0;color:#d9e7d4;font:12px/1.4 monospace;white-space:pre;width:640px;height:340px";
       pre.textContent = [
         "> Tell me the time",
         "  Bash(date)",

@@ -1,5 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
+import { observeMirrorFit } from "./mirrorScale";
 
 import { requestTakeoverControlGrant } from "../api";
 
@@ -48,6 +49,7 @@ const ACKNOWLEDGEMENT_POLL_MS = 2_000;
  */
 export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClose, createSurface }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"connecting" | "live" | "closed">("connecting");
   const [detail, setDetail] = useState<string>();
 
@@ -123,23 +125,40 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
       socket.addEventListener("error", ended);
     })();
 
+    // Scaled, never reflowed: the Hive being held owns this grid, exactly as it
+    // does while being watched. See `mirrorScale`.
+    const stopFitting = frame.current
+      ? observeMirrorFit(frame.current, element)
+      : () => {};
     return () => {
+      stopFitting();
       closed = true;
       socket?.close();
       surface?.dispose();
     };
   }, [leaseId, operatorToken, createSurface]);
 
+  // ⚠️ THE SAME FULL WINDOW WATCHING GETS. Escalating from a watch used to drop
+  // the operator from a full-screen window back into a panel a few hundred
+  // pixels wide — "when I take over it goes back to a small window" — which is
+  // backwards: typing on somebody else's machine needs MORE room to see than
+  // reading does, not less.
   return (
-    <section className="takeover-window" aria-label={`Controlling ${hiveName}`}>
-      <header>
-        <div><p className="eyebrow">Controlling</p><h4>{hiveName}</h4></div>
-        <span role="status">{detail ?? (state === "live" ? "Live — you are typing on this Hive" : "Opening…")}</span>
-        <button type="button" onClick={onClose}>Hand back</button>
-      </header>
-      <div className="takeover-window-surface" ref={host} />
-      <small>{hiveName} is showing that you hold it, and can take it back at any moment.</small>
-    </section>
+    <div className="watch-overlay" role="dialog" aria-modal="true" aria-label={`Controlling ${hiveName}`}>
+      <section className="watch-window takeover-window">
+        <header>
+          <div><p className="eyebrow">Controlling</p><h4>{hiveName}</h4></div>
+          <span className={`watch-window-state ${state}`} role="status">{detail ?? (state === "live" ? "Live — you are typing on this Hive" : "Opening…")}</span>
+          <span className="watch-window-tools">
+            <button type="button" className="secondary-button" onClick={onClose}>Hand back</button>
+          </span>
+        </header>
+        <div className="watch-window-frame" ref={frame}>
+          <div className="takeover-window-surface" ref={host} />
+        </div>
+        <small>{hiveName} is showing that you hold it, and can take it back at any moment. Handing back ends the takeover and clears that notice.</small>
+      </section>
+    </div>
   );
 }
 
