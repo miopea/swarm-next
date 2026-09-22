@@ -3570,6 +3570,109 @@ mod tests {
     /// A bulk move retries. Minting a second shared task for the same local one
     /// would put the same work on the board twice with no way to tell which is
     /// real, so the second call returns the first result.
+    /// ⚠️ UNRESERVED SHARED WORK IS READ ONLY — the operator's decision of
+    /// 2026-09-21, and Keeper is where it is enforced rather than trusted.
+    ///
+    /// A Hive must reserve an apiary task before changing anything about it.
+    /// Reservation is the moment a Hive takes responsibility for the work, so
+    /// it is the natural line; without it two Hives could edit one shared
+    /// ticket with no serialization between them.
+    ///
+    /// ⚠️ THE MEMBER'S OWN REFUSAL IS NOT THE ONE THAT COUNTS. A member's local
+    /// guard can be bypassed by anything that can post a command, so this tests
+    /// the KEEPER's answer to a command it did not expect — which is the only
+    /// refusal a second Hive cannot route around.
+    #[test]
+    fn a_hive_cannot_change_shared_work_it_has_not_reserved() {
+        let now = 900_000;
+        let (keeper, first, first_acceptance) = joined_member(now);
+        let (_second, second_acceptance) = second_member(&keeper, now + 100);
+        let task = keeper
+            .create_apiary_task("Shared work", "", TaskPriority::Normal, now + 110)
+            .unwrap();
+        let page = keeper
+            .federation_task_page(&first_acceptance.node_credential, 0, now + 111)
+            .unwrap();
+        first.apply_federation_task_page(&page, now + 111).unwrap();
+
+        // ⚠️ NOBODY HAS RESERVED IT YET, and an unreserved task is nobody's to
+        // move.
+        let unreserved = FederationTaskCommand {
+            id: FederationTaskCommandId::new(),
+            apiary_id: task.apiary_id,
+            task_id: task.id,
+            expected_revision: task.revision,
+            kind: FederationTaskCommandKind::Transition,
+            target_state: Some(TaskState::Active),
+            filing: None,
+            created_at: now + 112,
+        };
+        assert_eq!(
+            keeper
+                .apply_federation_task_command(
+                    &second_acceptance.node_credential,
+                    &unreserved,
+                    now + 113
+                )
+                .unwrap()
+                .outcome,
+            FederationTaskCommandOutcome::Conflict,
+            "changing work nobody reserved is refused"
+        );
+
+        // The first Hive reserves it properly.
+        let claim = first
+            .queue_federation_task_claim(task.id, now + 114)
+            .unwrap();
+        assert_eq!(
+            keeper
+                .apply_federation_task_command(
+                    &first_acceptance.node_credential,
+                    &claim.command,
+                    now + 115
+                )
+                .unwrap()
+                .outcome,
+            FederationTaskCommandOutcome::Applied
+        );
+
+        // ⚠️ AND THE OTHER HIVE STILL CANNOT MOVE IT, which is the half that
+        // matters: reservation is what serializes two Hives on one ticket.
+        let poached = FederationTaskCommand {
+            id: FederationTaskCommandId::new(),
+            apiary_id: task.apiary_id,
+            task_id: task.id,
+            expected_revision: task.revision + 1,
+            kind: FederationTaskCommandKind::Transition,
+            target_state: Some(TaskState::Active),
+            filing: None,
+            created_at: now + 116,
+        };
+        assert_eq!(
+            keeper
+                .apply_federation_task_command(
+                    &second_acceptance.node_credential,
+                    &poached,
+                    now + 117
+                )
+                .unwrap()
+                .outcome,
+            FederationTaskCommandOutcome::Conflict,
+            "somebody else's reservation is not a door"
+        );
+        assert_eq!(
+            keeper
+                .list_visible_apiary_tasks()
+                .unwrap()
+                .into_iter()
+                .find(|held| held.id == task.id)
+                .unwrap()
+                .state,
+            TaskState::Ready,
+            "and nothing about the task moved"
+        );
+    }
+
     /// ⚠️ A CLAIM WAS A PERMANENT HOLD. Claim set `home_node_id` and nothing ever
     /// cleared it, so a Hive that slept holding work held it forever — the
     /// exact thing this task's title says must never happen.
