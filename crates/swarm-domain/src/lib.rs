@@ -1189,6 +1189,32 @@ mod tests {
             ApiaryJoinReadiness::evaluate(&hive, &apiary, Some(&invitation), checks, 20).blockers(),
             [ApiaryJoinBlocker::InvitationExpired]
         );
+        // ⚠️ A BLOCKER WITHOUT A SENTENCE IS A BLOCKER NOBODY CAN CLEAR. These
+        // are computed correctly and were then discarded for one opaque code;
+        // adding a ninth variant without a description would quietly put the
+        // next operator back where this one was.
+        let described = [
+            ApiaryJoinBlocker::HiveAlreadyFederated,
+            ApiaryJoinBlocker::InvitationRequired,
+            ApiaryJoinBlocker::InvitationExpired,
+            ApiaryJoinBlocker::IdentityNotVerified,
+            ApiaryJoinBlocker::IntegrationNotReady,
+            ApiaryJoinBlocker::ProjectAccessNotReady,
+            ApiaryJoinBlocker::PolicyNotAccepted,
+            ApiaryJoinBlocker::ProtocolMismatch,
+        ]
+        .map(|blocker| blocker.describe());
+        for sentence in described {
+            assert!(!sentence.is_empty());
+        }
+        let mut unique = described.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            described.len(),
+            "two blockers reading the same leaves the operator unable to tell them apart"
+        );
         hive.join(ApiaryId::new()).unwrap();
         assert_eq!(
             ApiaryJoinReadiness::evaluate(&hive, &apiary, None, checks, 15).blockers(),

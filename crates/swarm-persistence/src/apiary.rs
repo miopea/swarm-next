@@ -767,7 +767,9 @@ impl TaskStore {
         now: i64,
     ) -> Result<ApiaryInvitation, TaskStoreError> {
         if !readiness.can_join() {
-            return Err(TaskStoreError::ApiaryJoinNotReady);
+            return Err(TaskStoreError::ApiaryJoinBlocked(
+                readiness.blockers().to_vec(),
+            ));
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -776,8 +778,16 @@ impl TaskStore {
         if invitation.state != ApiaryInvitationState::Pending {
             return Err(TaskStoreError::ApiaryInvitationResolved);
         }
-        if invitation.expires_at <= now
-            || invitation.apiary_id != readiness.apiary_id()
+        // Expiry is the one an operator can clear themselves, and it is by far
+        // the most common: a join link lives a day. It is separated from the
+        // identity mismatch below, which is a routing fault nobody at a keyboard
+        // can act on.
+        if invitation.expires_at <= now {
+            return Err(TaskStoreError::ApiaryJoinBlocked(vec![
+                swarm_domain::ApiaryJoinBlocker::InvitationExpired,
+            ]));
+        }
+        if invitation.apiary_id != readiness.apiary_id()
             || invitation.invited_hive_id != readiness.hive_id()
         {
             return Err(TaskStoreError::ApiaryJoinNotReady);
@@ -792,7 +802,11 @@ impl TaskStore {
             ],
         )? != 1
         {
-            return Err(TaskStoreError::ApiaryJoinNotReady);
+            // `apiary_id IS NULL` is the only way this misses a live Hive, so
+            // the Hive joined something between the readiness check and here.
+            return Err(TaskStoreError::ApiaryJoinBlocked(vec![
+                swarm_domain::ApiaryJoinBlocker::HiveAlreadyFederated,
+            ]));
         }
         transaction.execute(
             "UPDATE apiary_invitations
@@ -1871,15 +1885,73 @@ mod tests {
             50,
         );
 
+        // ⚠️ AND IT SAYS WHICH CHECK. Failing closed was already right; failing
+        // closed WITHOUT THE REASON is what sent an operator to their Keeper
+        // with an unclassifiable code for a fact this readiness already held.
+        let refusal = store.accept_apiary_invitation(invitation.id, &readiness, 50);
         assert!(matches!(
-            store.accept_apiary_invitation(invitation.id, &readiness, 50),
-            Err(TaskStoreError::ApiaryJoinNotReady)
+            &refusal,
+            Err(TaskStoreError::ApiaryJoinBlocked(blockers))
+                if blockers == &[swarm_domain::ApiaryJoinBlocker::ProjectAccessNotReady]
         ));
+        assert!(
+            refusal.unwrap_err().to_string().contains("projects"),
+            "the refusal has to name what is wrong to the person reading it"
+        );
         assert_eq!(store.local_hive_identity().unwrap().hive.apiary_id, None);
         assert_eq!(
             store.get_apiary_invitation(invitation.id).unwrap().state,
             ApiaryInvitationState::Pending
         );
+    }
+
+    /// The exact shape reported from the field on 2026-09-22: a reinstalled
+    /// Hive retrying a saved request against a join link that had expired days
+    /// earlier. It was told `apiary_join_not_ready (409)` and "Swarm could not
+    /// classify why", when the one thing needed was a fresh invitation.
+    #[test]
+    fn an_expired_invitation_says_it_expired_and_what_to_do() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let (apiary, keeper_id) = add_apiary(&store, "Garden");
+        let invitation = store
+            .create_apiary_invitation(apiary.id, identity.hive.id, keeper_id, 10, 100)
+            .unwrap();
+        let accepted = store
+            .accept_apiary_policy(
+                invitation.id,
+                identity.operator.id,
+                apiary.policy_revision(),
+                40,
+            )
+            .unwrap();
+        // Well past the invitation's expiry.
+        let now = 500;
+        let readiness = ApiaryJoinReadiness::evaluate(
+            &identity.hive,
+            &apiary,
+            Some(&accepted),
+            ApiaryJoinChecks {
+                identity: ApiaryJoinCheckState::Ready,
+                integration: ApiaryJoinCheckState::Ready,
+                project_access: ApiaryJoinCheckState::Ready,
+                protocol: ApiaryJoinCheckState::Ready,
+            },
+            now,
+        );
+        let refusal = store.accept_apiary_invitation(invitation.id, &readiness, now);
+        assert!(matches!(
+            &refusal,
+            Err(TaskStoreError::ApiaryJoinBlocked(blockers))
+                if blockers.contains(&swarm_domain::ApiaryJoinBlocker::InvitationExpired)
+        ));
+        let message = refusal.unwrap_err().to_string();
+        assert!(message.contains("expired"), "{message}");
+        assert!(
+            message.contains("issue a new one"),
+            "naming the cause without the remedy still leaves somebody stuck: {message}"
+        );
+        assert_eq!(store.local_hive_identity().unwrap().hive.apiary_id, None);
     }
 
     #[test]

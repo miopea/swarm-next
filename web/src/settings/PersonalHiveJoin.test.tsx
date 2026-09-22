@@ -170,6 +170,56 @@ test("an unclassified failure shows the code rather than guessing a cause", asyn
   expect(screen.getByRole("status")).not.toHaveTextContent(/submitted terms/);
 });
 
+/**
+ * The 2026-09-22 report: a reinstalled Hive retrying a saved request against a
+ * join link that had expired days earlier was shown `apiary_join_not_ready
+ * (409)` beside "Swarm could not classify why". The Keeper knew it had expired
+ * the whole time — the reason had nowhere to travel, because a member refuses
+ * to render a remote Hive's prose. It now travels as a typed code this Hive
+ * turns into its own words.
+ */
+test("a named join blocker is explained in this Hive's own words", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
+    String(input).endsWith("/enrollments")
+      ? JSON.stringify([{
+          consent: { link_id: "link-1" },
+          phase: "attention",
+          problem: "unclassified",
+          problem_code: "apiary_join_blocked_invitation_expired (409)",
+        }])
+      : "[]")));
+
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+
+  const status = await screen.findByRole("status");
+  expect(status).toHaveTextContent(/invitation expired/i);
+  expect(status).toHaveTextContent(/issue a new one/i);
+  // The raw code is no longer the whole of what the operator is given.
+  expect(status).not.toHaveTextContent(/could not classify why/);
+});
+
+/**
+ * A Keeper on a newer build can name a blocker this one has never heard of.
+ * That must degrade to the code-quoting sentence rather than to silence or to
+ * text this Hive cannot vouch for.
+ */
+test("an unknown blocker code still falls back to quoting the code", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(
+    String(input).endsWith("/enrollments")
+      ? JSON.stringify([{
+          consent: { link_id: "link-1" },
+          phase: "attention",
+          problem: "unclassified",
+          problem_code: "apiary_join_blocked_something_new (409)",
+        }])
+      : "[]")));
+
+  render(<PersonalHiveJoin busy={false} operatorToken="test" onError={vi.fn()} onMessage={vi.fn()} onJoined={vi.fn()} />);
+
+  await waitFor(() => expect(screen.getByRole("status"))
+    .toHaveTextContent(/apiary_join_blocked_something_new \(409\)/));
+});
+
 // Profile persistence is covered independently; these tests isolate join policy
 // and membership failure/recovery rather than mocking its HTTP contract twice.
 vi.mock("./JoinPublicProfile", async () => {

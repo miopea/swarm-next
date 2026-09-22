@@ -10034,13 +10034,32 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_invitation_not_found",
             error.to_string(),
         ),
-        TaskStoreError::ApiaryInvitationResolved | TaskStoreError::ApiaryJoinNotReady => {
-            ApiError::new(
-                StatusCode::CONFLICT,
-                "apiary_join_not_ready",
-                error.to_string(),
-            )
-        }
+        // ⚠️ THESE WERE ONE CODE AND THEY ARE NOT ONE PROBLEM. An operator
+        // adding a reinstalled Hive on 2026-09-22 was told
+        // `apiary_join_not_ready (409)` beside "Swarm could not classify why",
+        // for an invitation that had simply expired a week earlier — which they
+        // could have cleared themselves in a minute.
+        TaskStoreError::ApiaryInvitationResolved => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_invitation_resolved",
+            error.to_string(),
+        ),
+        // Carries the typed reasons the domain already computed. The CODE names
+        // the first one, because a member Hive maps codes to its own words and
+        // refuses to render a remote's prose — so a reason that travels only in
+        // the message never reaches the person who has to clear it.
+        TaskStoreError::ApiaryJoinBlocked(blockers) => ApiError::new(
+            StatusCode::CONFLICT,
+            blockers
+                .first()
+                .map_or("apiary_join_blocked", swarm_domain::ApiaryJoinBlocker::code),
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryJoinNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_join_not_ready",
+            error.to_string(),
+        ),
         TaskStoreError::ApiaryCollapseNotReady => ApiError::new(
             StatusCode::CONFLICT,
             "apiary_collapse_not_ready",

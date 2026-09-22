@@ -451,6 +451,17 @@ pub enum TaskStoreError {
     ApiaryInvitationResolved,
     #[error("Apiary join readiness is incomplete")]
     ApiaryJoinNotReady,
+    /// ⚠️ CARRIES THE REASONS, BECAUSE THE DOMAIN ALREADY KNEW THEM.
+    ///
+    /// `ApiaryJoinReadiness` computes eight typed blockers and every caller
+    /// then threw them away for a bare `ApiaryJoinNotReady`, which is also what
+    /// twenty other conditions return. An operator was shown
+    /// `apiary_join_not_ready (409)` beside the sentence "Swarm could not
+    /// classify why" — and Swarm could, it just did not say. Every one of these
+    /// is something the person reading it can act on: issue a fresh invitation,
+    /// leave the Apiary they are already in, accept the policy.
+    #[error("Apiary join is blocked: {}", .0.iter().map(swarm_domain::ApiaryJoinBlocker::describe).collect::<Vec<_>>().join("; "))]
+    ApiaryJoinBlocked(Vec<swarm_domain::ApiaryJoinBlocker>),
     #[error("Apiary cannot collapse until all federation state is clear")]
     ApiaryCollapseNotReady,
     #[error("Jira project is not ready for Apiary promotion")]

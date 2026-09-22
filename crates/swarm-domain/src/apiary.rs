@@ -1908,6 +1908,58 @@ pub enum ApiaryJoinBlocker {
     ProtocolMismatch,
 }
 
+impl ApiaryJoinBlocker {
+    /// The stable wire code for this blocker.
+    ///
+    /// ⚠️ THE REASON TRAVELS AS A CODE, NEVER AS THE KEEPER'S PROSE. A member
+    /// Hive deliberately refuses to render another Hive's text — that boundary
+    /// exists so a remote cannot write sentences onto this operator's screen —
+    /// so the reason has to be something the member can map to its OWN words.
+    /// These strings are that mapping, and renaming one silently degrades a
+    /// member that has not been updated to the generic refusal, which is the
+    /// safe direction.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::HiveAlreadyFederated => "apiary_join_blocked_hive_already_federated",
+            Self::InvitationRequired => "apiary_join_blocked_invitation_required",
+            Self::InvitationExpired => "apiary_join_blocked_invitation_expired",
+            Self::IdentityNotVerified => "apiary_join_blocked_identity_not_verified",
+            Self::IntegrationNotReady => "apiary_join_blocked_integration_not_ready",
+            Self::ProjectAccessNotReady => "apiary_join_blocked_project_access_not_ready",
+            Self::PolicyNotAccepted => "apiary_join_blocked_policy_not_accepted",
+            Self::ProtocolMismatch => "apiary_join_blocked_protocol_mismatch",
+        }
+    }
+
+    /// What this blocker means to the person who has to clear it.
+    ///
+    /// ⚠️ WRITTEN FOR THE OPERATOR READING A REFUSAL, not for a log. Each one
+    /// names the thing to do, because a join refusal that cannot be acted on
+    /// sends somebody to their Keeper for a fact their own screen already had.
+    #[must_use]
+    pub const fn describe(&self) -> &'static str {
+        match self {
+            Self::HiveAlreadyFederated => {
+                "this Hive already belongs to an Apiary, and must leave it before joining another"
+            }
+            Self::InvitationRequired => {
+                "there is no pending invitation for this Hive; ask the Keeper to issue a new one"
+            }
+            Self::InvitationExpired => {
+                "the invitation has expired; ask the Keeper to issue a new one"
+            }
+            Self::IdentityNotVerified => "this Hive's identity has not been verified yet",
+            Self::IntegrationNotReady => "a required integration is not connected yet",
+            Self::ProjectAccessNotReady => "the promoted projects are not all reachable yet",
+            Self::PolicyNotAccepted => "the Apiary policy revision has not been accepted yet",
+            Self::ProtocolMismatch => {
+                "this Hive speaks a different federation protocol; update Swarm on one side"
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiaryJoinCheckState {

@@ -36,6 +36,49 @@ type Props = {
   creationProfileRef?: RefObject<JoinPublicProfileHandle | null>;
 };
 
+/**
+ * The Keeper's refusal, in THIS Hive's words.
+ *
+ * ⚠️ THE CODE IS MAPPED LOCALLY AND THE REMOTE'S TEXT IS STILL NEVER SHOWN.
+ * A member refuses to render another Hive's prose on purpose, so a Keeper
+ * cannot write sentences onto this screen. That rule is why a refusal used to
+ * arrive as a bare code beside "Swarm could not classify why" — the Keeper knew
+ * the reason and had no way to say it. A typed code it can look up costs the
+ * Keeper no trust and tells the operator what to do.
+ *
+ * An unrecognised code falls through to the generic sentence, so a newer Keeper
+ * naming a blocker this build has never heard of degrades to what it did
+ * before rather than rendering something it cannot vouch for.
+ */
+function joinBlockerSentence(code: string | null | undefined): string | undefined {
+  if (!code) return undefined;
+  // Codes arrive as "<code> (<status>)" from the enrollment reconciler.
+  const bare = code.split(" ")[0];
+  const unchanged = "Your local work is unchanged.";
+  switch (bare) {
+    case "apiary_join_blocked_invitation_expired":
+      return `The invitation expired before joining finished. Ask your Keeper to issue a new one. ${unchanged}`;
+    case "apiary_join_blocked_invitation_required":
+      return `Your Keeper has no pending invitation for this Hive. Ask them to issue one. ${unchanged}`;
+    case "apiary_join_blocked_hive_already_federated":
+      return `This Hive already belongs to an Apiary. Leave that one before joining another. ${unchanged}`;
+    case "apiary_join_blocked_policy_not_accepted":
+      return `The Apiary policy changed and has not been accepted on this Hive. Review it and accept, then join again. ${unchanged}`;
+    case "apiary_join_blocked_identity_not_verified":
+      return `This Hive's identity has not been verified yet. ${unchanged}`;
+    case "apiary_join_blocked_integration_not_ready":
+      return `A required integration is not connected yet. Connect it, then join again. ${unchanged}`;
+    case "apiary_join_blocked_project_access_not_ready":
+      return `The Apiary's promoted projects are not all reachable from this Hive yet. ${unchanged}`;
+    case "apiary_join_blocked_protocol_mismatch":
+      return `The two Hives speak different federation protocols. Update Swarm on both, then join again. ${unchanged}`;
+    case "apiary_invitation_resolved":
+      return `That invitation has already been used or cancelled. Ask your Keeper for a current one. ${unchanged}`;
+    default:
+      return undefined;
+  }
+}
+
 export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage, onJoined, creationProfileRef }: Props) {
   const localProfileRef = useRef<JoinPublicProfileHandle>(null);
   const profileRef = creationProfileRef ?? localProfileRef;
@@ -325,9 +368,10 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
                 detection. An operator followed that sentence for an afternoon
                 while the real block was a stranded invitation. A code they can
                 quote to us beats fluent prose nobody established. */
-            : record.problem_code
-              ? `Joining could not finish, and Swarm could not classify why. Report this code to your Keeper: ${record.problem_code}. Your local work is unchanged.`
-              : "Joining could not finish and Swarm could not determine why. Ask your Keeper for a current invitation; your local work is unchanged."}
+            : joinBlockerSentence(record.problem_code)
+              ?? (record.problem_code
+                ? `Joining could not finish, and Swarm could not classify why. Report this code to your Keeper: ${record.problem_code}. Your local work is unchanged.`
+                : "Joining could not finish and Swarm could not determine why. Ask your Keeper for a current invitation; your local work is unchanged.")}
         {record.next_attempt_at ? <> Next check: {new Date(record.next_attempt_at * 1000).toLocaleTimeString()}.</> : null}
       </p> : null}
       {record.phase === "awaiting_approval" || record.phase === "attention" ? <button className="secondary-button" disabled={working} onClick={() => {
