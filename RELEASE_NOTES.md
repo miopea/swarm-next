@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.15.2
+
+### Fixes
+- Workers in auto mode really do stop showing as Resting while they work. 1.15.1 taught Swarm to read the provider's working indicator, but that indicator is not always on screen — on a phone-width terminal a leftover menu or a queued message can push it out of view. Swarm now also reads the footer's interrupt hint however short the terminal cuts it, which on a narrow screen is often just "esc …". Checked on live screens in both directions: working workers read as working, finished ones as resting.
+
 ## 1.15.1
 
 ### Fixes
