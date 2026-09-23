@@ -12,6 +12,11 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.15.3
+
+### Fixes
+- Switching between workers is quick again. Returning to a worker that had been busy while you were elsewhere could take several seconds to reconnect, and occasionally much longer. Each time Swarm restarted, workers in the background were left waiting longer before their next reconnect, and switching to one paid that wait. They now reconnect promptly, and switching to one that is waiting reconnects straight away.
+
 ## 1.15.2
 
 ### Fixes
