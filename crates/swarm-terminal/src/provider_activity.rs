@@ -137,8 +137,21 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
     // so an open question still reads as waiting on the operator, and BEFORE
     // the idle prompt, because Claude keeps its input box on screen while it
     // works.
+    //
+    // ⚠️ AND THE FOOTER, BECAUSE THE SPINNER IS NOT ALWAYS ON SCREEN. The live
+    // screen that proved the first version of this fix insufficient (a 48-column
+    // phone, 2026-09-22) had no spinner in view at all: a menu left over from a
+    // `/model` filled the top and the operator's queued message filled the
+    // bottom. The one busy signal still showing was the footer, "⏵⏵ auto mode on
+    // (shift+tab to cycle) · esc …". Measured across two days of this Hive's
+    // terminal history, the segment after "cycle) ·" reads "esc to interrupt"
+    // 14,687 times, "esc…" 8,050 and "esc …" 4,051 when working, and "← for
+    // agents" or a truncation of it when not. No idle form begins with "esc".
     if provider == ProviderKind::ClaudeCode
-        && recent.iter().any(|line| claude_spinner_is_running(line))
+        && (recent
+            .first()
+            .is_some_and(|line| claude_footer_says_interruptible(line))
+            || claude_spinner_on_screen(visible))
     {
         return ProviderActivity::Active;
     }
@@ -211,6 +224,38 @@ fn active_signal(normalized: &str) -> bool {
     normalized.contains("esc to int")
         || normalized.contains("esc to sto")
         || normalized.contains("esc to …")
+}
+
+/// Whether Claude's bottom-line footer carries the interrupt hint, however cut.
+///
+/// ⚠️ ONLY EVER ASKED OF THE BOTTOM LINE. This conversation's own transcript
+/// quotes the busy footer verbatim, and so will any worker that discusses one;
+/// reading every row would call a resting worker busy the moment it scrolled
+/// past its own notes.
+fn claude_footer_says_interruptible(line: &str) -> bool {
+    let Some((_, after)) = line.split_once("cycle)") else {
+        return false;
+    };
+    let Some(hint) = after.trim_start().strip_prefix('·') else {
+        return false;
+    };
+    hint.trim_start().to_lowercase().starts_with("esc")
+}
+
+/// Whether a spinner line is anywhere in the lower part of the screen.
+///
+/// ⚠️ AT COLUMN ZERO ONLY. Claude draws its spinner flush left; everything it
+/// prints into the transcript — its own prose, quoted text, tool output — is
+/// indented under a bullet or a gutter. Trimming leading space before looking
+/// would let a transcript that QUOTES a spinner line read as one.
+fn claude_spinner_on_screen(visible: &str) -> bool {
+    visible
+        .lines()
+        .rev()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .take(24)
+        .any(claude_spinner_is_running)
 }
 
 /// Claude's own working indicator: a spinner glyph, a verb in progress, then
@@ -510,6 +555,87 @@ mod tests {
             classify_visible_text(ProviderKind::ClaudeCode, screen),
             ProviderActivity::Active
         );
+    }
+
+    /// ⚠️ THE SCREEN THAT PROVED THE SPINNER ALONE WAS NOT ENOUGH, rendered at
+    /// its real size (48 x 36, a phone owning the geometry) at a moment the
+    /// roster said Resting while this worker was running a command. No spinner
+    /// is in view: a leftover `/model` menu fills the top and the operator's
+    /// queued message fills the bottom. Only the footer still says "working".
+    #[test]
+    fn a_working_screen_with_no_spinner_in_view_is_read_from_its_footer() {
+        let screen = [
+            "     4. Sonnet                   Sonnet 5 ·",
+            "                                 Efficient for",
+            "  ◐ Medium effort (default) ←/→ to adjust",
+            "  Enter to set as default · s to use this",
+            "  session only · Esc to cancel",
+            "",
+            "❯ /task Check the performance of switching",
+            "  between workers and mobile. It's back to",
+            "  taking a couple of seconds for the socket to",
+            "  reconnect, which is weird since I'm not",
+            "  minimizing the app.",
+            "  ctrl+x ctrl+s to send now",
+            "──────────────────── Task system gaps analysis ─",
+            "❯\u{a0}Press up to edit queued messages",
+            "────────────────────────────────────────────────",
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · esc …",
+        ]
+        .join("\n");
+        assert_eq!(
+            classify_visible_text(ProviderKind::ClaudeCode, &screen),
+            ProviderActivity::Active
+        );
+    }
+
+    /// ⚠️ A WORKER THAT TALKS ABOUT THE BUSY FOOTER IS NOT BUSY. This fix's own
+    /// transcript quotes it verbatim; reading any row but the bottom one would
+    /// call a resting worker working the moment it scrolled past its notes.
+    #[test]
+    fn a_transcript_quoting_the_busy_footer_does_not_make_an_idle_worker_busy() {
+        let screen = "● The footer read:\n    ⏵⏵ auto mode on (shift+tab to cycle) · esc …\n  and that was the bug.\n\n────────────\n❯ \n────────────\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents";
+        assert_ne!(
+            classify_visible_text(ProviderKind::ClaudeCode, screen),
+            ProviderActivity::Active
+        );
+    }
+
+    /// Nor does quoting a spinner line: Claude draws the real one at column zero
+    /// and indents everything it prints into the transcript.
+    #[test]
+    fn a_transcript_quoting_a_spinner_does_not_make_an_idle_worker_busy() {
+        let screen = "● It showed:\n  ✽ Baking… (8m 38s · ↓ 23.5k tokens)\n\n✻ Cogitated for 2s\n\n❯ \n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents";
+        assert_ne!(
+            classify_visible_text(ProviderKind::ClaudeCode, screen),
+            ProviderActivity::Active
+        );
+    }
+
+    /// Every busy footer form measured across two days of this Hive's history.
+    #[test]
+    fn every_measured_busy_footer_reads_as_working_and_no_idle_one_does() {
+        for busy in [
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents",
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · esc…",
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · esc …",
+        ] {
+            assert!(
+                super::claude_footer_says_interruptible(busy.trim()),
+                "{busy}"
+            );
+        }
+        for idle in [
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · ← fo…",
+            "  ⏵⏵ auto mode on (shift+tab to cycle) · 1 feedback",
+            "  ⏵⏵ auto mode on (shift+tab to cycle)",
+        ] {
+            assert!(
+                !super::claude_footer_says_interruptible(idle.trim()),
+                "{idle}"
+            );
+        }
     }
 
     /// Hooks running before a tool are work too, and Claude says so on the
