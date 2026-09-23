@@ -12,6 +12,13 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.0
+
+### Fixes
+- Queen's reviews stop stalling on "Swarm could not confirm the last review reached Queen". When your answer to a decision parked a task for you to handle yourself, that park was recorded in a form Queen's review could not read, so any review touching the task failed before it was ever sent — and stopped until you pressed Resume. Parks are now recorded in the form the review reads, and existing ones are repaired on upgrade.
+- A Steward's takeover no longer ends five minutes in while they are typing. 1.15.1 fixed this for the Keeper only.
+- The Keeper holding a takeover can see how long it has left, as the Hive being held already could.
+
 ## 1.15.3
 
 ### Fixes
