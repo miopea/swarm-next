@@ -2747,6 +2747,64 @@ mod tests {
         assert_eq!(DeferralReason::InteractiveControl.refusal_kind(), None);
     }
 
+    /// ⚠️ QUEEN'S REVIEW PARKING, 2026-09-22: "It's like the queen can't keep
+    /// working without me prodding her." Automation kept stopping on "Swarm
+    /// could not confirm the last review reached Queen".
+    ///
+    /// Delivery is confirmed by seeing Queen go Active after Enter. In auto mode
+    /// her footer's "esc to interrupt" is truncated to "esc …", which read as
+    /// Resting — so a Queen who had taken the review and was working on it
+    /// looked idle, was sent Enter twice more, and the delivery was declared
+    /// Uncertain and automation parked. Her spinner line now says she is
+    /// working, and that must confirm the delivery on the first look.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_queen_working_in_auto_mode_confirms_the_review_reached_her() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let session = WorkerSessionId::new();
+        let server = tokio::spawn(async move {
+            let working = "> [Swarm review] 3 actionable items\r\n\r\n✽ Baking… (4s · ↓ 1.2k tokens)\r\n\r\n────────────\r\n❯ \r\n────────────\r\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc …";
+            let mut writes = 0;
+            loop {
+                let Ok(Ok((stream, _))) =
+                    tokio::time::timeout(Duration::from_secs(12), listener.accept()).await
+                else {
+                    return writes;
+                };
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let response = match serde_json::from_str::<HostRequest>(&line).unwrap() {
+                    HostRequest::Write { .. } => {
+                        writes += 1;
+                        HostResponse::Acknowledged
+                    }
+                    _ => prompt_observation(session, working, true),
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                if reader.get_mut().write_all(&bytes).await.is_err() {
+                    return writes;
+                }
+            }
+        });
+        let outcome = submit_rendered_message(
+            &HostClient::new(socket),
+            session,
+            ProviderKind::ClaudeCode,
+            b"[Swarm review]",
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, TerminalSubmission::Acknowledged);
+        server.abort();
+    }
+
     #[tokio::test]
     async fn stalled_coordination_phases_defer_before_writing_and_never_replay_afterward() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
