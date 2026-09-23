@@ -122,3 +122,33 @@ test("the window waits for the Hive to accept rather than declaring it dead", as
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
   vi.useRealTimers();
 });
+
+/**
+ * The held Hive shows how long a takeover has left; the Keeper holding it did
+ * not, so the one person who can keep it alive by typing could not see how long
+ * they had.
+ */
+test("the Keeper's window says when the lease lapses", () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  render(<TakeoverWindow
+    leaseId="lease-1"
+    operatorToken="token"
+    hiveName="Paul's Hive"
+    onClose={vi.fn()}
+    expiresAt={Date.now() / 1000 + 250}
+    createSurface={() => ({ write: vi.fn(), resize: vi.fn(), clear: vi.fn(), dispose: vi.fn() })}
+  />);
+  expect(screen.getByText(/Lapses in about 5 min unless you keep typing/)).toBeInTheDocument();
+});
+
+test("without a known expiry the window invents none", () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  render(<TakeoverWindow
+    leaseId="lease-1"
+    operatorToken="token"
+    hiveName="Paul's Hive"
+    onClose={vi.fn()}
+    createSurface={() => ({ write: vi.fn(), resize: vi.fn(), clear: vi.fn(), dispose: vi.fn() })}
+  />);
+  expect(screen.queryByText(/Lapses in about/)).not.toBeInTheDocument();
+});

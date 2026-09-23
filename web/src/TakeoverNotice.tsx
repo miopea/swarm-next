@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { TakeoverLease } from "./api";
+import { approximateRemaining } from "./apiary/leaseTime";
 
 type Props = {
   leases: TakeoverLease[] | undefined;
@@ -77,8 +78,7 @@ export default function TakeoverNotice({ leases, onReclaim }: Props) {
 
 /** How long the lease has left, in the words the person holding the keyboard needs. */
 export function remaining(expiresAt: number, active: boolean, now = Date.now()): string {
-  const seconds = Math.max(0, Math.round(expiresAt - now / 1000));
-  const span = seconds >= 60 ? `${Math.ceil(seconds / 60)} min` : `${seconds}s`;
+  const span = approximateRemaining(expiresAt, now);
   return active
     ? `Ends in about ${span} unless they keep typing.`
     // No action is asked of anyone here: this Hive takes a request up on

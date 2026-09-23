@@ -194,6 +194,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
           {watchError ? <p className="keeper-empty" role="alert">{watchError}</p> : null}
           {controlling ? <TakeoverWindow
             leaseId={controlling.leaseId}
+            expiresAt={snapshot.takeovers.find((entry) => entry.lease.id === controlling.leaseId)?.lease.expires_at}
             operatorToken={operatorToken}
             hiveName={controlling.hiveName}
             onClose={() => {

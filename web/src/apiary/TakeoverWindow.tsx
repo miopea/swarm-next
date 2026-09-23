@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 import { observeMirrorFit } from "./mirrorScale";
+import { approximateRemaining } from "./leaseTime";
 
 import { requestTakeoverControlGrant } from "../api";
 
@@ -9,6 +10,13 @@ type Props = {
   operatorToken: string;
   hiveName: string;
   onClose: () => void;
+  /**
+   * When the lease lapses, from the roster's regular refresh.
+   *
+   * The held Hive already shows this; the Keeper holding it did not, so the
+   * one person able to keep it alive could not see how long it had.
+   */
+  expiresAt?: number;
   /** Injected by tests; the default builds an xterm surface. */
   createSurface?: (host: HTMLElement, onKey: (data: string) => void) => Surface;
 };
@@ -47,7 +55,7 @@ const ACKNOWLEDGEMENT_POLL_MS = 2_000;
  * relay watching uses; nothing is recorded anywhere but the audit, which says
  * who held the Hive and never what they typed.
  */
-export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClose, createSurface }: Props) {
+export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClose, expiresAt, createSurface }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"connecting" | "live" | "closed">("connecting");
@@ -156,7 +164,10 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
         <div className="watch-window-frame" ref={frame}>
           <div className="takeover-window-surface" ref={host} />
         </div>
-        <small>{hiveName} is showing that you hold it, and can take it back at any moment. Handing back ends the takeover and clears that notice.</small>
+        <small>
+          {expiresAt === undefined ? null : <>Lapses in about {approximateRemaining(expiresAt)} unless you keep typing. </>}
+          {hiveName} is showing that you hold it, and can take it back at any moment. Handing back ends the takeover and clears that notice.
+        </small>
       </section>
     </div>
   );
