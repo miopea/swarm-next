@@ -148,9 +148,7 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
     // 14,687 times, "esc…" 8,050 and "esc …" 4,051 when working, and "← for
     // agents" or a truncation of it when not. No idle form begins with "esc".
     if provider == ProviderKind::ClaudeCode
-        && (recent
-            .first()
-            .is_some_and(|line| claude_footer_says_interruptible(line))
+        && (below_input_box(&recent).any(claude_footer_says_interruptible)
             || claude_spinner_on_screen(visible))
     {
         return ProviderActivity::Active;
@@ -226,12 +224,23 @@ fn active_signal(normalized: &str) -> bool {
         || normalized.contains("esc to …")
 }
 
-/// Whether Claude's bottom-line footer carries the interrupt hint, however cut.
+/// The rows beneath the input box's lower border, bottom first.
 ///
-/// ⚠️ ONLY EVER ASKED OF THE BOTTOM LINE. This conversation's own transcript
-/// quotes the busy footer verbatim, and so will any worker that discusses one;
-/// reading every row would call a resting worker busy the moment it scrolled
-/// past its own notes.
+/// ⚠️ THIS IS WHERE THE FOOTER LIVES, AND WHY IT IS FOUND STRUCTURALLY. The
+/// first version read only the bottom line, and a live 48-column screen had
+/// "0% until auto-compact" UNDER the footer — so a working worker at phone width
+/// would have been read from the wrong line. Everything Claude prints into the
+/// transcript, including a quoted footer, sits ABOVE the input box; what is
+/// below its last border is Claude's own chrome. Stopping at that border is what
+/// keeps a worker that discusses the busy footer from being called busy.
+fn below_input_box<'a>(recent: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
+    recent
+        .iter()
+        .copied()
+        .take_while(|line| !line.starts_with('─'))
+}
+
+/// Whether a line of Claude's footer carries the interrupt hint, however cut.
 fn claude_footer_says_interruptible(line: &str) -> bool {
     let Some((_, after)) = line.split_once("cycle)") else {
         return false;
@@ -583,6 +592,13 @@ mod tests {
             "  ⏵⏵ auto mode on (shift+tab to cycle) · esc …",
         ]
         .join("\n");
+        assert_eq!(
+            classify_visible_text(ProviderKind::ClaudeCode, &screen),
+            ProviderActivity::Active
+        );
+        // And with the status line a 48-column screen shows BENEATH the footer,
+        // which a bottom-line-only reading got wrong.
+        let screen = format!("{screen}\n                         0% until auto-compact");
         assert_eq!(
             classify_visible_text(ProviderKind::ClaudeCode, &screen),
             ProviderActivity::Active
