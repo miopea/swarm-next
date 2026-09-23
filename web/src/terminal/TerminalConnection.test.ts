@@ -857,6 +857,72 @@ test("output resumes normally once a surface is back on screen", async () => {
   await vi.waitFor(() => expect(handlers.onOutput).toHaveBeenCalledTimes(1));
 });
 
+/**
+ * ⚠️ THE SLOW WORKER SWITCH, 2026-09-22/23: "It's back to taking a couple of
+ * seconds for the socket to reconnect, which is weird since I'm not minimizing
+ * the app." Measured from the operator's devices: switches averaging 2-8 s, a
+ * 56 s worst case, against a ~1 s baseline.
+ *
+ * A background terminal drops its frames unpainted, and the retry counter only
+ * reset on a PAINTED confirmation — so every API restart pushed every
+ * background worker one rung up the ladder, for good. Here the socket drops
+ * three times while detached and reconnects each time with a real snapshot; the
+ * fourth drop must still reconnect after the FIRST rung, not the fourth.
+ */
+test("a background terminal that keeps reconnecting does not climb the backoff ladder", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness([10, 1_000, 2_000, 4_000, 8_000]);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(1n, 24, 80, "live"));
+  await vi.advanceTimersByTimeAsync(0);
+  connection.suspendRendering();
+
+  for (let restart = 0; restart < 3; restart += 1) {
+    const current = sockets[sockets.length - 1];
+    current.disconnect();
+    // The bottom rung, every time: no restart may have left it escalated.
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets.length, `reconnect after restart ${restart + 1}`).toBe(restart + 2);
+    const next = sockets[sockets.length - 1];
+    next.open();
+    next.message(snapshotFrame(BigInt(restart + 2), 24, 80, "still here"));
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  connection.dispose();
+});
+
+/**
+ * ⚠️ AND IF THE LADDER DID CLIMB — an outage long enough that nothing
+ * answered — the operator switching to the terminal must not wait out the
+ * rung it reached. Looking at it is reason enough to try now.
+ */
+test("switching to a terminal that is waiting out a backoff reconnects at once", async () => {
+  vi.useFakeTimers();
+  const { connection, fetch, handlers, sockets } = harness([10, 60_000]);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(1n, 24, 80, "live"));
+  await vi.advanceTimersByTimeAsync(0);
+  connection.suspendRendering();
+
+  // The API goes away: the socket drops and the next attach grant fails, so
+  // the ladder reaches its sixty-second rung.
+  fetch.mockRejectedValueOnce(new TypeError("fictional API restart"));
+  sockets[0].disconnect();
+  await vi.advanceTimersByTimeAsync(10);
+  await vi.advanceTimersByTimeAsync(0);
+  const attemptsBefore = fetch.mock.calls.length;
+
+  connection.resumeRendering();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch.mock.calls.length, "an attach was attempted without waiting out the rung").toBe(attemptsBefore + 1);
+  connection.dispose();
+});
+
 test("an open-close loop cannot reset the bounded reconnect budget", async () => {
   vi.useFakeTimers();
   const { connection, handlers, sockets } = harness([1, 1]);

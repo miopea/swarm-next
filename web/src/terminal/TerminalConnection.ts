@@ -524,6 +524,17 @@ export class TerminalConnection {
   resumeRendering(): void {
     if (this.#rendering) return;
     this.#rendering = true;
+    // ⚠️ THE OPERATOR IS LOOKING: DO NOT MAKE THEM WAIT OUT A BACKOFF. A
+    // background terminal whose socket dropped may be several rungs up the
+    // ladder, with its next attempt seconds away. Someone switching to it is
+    // the strongest reason there is to try now. The rate this allows is bounded
+    // by how fast a person can switch workers, which is not a loop.
+    if (this.#retryTimer !== undefined && this.#socket === undefined && !this.#disposed && !this.#fatal) {
+      clearTimeout(this.#retryTimer);
+      this.#retryTimer = undefined;
+      this.#retryAttempt = 0;
+      void this.#connect();
+    }
     this.#handleVisibilityChange();
     if (!this.#missedWhileDetached) return;
     this.#missedWhileDetached = false;
@@ -531,6 +542,23 @@ export class TerminalConnection {
   }
 
   #enqueueBinaryFrame(frame: Uint8Array, socket: WebSocket): void {
+    // ⚠️ A TERMINAL FRAME PROVES THE TRANSPORT, PAINTED OR NOT. The retry
+    // counter used to reset only on a RENDERED confirmation, and a terminal in
+    // the background drops its frames unpainted — so every API restart pushed
+    // every background worker one rung up the backoff ladder, permanently, and
+    // the next switch to it waited out that escalated delay before
+    // reconnecting. Measured from the operator's own devices on 2026-09-22/23:
+    // switches averaging 2-8 s with a 56 s worst case against a ~1 s baseline,
+    // the excess entirely in time no phase accounted for, and the spikes lined
+    // up with the hours this Hive was being reloaded repeatedly.
+    //
+    // Only a TERMINAL frame counts. The open-close loop the ladder exists to
+    // throttle still sends a control message before it drops, and that must
+    // not buy it a fresh budget.
+    if ((frame[0] === OUTPUT_FRAME_TYPE || frame[0] === SNAPSHOT_FRAME_TYPE)
+      && socket === this.#socket && socket.readyState === WebSocket.OPEN) {
+      this.#retryAttempt = 0;
+    }
     if (this.#recovering) return;
     if (!this.#rendering) {
       // Nothing can draw this, and holding it only decides how long the
@@ -811,6 +839,9 @@ export class TerminalConnection {
     this.#hasCanonicalState = false;
     this.#sequence = 0;
     this.#handlers?.onState("disconnected", `${detail}; requesting a fresh snapshot`);
+    // A close WE chose is not a failure, so it starts from the bottom of the
+    // ladder rather than inheriting whatever an unrelated earlier outage left.
+    this.#retryAttempt = 0;
     this.#socket?.close(CLOSE_FRESH_SNAPSHOT, "fresh terminal snapshot required");
   }
 
