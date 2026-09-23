@@ -460,6 +460,42 @@ impl TaskStore {
         Ok(lease)
     }
 
+    /// Extends an active takeover because its SOURCE is typing into it.
+    ///
+    /// ⚠️ A STEWARD'S TAKEOVER ENDED FIVE MINUTES IN, MID-KEYSTROKE, AND NOTHING
+    /// COULD STOP IT. Renewal-on-input existed only for a lease the Keeper holds
+    /// itself; a Steward's keystrokes reach the Keeper through the federation
+    /// relay, where the Keeper-only renewal refused the lease for naming a
+    /// stewardship. The lease lapsed while the Steward was typing.
+    ///
+    /// Authority comes from the caller, not from here: this is called only from
+    /// the relay's SOURCE side, whose connection was authorised as this lease's
+    /// source — the Keeper's own browser by a single-use grant, a Steward's Hive
+    /// by its node credential against this exact lease. That is the
+    /// "authenticated input" ADR 0036 renews on. Only an ACTIVE, UNEXPIRED lease
+    /// moves: input never revives a lease that was reclaimed, released or lapsed.
+    ///
+    /// # Errors
+    /// Returns an error when persistence fails. `Ok(false)` means nothing was
+    /// eligible, which is ordinary.
+    pub fn extend_takeover_on_source_input(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let changed = self.connection()?.execute(
+            "UPDATE apiary_steward_takeover_leases
+             SET expires_at = ?2, revision = revision + 1, updated_at = ?1
+             WHERE lease_id = ?3 AND state = 'active' AND expires_at > ?1",
+            params![
+                now,
+                now.saturating_add(ACTIVE_LIFETIME_SECONDS),
+                lease_id.to_string()
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
     /// Keeper extending or ending a takeover it holds.
     ///
     /// ⚠️ NOT REVISION-FENCED EITHER, for the same reason reclaim is not: the
@@ -2679,6 +2715,82 @@ mod tests {
         assert_ne!(
             replacement.lease.as_ref().map(|lease| lease.id),
             first_receipt.lease.as_ref().map(|lease| lease.id)
+        );
+    }
+
+    /// ⚠️ A STEWARD'S TAKEOVER USED TO END FIVE MINUTES IN, MID-KEYSTROKE. The
+    /// only renewal on input was for a lease the Keeper held itself, and a
+    /// Steward's lease names a stewardship, so it was refused and lapsed while
+    /// the Steward typed.
+    #[test]
+    fn a_steward_typing_into_a_takeover_keeps_it_alive_and_nothing_revives_one() {
+        let now = 910_000;
+        let (keeper, steward, acceptance, target, target_acceptance) = setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let request = steward
+            .queue_federation_steward_takeover(target_hive_id, "Need control", now + 53)
+            .expect("request");
+        let requested = keeper
+            .apply_federation_steward_takeover_command(
+                &acceptance.node_credential,
+                &request.command,
+                now + 54,
+            )
+            .expect("apply request");
+        let lease_id = requested.lease.as_ref().unwrap().id;
+        // Still only REQUESTED: input must not activate or extend it.
+        assert!(
+            !keeper
+                .extend_takeover_on_source_input(lease_id, now + 54)
+                .unwrap()
+        );
+
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 55)
+            .expect("target inbox");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 56)
+            .expect("projection");
+        let acknowledgement = target
+            .queue_federation_steward_takeover_acknowledgement(lease_id, 1, now + 57)
+            .expect("ack");
+        let active = keeper
+            .apply_federation_steward_takeover_command(
+                &target_acceptance.node_credential,
+                &acknowledgement.command,
+                now + 58,
+            )
+            .expect("active");
+        let before = active.lease.as_ref().unwrap().expires_at;
+        assert!(
+            active.lease.as_ref().unwrap().stewardship_id.is_some(),
+            "a Steward's lease"
+        );
+
+        // Four minutes in, the Steward is still typing.
+        let typing_at = before - 60;
+        assert!(
+            keeper
+                .extend_takeover_on_source_input(lease_id, typing_at)
+                .unwrap()
+        );
+        let renewed = keeper
+            .apiary_takeover_audit(10)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.lease.id == lease_id)
+            .unwrap()
+            .lease;
+        assert!(
+            renewed.expires_at > before,
+            "the lease outlives its first five minutes"
+        );
+
+        // And a lapsed lease is over: input after expiry revives nothing.
+        assert!(
+            !keeper
+                .extend_takeover_on_source_input(lease_id, renewed.expires_at + 1)
+                .unwrap()
         );
     }
 

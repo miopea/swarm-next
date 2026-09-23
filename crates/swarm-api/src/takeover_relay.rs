@@ -259,9 +259,10 @@ const MIN_SECONDS_BETWEEN_RENEWALS: i64 = 30;
 /// its own copy before that copy lapses and releases automation underneath a
 /// Keeper who is still typing.
 ///
-/// A Steward-held lease is not renewed here: its source is another Hive, which
-/// renews it by journalling the command from its own side. Filed as a follow-up
-/// rather than done blind.
+/// A Steward-held lease is renewed here too. Its keystrokes arrive at the
+/// Keeper through the federation relay, authorised by the Steward Hive's node
+/// credential as this lease's source — the same proof a journalled renewal
+/// would carry — so the lease is extended where it lives.
 fn renew_on_input(state: &AppState, lease: FederationStewardTakeoverLeaseId, last: &mut i64) {
     let now = crate::unix_timestamp();
     if now - *last < MIN_SECONDS_BETWEEN_RENEWALS {
@@ -280,13 +281,11 @@ fn renew_on_input(state: &AppState, lease: FederationStewardTakeoverLeaseId, las
         return;
     }
     *last = now;
+    // Keeper-held and Steward-held alike: both reach this through a connection
+    // already authorised as the lease's source.
     if store
-        .transition_keeper_takeover(
-            lease,
-            swarm_domain::FederationStewardTakeoverState::Active,
-            now,
-        )
-        .is_ok()
+        .extend_takeover_on_source_input(lease, now)
+        .unwrap_or(false)
     {
         crate::announce_federation_change(state, swarm_domain::FederationChangeKind::Unspecified);
     }
