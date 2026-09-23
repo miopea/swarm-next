@@ -61,7 +61,6 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
     if active_signal(&normalized) {
         return ProviderActivity::Active;
     }
-
     if provider == ProviderKind::ClaudeCode
         && normalized.contains("esc to cancel")
         && (normalized.contains("enter to confirm")
@@ -120,6 +119,28 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
             >= 2
     {
         return ProviderActivity::AwaitingOperator;
+    }
+
+    // ⚠️ THE SPINNER LINE, BECAUSE THE FOOTER HINT CAN BE TRUNCATED AWAY. With
+    // auto mode on, Claude's footer grows to "⏵⏵ auto mode on (shift+tab to
+    // cycle) · esc to interrupt", and on an ordinary terminal width the right
+    // edge cuts it to "· esc …" — before the "to" that `active_signal` needs.
+    // Every worker running in auto mode therefore read as RESTING while it was
+    // working. Operator, 2026-09-22, photographing the roster: "you're obviously
+    // working and so is Scout. Yet what we're seeing is no state updates or
+    // reflecting reality." Read off this Hive's own live screen at the moment
+    // the roster said Resting: "✽ Baking… (8m 38s · ↓ 23.5k tokens)" above
+    // "⏵⏵ auto mode on (shift+tab to cycle) · esc …".
+    //
+    // The spinner line is anchored at the LEFT, so the truncation that ate the
+    // footer cannot remove the part that identifies it. Checked AFTER the menus,
+    // so an open question still reads as waiting on the operator, and BEFORE
+    // the idle prompt, because Claude keeps its input box on screen while it
+    // works.
+    if provider == ProviderKind::ClaudeCode
+        && recent.iter().any(|line| claude_spinner_is_running(line))
+    {
+        return ProviderActivity::Active;
     }
 
     if recent.iter().any(|line| idle_prompt(provider, line))
@@ -190,6 +211,35 @@ fn active_signal(normalized: &str) -> bool {
     normalized.contains("esc to int")
         || normalized.contains("esc to sto")
         || normalized.contains("esc to …")
+}
+
+/// Claude's own working indicator: a spinner glyph, a verb in progress, then
+/// the parenthesised elapsed time — "✽ Baking… (8m 38s · ↓ 23.5k tokens)".
+///
+/// ⚠️ THE ELLIPSIS AND THE PARENTHESIS ARE BOTH REQUIRED, and each rules out a
+/// real line that is not work. A finished turn leaves "✻ Cogitated for 1s" or
+/// "✻ Brewed for 3s · done 11:33 AM" — a past-tense verb with no ellipsis. Tool
+/// progress inside the transcript looks like "⎿  Waiting…" — the right verb
+/// shape, but under a different glyph and with no elapsed time after it. A
+/// match on either would pin a finished worker Active, which the roster shows
+/// as Buzzing and which defers every delivery to it.
+///
+/// The glyph set is Claude's spinner frames. A line that merely begins with
+/// ordinary punctuation is not one.
+fn claude_spinner_is_running(line: &str) -> bool {
+    const SPINNER_FRAMES: [char; 7] = ['·', '✢', '✳', '✶', '✻', '✽', '*'];
+    let mut characters = line.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !SPINNER_FRAMES.contains(&first) {
+        return false;
+    }
+    let rest = characters.as_str().trim_start();
+    let Some((verb, after)) = rest.split_once('…') else {
+        return false;
+    };
+    !verb.is_empty() && verb.chars().all(char::is_alphabetic) && after.trim_start().starts_with('(')
 }
 
 /// Something the provider started is still running in the background.
@@ -447,6 +497,58 @@ mod tests {
         );
         state.push(text.as_bytes().to_vec());
         state.snapshot()
+    }
+
+    /// ⚠️ THE REPORTED SCREEN, read off this Hive at the moment the roster
+    /// showed a working worker as Resting (2026-09-22). Auto mode lengthens the
+    /// footer, the terminal cuts "esc to interrupt" to "esc …", and the only
+    /// busy signal Swarm read was gone.
+    #[test]
+    fn an_auto_mode_worker_whose_interrupt_hint_was_truncated_is_still_working() {
+        let screen = "● Bash(cargo test --workspace)\n  ⎿  Waiting…\n\n✽ Baking… (8m 38s · ↓ 23.5k tokens)\n\n────────────────────\n❯ \n────────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc …";
+        assert_eq!(
+            classify_visible_text(ProviderKind::ClaudeCode, screen),
+            ProviderActivity::Active
+        );
+    }
+
+    /// Hooks running before a tool are work too, and Claude says so on the
+    /// spinner line rather than in the footer.
+    #[test]
+    fn a_spinner_reporting_hooks_is_working() {
+        let screen = "✽ Baking… (running PreToolUse hooks… 0/2 · 8m 38s)\n\n❯ \n  ⏵⏵ auto mode on (shift+tab to cycle) · esc …";
+        assert_eq!(
+            classify_visible_text(ProviderKind::ClaudeCode, screen),
+            ProviderActivity::Active
+        );
+    }
+
+    /// The finished turn from the operator's own screenshot. A past-tense verb
+    /// with no ellipsis is a summary, not a spinner, and reading it as work
+    /// would pin a resting worker Buzzing and defer every delivery to it.
+    #[test]
+    fn a_finished_turn_summary_is_not_a_spinner() {
+        let screen = "● Got it — I'm here. What do you need?\n\n✻ Cogitated for 1s · done 1:38 PM\n\n────────────────────\n❯ \n────────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents";
+        assert_ne!(
+            classify_visible_text(ProviderKind::ClaudeCode, screen),
+            ProviderActivity::Active
+        );
+    }
+
+    /// Tool progress has the verb shape but not the glyph or the elapsed time.
+    #[test]
+    fn transcript_tool_progress_is_not_a_spinner() {
+        assert!(!super::claude_spinner_is_running("⎿  Waiting…"));
+        assert!(!super::claude_spinner_is_running(
+            "✻ Brewed for 3s · done 11:33 AM"
+        ));
+        assert!(!super::claude_spinner_is_running("· Waiting on review"));
+        assert!(super::claude_spinner_is_running(
+            "✶ Mustering… (1s · ↓ 2 tokens)"
+        ));
+        assert!(super::claude_spinner_is_running(
+            "· Testing… (2s · thinking)"
+        ));
     }
 
     #[test]
