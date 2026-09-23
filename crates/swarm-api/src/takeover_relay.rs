@@ -195,6 +195,7 @@ async fn serve_takeover(
         }
     };
     let mut receiver: broadcast::Receiver<Vec<u8>> = inbound.subscribe(lease);
+    let mut last_renewal: i64 = 0;
     let mut liveness = tokio::time::interval(Duration::from_secs(RELAY_LIVENESS_CHECK_SECONDS));
     liveness.tick().await;
     loop {
@@ -221,7 +222,12 @@ async fn serve_takeover(
             }
             message = socket.recv() => {
                 match message {
-                    Some(Ok(Message::Binary(frame))) => outbound.publish(lease, frame.to_vec()),
+                    Some(Ok(Message::Binary(frame))) => {
+                        if role == FederationStewardTakeoverRelayRole::Source {
+                            renew_on_input(&state, lease, &mut last_renewal);
+                        }
+                        outbound.publish(lease, frame.to_vec());
+                    }
                     // Binary only. Text would be a second protocol inside this
                     // one, and this channel carries terminal bytes.
                     Some(Ok(_)) => {}
@@ -230,6 +236,70 @@ async fn serve_takeover(
             }
         }
     }
+}
+
+/// How close to expiry a lease in use must be before input renews it.
+const RENEW_WHEN_REMAINING_SECONDS: i64 = 120;
+/// The fewest seconds between two renewals of one lease.
+const MIN_SECONDS_BETWEEN_RENEWALS: i64 = 30;
+
+/// Extends a Keeper-held takeover that is being actively typed into.
+///
+/// ⚠️ NOTHING DID THIS, SO EVERY TAKEOVER ENDED FIVE MINUTES AFTER IT STARTED,
+/// MID-KEYSTROKE. The lease is five minutes long by design (ADR 0036), and the
+/// design is that use keeps it alive — `queue_federation_steward_takeover_renewal`
+/// even says renewal happens "after authenticated input". Nothing called it,
+/// and nothing renewed a Keeper's own lease either, so a Keeper halfway through
+/// an incident would find the window dead with "The takeover ended." Nobody had
+/// hit it only because every test so far was shorter than five minutes.
+///
+/// Renewal is bounded twice: only when the lease is within two minutes of
+/// lapsing, and at most once per thirty seconds, so typing does not become a
+/// database write per keystroke. The doorbell is rung so the held Hive refreshes
+/// its own copy before that copy lapses and releases automation underneath a
+/// Keeper who is still typing.
+///
+/// A Steward-held lease is not renewed here: its source is another Hive, which
+/// renews it by journalling the command from its own side. Filed as a follow-up
+/// rather than done blind.
+fn renew_on_input(state: &AppState, lease: FederationStewardTakeoverLeaseId, last: &mut i64) {
+    let now = crate::unix_timestamp();
+    if now - *last < MIN_SECONDS_BETWEEN_RENEWALS {
+        return;
+    }
+    let Ok(store) = crate::task_store(state) else {
+        return;
+    };
+    let expires_at = store.apiary_takeover_audit(200).ok().and_then(|audit| {
+        audit
+            .into_iter()
+            .find(|entry| entry.lease.id == lease)
+            .map(|entry| entry.lease.expires_at)
+    });
+    if !expires_at.is_some_and(|expires_at| should_renew(now, *last, expires_at)) {
+        return;
+    }
+    *last = now;
+    if store
+        .transition_keeper_takeover(
+            lease,
+            swarm_domain::FederationStewardTakeoverState::Active,
+            now,
+        )
+        .is_ok()
+    {
+        crate::announce_federation_change(state, swarm_domain::FederationChangeKind::Unspecified);
+    }
+}
+
+/// Whether input at `now` should extend a lease that lapses at `expires_at`.
+///
+/// Pure so the two bounds can be pinned without a relay: near expiry only, and
+/// never twice inside the spacing window.
+fn should_renew(now: i64, last_renewal: i64, expires_at: i64) -> bool {
+    now - last_renewal >= MIN_SECONDS_BETWEEN_RENEWALS
+        && expires_at - now <= RENEW_WHEN_REMAINING_SECONDS
+        && expires_at > now
 }
 
 /// Whether an active, unexpired lease still names this takeover.
@@ -262,4 +332,37 @@ fn lease_is_live(state: &AppState, lease: FederationStewardTakeoverLeaseId, now:
                 .collect::<Vec<_>>(),
         )
     })
+}
+
+#[cfg(test)]
+mod renewal_tests {
+    use super::should_renew;
+
+    /// ⚠️ A takeover being typed into must outlive five minutes. Nothing renewed
+    /// one, so every takeover died at the five-minute mark, mid-keystroke.
+    #[test]
+    fn input_near_expiry_renews() {
+        assert!(should_renew(1_000, 0, 1_060));
+    }
+
+    /// Typing is not a write per keystroke: far from expiry, nothing happens.
+    #[test]
+    fn input_far_from_expiry_does_not_renew() {
+        assert!(!should_renew(1_000, 0, 1_290));
+    }
+
+    /// And near expiry, not more than once per spacing window.
+    #[test]
+    fn renewals_are_spaced() {
+        assert!(!should_renew(1_000, 990, 1_060));
+        assert!(should_renew(1_000, 970, 1_060));
+    }
+
+    /// A lease that has already lapsed is over. Input does not resurrect it —
+    /// that would undo a reclaim or an expiry the held Hive has already acted on.
+    #[test]
+    fn a_lapsed_lease_is_not_revived_by_input() {
+        assert!(!should_renew(1_000, 0, 999));
+        assert!(!should_renew(1_000, 0, 1_000));
+    }
 }
