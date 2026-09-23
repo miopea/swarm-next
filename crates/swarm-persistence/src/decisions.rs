@@ -1484,9 +1484,38 @@ fn park_when_operator_owes_the_action(
     let recorded_sequence = transaction.last_insert_rowid();
     let parsed: TaskId = crate::parse_domain_id(&task_id)?;
     let evidence = crate::queen_review::task_review_evidence(transaction, parsed)?;
-    // run_id names the DECISION rather than a Queen run, because no run reached
-    // this: the operator's answer did. Storing it keeps every receipt traceable
-    // to the exact ruling that created it.
+    // ⚠️ WRITTEN IN THE TABLE'S OWN TYPE, AND BUILT THROUGH IT. This used to be
+    // an ad-hoc `{"action":…,"decision_id":…}` object, which the Queen review
+    // reads back as `QueenReviewDispositionInput` with unknown fields refused —
+    // so every review touching a parked task failed its integrity check and
+    // never reached Queen. The type already had the right shape for exactly this
+    // record: kind `OperatorDeferral`, with the decision as its one operator
+    // source. Constructing it here, and validating it before it is stored, is
+    // what keeps a second writer from drifting the same way.
+    //
+    // The receipt's run_id names the DECISION rather than a Queen run, because
+    // no run reached this: the operator's answer did. The payload's run_id is
+    // the decision's own UUID, which is the one identifier here the type accepts.
+    let assessment = swarm_domain::QueenReviewDispositionInput {
+        task_id: parsed,
+        run_id: id.to_string(),
+        expected_revision: evidence.evidence_revision.clone(),
+        kind: swarm_domain::QueenReviewDispositionKind::OperatorDeferral,
+        condition: bounded(
+            &format!("The operator took on \"{action}\" themselves."),
+            900,
+        ),
+        evidence: format!(
+            "Parked from {state} by the operator's own answer on decision {id}; held, still \
+             assigned, until they clear it from Parked."
+        ),
+        source: "operator_resolution".to_owned(),
+        operator_activity_sequence: None,
+        operator_decision_id: Some(id),
+    };
+    assessment
+        .validate()
+        .map_err(|reason| TaskStoreError::IntegrityFailure(reason.into()))?;
     transaction.execute(
         "INSERT INTO queen_task_review_receipts
             (task_id, run_id, kind, accepted_revision, input_payload,
@@ -1503,17 +1532,69 @@ fn park_when_operator_owes_the_action(
             &task_id,
             format!("operator-decision:{id}"),
             evidence.evidence_revision,
-            serde_json::json!({
-                "source": "operator_resolution",
-                "decision_id": id.to_string(),
-                "action": action,
-                "parked_from_state": state,
-            })
-            .to_string(),
+            serde_json::to_string(&assessment)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
             recorded_sequence,
         ],
     )?;
     Ok(())
+}
+
+/// Rewrites parks recorded in the old ad-hoc shape into the review's own type.
+///
+/// ⚠️ EXISTING ROWS BREAK EVERY REVIEW UNTIL THEY ARE REWRITTEN. Fixing the
+/// writer stops new ones; the ones already written keep failing the Queen
+/// review's integrity check for every review that touches their task. They are
+/// identified exactly — a receipt this path wrote carries a `run_id` of
+/// `operator-decision:` and a payload with an `action` — so nothing a Queen
+/// review recorded is touched.
+pub(super) fn migrate_typed_operator_park(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "UPDATE queen_task_review_receipts
+         SET input_payload = json_object(
+             'task_id', task_id,
+             'run_id', json_extract(input_payload, '$.decision_id'),
+             'expected_revision', accepted_revision,
+             'kind', 'operator_deferral',
+             'condition', 'The operator took on \"'
+                 || substr(json_extract(input_payload, '$.action'), 1, 200)
+                 || '\" themselves.',
+             'evidence', 'Parked from '
+                 || coalesce(nullif(json_extract(input_payload, '$.parked_from_state'), ''), 'an open state')
+                 || ' by the operator''s own answer on decision '
+                 || json_extract(input_payload, '$.decision_id')
+                 || '; held, still assigned, until they clear it from Parked.',
+             'source', 'operator_resolution',
+             'operator_activity_sequence', NULL,
+             'operator_decision_id', json_extract(input_payload, '$.decision_id'))
+         WHERE run_id LIKE 'operator-decision:%'
+           AND json_valid(input_payload)
+           AND json_extract(input_payload, '$.action') IS NOT NULL
+           AND json_extract(input_payload, '$.decision_id') IS NOT NULL;",
+    )?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::TYPED_OPERATOR_PARK_SCHEMA_MARKER,
+    )
+}
+
+/// At most `limit` bytes of `text`, cut on a character boundary.
+///
+/// An action label is the operator's own words and has no length the type
+/// promises; the assessment it is quoted into does, and exceeding it would
+/// fail the park rather than record it.
+fn bounded(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 /// The subset of offered actions the OPERATOR said they would carry out.
@@ -2276,6 +2357,110 @@ mod tests {
             Some(worker),
             "parked work is resting, not reassigned"
         );
+    }
+
+    /// ⚠️ THE PARK MUST BE READABLE BY THE REVIEW IT RESTS IN, and it was not.
+    ///
+    /// Parking writes into `queen_task_review_receipts`, whose rows the Queen
+    /// review reads back as `QueenReviewDispositionInput` with unknown fields
+    /// refused. The park wrote its own ad-hoc shape — `{"action":…,
+    /// "decision_id":…}` — so every review that touched a parked task failed its
+    /// integrity check, the whole review never reached Queen, and automation
+    /// stopped on "Swarm could not confirm the last review reached Queen" until
+    /// the operator pressed Resume. On this Hive it failed 229 times from the
+    /// first park (2026-09-22 03:10 UTC) onward. The test above proved the park
+    /// happened and never read it back, which is how it shipped.
+    #[test]
+    fn a_parked_task_can_still_be_reviewed() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let (_, task_id) = parked_fixture(&store);
+        let actions = vec![
+            "Push the fix myself".to_owned(),
+            "Let the worker proceed".to_owned(),
+        ];
+        let mine = vec!["Push the fix myself".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                operator_actions: &mine,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(created.id, "Push the fix myself", "", "control_room")
+            .unwrap();
+
+        let snapshot = store
+            .queen_task_review_snapshot(task_id)
+            .expect("a parked task must not make its own review unreadable");
+        let saved = snapshot
+            .previous_assessment
+            .expect("the park is recorded as the operator's deferral");
+        assert_eq!(
+            saved.assessment.kind,
+            swarm_domain::QueenReviewDispositionKind::OperatorDeferral
+        );
+        assert_eq!(saved.assessment.operator_decision_id, Some(created.id));
+    }
+
+    /// ⚠️ ROWS ALREADY WRITTEN IN THE OLD SHAPE ARE REPAIRED ON UPGRADE. Fixing
+    /// the writer stops new ones; the ones already on an operator's disk keep
+    /// breaking every review that touches their task until rewritten. This plants
+    /// the exact shape the old writer stored, rewinds the database to 192, and
+    /// requires the review to load after reopening.
+    #[test]
+    fn a_park_recorded_in_the_old_shape_is_repaired_on_upgrade() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm.sqlite3");
+        let (task_id, decision_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let queen = store.ensure_queen("/workspace").unwrap();
+            let (_, task_id) = parked_fixture(&store);
+            let actions = vec![
+                "Push the fix myself".to_owned(),
+                "Let it proceed".to_owned(),
+            ];
+            let mine = vec!["Push the fix myself".to_owned()];
+            let created = store
+                .create_decision_request(&NewDecisionRequest {
+                    task_id: Some(task_id),
+                    operator_actions: &mine,
+                    ..request(queen.id, &actions)
+                })
+                .unwrap();
+            store
+                .resolve_decision_request(created.id, "Push the fix myself", "", "control_room")
+                .unwrap();
+            let legacy = serde_json::json!({
+                "source": "operator_resolution",
+                "decision_id": created.id.to_string(),
+                "action": "Push the fix myself",
+                "parked_from_state": "active",
+            })
+            .to_string();
+            let connection = store.connection().unwrap();
+            connection
+                .execute(
+                    "UPDATE queen_task_review_receipts SET input_payload = ?1 WHERE task_id = ?2",
+                    params![legacy, task_id.to_string()],
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 192).unwrap();
+            drop(connection);
+            // The planted shape really does break the review, or this test
+            // would pass whether or not the repair ran.
+            assert!(store.queen_task_review_snapshot(task_id).is_err());
+            (task_id, created.id)
+        };
+
+        let upgraded = TaskStore::open(&path).unwrap();
+        let snapshot = upgraded
+            .queen_task_review_snapshot(task_id)
+            .expect("the upgrade must repair the park so the review can read it");
+        let saved = snapshot.previous_assessment.expect("still recorded");
+        assert_eq!(saved.assessment.operator_decision_id, Some(decision_id));
+        assert!(saved.assessment.condition.contains("Push the fix myself"));
     }
 
     /// The marking is an offer. If the operator picks something else, the task

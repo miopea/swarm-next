@@ -358,7 +358,9 @@ const TAKEOVER_RECOVERY_SCHEMA_MARKER: i64 = 190;
 const CROSS_HIVE_FILING_SCHEMA_MARKER: i64 = 191;
 /// A closure carries the evidence the closing Hive stood on.
 const CLOSURE_EVIDENCE_SCHEMA_MARKER: i64 = 192;
-const CURRENT_SCHEMA_VERSION: i64 = CLOSURE_EVIDENCE_SCHEMA_MARKER;
+/// A task the operator's answer parked is recorded in the shape the review reads.
+const TYPED_OPERATOR_PARK_SCHEMA_MARKER: i64 = 193;
+const CURRENT_SCHEMA_VERSION: i64 = TYPED_OPERATOR_PARK_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4624,6 +4626,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < CLOSURE_EVIDENCE_SCHEMA_MARKER {
         crate::federation_tasks::migrate_closure_evidence(transaction)?;
+    }
+    if schema_version < TYPED_OPERATOR_PARK_SCHEMA_MARKER {
+        crate::decisions::migrate_typed_operator_park(transaction)?;
     }
     Ok(())
 }
@@ -10495,6 +10500,16 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                 WHERE type = 'table' AND name = 'local_apiary_task_commands'
                   AND sql LIKE '%file%')",
+        },
+        SchemaStep {
+            table: "queen_task_review_receipts",
+            artifact: "typed_operator_park",
+            // Schema 193 rewrites DATA, not shape. The rewritten rows are the
+            // only form every release can read — older ones included, since
+            // they parse the same type — so undoing it would restore the one
+            // shape nothing reads and re-break their Queen review.
+            undo_sql: "SELECT 1",
+            probe_sql: "SELECT user_version >= 193 FROM pragma_user_version",
         },
     ];
 
