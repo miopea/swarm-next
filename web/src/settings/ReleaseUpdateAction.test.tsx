@@ -141,6 +141,43 @@ test("promises workers stay online, and defers the engine rather than stopping t
 });
 
 /**
+ * ⚠️ A SECOND PRESS IS NOT A FAILURE. Pressing Install while an install is
+ * already underway used to start a second attempt, which collided with the
+ * first on the package lifecycle lock and wrote "Nothing was changed and this
+ * Hive is still on X" over an install that then succeeded — reported twice on
+ * 2026-09-22. The server now refuses the second press, and what is true is that
+ * an install is running, so that is what the card shows.
+ */
+test("a refused second press shows the install already underway, not an error", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ downloaded_version: "0.2.0" }));
+  vi.mocked(api.applyRelease).mockRejectedValue(
+    new api.RuntimeRequestError(409, "Runtime request returned 409: already underway", "release_install_in_progress"),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Install Swarm 0.2.0" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install 0.2.0" }));
+
+  await waitFor(() => expect(api.applyRelease).toHaveBeenCalled());
+  expect(screen.queryByText(/Runtime request returned 409/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Nothing was changed/)).not.toBeInTheDocument();
+});
+
+/** Any OTHER refusal is still reported, so this does not swallow real failures. */
+test("a different refusal is still shown as an error", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ downloaded_version: "0.2.0" }));
+  vi.mocked(api.applyRelease).mockRejectedValue(
+    new api.RuntimeRequestError(409, "Runtime request returned 409: no release has been downloaded", "no_release_downloaded"),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Install Swarm 0.2.0" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install 0.2.0" }));
+
+  expect(await screen.findByText(/no release has been downloaded/)).toBeInTheDocument();
+});
+
+/**
  * A result from an earlier attempt must not be reported as the current one.
  * "I did check now and it IMMEDIATELY comes back with this" — a failure
  * recorded against 0.2.0 hours earlier, shown as though Install had just been

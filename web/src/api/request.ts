@@ -8,7 +8,14 @@ export const BROWSER_SESSION_AUTH = "browser-session-cookie";
 const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504, 522, 523, 524]);
 
 export class RuntimeRequestError extends Error {
-  constructor(public readonly status: number, message: string) {
+  /**
+   * The server's machine-readable reason, when it gave one.
+   *
+   * Carried so a caller can act on WHICH refusal this was without matching the
+   * prose, which is written for people and may change. Optional because some
+   * failures (a proxy, an empty body) have none.
+   */
+  constructor(public readonly status: number, message: string, public readonly code?: string) {
     super(message);
     this.name = "RuntimeRequestError";
   }
@@ -24,13 +31,15 @@ export async function authenticatedFetch(
   const response = await fetch(url, { ...init, headers, cache: "no-store", credentials: "same-origin" });
   if (!response.ok) {
     let detail = "";
+    let code: string | undefined;
     try {
-      const body = (await response.json()) as { message?: string };
+      const body = (await response.json()) as { message?: string; code?: string };
       detail = body.message ? `: ${body.message}` : "";
+      code = typeof body.code === "string" ? body.code : undefined;
     } catch {
       // Some infrastructure failures return an empty or non-JSON response.
     }
-    throw new RuntimeRequestError(response.status, `Runtime request returned ${response.status}${detail}`);
+    throw new RuntimeRequestError(response.status, `Runtime request returned ${response.status}${detail}`, code);
   }
   return response;
 }

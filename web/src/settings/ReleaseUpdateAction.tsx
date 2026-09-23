@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  RuntimeRequestError,
   applyRelease,
   fetchHealth,
   checkForRelease,
@@ -373,7 +374,21 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
                           setInstalling(status.offer?.version ?? null);
                           setStartedAt(Date.now());
                         })
-                        .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The install could not be started."))
+                        .catch((caught: unknown) => {
+                          // ⚠️ NOT AN ERROR: AN INSTALL IS ALREADY DOING THIS. A
+                          // second press used to start a second attempt, which
+                          // collided with the first and wrote "nothing was
+                          // changed" over an install that then succeeded. The
+                          // server now refuses it, and the true thing to show is
+                          // the install that is underway.
+                          if (caught instanceof RuntimeRequestError && caught.code === "release_install_in_progress") {
+                            setInstalled(true);
+                            setInstalling(status.offer?.version ?? null);
+                            setStartedAt(Date.now());
+                            return;
+                          }
+                          setError(caught instanceof Error ? caught.message : "The install could not be started.");
+                        })
                         .finally(() => setWorking(false));
                     }}
                   >Install {status.offer?.version}</button>

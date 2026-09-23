@@ -374,6 +374,26 @@ pub(super) async fn apply(
             "no release has been downloaded",
         )
     })?;
+    // ⚠️ ONE INSTALL AT A TIME, AND THE SECOND PRESS IS REFUSED RATHER THAN
+    // QUEUED. Nothing stopped Install being pressed again while an install was
+    // pending or running, and a second attempt of the same release collides with
+    // the first on the package lifecycle lock, fails, and writes ITS failure over
+    // the status of the attempt that actually did the work. The operator was
+    // then told "The install failed ... Nothing was changed and this Hive is
+    // still on 1.13.0" about an install that succeeded — reported twice on
+    // 2026-09-22 as "it said nothing changed ... I restarted the service and it
+    // was updated".
+    if install_in_flight(
+        &state,
+        status.offer.as_ref().map(|offer| offer.version.as_str()),
+        request_path,
+    ) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "release_install_in_progress",
+            "an install of this release is already underway; it finishes on its own without another press",
+        ));
+    }
     // A PROTOCOL CHANGE ENDS EVERY WORKER SESSION, so the workers owed a return
     // are written down BEFORE the install is asked for.
     //
@@ -656,6 +676,34 @@ fn commits_ahead_of_release(state: &AppState, released: Option<&str>) -> Option<
     crate::runtime::git_output(checkout, &["rev-list", "--count", &range])?
         .parse()
         .ok()
+}
+
+/// How long an `installing` status is believed without being refreshed.
+///
+/// An install can wait up to five minutes for the package lifecycle lock and
+/// then take its own time; past this, a status still saying `installing` is an
+/// attempt that died without writing its ending, and trusting it would refuse
+/// Install forever — a stuck button instead of a stuck install.
+const INSTALL_IN_FLIGHT_WINDOW: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Whether an install of the offered release is already queued or running.
+fn install_in_flight(state: &AppState, offered: Option<&str>, request_path: &Path) -> bool {
+    if request_path.exists() {
+        return true;
+    }
+    let Some(status_path) = state
+        .release_state_root
+        .as_ref()
+        .map(|root| root.join("release-apply.status"))
+    else {
+        return false;
+    };
+    let recent = std::fs::metadata(&status_path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < INSTALL_IN_FLIGHT_WINDOW);
+    recent && apply_state(state, offered).as_deref() == Some("installing")
 }
 
 /// What the install unit last wrote about itself.
@@ -1080,4 +1128,89 @@ pub(super) async fn notes(
         })),
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod install_in_flight_tests {
+    use super::install_in_flight;
+    use crate::AppState;
+    use std::time::{Duration, SystemTime};
+
+    fn hive() -> (tempfile::TempDir, AppState, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let request = directory.path().join("release-apply.request");
+        let state =
+            AppState::default().with_release_paths(directory.path().to_owned(), request.clone());
+        (directory, state, request)
+    }
+
+    fn status(directory: &tempfile::TempDir, contents: &str) -> std::path::PathBuf {
+        let path = directory.path().join("release-apply.status");
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn nothing_queued_and_nothing_running_allows_an_install() {
+        let (_directory, state, request) = hive();
+        assert!(!install_in_flight(&state, Some("1.14.1"), &request));
+    }
+
+    /// ⚠️ THE SECOND PRESS. A queued request is an install that has not started
+    /// yet, and a second one of the same release collides with it on the
+    /// lifecycle lock and writes its failure over the one doing the work.
+    #[test]
+    fn a_queued_request_refuses_another() {
+        let (_directory, state, request) = hive();
+        std::fs::write(&request, "/downloads/swarm-1.14.1").unwrap();
+        assert!(install_in_flight(&state, Some("1.14.1"), &request));
+    }
+
+    #[test]
+    fn a_running_install_of_this_release_refuses_another() {
+        let (directory, state, request) = hive();
+        status(&directory, "state=installing\nversion=1.14.1\n");
+        assert!(install_in_flight(&state, Some("1.14.1"), &request));
+    }
+
+    /// A finished attempt, successful or not, is not in the way of trying again.
+    #[test]
+    fn a_finished_attempt_does_not_block_the_next() {
+        let (directory, state, request) = hive();
+        for ended in [
+            "state=failed\nversion=1.14.1\n",
+            "state=installed\nversion=1.14.1\n",
+        ] {
+            status(&directory, ended);
+            assert!(
+                !install_in_flight(&state, Some("1.14.1"), &request),
+                "{ended}"
+            );
+        }
+    }
+
+    /// A status about a different release says nothing about this one.
+    #[test]
+    fn an_install_of_another_release_does_not_block_this_one() {
+        let (directory, state, request) = hive();
+        status(&directory, "state=installing\nversion=1.14.0\n");
+        assert!(!install_in_flight(&state, Some("1.14.1"), &request));
+    }
+
+    /// ⚠️ A STUCK BUTTON IS NOT A FIX FOR A STUCK INSTALL. An attempt that died
+    /// without writing its ending leaves `installing` behind forever; believing
+    /// it indefinitely would refuse Install on this Hive until someone deleted a
+    /// file by hand.
+    #[test]
+    fn an_installing_status_nobody_has_touched_for_a_long_time_is_not_believed() {
+        let (directory, state, request) = hive();
+        let path = status(&directory, "state=installing\nversion=1.14.1\n");
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(20 * 60))
+            .unwrap();
+        assert!(!install_in_flight(&state, Some("1.14.1"), &request));
+    }
 }
