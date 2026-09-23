@@ -400,3 +400,31 @@ sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/nu
   || fail "a marker naming a missing release was left pending"
 
 printf 'pending marker validation passed\n'
+
+# THE INSTALL BUTTON WHILE THE RECONCILE TIMER HOLDS THE LOCK.
+#
+# Reported twice on 2026-09-22: "The install failed ... Nothing was changed ...
+# but when I restarted the service it was updated". Replayed against 1.14.0's
+# swarm-package, the first press died on the lock the two-minute reconcile
+# timer held and reported "changed=nothing", truthfully. Its request was
+# consumed, so no restart could re-fire it; the release landed only when a
+# second request arrived, while the card still showed the first attempt's
+# claim. The install now waits for the lock, so the first press is the one
+# that installs.
+make_bundle 13.0.0 "$(cat "$SWARM_INSTALL_ROOT/host-current/PROTOCOL")"
+cp -r "$test_root/bundle-13.0.0" "$SWARM_STATE_ROOT/downloads/13.0.0"
+flock "$SWARM_STATE_ROOT/.package-lifecycle.lock" sleep 3 &
+reconcile_holder=$!
+sleep 0.5
+printf '%s\n' "$SWARM_STATE_ROOT/downloads/13.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1 \
+  || fail "an install pressed while the reconcile timer held the lock failed instead of waiting"
+wait "$reconcile_holder"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "13.0.0" ] \
+  || fail "the install that waited for the lock did not activate"
+grep -q '^state=installed$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || fail "the install that waited for the lock was not reported installed"
+[ ! -f "$SWARM_STATE_ROOT/release-apply.request" ] \
+  || fail "the request survived the apply and could re-fire on restart"
+
+printf 'an install waits out the reconcile timer instead of failing\n'
