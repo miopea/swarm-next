@@ -12,6 +12,15 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.15.1
+
+### Fixes
+- Workers in auto mode no longer show as Resting while they work. With auto mode on, the provider's "esc to interrupt" hint is cut short by the terminal width, and it was the only sign of work Swarm looked for. Swarm now reads the provider's own working indicator, which the cut cannot reach.
+- Queen's reviews no longer stall waiting for you to press Resume. Swarm confirms a review arrived by seeing Queen start working on it, and in auto mode she never looked busy — so each review was declared unconfirmed and automation stopped. Same cause as the Resting problem, and fixed with it.
+- A takeover that is being typed into no longer ends after five minutes. Nothing kept an active takeover alive, so every one expired mid-use.
+- The Hive being taken over now shows how long the takeover has left.
+- Pressing Install a second time while an install is already running no longer reports a failure for an install that succeeded. The second press is refused and the card shows the install already underway.
+
 ## 1.15.0
 
 ### New features
