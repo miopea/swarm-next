@@ -4322,6 +4322,10 @@ fn api_router(state: AppState) -> Router {
             axum::routing::put(acknowledge_federation_watch),
         )
         .route(
+            "/api/v1/federation/watches/{watch_id}/renewal",
+            post(renew_federation_watch),
+        )
+        .route(
             "/api/v1/federation/watches/{watch_id}/frames",
             get(watch_relay::federation_watch_frames),
         )
@@ -5659,14 +5663,55 @@ async fn renew_apiary_watch(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let store = task_store(&state)?;
-    let watcher = store
-        .local_hive_identity()
-        .map_err(|error| task_store_error(&error))?
-        .operator
-        .id;
-    let watch = store
-        .renew_apiary_watch(watcher, watch_id, unix_timestamp())
+    // A Steward's watch lives at Keeper, so its renewal has to as well; renewing
+    // a local row that does not exist would let the window lapse mid-look.
+    let watch = if local_apiary_role(&state) == Some(LocalApiaryRole::Member) {
+        let service = apiary_service(&state)?;
+        let connection = service
+            .federation_member_connection()
+            .map_err(application_error)?;
+        federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "apiary_keeper_unreachable",
+                    "this Apiary's Keeper could not be reached",
+                )
+            })?
+            .renew_watch(&connection.node_credential, watch_id)
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::CONFLICT,
+                    "watch_not_renewed",
+                    "Keeper no longer holds that window open",
+                )
+            })?
+    } else {
+        let watcher = store
+            .local_hive_identity()
+            .map_err(|error| task_store_error(&error))?
+            .operator
+            .id;
+        store
+            .renew_apiary_watch(watcher, watch_id, unix_timestamp())
+            .map_err(|error| task_store_error(&error))?
+    };
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
+}
+
+/// A Steward's renewal, arriving at Keeper over its outbound connection.
+async fn renew_federation_watch(
+    State(state): State<Arc<AppState>>,
+    Path(watch_id): Path<swarm_domain::ApiaryWatchId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let watch = task_store(&state)?
+        .renew_apiary_watch_for_member(credential, watch_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(watch)).into_response())
 }
 

@@ -1,7 +1,9 @@
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
+import { renewApiaryWatch } from "../api";
 import { WatchStream, type WatchStreamState } from "./WatchStream";
+import { approximateRemaining } from "./leaseTime";
 import { observeMirrorFit } from "./mirrorScale";
 
 /**
@@ -34,6 +36,9 @@ type Props = {
   createSurface?: (host: HTMLElement) => WatchSurface;
 };
 
+/** A fifth of the lease, so four renewals can fail before the window lapses. */
+export const WATCH_RENEWAL_INTERVAL_MS = 60_000;
+
 const label: Record<WatchStreamState, string> = {
   connecting: "Opening the window…",
   live: "Live",
@@ -57,6 +62,30 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
   const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<WatchStreamState>("connecting");
   const [detail, setDetail] = useState<string>();
+  const [expiresAt, setExpiresAt] = useState<number>();
+
+  // ⚠️ A WATCH LAPSES FIVE MINUTES AFTER IT OPENS UNLESS SOMETHING RENEWS IT,
+  // and for its whole life nothing did: every window closed itself mid-look.
+  // Renewal is owned by this window and ends with it, which is the property
+  // that keeps a forgotten watch from becoming standing surveillance.
+  useEffect(() => {
+    let cancelled = false;
+    const renew = async () => {
+      try {
+        const watch = await renewApiaryWatch(operatorToken, watchId);
+        if (!cancelled) setExpiresAt(watch.expires_at);
+      } catch {
+        // The relay ends the stream itself if the watch has truly lapsed; a
+        // transient failure is retried on the next tick.
+      }
+    };
+    void renew();
+    const timer = window.setInterval(() => void renew(), WATCH_RENEWAL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [watchId, operatorToken]);
 
   useEffect(() => {
     const element = host.current;
@@ -128,6 +157,9 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
           <div className="watch-window-surface" ref={host} />
         </div>
         <small>A live view. Nothing here is recorded, and {hiveName} is showing that you are watching. Stopping takes the notice off their screen.</small>
+        {expiresAt !== undefined ? (
+          <small>Stays open while this window does. If it is left behind, it closes by itself in about {approximateRemaining(expiresAt)}.</small>
+        ) : null}
       </section>
     </div>
   );

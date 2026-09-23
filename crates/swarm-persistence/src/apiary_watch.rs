@@ -492,6 +492,21 @@ impl TaskStore {
         self.open_apiary_watch(operator, target_hive_id, now)
     }
 
+    /// A Steward keeping its window open, renewed at Keeper where the watch lives.
+    ///
+    /// # Errors
+    /// Refuses a bad credential, a watch that operator does not hold, one
+    /// already ended or lapsed, and unavailable persistence.
+    pub fn renew_apiary_watch_for_member(
+        &self,
+        credential: &str,
+        watch_id: ApiaryWatchId,
+        now: i64,
+    ) -> Result<ApiaryWatch, TaskStoreError> {
+        let (_, _, operator) = self.authenticated_member(credential, now)?;
+        self.renew_apiary_watch(operator, watch_id, now)
+    }
+
     fn authenticated_member_hive(
         &self,
         credential: &str,
@@ -733,6 +748,41 @@ mod tests {
             keeper.apiary_watch_audit(10).unwrap().len(),
             1,
             "only the one authorized watch was ever recorded"
+        );
+    }
+
+    /// A Steward's window lives at Keeper, so its renewal arrives there on the
+    /// Steward's credential. Without this route a Steward watching past five
+    /// minutes lost the window mid-look.
+    #[test]
+    fn a_steward_renews_its_own_watch_at_keeper_and_no_one_elses() {
+        let now = 200_000;
+        let (keeper, member, credential, hive) = apiary(now);
+        let steward = member.local_hive_identity().unwrap().operator.id;
+        keeper
+            .set_stewardship(steward, &[hive], &[StewardCapability::Observe], now)
+            .unwrap();
+        let mine = keeper
+            .open_apiary_watch_for_member(&credential, hive, now + 1)
+            .unwrap();
+        let keepers = keeper
+            .open_apiary_watch(keeper_operator(&keeper), hive, now + 1)
+            .unwrap();
+
+        let renewed = keeper
+            .renew_apiary_watch_for_member(&credential, mine.id, now + 100)
+            .unwrap();
+        assert_eq!(renewed.expires_at, now + 100 + WATCH_LEASE_SECONDS);
+        assert!(
+            keeper
+                .renew_apiary_watch_for_member(&credential, keepers.id, now + 100)
+                .is_err(),
+            "a Steward cannot keep someone else's window open"
+        );
+        assert!(
+            keeper
+                .renew_apiary_watch_for_member("not-a-credential", mine.id, now + 100)
+                .is_err()
         );
     }
 }

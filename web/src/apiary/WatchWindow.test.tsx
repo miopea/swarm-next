@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { expect, test, vi, afterEach } from "vitest";
 
-import WatchWindow, { type WatchSurface } from "./WatchWindow";
+import WatchWindow, { WATCH_RENEWAL_INTERVAL_MS, type WatchSurface } from "./WatchWindow";
 
 const opened: Array<{ handlers: unknown; close: ReturnType<typeof vi.fn> }> = [];
 
@@ -15,7 +15,15 @@ vi.mock("./WatchStream", () => ({
   },
 }));
 
-afterEach(() => { opened.length = 0; });
+const renewals: string[] = [];
+vi.mock("../api", () => ({
+  renewApiaryWatch: (_token: string, watchId: string) => {
+    renewals.push(watchId);
+    return Promise.resolve({ expires_at: Math.round(Date.now() / 1000) + 300 });
+  },
+}));
+
+afterEach(() => { opened.length = 0; renewals.length = 0; vi.useRealTimers(); });
 
 function surface() {
   return { write: vi.fn(), resize: vi.fn(), clear: vi.fn(), dispose: vi.fn() } satisfies WatchSurface;
@@ -92,4 +100,23 @@ test("closing releases the stream and the surface", async () => {
   view.unmount();
   expect(opened[0].close).toHaveBeenCalled();
   expect(drawn.dispose).toHaveBeenCalled();
+});
+
+/**
+ * ⚠️ A WATCH LAPSES FIVE MINUTES AFTER IT OPENS UNLESS SOMETHING RENEWS IT.
+ * Nothing did, so every window closed itself mid-look. It renews while open and
+ * stops the moment it closes, so a forgotten window still ends on its own.
+ */
+test("the window keeps its watch alive while open, and stops the moment it closes", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const { unmount } = render(<WatchWindow watchId="w1" operatorToken="token" hiveName="Paul's Hive" onClose={vi.fn()} createSurface={surface} />);
+  await waitFor(() => expect(renewals).toEqual(["w1"]));
+  expect(await screen.findByText(/closes by itself in about 5 min/)).toBeInTheDocument();
+
+  await vi.advanceTimersByTimeAsync(WATCH_RENEWAL_INTERVAL_MS * 3);
+  expect(renewals).toHaveLength(4);
+
+  unmount();
+  await vi.advanceTimersByTimeAsync(WATCH_RENEWAL_INTERVAL_MS * 3);
+  expect(renewals).toHaveLength(4);
 });

@@ -52,3 +52,17 @@ test("nothing is claimed when nobody is watching", () => {
   view.rerender(<WatchedByNotice watches={[watch({ state: "ended", ended_at: 9 })]} />);
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
+
+test("the watched operator is told how long the window lasts if nobody renews it", () => {
+  const now = 1_000_000;
+  vi.spyOn(Date, "now").mockReturnValue(now * 1000);
+  render(<WatchedByNotice watches={[watch({ expires_at: now + 240 })]} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Ends by itself in about 4 min unless they keep watching.");
+  vi.restoreAllMocks();
+});
+
+test("a watch with no expiry still renders the notice rather than a nonsense countdown", () => {
+  render(<WatchedByNotice watches={[watch({ expires_at: undefined as unknown as number })]} />);
+  expect(screen.getByRole("status")).toHaveTextContent("Another operator is watching this Hive");
+  expect(screen.queryByText(/Ends by itself/)).not.toBeInTheDocument();
+});

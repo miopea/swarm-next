@@ -183,6 +183,24 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Keeps a Steward's window open at Keeper, where the watch lives.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn renew_watch(
+        &self,
+        credential: &str,
+        watch_id: swarm_domain::ApiaryWatchId,
+    ) -> Result<swarm_domain::ApiaryWatch, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::POST,
+            &format!("api/v1/federation/watches/{watch_id}/renewal"),
+            Some(credential),
+            None,
+        )
+        .await
+    }
+
     /// Tells Keeper this Hive has the watch on its own screen.
     ///
     /// Nothing is relayed until this lands, which is what makes "always

@@ -1624,6 +1624,12 @@ export async function openApiaryWatch(operatorToken: string, targetHiveId: strin
 }
 
 /** Ends a watch from the watched Hive's own side. */
+/** Keeps a watch open; it lapses on its own unless this keeps arriving. */
+export async function renewApiaryWatch(operatorToken: string, watchId: string): Promise<ApiaryWatch> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/watches/${encodeURIComponent(watchId)}/renewal`, { method: "POST" });
+  return response.json() as Promise<ApiaryWatch>;
+}
+
 export async function endApiaryWatch(operatorToken: string, watchId: string): Promise<void> {
   await authenticatedFetch(operatorToken, `/api/v1/apiary/watches/${encodeURIComponent(watchId)}`, { method: "DELETE" });
 }

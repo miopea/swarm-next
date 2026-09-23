@@ -1,4 +1,5 @@
 import type { ApiaryWatch } from "./api";
+import { approximateRemaining } from "./apiary/leaseTime";
 
 type Props = {
   watches: ApiaryWatch[] | undefined;
@@ -33,10 +34,16 @@ export default function WatchedByNotice({ watches, nameFor, onEnd }: Props) {
   if (open.length === 0) return null;
   const names = open.map((watch) => nameFor?.(watch.watcher_operator_id) ?? "Another operator");
   const pending = open.some((watch) => watch.state === "requested");
+  const expiries = open.map((watch) => watch.expires_at).filter((at) => Number.isFinite(at));
   return (
     <div className="watched-by-notice" role="status">
       <strong>{names.join(", ")} {open.length === 1 ? "is" : "are"} watching this Hive</strong>
       <small>{pending ? "Opening a live window. Nothing is relayed until this Hive confirms." : "A live window. Nothing is recorded."}</small>
+      {/* Renewed only while their window is open, so this is how long it lasts
+          after they walk away, not a fixed end. */}
+      {expiries.length > 0 ? (
+        <small>Ends by itself in about {approximateRemaining(Math.max(...expiries))} unless they keep watching.</small>
+      ) : null}
       {onEnd ? <button type="button" onClick={() => void onEnd(open[0].id)}>Stop it</button> : null}
     </div>
   );
