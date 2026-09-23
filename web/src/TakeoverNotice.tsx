@@ -38,6 +38,13 @@ export default function TakeoverNotice({ leases, onReclaim }: Props) {
     <div className="takeover-notice" role="alert">
       <strong>{active ? "Someone else is controlling this Hive" : "Someone is asking to control this Hive"}</strong>
       <small>{lease.reason}</small>
+      {/* ⚠️ THE ONE NUMBER THAT ANSWERS "WAIT OR TAKE IT BACK?" The lease has a
+          life and this card used to hide it, so the person at this keyboard had
+          no way to tell a takeover that would end in a minute from one that
+          would not. It says "unless they keep typing" because it will not: a
+          takeover in use renews itself, and a countdown that silently reset
+          would read as a lie. */}
+      <small>{remaining(lease.expires_at, active)}</small>
       {/* A reason is required, and it is the operator's own account — the audit
           can answer "why was this taken back" only because this field exists. */}
       <label>
@@ -66,4 +73,16 @@ export default function TakeoverNotice({ leases, onReclaim }: Props) {
       </button>
     </div>
   );
+}
+
+/** How long the lease has left, in the words the person holding the keyboard needs. */
+export function remaining(expiresAt: number, active: boolean, now = Date.now()): string {
+  const seconds = Math.max(0, Math.round(expiresAt - now / 1000));
+  const span = seconds >= 60 ? `${Math.ceil(seconds / 60)} min` : `${seconds}s`;
+  return active
+    ? `Ends in about ${span} unless they keep typing.`
+    // No action is asked of anyone here: this Hive takes a request up on
+    // its own, and wording that implied otherwise sent an operator hunting
+    // for an approval button once already.
+    : `Starting shortly; the request lapses in about ${span} if it does not.`;
 }
