@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { renewApiaryWatch } from "../api";
 import { WatchStream, type WatchStreamState } from "./WatchStream";
 import { approximateRemaining } from "./leaseTime";
-import { observeMirrorFit } from "./mirrorScale";
+import { type MirrorFont, mirrorFont, mirrorTerminalOptions, observeMirrorFit } from "./mirrorScale";
 
 /**
  * What a window draws into. An interface so the window can be tested without
@@ -15,6 +15,8 @@ export interface WatchSurface {
   resize(rows: number, columns: number): void;
   clear(): void;
   dispose(): void;
+  /** How the window sizes the owner's screen to fit; absent means drawn as-is. */
+  font?: MirrorFont;
 }
 
 type Props = {
@@ -121,8 +123,8 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
     // never changed — the operator's "it doesn't do a redraw like it does on
     // mobile". Reflowing it to fit is the one thing that must not happen here:
     // this window does not own that grid.
-    const stopFitting = frame.current
-      ? observeMirrorFit(frame.current, element)
+    const stopFitting = frame.current && surface.font
+      ? observeMirrorFit(frame.current, element, surface.font)
       : () => {};
     return () => {
       stopFitting();
@@ -169,7 +171,7 @@ function defaultSurface(host: HTMLElement): WatchSurface {
   // `disableStdin` is belt and braces beside there being no input path: a
   // terminal that quietly accepted keystrokes and dropped them would read as
   // broken rather than as read-only.
-  const terminal = new Terminal({ disableStdin: true, cursorBlink: false });
+  const terminal = new Terminal({ ...mirrorTerminalOptions(), disableStdin: true, cursorBlink: false });
   terminal.open(host);
   const decoder = new TextDecoder();
   return {
@@ -179,5 +181,6 @@ function defaultSurface(host: HTMLElement): WatchSurface {
     resize: (rows, columns) => terminal.resize(Math.max(columns, 1), Math.max(rows, 1)),
     clear: () => terminal.reset(),
     dispose: () => terminal.dispose(),
+    font: mirrorFont(terminal),
   };
 }

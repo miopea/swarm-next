@@ -34,6 +34,8 @@ const REMEMBERED_SIZES = 8;
 const REDRAW_RETRY_MS = 350;
 const TOUCH_DRAG_THRESHOLD_PX = 4;
 const FALLBACK_CELL_HEIGHT_PX = 17;
+export const TERMINAL_FONT_FAMILY = '"Atkinson Hyperlegible Mono Variable", "Cascadia Code", "SFMono-Regular", Consolas, monospace';
+export const TERMINAL_FONT_SIZE = 14;
 export const MIN_TERMINAL_ROWS = 4;
 export const MIN_TERMINAL_COLUMNS = 20;
 
@@ -120,8 +122,8 @@ export class XtermSurface implements TerminalSurface {
       allowProposedApi: true,
       cursorBlink: true,
       convertEol: false,
-      fontFamily: '"Atkinson Hyperlegible Mono Variable", "Cascadia Code", "SFMono-Regular", Consolas, monospace',
-      fontSize: 14,
+      fontFamily: TERMINAL_FONT_FAMILY,
+      fontSize: TERMINAL_FONT_SIZE,
       minimumContrastRatio: 4.5,
       scrollback: 1_000,
       theme: terminalTheme(documentColorTheme()),

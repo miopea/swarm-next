@@ -1,6 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
-import { observeMirrorFit } from "./mirrorScale";
+import { type MirrorFont, mirrorFont, mirrorTerminalOptions, observeMirrorFit } from "./mirrorScale";
 import { approximateRemaining } from "./leaseTime";
 
 import { requestTakeoverControlGrant } from "../api";
@@ -26,6 +26,8 @@ export interface Surface {
   resize(rows: number, columns: number): void;
   clear(): void;
   dispose(): void;
+  /** How the window sizes the owner's screen to fit; absent means drawn as-is. */
+  font?: MirrorFont;
 }
 
 const OUTPUT_FRAME_TYPE = 1;
@@ -67,6 +69,7 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
     let socket: WebSocket | undefined;
     let surface: Surface | undefined;
     let closed = false;
+    let stopFitting = () => {};
 
     const send = (data: string) => {
       if (socket?.readyState !== WebSocket.OPEN) return;
@@ -107,6 +110,7 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
         setDetail("This browser could not open a terminal view.");
         return;
       }
+      if (frame.current && surface.font) stopFitting = observeMirrorFit(frame.current, element, surface.font);
       const url = `${window.location.origin.replace(/^http/, "ws")}${ticket.websocket_path}`;
       socket = new WebSocket(url, [`swarm-takeover.${ticket.grant}`]);
       socket.binaryType = "arraybuffer";
@@ -135,9 +139,6 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
 
     // Scaled, never reflowed: the Hive being held owns this grid, exactly as it
     // does while being watched. See `mirrorScale`.
-    const stopFitting = frame.current
-      ? observeMirrorFit(frame.current, element)
-      : () => {};
     return () => {
       stopFitting();
       closed = true;
@@ -174,7 +175,7 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
 }
 
 function defaultSurface(host: HTMLElement, onKey: (data: string) => void): Surface {
-  const terminal = new Terminal({ cursorBlink: true });
+  const terminal = new Terminal({ ...mirrorTerminalOptions(), cursorBlink: true });
   terminal.open(host);
   terminal.onData(onKey);
   const decoder = new TextDecoder();
@@ -183,5 +184,6 @@ function defaultSurface(host: HTMLElement, onKey: (data: string) => void): Surfa
     resize: (rows, columns) => terminal.resize(Math.max(columns, 1), Math.max(rows, 1)),
     clear: () => terminal.reset(),
     dispose: () => terminal.dispose(),
+    font: mirrorFont(terminal),
   };
 }

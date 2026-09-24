@@ -1,4 +1,7 @@
+import { Terminal } from "@xterm/xterm";
+
 import WatchWindow, { type WatchSurface } from "../apiary/WatchWindow";
+import { mirrorFont, mirrorTerminalOptions } from "../apiary/mirrorScale";
 
 /**
  * The watch window at full size, with no Hive and no stream.
@@ -7,8 +10,8 @@ import WatchWindow, { type WatchSurface } from "../apiary/WatchWindow";
  * operator's verdict on 2026-09-22 was "the UI for watching is terrible": a
  * panel a few hundred pixels wide inside the Hive roster, somebody else's
  * terminal reflowed into it, and no control but "Close window". The surface is
- * supplied here so nothing opens a socket — what is being checked is the frame,
- * the tools and how much room the terminal gets.
+ * supplied here so nothing is streamed — what is being checked is the frame,
+ * the tools, the typeface, and how much room the terminal gets.
  */
 export default function ApiaryWatchFixture() {
   return <WatchWindow
@@ -18,27 +21,30 @@ export default function ApiaryWatchFixture() {
     onClose={() => {}}
     onTakeOver={() => {}}
     createSurface={(host) => {
-      const pre = document.createElement("pre");
-      pre.className = "xterm-screen";
-      pre.style.cssText = "margin:0;color:#d9e7d4;font:12px/1.4 monospace;white-space:pre;width:640px;height:340px";
-      pre.textContent = [
+      // A real terminal at the size the WSL Hive's Queen ran at, so the font
+      // and the fit are the ones the window really draws.
+      const terminal = new Terminal({ ...mirrorTerminalOptions(), disableStdin: true, cursorBlink: false, cols: 80, rows: 24 });
+      terminal.open(host);
+      terminal.write([
         "> Tell me the time",
+        "",
         "  Bash(date)",
         "  └ Tue Sep 22 11:32:59 EDT 2026",
         "",
         "  11:32 AM EDT, Tuesday, September 22, 2026.",
         "",
         "> Testing",
+        "",
         "  Got it — I'm here. What do you need?",
         "",
         "  auto mode on (shift+tab to cycle) · ← for agents",
-      ].join("\n");
-      host.appendChild(pre);
+      ].join("\r\n"));
       return {
         write: () => {},
         resize: () => {},
-        clear: () => { pre.textContent = ""; },
-        dispose: () => pre.remove(),
+        clear: () => terminal.reset(),
+        dispose: () => terminal.dispose(),
+        font: mirrorFont(terminal),
       } satisfies WatchSurface;
     }}
   />;
