@@ -12,6 +12,12 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.1
+
+### Fixes
+- Watching another Hive no longer cuts off after five minutes. Nothing kept a watch alive while its window was open, so every watch ended five minutes in, mid-look. The window now keeps it open for as long as you are watching, including a Steward's, and it still closes by itself about five minutes after the window is closed or left behind.
+- The Hive being watched is told how long the watch lasts if the watcher walks away, and the watcher's window says the same.
+
 ## 1.16.0
 
 ### Fixes
