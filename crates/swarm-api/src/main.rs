@@ -490,6 +490,13 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
             state.relay_watched_frames().await;
         }
     });
+    let held_terminal = state.clone();
+    services.periodic(std::time::Duration::from_secs(1), true, move || {
+        let state = held_terminal.clone();
+        async move {
+            state.relay_held_terminal().await;
+        }
+    });
     let federation_events = state.clone();
     let mut event_backoff = std::time::Duration::from_secs(2);
     services.periodic(std::time::Duration::from_secs(1), true, move || {

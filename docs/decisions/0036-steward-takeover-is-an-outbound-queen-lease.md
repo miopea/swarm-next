@@ -26,6 +26,17 @@ Checkpoint (2026-09-22): Keeper may now take over on its own authority, and the
 relay carries both directions. The reclaim rule below was amended after a proven
 defect.
 
+Checkpoint (2026-09-24): the held Hive's half of the relay did not exist. Keeper
+relayed both directions and the controller attached, but nothing on the held
+Hive dialled the relay, installed the terminal-host authority, or wrote input,
+so the controller saw a blank window. The held Hive now does all three while a
+lease is active. Activation releases this Hive's own view of Queen before
+installing the authority, as "activation visibly replaces the local engagement
+lease" requires. A controller attaching sends the held Hive a request for its
+whole screen, because the relay keeps nothing a late window could be shown. A
+local reclaim, or a queued release, ends the takeover on the held Hive at once
+and removes the host authority without waiting for Keeper.
+
 The relay is the SAME bounded, memory-only fan-out ADR 0107 built for watching,
 generalised over its key rather than copied — the "frames pass through and are
 never kept" property has one home, because two copies would be two places for it

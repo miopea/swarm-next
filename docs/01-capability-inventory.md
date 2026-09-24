@@ -172,6 +172,16 @@ Queen only, by this ADR's own decision; a Steward's request becomes a lease on
 the next federation pass rather than immediately; and none of it has run between
 two real machines.
 
+Correction (2026-09-24): the held Hive's half was never wired, so a released
+takeover was a blank window whose keystrokes went nowhere — the operator's live
+check was "takeover starts and stops, the screen is blank". The held Hive now
+dials the relay while a lease is active, sends Queen's screen out, and writes
+input only through the terminal host's exact-lease authority, installed after
+releasing this Hive's own view of Queen. A controller attaching asks for a fresh
+screen, because the relay keeps no frames. "Take back control" removes the host
+authority at once rather than when Keeper hears. Tested end to end over real
+sockets and a real terminal; still not run between two real machines.
+
 Hive watching checkpoint: the control plane, the frame relay and the Keeper's
 viewer surface are implemented. A Keeper opens a window from the Apiary Hive
 roster — offered for remote Hives and not for this one — and closing it ENDS the

@@ -873,6 +873,37 @@ impl TaskStore {
         Ok(())
     }
 
+    /// The takeover this Hive is under right now, if any.
+    ///
+    /// ⚠️ A QUEUED RECLAIM OR RELEASE ENDS IT HERE, BEFORE KEEPER HEARS. The
+    /// lease row stays `active` until Keeper's receipt comes back, and an inbox
+    /// pass can even write it back to `active` before the reclaim is sent. The
+    /// operator pressing "Take back control" is the end of the takeover on this
+    /// machine at that moment, so nothing may keep acting on the lease after it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when stored state is invalid.
+    pub fn held_takeover(
+        &self,
+        now: i64,
+    ) -> Result<Option<FederationStewardTakeoverLease>, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        let leases = read_leases(
+            &connection,
+            "local_federation_steward_takeover_leases",
+            "WHERE target_hive_id = ?1 AND state = 'active' AND expires_at > ?2
+               AND NOT EXISTS (
+                 SELECT 1 FROM local_federation_steward_takeover_commands command
+                 WHERE json_extract(command.command_json, '$.action.kind') IN ('reclaim','release')
+                   AND json_extract(command.command_json, '$.action.lease_id') = lease_id)
+             ORDER BY requested_at DESC, lease_id DESC LIMIT 1",
+            params![identity.hive.id.to_string(), now],
+        )?;
+        Ok(leases.into_iter().next())
+    }
+
     /// Returns the local lease projection and durable command outbox.
     ///
     /// # Errors
@@ -1847,6 +1878,77 @@ mod tests {
                 .expect("projection");
         }
         active
+    }
+
+    /// ⚠️ "TAKE BACK CONTROL" ENDS IT ON THIS MACHINE AT ONCE, and stays ended
+    /// while Keeper has not heard: its inbox still says active until the
+    /// reclaim is delivered, and applying that must not revive the takeover.
+    #[test]
+    fn a_queued_reclaim_ends_the_held_takeover_before_keeper_hears() {
+        let now = 710_000;
+        let (keeper, steward, steward_acceptance, target, target_acceptance) = setup_takeover(now);
+        activate_takeover(
+            &keeper,
+            &steward,
+            &steward_acceptance,
+            &target,
+            &target_acceptance,
+            now + 60,
+        );
+        let held = target
+            .held_takeover(now + 70)
+            .expect("read")
+            .expect("the acknowledged takeover is held");
+        assert!(
+            steward.held_takeover(now + 70).expect("read").is_none(),
+            "the Hive taking over is not the one being held"
+        );
+
+        target
+            .queue_federation_steward_takeover_reclaim(
+                held.id,
+                held.revision,
+                "Mine again",
+                now + 71,
+            )
+            .expect("journal reclaim");
+        assert!(
+            target.held_takeover(now + 72).expect("read").is_none(),
+            "a queued reclaim is the end of it, before any receipt"
+        );
+        // Keeper has not heard yet, so its inbox still says active, and a sync
+        // pass applies that before it drains the reclaim.
+        let stale = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 73)
+            .expect("poll");
+        target
+            .apply_federation_steward_takeover_inbox(&stale, now + 73)
+            .expect("projection");
+        assert!(
+            target.held_takeover(now + 74).expect("read").is_none(),
+            "Keeper's stale view must not hand the terminal back to the Keeper"
+        );
+    }
+
+    #[test]
+    fn a_held_takeover_ends_when_its_time_does() {
+        let now = 720_000;
+        let (keeper, steward, steward_acceptance, target, target_acceptance) = setup_takeover(now);
+        activate_takeover(
+            &keeper,
+            &steward,
+            &steward_acceptance,
+            &target,
+            &target_acceptance,
+            now + 60,
+        );
+        let held = target.held_takeover(now + 70).expect("read").expect("held");
+        assert!(
+            target
+                .held_takeover(held.expires_at)
+                .expect("read")
+                .is_none()
+        );
     }
 
     /// ⚠️ THE AUDIT MUST CARRY BOTH REASONS, AND THEY ARE DIFFERENT CLAIMS. The

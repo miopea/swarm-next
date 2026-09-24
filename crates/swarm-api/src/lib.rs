@@ -23,6 +23,7 @@ mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
 mod federation_events;
+mod takeover_producer;
 mod takeover_relay;
 mod watch_producer;
 mod watch_relay;
@@ -1157,6 +1158,13 @@ impl AppState {
     /// Returns promptly when nobody is watching, which is the ordinary case.
     pub async fn relay_watched_frames(&self) {
         watch_producer::relay_watched_frames(self).await;
+    }
+
+    /// Relays this Hive's Queen terminal to whoever holds a takeover of it.
+    ///
+    /// Returns promptly when nothing holds this Hive, which is the ordinary case.
+    pub async fn relay_held_terminal(&self) {
+        takeover_producer::relay_held_terminal(self).await;
     }
 
     pub async fn reconcile_federation(&self) {
@@ -5973,6 +5981,22 @@ async fn reclaim_apiary_takeover(
     store
         .queue_federation_steward_takeover_reclaim(lease_id, revision, &request.reason, now)
         .map_err(|error| task_store_error(&error))?;
+    // ⚠️ INSTANT, NOT WHEN KEEPER HEARS. ADR 0036: the local operator reclaims
+    // immediately. The reclaim above reaches Keeper on the next sync, and until
+    // then the host would keep refusing this operator's own keystrokes.
+    // Nothing installed is an ordinary answer; recovery settles anything left.
+    if let (Some(host), Ok(Some(session))) = (
+        state.terminal_host.as_ref(),
+        store.active_queen_session_id(),
+    ) {
+        let _ = host
+            .request(&swarm_terminal::HostRequest::ReleaseTakeover {
+                session_id: session,
+                lease_id,
+                revision,
+            })
+            .await;
+    }
     state.control_room_notify.notify_waiters();
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
@@ -13715,6 +13739,18 @@ mod tests {
         screen.extend_from_slice(&7u64.to_be_bytes());
         screen.extend_from_slice(b"prompt$ ");
 
+        // The controller attaching asks the held Hive for its whole screen,
+        // because the relay keeps nothing a late window could be shown.
+        let Ok(Some(Ok(ClientMessage::Binary(request)))) =
+            tokio::time::timeout(Duration::from_secs(5), target_socket.next()).await
+        else {
+            panic!("the held Hive is asked for its screen when a controller attaches");
+        };
+        assert_eq!(
+            request.as_ref(),
+            [crate::takeover_producer::RESNAPSHOT_FRAME_TYPE].as_slice()
+        );
+
         // ⚠️ IN: the controller types, the target receives.
         let received = pump(&mut steward_socket, &mut target_socket, &keystroke).await;
         assert_eq!(
@@ -13738,6 +13774,117 @@ mod tests {
             dial("not-a-credential".to_owned(), revision).await.is_err(),
             "and an unauthenticated caller gets none at all"
         );
+    }
+
+    /// ⚠️ THE HELD HIVE'S HALF, OVER REAL SOCKETS AND A REAL TERMINAL. Keeper's
+    /// relay was tested alone and passed while the held Hive never dialled it,
+    /// so a takeover window was blank. This drives the member's own sender
+    /// against a live terminal host: the controller sees the held screen and
+    /// what they type lands in it.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn the_held_hive_sends_its_screen_and_types_what_the_controller_types() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let (endpoint, _bus, _server) = start_keeper_event_server(keeper.clone()).await;
+        let (target, _target_credential, _steward, steward_credential, lease_id, revision) =
+            active_steward_takeover(&keeper, &endpoint, now);
+
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "printf 'held-screen\\n'; read value; printf 'typed:%s\\n' \"$value\"; sleep 5"
+                    .into(),
+            ],
+            working_directory: workspace.clone(),
+        };
+        let queen_terminal = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        // The fixture binds Queen to a placeholder; give her the live terminal.
+        let queen = target.ensure_queen("/workspace/queen").unwrap();
+        let placeholder = target.active_queen_session_id().unwrap().unwrap();
+        target.release_worker_session(placeholder).unwrap();
+        target
+            .bind_worker_session(queen.id, queen_terminal.id())
+            .unwrap();
+        let held = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(target.clone());
+        let producer = tokio::spawn(async move { held.relay_held_terminal().await });
+        // The window the operator opens arrives AFTER the held Hive has
+        // connected and sent its first screen into a relay that keeps nothing.
+        // That ordering is the blank window; waiting forces it.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        let url = format!(
+            "{}/api/v1/federation/takeovers/{lease_id}/relay?revision={revision}",
+            endpoint.replace("http://", "ws://")
+        );
+        let mut request = url.into_client_request().unwrap();
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            axum::http::HeaderValue::from_str(&format!("Bearer {steward_credential}")).unwrap(),
+        );
+        let (mut controller, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+
+        // Everything the controller has been shown, as text.
+        let mut shown = String::new();
+        let mut read_until = async |controller: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+                                    wanted: &str| {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while !shown.contains(wanted) {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Ok(Some(Ok(ClientMessage::Binary(frame)))) =
+                    tokio::time::timeout(remaining, controller.next()).await
+                else {
+                    break;
+                };
+                let body = match frame.first() {
+                    Some(1) => &frame[9..],
+                    Some(2) => &frame[14..],
+                    _ => continue,
+                };
+                shown.push_str(&String::from_utf8_lossy(body));
+            }
+            shown.contains(wanted)
+        };
+
+        assert!(
+            read_until(&mut controller, "held-screen").await,
+            "the controller sees the held Hive's screen, not a blank window"
+        );
+        let mut keystroke = vec![9u8];
+        keystroke.extend_from_slice(b"hello\n");
+        controller
+            .send(ClientMessage::Binary(keystroke.into()))
+            .await
+            .unwrap();
+        assert!(
+            read_until(&mut controller, "typed:hello").await,
+            "what the controller types reaches the held terminal and comes back on screen"
+        );
+
+        producer.abort();
+        queen_terminal.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
     }
 
     /// Sends until the other end receives, and returns what arrived.

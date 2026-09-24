@@ -67,8 +67,13 @@ impl BackgroundServices {
         // watch ended on this machine stops this service producing without
         // waiting for the window to expire — the tripwire is what made that
         // liveness re-check get written rather than assumed.
+        //
+        // 10 since 2026-09-24, for the held Hive's side of a takeover, on the
+        // same terms: owned here, a bounded window per pass, and the lease
+        // re-read every poll, so "Take back control" on this machine stops it
+        // relaying and writing without waiting for Keeper.
         assert!(
-            self.tasks.len() < 9,
+            self.tasks.len() < 10,
             "all background services need a bounded owner"
         );
         let mut stop = self.stop.subscribe();

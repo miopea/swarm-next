@@ -136,7 +136,7 @@ async fn relay_one(state: &AppState, watch: ApiaryWatchId) -> Result<(), String>
 /// ⚠️ DELIBERATELY IDENTICAL, so a watcher renders a remote Hive with the same
 /// code that renders their own. A second frame format would be a second thing
 /// to keep correct, and the two would drift the first time either changed.
-fn encode(resume: &Resume, after: &mut Option<u64>) -> Vec<Vec<u8>> {
+pub(crate) fn encode(resume: &Resume, after: &mut Option<u64>) -> Vec<Vec<u8>> {
     match resume {
         Resume::Snapshot { snapshot } => {
             let mut payload = Vec::with_capacity(snapshot.bytes.len() + 14);
