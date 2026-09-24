@@ -109,7 +109,11 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         hive: { id: "demo-hive", name: "Orchard", operator_id: "demo-operator", apiary_id: null },
       };
     case "/api/v1/workers":
-      return demoWorkers;
+      // A briefing Swarm could not confirm, which puts its warning in the
+      // phone header beside the worker switcher.
+      return new URLSearchParams(window.location.search).get("briefing") === "unconfirmed"
+        ? demoWorkers.map((worker) => ({ ...worker, unconfirmed_delivery: true }))
+        : demoWorkers;
     // Transcribed from the real measurement that prompted this panel
     // (2026-09-14, 7-day window), not invented: Queen at a third of everything,
     // a 98-99% cache hit rate, and cache reads dwarfing everything else. A

@@ -494,6 +494,23 @@ test("renders every header pill at one height, and lets the chrome yield before 
   expect(stylesheet).toMatch(/\.mobile-worker-switcher-trigger \{[^}]*flex:\s*1 1 auto/);
 });
 
+/**
+ * Reported 2026-09-24 against a phone screenshot: "Notice when there is a
+ * briefing and the terminal is not showing correctly it completely crashes the
+ * selector option". The warning was a sentence that would neither shrink nor
+ * wrap, and measured at 393px it took 290px of the row: the switcher dropped
+ * from 120px to 16px and the header actions ended at 567px.
+ */
+test("an unconfirmed briefing cannot crush the phone's worker switcher", () => {
+  const mark = stylesheet.match(/\.worker-context \.worker-unconfirmed-detail \{([^}]+)\}/)?.[1];
+  expect(mark).toMatch(/width:\s*24px/);
+  const sentence = stylesheet.match(/\.worker-context \.worker-unconfirmed-text \{([^}]+)\}/)?.[1];
+  // Hidden from sight, not from a screen reader: the sentence is the warning.
+  expect(sentence).toMatch(/clip:\s*rect\(0, 0, 0, 0\)/);
+  expect(sentence).not.toMatch(/display:\s*none/);
+  expect(stylesheet).toMatch(/\.mobile-worker-switcher-trigger \{\s*min-width:\s*96px;\s*\}/);
+});
+
 test("keeps the age legible on a state that paints its own pill", () => {
   // Reported: "when buzzing the time is hard to read." The age was written in a
   // fixed --quiet grey, which is chosen against the panel — but buzzing fills

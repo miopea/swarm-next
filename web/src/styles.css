@@ -2241,6 +2241,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .jira-intake-filter > span:has(.email-inbox-refresh) { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .email-inbox-refresh { min-height: 28px; padding: 4px 10px; font-size: .72rem; }
 .worker-unconfirmed-detail { flex: 0 0 auto; padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line)); border-radius: 999px; color: var(--warn); font-size: .68rem; font-weight: 500; white-space: nowrap; }
+.worker-unconfirmed-mark { display: none; }
 .worker-engaged-elsewhere { flex: 0 0 auto; padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--accent-strong) 45%, var(--line)); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
 .worker-unconfirmed { display: inline-flex; width: 14px; height: 14px; flex: 0 0 auto; align-items: center; justify-content: center; margin-left: 5px; border-radius: 50%; color: var(--panel); background: var(--warn); font-size: .58rem; font-weight: 700; vertical-align: middle; }
 /* A tint of whatever the label is actually written in, rather than a fixed
@@ -2505,6 +2506,17 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      still computed display:none — so listing them here would be a rule that
      cannot fail and would read like it was doing something. */
   .worker-context .worker-engaged-elsewhere { display: none; }
+  /* ⚠️ THE BRIEFING WARNING IS A MARK HERE, NOT A SENTENCE. As a sentence it
+     would not shrink or wrap, so it took the whole row: the switcher collapsed
+     to a sliver nobody could tap and the actions were pushed off the screen
+     (operator, 2026-09-24: "it completely crashes the selector"). The row is
+     the name and Work here on the operator's ruling, so the warning keeps its
+     colour and a "!" and the sentence stays for screen readers and the title. */
+  .worker-context .worker-unconfirmed-detail { display: inline-grid; width: 24px; height: 24px; box-sizing: border-box; place-items: center; padding: 0; font-weight: 700; }
+  .worker-context .worker-unconfirmed-mark { display: inline; }
+  .worker-context .worker-unconfirmed-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  /* A floor, so nothing added beside the name can take it back to a sliver. */
+  .mobile-worker-switcher-trigger { min-width: 96px; }
   /* Work here is what survives beside the name, so it gets a real target
      rather than the leftovers of one. */
   .worker-context .worker-claim { min-height: var(--pill-touch-height); }

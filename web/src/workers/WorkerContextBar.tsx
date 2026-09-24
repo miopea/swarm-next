@@ -70,7 +70,10 @@ export default function WorkerContextBar({
           className="worker-unconfirmed-detail"
           role="status"
           title="Swarm wrote a briefing to this worker and could not confirm the worker received it. Nothing is retried automatically, because a briefing delivered twice is worse than one the operator was told about."
-        >Briefing unconfirmed — check the terminal below</span>
+        >
+          <span className="worker-unconfirmed-mark" aria-hidden="true">!</span>
+          <span className="worker-unconfirmed-text">Briefing unconfirmed — check the terminal below</span>
+        </span>
       ) : null}
       {engagement ? (
         <span
