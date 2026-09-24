@@ -12,6 +12,13 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.2
+
+### Fixes
+- Taking over another Hive now actually shows its screen and types into it. The Hive being taken over never sent its screen or accepted the keystrokes, so the takeover window stayed blank. Both Hives need this release for takeover to work between them.
+- "Take back control" on the Hive being held returns the terminal at once, rather than when the Keeper next hears about it.
+- Watching or taking over shows the other Hive's screen in this app's own terminal font at a normal size, instead of stretching it up to two and a half times.
+
 ## 1.16.1
 
 ### Fixes
