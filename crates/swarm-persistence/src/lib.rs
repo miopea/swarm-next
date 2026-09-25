@@ -360,7 +360,9 @@ const CROSS_HIVE_FILING_SCHEMA_MARKER: i64 = 191;
 const CLOSURE_EVIDENCE_SCHEMA_MARKER: i64 = 192;
 /// A task the operator's answer parked is recorded in the shape the review reads.
 const TYPED_OPERATOR_PARK_SCHEMA_MARKER: i64 = 193;
-const CURRENT_SCHEMA_VERSION: i64 = TYPED_OPERATOR_PARK_SCHEMA_MARKER;
+/// A takeover request withdrawn before it was taken up is recorded as expired.
+const WITHDRAWN_TAKEOVER_SCHEMA_MARKER: i64 = 194;
+const CURRENT_SCHEMA_VERSION: i64 = WITHDRAWN_TAKEOVER_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4629,6 +4631,9 @@ fn migrate_engine_history_schema_steps(
     }
     if schema_version < TYPED_OPERATOR_PARK_SCHEMA_MARKER {
         crate::decisions::migrate_typed_operator_park(transaction)?;
+    }
+    if schema_version < WITHDRAWN_TAKEOVER_SCHEMA_MARKER {
+        crate::federation_steward_takeovers::migrate_withdrawn_takeover_requests(transaction)?;
     }
     Ok(())
 }
@@ -10510,6 +10515,16 @@ mod tests {
             // shape nothing reads and re-break their Queen review.
             undo_sql: "SELECT 1",
             probe_sql: "SELECT user_version >= 193 FROM pragma_user_version",
+        },
+        SchemaStep {
+            table: "apiary_steward_takeover_leases",
+            artifact: "withdrawn_takeover_request",
+            // Schema 194 rewrites DATA, not shape, and only into a state every
+            // release already reads and every member already accepts. Undoing
+            // it would restore rows that stop a member from ever acknowledging
+            // another takeover.
+            undo_sql: "SELECT 1",
+            probe_sql: "SELECT user_version >= 194 FROM pragma_user_version",
         },
     ];
 

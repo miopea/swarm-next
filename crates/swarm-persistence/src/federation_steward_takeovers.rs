@@ -546,6 +546,20 @@ impl TaskStore {
                     }
             })
             .ok_or(TaskStoreError::InvalidFederationStewardTakeover)?;
+        // ⚠️ A REQUEST WITHDRAWN BEFORE IT WAS TAKEN UP ENDS AS EXPIRED, NOT
+        // RELEASED. A member refuses a released lease that was never
+        // acknowledged, and it refuses its WHOLE takeover inbox for one such
+        // lease, so recording it as released stopped that Hive acknowledging
+        // any takeover again: the operator's "the take over tries and ends
+        // before I can do anything", 2026-09-25, after closing one window
+        // before the Hive, still restarting from an update, had accepted.
+        let to = if to == FederationStewardTakeoverState::Released
+            && lease.state == FederationStewardTakeoverState::Requested
+        {
+            FederationStewardTakeoverState::Expired
+        } else {
+            to
+        };
         let expires_at = if to == FederationStewardTakeoverState::Active {
             now.saturating_add(ACTIVE_LIFETIME_SECONDS)
         } else {
@@ -1590,6 +1604,29 @@ fn valid_lease(lease: &FederationStewardTakeoverLease, now: i64) -> bool {
         && lease.state.is_open() == lease.ended_at.is_none()
 }
 
+/// Rewrites requests Keeper withdrew before they were taken up, which earlier
+/// releases recorded as `released` with no acknowledgement.
+///
+/// ⚠️ EACH ONE STOPS ITS TARGET ACKNOWLEDGING ANY TAKEOVER. A member refuses a
+/// released lease that was never acknowledged and refuses its whole inbox for
+/// it, and Keeper keeps serving the row. Fixing the writer stops new ones; the
+/// ones already written would keep that Hive untakeable until this runs.
+pub(super) fn migrate_withdrawn_takeover_requests(
+    transaction: &Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "UPDATE apiary_steward_takeover_leases
+         SET state = 'expired', revision = revision + 1
+         WHERE state IN ('released','reclaimed') AND acknowledged_at IS NULL",
+        [],
+    )?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::WITHDRAWN_TAKEOVER_SCHEMA_MARKER,
+    )
+}
+
 /// Automation resumes only after the Hive has reconciled locally.
 ///
 /// ⚠️ THE GAP THIS CLOSES WAS MEASURED, NOT SUSPECTED. Before this, Queen
@@ -1878,6 +1915,114 @@ mod tests {
                 .expect("projection");
         }
         active
+    }
+
+    /// ⚠️ THE OPERATOR'S "TAKES OVER TRIES AND ENDS", 2026-09-25. Keeper closed
+    /// a window before the target had acknowledged, the request was recorded as
+    /// released without an acknowledgement, and the target refused its whole
+    /// inbox from then on — so every later takeover of it went unacknowledged.
+    #[test]
+    fn a_request_withdrawn_before_acknowledgement_does_not_stop_the_next_one() {
+        let now = 730_000;
+        let (keeper, _steward, _steward_acceptance, target, target_acceptance) =
+            setup_takeover(now);
+        let target_hive_id = target_acceptance.receipt.payload.member_hive_id;
+        let queen = target.ensure_queen("/workspace/queen").expect("queen");
+        target
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .expect("bind queen");
+
+        let first = keeper
+            .open_keeper_takeover(target_hive_id, "First try", now + 60)
+            .expect("request");
+        let withdrawn = keeper
+            .transition_keeper_takeover(
+                first.id,
+                FederationStewardTakeoverState::Released,
+                now + 70,
+            )
+            .expect("the window closed before the target took it up");
+        assert_eq!(
+            withdrawn.state,
+            FederationStewardTakeoverState::Expired,
+            "never taken up, so it lapsed rather than being handed back"
+        );
+
+        let second = keeper
+            .open_keeper_takeover(target_hive_id, "Second try", now + 80)
+            .expect("request again");
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 81)
+            .expect("target poll");
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 81)
+            .expect("the target accepts an inbox carrying the withdrawn request");
+        target
+            .queue_federation_steward_takeover_acknowledgement(second.id, second.revision, now + 82)
+            .expect("and can take up the next takeover");
+    }
+
+    /// Rows already written the old way keep a Hive untakeable until repaired,
+    /// so the upgrade rewrites them.
+    #[test]
+    fn a_withdrawn_request_recorded_as_released_is_repaired_on_upgrade() {
+        let now = 740_000;
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("keeper.sqlite3");
+        let (target, target_acceptance, lease_id) = {
+            let keeper = TaskStore::open(&path).expect("keeper");
+            keeper
+                .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+                .expect("apiary");
+            let (target, target_acceptance) = join_member(&keeper, now + 10);
+            let lease = keeper
+                .open_keeper_takeover(
+                    target_acceptance.receipt.payload.member_hive_id,
+                    "Old shape",
+                    now + 60,
+                )
+                .expect("request");
+            let connection = keeper.connection().expect("connection");
+            connection
+                .execute(
+                    "UPDATE apiary_steward_takeover_leases
+                     SET state = 'released', revision = revision + 1, ended_at = ?1
+                     WHERE lease_id = ?2",
+                    params![now + 70, lease.id.to_string()],
+                )
+                .expect("plant the old shape");
+            connection
+                .pragma_update(None, "user_version", 193)
+                .expect("rewind");
+            drop(connection);
+            // The planted row really does stop the target, or this would pass
+            // whether or not the repair ran.
+            let inbox = keeper
+                .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 71)
+                .expect("poll");
+            assert!(
+                target
+                    .apply_federation_steward_takeover_inbox(&inbox, now + 71)
+                    .is_err()
+            );
+            (target, target_acceptance, lease.id)
+        };
+
+        let upgraded = TaskStore::open(&path).expect("upgraded keeper");
+        let inbox = upgraded
+            .federation_steward_takeover_inbox(&target_acceptance.node_credential, now + 80)
+            .expect("poll");
+        assert_eq!(
+            inbox
+                .leases
+                .iter()
+                .find(|lease| lease.id == lease_id)
+                .map(|lease| lease.state),
+            Some(FederationStewardTakeoverState::Expired)
+        );
+        target
+            .apply_federation_steward_takeover_inbox(&inbox, now + 80)
+            .expect("the repaired inbox is accepted");
     }
 
     /// ⚠️ "TAKE BACK CONTROL" ENDS IT ON THIS MACHINE AT ONCE, and stays ended
