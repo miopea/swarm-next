@@ -12,6 +12,12 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.3
+
+### Fixes
+- Taking over a Hive works again after a takeover window was closed before that Hive accepted. Closing it early was recorded in a form the other Hive refuses, and it then ignored every later takeover. Only the Keeper needs this release; the repair to already-affected records runs on its own during the update.
+- On a phone, an unconfirmed briefing no longer squeezes the worker switcher down to a sliver and pushes the header buttons off the screen. It shows as a small "!" beside the worker's name instead.
+
 ## 1.16.2
 
 ### Fixes
