@@ -111,7 +111,19 @@ async fn serve_notices(
     apiary_id: swarm_domain::ApiaryId,
 ) {
     loop {
-        let notice = match receiver.recv().await {
+        // ⚠️ THE SOCKET IS WATCHED AS WELL AS THE BUS. A member redials every
+        // minute, and a handler that only learnt it had gone when a send failed
+        // kept its slot through every quiet minute. The slots are shared with
+        // every operator terminal, so on 2026-09-26 they ran out and terminals
+        // were refused with "capacity is exhausted" on every reconnect.
+        let next = tokio::select! {
+            message = socket.recv() => match message {
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                Some(Ok(_)) => continue,
+            },
+            notice = receiver.recv() => notice,
+        };
+        let notice = match next {
             Ok(notice) => notice,
             // ⚠️ LAGGING IS RECOVERABLE PRECISELY BECAUSE THIS IS A DOORBELL.
             // The member provably missed notices, and the honest recovery is to

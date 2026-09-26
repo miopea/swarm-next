@@ -13887,6 +13887,116 @@ mod tests {
         let _ = server_task.await;
     }
 
+    /// ⚠️ A MEMBER THAT HANGS UP MUST GIVE ITS SLOT BACK. Keeper's event, watch
+    /// and takeover sockets share one bounded pool with every operator
+    /// terminal, and a member redials its event socket every minute. A handler
+    /// that only notices its member left when it next has something to send
+    /// keeps the slot through every quiet minute, and on 2026-09-26 the pool ran
+    /// dry: "terminal connected and disconnected over and over again".
+    #[tokio::test]
+    async fn a_member_hanging_up_its_event_socket_gives_the_slot_back() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new("/unreachable/terminal.sock"),
+                "keeper-secret",
+            )
+            .with_task_store(keeper.clone());
+        let pool = Arc::clone(&state.websocket_limit);
+        let server = tokio::spawn(async move { axum::serve(listener, router(state)).await });
+        let credential = complete_join(&keeper, &member, &card, &endpoint, now);
+        let idle = pool.available_permits();
+
+        let mut request = format!(
+            "{}/api/v1/federation/events",
+            endpoint.replace("http://", "ws://")
+        )
+        .into_client_request()
+        .unwrap();
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            axum::http::HeaderValue::from_str(&format!("Bearer {credential}")).unwrap(),
+        );
+        let (socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while pool.available_permits() == idle && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            pool.available_permits(),
+            idle - 1,
+            "the open socket holds one slot"
+        );
+
+        drop(socket);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while pool.available_permits() < idle && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            pool.available_permits(),
+            idle,
+            "a member that hung up must not keep a slot through a quiet minute"
+        );
+        server.abort();
+    }
+
+    /// The watcher's side of the same rule: closing the window gives the slot
+    /// back at once, rather than when the next frame fails to send or the watch
+    /// lapses minutes later.
+    #[tokio::test]
+    async fn a_watcher_closing_the_window_gives_the_slot_back() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new("/unreachable/terminal.sock"),
+                "keeper-secret",
+            )
+            .with_task_store(keeper.clone());
+        let pool = Arc::clone(&state.websocket_limit);
+        let server = tokio::spawn(async move { axum::serve(listener, router(state)).await });
+        let credential = complete_join(&keeper, &member, &card, &endpoint, now);
+        let target = member.local_hive_identity().unwrap().hive.id;
+        let watcher = keeper.local_hive_identity().unwrap().operator.id;
+        let watch = keeper.open_apiary_watch(watcher, target, now).unwrap();
+        keeper
+            .acknowledge_federation_watch(&credential, watch.id, now)
+            .unwrap();
+        let idle = pool.available_permits();
+
+        let ticket = watch_grant(&endpoint, watch.id).await;
+        let viewer = dial_viewer(&endpoint.replace("http://", "ws://"), watch.id, &ticket)
+            .await
+            .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while pool.available_permits() == idle && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            pool.available_permits(),
+            idle - 1,
+            "the open window holds one slot"
+        );
+
+        drop(viewer);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while pool.available_permits() < idle && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            pool.available_permits(),
+            idle,
+            "a closed window keeps no slot"
+        );
+        server.abort();
+    }
+
     /// Sends until the other end receives, and returns what arrived.
     ///
     /// Retried because the receiving side's subscription is established inside

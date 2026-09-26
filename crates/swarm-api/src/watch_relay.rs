@@ -494,6 +494,13 @@ async fn serve_frames(
                     return;
                 }
             }
+            // A viewer that closed its window gives its slot back now, not when
+            // the next frame fails to send or the watch lapses minutes later.
+            message = socket.recv() => {
+                if matches!(message, Some(Ok(Message::Close(_)) | Err(_)) | None) {
+                    return;
+                }
+            }
             frame = receiver.recv() => {
                 match frame {
                     Ok(frame) => {
