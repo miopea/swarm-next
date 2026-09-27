@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.4
+
+### New features
+- Swarm now installs ordinary releases by itself while you are away. A release that keeps your workers running installs on its own once you are away or in Night Watch, the same way the Install button would. A release that would stop your workers still waits for you. If an automatic install fails, it is not retried; the Updates card shows why and you install it from there. You can turn this off on the Updates card. From this release on, each Hive keeps itself current, so install this one by hand once.
+
+### Fixes
+- Needs you stops asking about the same Hive falling behind. Answering "Hives are behind the current release", even with "leave them behind", no longer brings the same question back at the next check. You are asked again only when there is a newer release or a different Hive falls behind.
+- A Keeper built from a working copy no longer flags other Hives as behind on their database because of its own unreleased changes.
+- Terminals no longer drop into a connect-and-disconnect loop after an Apiary member has been connected for a while. Each time a member reconnected, the Keeper held one of the connections your terminals share, until none were left.
+- A Hive that never chose whether to check for updates now shows what its checks found. It was checking and then keeping nothing.
+
 ## 1.16.3
 
 ### Fixes
