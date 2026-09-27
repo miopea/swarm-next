@@ -12,6 +12,12 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.5
+
+### Fixes
+- The Updates card's buttons stay on the card. On a laptop-sized window the new automatic-install button ran off the edge, and on a phone the others already did. They now wrap within the card.
+- Automatic install is a checkbox, "Install ordinary releases automatically while I'm away", instead of a button whose label described the opposite of its current setting.
+
 ## 1.16.4
 
 ### New features
