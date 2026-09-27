@@ -50,18 +50,6 @@ function changedSentence(changed: string | null, version: string): string | null
   return null;
 }
 
-/**
- * What happens to an ordinary release on this Hive without anyone pressing
- * Install (ADR 0110). A development build is never replaced by a release, and a
- * Hive that does not check has nothing to install, so neither says anything.
- */
-function automaticInstallLine(status: ReleaseStatus): string {
-  if (status.development_build || status.mode === "off") return "";
-  return status.auto_install
-    ? "Ordinary releases install themselves while you are away; one that stops workers waits for you. "
-    : "Releases install only when you press Install. ";
-}
-
 /** The step named the way an operator thinks of it, not the way we spell it. */
 function stepName(step: string | null): string | null {
   if (step === "accept") return "accepting the download";
@@ -429,18 +417,37 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
         <p>Version {status.current_version} is the newest release for this Hive.</p>
       )}
 
+      {/* A SETTING, SO A CHECKBOX. It was a button whose label named the
+          opposite of the current state ("Stop installing automatically"), and
+          as a fourth button it pushed the row off the card (2026-09-27). A
+          development build is never replaced by a release, and a Hive that does
+          not check has nothing to install, so neither is offered the choice. */}
+      {!status.development_build && status.mode !== "off" ? (
+        <label className="release-auto-install">
+          <input
+            type="checkbox"
+            checked={status.auto_install}
+            disabled={disabled}
+            onChange={(event) => {
+              const enabled = event.currentTarget.checked;
+              void run(() => setReleaseAutoInstall(operatorToken, enabled), "The preference could not be saved.");
+            }}
+          />
+          <span>
+            Install ordinary releases automatically while I’m away
+            <small>A release that would stop your workers still waits for you.</small>
+          </span>
+        </label>
+      ) : null}
+
       <footer className="release-check-footer">
         <small>
           {status.mode === "off" ? "Automatic checks are off. " : "Checked about every four hours. "}
-          {automaticInstallLine(status)}
           {status.last_outcome === "unreachable" ? "The last check could not reach the origin." : status.last_outcome === "rejected" ? "The last check found a manifest it could not verify, and ignored it." : status.last_checked_at ? `Last checked ${new Date(status.last_checked_at * 1000).toLocaleString()}.` : "Not checked yet."}
         </small>
         <span className="settings-actions">
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => checkForRelease(operatorToken), "The check could not be completed.")}>{working ? "Checking…" : "Check now"}</button>
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "off" ? "daily" : "off"), "The preference could not be saved.")}>{status.mode === "off" ? "Start checking" : "Stop checking"}</button>
-          {!status.development_build && status.mode !== "off" ? (
-            <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseAutoInstall(operatorToken, !status.auto_install), "The preference could not be saved.")}>{status.auto_install ? "Stop installing automatically" : "Install automatically"}</button>
-          ) : null}
           <button className="secondary-button" disabled={disabled} onClick={() => void openNotes()}>Release notes</button>
         </span>
       </footer>

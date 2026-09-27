@@ -521,7 +521,7 @@ test("an ordinary release says it installs itself while the operator is away", a
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true, downloaded_version: "0.2.0" }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   expect(await screen.findByText(/It installs itself while you are away/)).toBeInTheDocument();
-  expect(screen.getByText(/Ordinary releases install themselves while you are away/)).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: /Install ordinary releases automatically/ })).toBeChecked();
   expect(screen.queryByText(/Nothing is installed until you say so/)).not.toBeInTheDocument();
 });
 
@@ -538,10 +538,11 @@ test("the operator can turn automatic installs off from the card", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true }));
   vi.mocked(api.setReleaseAutoInstall).mockResolvedValue(status({ auto_install: false }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Stop installing automatically" }));
+  const setting = await screen.findByRole("checkbox", { name: /Install ordinary releases automatically/ });
+  expect(setting).toBeChecked();
+  fireEvent.click(setting);
   await waitFor(() => expect(api.setReleaseAutoInstall).toHaveBeenCalledWith("token", false));
-  expect(await screen.findByRole("button", { name: "Install automatically" })).toBeInTheDocument();
-  expect(screen.getByText(/Releases install only when you press Install/)).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: /Install ordinary releases automatically/ })).not.toBeChecked());
 });
 
 /** A working copy is never replaced by a release, so it is offered no switch. */
@@ -549,6 +550,5 @@ test("a development build offers no automatic install", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true, development_build: true, upgrade_available: false }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   await screen.findByRole("button", { name: /Check now|Checking/ });
-  expect(screen.queryByRole("button", { name: /installing automatically|Install automatically/ })).not.toBeInTheDocument();
-  expect(screen.queryByText(/install themselves/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: /Install ordinary releases automatically/ })).not.toBeInTheDocument();
 });

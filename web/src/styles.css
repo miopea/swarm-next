@@ -3059,7 +3059,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-subsystem-attention { border-color: color-mix(in srgb, var(--warn) 46%, var(--line)); background: color-mix(in srgb, var(--warn-soft) 32%, var(--panel)); }
 .release-check-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
 .release-check-footer small { min-width: 0; color: var(--text-muted); line-height: 1.35; white-space: normal; }
-.release-check-footer .settings-actions { flex: 0 0 auto; margin: 0; }
+/* The actions take their own full row and wrap within it. Sized to their
+   content (flex 0 0 auto) they never wrapped, so a fourth button ran off the
+   card at laptop widths and three already did on a phone (2026-09-27). */
+.release-check-footer .settings-actions { flex: 1 1 100%; min-width: 0; margin: 0; }
+.release-auto-install { display: flex; align-items: flex-start; gap: 10px; color: var(--text); font-size: .8rem; line-height: 1.4; cursor: pointer; }
+.release-auto-install input { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; }
+/* Full text colour: the global `label span` rule paints a label's text in
+   --quiet, which measured about 3.5:1 on this card, under AA. */
+.release-auto-install > span { display: grid; gap: 2px; min-width: 0; color: var(--text); font-weight: 500; }
+.release-auto-install small { color: var(--muted); font-size: .74rem; }
 .runtime-status-badge.attention { color: var(--warn-strong); background: var(--warn-soft); }
 .runtime-status-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: .66rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .runtime-status-badge.restart { color: var(--danger); background: var(--bad-soft); }

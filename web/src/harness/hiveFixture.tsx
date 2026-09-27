@@ -108,6 +108,29 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         operator: { id: "demo-operator", display_name: "You" },
         hive: { id: "demo-hive", name: "Orchard", operator_id: "demo-operator", apiary_id: null },
       };
+    // The Updates card as a Hive on the newest release sees it, with automatic
+    // install on: the state the operator photographed with a button off the card.
+    case "/api/v1/runtime/release":
+      return {
+        available: true,
+        mode: "daily",
+        auto_install: new URLSearchParams(window.location.search).get("autoInstall") !== "off",
+        current_version: "1.16.4",
+        development_build: false,
+        last_checked_at: now - 600,
+        last_outcome: "current",
+        offer: null,
+        upgrade_available: false,
+        carries_new_worker_engine: false,
+        carries_protocol_change: false,
+        commits_ahead_of_release: null,
+        downloaded_version: null,
+        apply_state: null,
+        apply_reason: null,
+        apply_step: null,
+        apply_detail: null,
+        apply_changed: null,
+      };
     case "/api/v1/workers":
       // A briefing Swarm could not confirm, which puts its warning in the
       // phone header beside the worker switcher.

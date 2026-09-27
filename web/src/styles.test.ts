@@ -511,6 +511,20 @@ test("an unconfirmed briefing cannot crush the phone's worker switcher", () => {
   expect(stylesheet).toMatch(/\.mobile-worker-switcher-trigger \{\s*min-width:\s*96px;\s*\}/);
 });
 
+/**
+ * Reported 2026-09-27 against a screenshot: the Updates card's buttons ran off
+ * the card. The action group was sized to its content (flex 0 0 auto), so it
+ * never wrapped — three buttons already overflowed a phone, a fourth a laptop.
+ */
+test("the Updates card's actions wrap inside the card and its setting is legible", () => {
+  const actions = stylesheet.match(/\.release-check-footer \.settings-actions \{([^}]+)\}/)?.[1];
+  expect(actions).toMatch(/flex:\s*1 1 100%/);
+  expect(actions).toMatch(/min-width:\s*0/);
+  // The global `label span` rule paints label text --quiet, about 3.5:1 here.
+  const text = stylesheet.match(/\.release-auto-install > span \{([^}]+)\}/)?.[1];
+  expect(text).toMatch(/color:\s*var\(--text\)/);
+});
+
 test("keeps the age legible on a state that paints its own pill", () => {
   // Reported: "when buzzing the time is hard to read." The age was written in a
   // fixed --quiet grey, which is chosen against the panel — but buzzing fills
