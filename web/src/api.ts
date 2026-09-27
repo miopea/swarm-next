@@ -710,6 +710,8 @@ export type ApiaryMember = {
   operator_email?: string | null;
   role: "keeper" | "member";
   is_local: boolean;
+  /** When this Hive last reached the Keeper; only the Keeper knows, and only for members. */
+  last_contact_at?: number | null;
 };
 export type StewardCapability =
   | "observe"
@@ -873,6 +875,8 @@ export type FederationSyncHealth = {
   last_success_at: number | null;
   consecutive_failures: number;
   next_attempt_at: number | null;
+  /** Which part of synchronization last failed, e.g. "project catalog". */
+  failed_step?: string | null;
 };
 export type ApiaryTask = {
   id: string;

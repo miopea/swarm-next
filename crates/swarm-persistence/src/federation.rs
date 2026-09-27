@@ -361,7 +361,7 @@ impl TaskStore {
         connection
             .query_row(
                 "SELECT condition, last_attempt_at, last_success_at,
-                        consecutive_failures, next_attempt_at
+                        consecutive_failures, next_attempt_at, failed_step
                  FROM local_federation_sync WHERE singleton = 1",
                 [],
                 federation_sync_health_from_row,
@@ -387,7 +387,7 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let prior = transaction.query_row(
-            "SELECT condition, last_attempt_at, last_success_at, consecutive_failures, next_attempt_at FROM local_federation_sync WHERE singleton = 1",
+            "SELECT condition, last_attempt_at, last_success_at, consecutive_failures, next_attempt_at, failed_step FROM local_federation_sync WHERE singleton = 1",
             [], federation_sync_health_from_row,
         ).optional()?.unwrap_or_default();
         if prior.condition == FederationSyncCondition::Idle && prior.next_attempt_at.is_some() {
@@ -431,13 +431,23 @@ impl TaskStore {
             last_success_at: Some(now),
             consecutive_failures: 0,
             next_attempt_at: Some(now.saturating_add(FEDERATION_SYNC_INTERVAL_SECONDS)),
+            failed_step: None,
         };
         self.persist_federation_sync_health(&health, now)?;
         Ok(health)
     }
 
-    /// Records a classified Member reconciliation failure. Temporary outages
-    /// back off to five minutes; authentication and protocol failures halt.
+    /// Records a classified Member reconciliation failure, and which step of
+    /// the sync it stopped at.
+    ///
+    /// ⚠️ EVERY FAILURE RETRIES, ON THE SAME BOUNDED BACKOFF. Authentication and
+    /// protocol failures used to halt for good, and "protocol" included any
+    /// 4xx a single request earned — so one refused request stopped a member
+    /// synchronising forever, silently: its version report, watch and takeover
+    /// acknowledgements and shared tasks all stopped with it. The field WSL
+    /// Hive sat that way from 2026-09-25 until someone noticed. A five-minute
+    /// ceiling costs a Keeper nothing, and a condition that is real keeps
+    /// failing and keeps saying so.
     ///
     /// # Errors
     /// Rejects success/idle conditions, personal and Keeper Hives, invalid
@@ -445,6 +455,7 @@ impl TaskStore {
     pub fn record_federation_sync_failure(
         &self,
         condition: FederationSyncCondition,
+        failed_step: &str,
         now: i64,
     ) -> Result<FederationSyncHealth, TaskStoreError> {
         if now < 0
@@ -463,14 +474,15 @@ impl TaskStore {
             .consecutive_failures
             .saturating_add(1)
             .min(MAX_FEDERATION_SYNC_FAILURES);
-        let next_attempt_at = (condition == FederationSyncCondition::Offline)
-            .then(|| now.saturating_add(federation_retry_delay_seconds(consecutive_failures)));
+        let next_attempt_at =
+            Some(now.saturating_add(federation_retry_delay_seconds(consecutive_failures)));
         let health = FederationSyncHealth {
             condition,
             last_attempt_at: Some(now),
             last_success_at: prior.last_success_at,
             consecutive_failures,
             next_attempt_at,
+            failed_step: Some(failed_step.chars().take(80).collect()),
         };
         self.persist_federation_sync_health(&health, now)?;
         Ok(health)
@@ -504,15 +516,16 @@ impl TaskStore {
         self.connection()?.execute(
             "INSERT INTO local_federation_sync
                 (singleton, condition, last_attempt_at, last_success_at,
-                 consecutive_failures, next_attempt_at, updated_at)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                 consecutive_failures, next_attempt_at, updated_at, failed_step)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(singleton) DO UPDATE SET
                  condition = excluded.condition,
                  last_attempt_at = excluded.last_attempt_at,
                  last_success_at = excluded.last_success_at,
                  consecutive_failures = excluded.consecutive_failures,
                  next_attempt_at = excluded.next_attempt_at,
-                 updated_at = excluded.updated_at",
+                 updated_at = excluded.updated_at,
+                 failed_step = excluded.failed_step",
             params![
                 health.condition.to_string(),
                 health.last_attempt_at,
@@ -520,6 +533,7 @@ impl TaskStore {
                 health.consecutive_failures,
                 health.next_attempt_at,
                 now,
+                health.failed_step,
             ],
         )?;
         Ok(())
@@ -3111,6 +3125,15 @@ pub(crate) fn authenticate_member_credential(
         return Err(TaskStoreError::InvalidFederationCredential);
     }
     let digest = invitation_secret_digest(credential);
+    // Every authenticated request a member makes is contact. Throttled so a
+    // member polling every few seconds costs one write per half minute.
+    connection.execute(
+        "UPDATE apiary_federation_memberships SET last_contact_at = ?3
+         WHERE apiary_id = ?1 AND credential_digest = ?2 AND state = 'active'
+           AND credential_expires_at > ?3
+           AND (last_contact_at IS NULL OR last_contact_at <= ?3 - 30)",
+        params![apiary_id.to_string(), digest.as_slice(), now],
+    )?;
     connection
         .query_row(
             "SELECT member_node_id, member_hive_id, member_operator_id
@@ -4811,6 +4834,7 @@ fn federation_sync_health_from_row(
         last_success_at: row.get(2)?,
         consecutive_failures,
         next_attempt_at: row.get(4)?,
+        failed_step: row.get(5)?,
     })
 }
 
@@ -7520,7 +7544,11 @@ pub(crate) mod tests {
             .node_credential;
         member.record_federation_sync_success(now + 10).unwrap();
         let failed = member
-            .record_federation_sync_failure(FederationSyncCondition::Incompatible, now + 20)
+            .record_federation_sync_failure(
+                FederationSyncCondition::Incompatible,
+                "shared tasks",
+                now + 20,
+            )
             .unwrap();
         let retry = member.request_federation_sync_retry(now + 30).unwrap();
         assert_eq!(retry.condition, FederationSyncCondition::Idle);
@@ -7543,10 +7571,12 @@ pub(crate) mod tests {
         let rejected = member
             .record_federation_sync_failure(
                 FederationSyncCondition::AuthenticationRequired,
+                "membership credential",
                 now + 32,
             )
             .unwrap();
-        assert_eq!(rejected.next_attempt_at, None);
+        // A refusal retries on the backoff rather than halting for good.
+        assert_eq!(rejected.next_attempt_at, Some(now + 32 + 15));
         assert_eq!(rejected.last_success_at, failed.last_success_at);
         member
             .connection()
@@ -7576,12 +7606,20 @@ pub(crate) mod tests {
         );
 
         let first = member
-            .record_federation_sync_failure(FederationSyncCondition::Offline, now + 10)
+            .record_federation_sync_failure(
+                FederationSyncCondition::Offline,
+                "project catalog",
+                now + 10,
+            )
             .unwrap();
         assert_eq!(first.consecutive_failures, 1);
         assert_eq!(first.next_attempt_at, Some(now + 15));
         let second = member
-            .record_federation_sync_failure(FederationSyncCondition::Offline, now + 20)
+            .record_federation_sync_failure(
+                FederationSyncCondition::Offline,
+                "project catalog",
+                now + 20,
+            )
             .unwrap();
         assert_eq!(second.consecutive_failures, 2);
         assert_eq!(second.next_attempt_at, Some(now + 35));
@@ -7592,18 +7630,27 @@ pub(crate) mod tests {
         assert_eq!(current.last_success_at, Some(now + 40));
         assert_eq!(current.next_attempt_at, Some(now + 100));
 
-        let halted = member
+        // ⚠️ A REFUSAL NO LONGER HALTS. It used to leave `next_attempt_at` empty
+        // and the member never tried again; it now waits out the same backoff
+        // and says which step was refused.
+        let refused = member
             .record_federation_sync_failure(
                 FederationSyncCondition::AuthenticationRequired,
+                "stewardships",
                 now + 50,
             )
             .unwrap();
-        assert_eq!(halted.last_success_at, Some(now + 40));
-        assert_eq!(halted.next_attempt_at, None);
-        assert_eq!(member.federation_sync_health().unwrap(), halted);
+        assert_eq!(refused.last_success_at, Some(now + 40));
+        assert_eq!(refused.next_attempt_at, Some(now + 55));
+        assert_eq!(refused.failed_step.as_deref(), Some("stewardships"));
+        assert_eq!(member.federation_sync_health().unwrap(), refused);
 
         assert!(matches!(
-            member.record_federation_sync_failure(FederationSyncCondition::Current, now + 60),
+            member.record_federation_sync_failure(
+                FederationSyncCondition::Current,
+                "shared tasks",
+                now + 60
+            ),
             Err(TaskStoreError::InvalidFederationSync)
         ));
         assert!(matches!(
@@ -7615,7 +7662,10 @@ pub(crate) mod tests {
             Err(TaskStoreError::InvalidFederationSync)
         ));
 
-        let serialized = serde_json::to_string(&halted).unwrap().to_ascii_lowercase();
+        // The step is a fixed label naming where it stopped, never content.
+        let serialized = serde_json::to_string(&refused)
+            .unwrap()
+            .to_ascii_lowercase();
         for forbidden in ["endpoint", "credential", "jira", "task", "response"] {
             assert!(!serialized.contains(forbidden));
         }

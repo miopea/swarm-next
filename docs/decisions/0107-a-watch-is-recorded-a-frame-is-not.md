@@ -107,6 +107,22 @@ authorization they opened under, and the producing side re-reads it every poll â
 so a watch ended from the watched machine stops production there, without waiting
 for Keeper to hang up.
 
+## A viewer that arrives asks for the whole screen
+
+Added 2026-09-27. Because the relay keeps no frames, a snapshot the member sent
+before a viewer subscribed is gone. The member sent one only when its frame
+socket opened, about once a minute, so a window opened in between stayed blank
+until the screen next changed. The two-Hive acceptance run found this, and the
+operator had reported the watch window "never gets past" waiting.
+
+Now, when a viewer attaches, Keeper's relay itself sends one byte (frame type
+10, the takeover relay's RESNAPSHOT) down the member's frame socket, and the
+member sends a fresh snapshot. The viewer's socket does not forward it, and
+watching still has no path from the viewer to the member. The member acts on
+that one byte and ignores everything else it receives. So the return direction
+cannot turn into a keystroke, or into a request for a chosen session, without
+reversing this section.
+
 ## The viewer holds a ticket, not a credential
 
 A browser CANNOT send an `Authorization` header on a WebSocket. The first viewer

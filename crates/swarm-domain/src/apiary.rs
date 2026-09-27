@@ -1275,6 +1275,11 @@ pub struct FederationSyncHealth {
     pub last_success_at: Option<i64>,
     pub consecutive_failures: u32,
     pub next_attempt_at: Option<i64>,
+    /// Which part of the sync the last failure stopped at, in the operator's
+    /// words. Without it a member that stopped synchronising said only that it
+    /// had, and nobody could tell which request the Keeper refused.
+    #[serde(default)]
+    pub failed_step: Option<String>,
 }
 
 impl Default for FederationSyncHealth {
@@ -1285,6 +1290,7 @@ impl Default for FederationSyncHealth {
             last_success_at: None,
             consecutive_failures: 0,
             next_attempt_at: None,
+            failed_step: None,
         }
     }
 }
@@ -1811,6 +1817,11 @@ pub struct ApiaryMemberSummary {
     pub operator_email: Option<String>,
     pub role: LocalApiaryRole,
     pub is_local: bool,
+    /// When this member last reached the Keeper, as the Keeper saw it. The
+    /// silent failure it answers: a member that stopped synchronising looked
+    /// exactly like one that had nothing to say.
+    #[serde(default)]
+    pub last_contact_at: Option<i64>,
 }
 
 /// Public destination identity available to an authenticated Apiary member

@@ -22,6 +22,7 @@ import InvitationRecoveryFixture from "./InvitationRecoveryFixture";
 import JoinApiaryFixture from "./JoinApiaryFixture";
 import ApiarySetupStatusFixture from "./ApiarySetupStatusFixture";
 import KeeperObservationFixture from "./KeeperObservationFixture";
+import MemberSyncSettingsFixture from "./MemberSyncSettingsFixture";
 import ApiaryWatchFixture from "./ApiaryWatchFixture";
 import HandoffRecoveryFixture from "./HandoffRecoveryFixture";
 
@@ -236,6 +237,7 @@ export const SURFACES: Surface[] = [
   { id: "apiary-watch", title: "Watching a Hive", why: "Fictional live window; no stream and no Hive. The frame, the tools, and how much room the terminal gets.", render: () => <ApiaryWatchFixture /> },
   { id: "keeper-observations", title: "Keeper observation recovery", why: "Fictional unavailable, retained and recovered Apiary information.", render: () => <KeeperObservationFixture /> },
   { id: "member-observations", title: "Member observation recovery", why: "Fictional missing status and recovery without reconnecting membership.", render: () => <KeeperObservationFixture member /> },
+  { id: "member-sync-settings", title: "Member synchronization stopped", why: "Fictional refused credential: the step it stopped at and when it tries again.", render: () => <MemberSyncSettingsFixture /> },
   { id: "handoff-recovery", title: "Handoff failure and recovery", why: "Fictional lost command replies, retained drafts and explicit status checks.", render: () => <HandoffRecoveryFixture /> },
   { id: "apiary-setup-status", title: "Shared setup without mandatory Jira", why: "Fictional optional integration, policy failure and recovery states.", render: () => <ApiarySetupStatusFixture /> },
   { id: "invitation-recovery", title: "Invitation status recovery", why: "Read-only fictional status failure and explicit recovery.", render: () => <InvitationRecoveryFixture /> },

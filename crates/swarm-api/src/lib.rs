@@ -446,6 +446,9 @@ pub struct AppState {
     /// notice costs latency, never correctness, so it needs no durability.
     federation_events: federation_events::FederationEventBus,
     watch_relay: Arc<watch_relay::WatchRelay>,
+    /// Viewers asking the watched Hive for its whole screen; the reverse of
+    /// `watch_relay`, carried on the watched Hive's frame connection.
+    watch_requests: Arc<watch_relay::WatchRelay>,
     watch_grants: Arc<watch_relay::WatchGrantStore>,
     takeover_relay: Arc<takeover_relay::TakeoverRelay>,
     takeover_grants: Arc<takeover_relay::TakeoverGrantStore>,
@@ -580,6 +583,7 @@ impl AppState {
             control_room_notify: Arc::new(Notify::new()),
             federation_events: federation_events::FederationEventBus::new(),
             watch_relay: Arc::new(watch_relay::WatchRelay::default()),
+            watch_requests: Arc::new(watch_relay::WatchRelay::default()),
             watch_grants: Arc::new(watch_relay::WatchGrantStore::default()),
             takeover_relay: Arc::new(takeover_relay::TakeoverRelay::default()),
             takeover_grants: Arc::new(takeover_relay::TakeoverGrantStore::default()),
@@ -1206,13 +1210,18 @@ impl AppState {
                 return;
             }
         };
-        if matches!(
+        // ⚠️ NO CONDITION STOPS THIS FOR GOOD. Authentication and incompatibility
+        // failures used to return here forever, and one refused request was
+        // enough to reach them, so a member went silent — no version report, no
+        // watch or takeover acknowledgement, no shared tasks — until someone
+        // noticed. They now wait out the same bounded backoff as an outage. An
+        // announcement skips the wait only when the last failure was an outage:
+        // a refusal is not made more likely to succeed by a doorbell.
+        let refused = matches!(
             health.condition,
             FederationSyncCondition::AuthenticationRequired | FederationSyncCondition::Incompatible
-        ) {
-            return;
-        }
-        if !announced && health.next_attempt_at.is_some_and(|next| next > now) {
+        );
+        if (!announced || refused) && health.next_attempt_at.is_some_and(|next| next > now) {
             return;
         }
         let connection = match service.federation_member_connection() {
@@ -1225,6 +1234,7 @@ impl AppState {
         if connection.credential_expires_at <= now {
             record_federation_failure(
                 &service,
+                "membership credential",
                 FederationSyncCondition::AuthenticationRequired,
                 now,
                 self.control_room_notify.as_ref(),
@@ -1236,6 +1246,7 @@ impl AppState {
             Err(error) => {
                 record_federation_failure(
                     &service,
+                    "Keeper address",
                     federation_sync_condition(error),
                     now,
                     self.control_room_notify.as_ref(),
@@ -1286,21 +1297,39 @@ impl AppState {
         if let Err(condition) =
             reconcile_federation_catalog(&service, &client, &connection.node_credential, now).await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "project catalog",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         if let Err(condition) =
             reconcile_federation_stewardship(&service, &client, &connection.node_credential, now)
                 .await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "stewardships",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         if let Err(condition) =
             reconcile_federation_steward_tasks(&service, &client, &connection.node_credential, now)
                 .await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "Steward tasks",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         if let Err(condition) = reconcile_federation_steward_assists(
@@ -1311,13 +1340,25 @@ impl AppState {
         )
         .await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "Steward assists",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         if let Err(condition) =
             reconcile_federation_tasks(&service, &client, &connection.node_credential, now).await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "shared tasks",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         if let Err(condition) = reconcile_federation_jira_claims(
@@ -1329,7 +1370,13 @@ impl AppState {
         )
         .await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "Jira claims",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         if let Err(condition) = reconcile_federation_claim_handoffs(
@@ -1341,7 +1388,13 @@ impl AppState {
         )
         .await
         {
-            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            record_federation_failure(
+                &service,
+                "claim handoffs",
+                condition,
+                now,
+                self.control_room_notify.as_ref(),
+            );
             return;
         }
         match service.record_federation_sync_success(now) {
@@ -5658,6 +5711,7 @@ async fn end_apiary_watch(
     // keep relaying frames for a watch the operator has just ended, which is
     // the one thing ending it is supposed to guarantee.
     state.watch_relay.retire(watch_id);
+    state.watch_requests.retire(watch_id);
     // Rung on the way out too. A notice that appears in a second and takes a
     // minute to clear is its own small lie about who is looking.
     announce_federation_change(&state, swarm_domain::FederationChangeKind::Watch);
@@ -5895,6 +5949,20 @@ async fn apiary_takeover_control_grant(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    // ⚠️ NO TICKET UNTIL THE HIVE HAS ACCEPTED. One was issued for a lease still
+    // `requested`, so the window opened its control socket at once, the socket
+    // refused a takeover that was not active yet, and the operator was told
+    // "The takeover ended" a second after asking — every time the member took
+    // longer than that to accept. Refused here, the window keeps saying it is
+    // waiting for that Hive and asks again. Found by the two-Hive acceptance
+    // run (scripts/dogfood/two-hive-acceptance.sh), 2026-09-27.
+    if !takeover_relay::lease_is_live(&state, lease_id, unix_timestamp()) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "takeover_not_accepted",
+            "that Hive has not accepted the takeover yet",
+        ));
+    }
     let grant = state.takeover_grants.issue(lease_id).ok_or_else(|| {
         ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -8965,11 +9033,17 @@ fn federation_sync_condition(
 
 fn record_federation_failure(
     service: &ApiaryService,
+    step: &str,
     condition: FederationSyncCondition,
     now: i64,
     notify: &Notify,
 ) {
-    match service.record_federation_sync_failure(condition, now) {
+    tracing::warn!(
+        step,
+        ?condition,
+        "Apiary synchronisation stopped at this step; it retries on a backoff"
+    );
+    match service.record_federation_sync_failure(condition, step, now) {
         Ok(_) => notify.notify_waiters(),
         Err(error) => {
             tracing::warn!(%error, "federation reconciliation failure could not be persisted");
@@ -13754,7 +13828,7 @@ mod tests {
         };
         assert_eq!(
             request.as_ref(),
-            [crate::takeover_producer::RESNAPSHOT_FRAME_TYPE].as_slice()
+            [crate::watch_producer::RESNAPSHOT_FRAME_TYPE].as_slice()
         );
 
         // ⚠️ IN: the controller types, the target receives.
@@ -14001,6 +14075,68 @@ mod tests {
             "a closed window keeps no slot"
         );
         server.abort();
+    }
+
+    /// ⚠️ THE OPERATOR'S "TAKEOVER ENDS AFTER A SECOND", 2026-09-27. A control
+    /// ticket for a takeover the member has not accepted opens a socket that is
+    /// refused at once, which the window reports as the takeover ending.
+    #[tokio::test]
+    async fn no_control_ticket_is_issued_until_the_hive_accepts_the_takeover() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let target = member.local_hive_identity().unwrap().hive.id;
+        let queen = member.ensure_queen("/workspace/queen").unwrap();
+        member
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let lease = keeper
+            .open_keeper_takeover(target, "Acceptance", now)
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let ticket = |app: Router| async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/takeovers/{}/control-grant",
+                        lease.id
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        };
+        assert_eq!(
+            ticket(app.clone()).await,
+            StatusCode::CONFLICT,
+            "not accepted yet, so the window keeps waiting rather than failing"
+        );
+
+        let inbox = keeper
+            .federation_steward_takeover_inbox(&credential, now)
+            .unwrap();
+        member
+            .apply_federation_steward_takeover_inbox(&inbox, now)
+            .unwrap();
+        let acknowledgement = member
+            .queue_federation_steward_takeover_acknowledgement(lease.id, lease.revision, now)
+            .unwrap();
+        keeper
+            .apply_federation_steward_takeover_command(&credential, &acknowledgement.command, now)
+            .unwrap();
+        assert_eq!(
+            ticket(app).await,
+            StatusCode::OK,
+            "accepted, so the window can attach"
+        );
     }
 
     /// Sends until the other end receives, and returns what arrived.
@@ -14893,7 +15029,11 @@ mod tests {
         credential: &str,
     ) {
         member
-            .record_federation_sync_failure(FederationSyncCondition::Incompatible, unix_timestamp())
+            .record_federation_sync_failure(
+                FederationSyncCondition::Incompatible,
+                "test",
+                unix_timestamp(),
+            )
             .unwrap();
         let retry_app = router(state.clone());
         let unauthorized = retry_app

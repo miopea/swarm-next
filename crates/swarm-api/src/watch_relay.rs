@@ -282,15 +282,44 @@ pub(crate) async fn federation_watch_frames(
     }))
 }
 
+/// A viewer just attached: ask the watched Hive for its whole screen.
+///
+/// ⚠️ WITHOUT THIS A NEW WINDOW STAYED BLANK FOR UP TO A MINUTE. The relay keeps
+/// no frames, and the watched Hive sent its whole screen only when its frame
+/// connection opened — once a minute — so a viewer arriving in between saw
+/// nothing until the screen changed or the connection was redialled. Found by
+/// the two-Hive acceptance run, 2026-09-27. Subscribed first, so the snapshot
+/// this asks for cannot arrive before the viewer is listening.
+fn ask_for_the_whole_screen(state: &AppState, watch: ApiaryWatchId) {
+    state
+        .watch_requests
+        .publish(watch, vec![crate::watch_producer::RESNAPSHOT_FRAME_TYPE]);
+}
+
 /// Reads frames from the watched Hive and fans them out. Never parses one.
 async fn receive_frames(mut socket: WebSocket, state: Arc<AppState>, watch: ApiaryWatchId) {
     let mut liveness = tokio::time::interval(Duration::from_secs(RELAY_LIVENESS_CHECK_SECONDS));
     liveness.tick().await;
+    let mut requests = state.watch_requests.subscribe(watch);
     loop {
         tokio::select! {
+            request = requests.recv() => match request {
+                Ok(request) => {
+                    if socket.send(Message::Binary(request.into())).await.is_err() {
+                        state.watch_relay.retire(watch);
+                        state.watch_requests.retire(watch);
+                        return;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => {
+                    requests = state.watch_requests.subscribe(watch);
+                }
+            },
             _ = liveness.tick() => {
                 if !watch_is_live(&state, watch, crate::unix_timestamp()) {
                     state.watch_relay.retire(watch);
+                    state.watch_requests.retire(watch);
                     return;
                 }
             }
@@ -305,6 +334,7 @@ async fn receive_frames(mut socket: WebSocket, state: Arc<AppState>, watch: Apia
                     Some(Ok(_)) => {}
                     Some(Err(_)) | None => {
                         state.watch_relay.retire(watch);
+                        state.watch_requests.retire(watch);
                         return;
                     }
                 }
@@ -347,6 +377,7 @@ pub(crate) async fn federation_watch_stream(
             )
         })?;
     let receiver = state.watch_relay.subscribe(watch_id);
+    ask_for_the_whole_screen(&state, watch_id);
     let viewed = Arc::clone(&state);
     Ok(websocket.on_upgrade(move |socket| async move {
         serve_frames(socket, receiver, viewed, watch_id).await;
@@ -406,6 +437,9 @@ pub(crate) async fn apiary_watch_stream(
     // outbound and forwards what arrives, which is the same hop every other
     // federation read takes and keeps the outbound-only model intact.
     let receiver = (!member).then(|| state.watch_relay.subscribe(watch_id));
+    if !member {
+        ask_for_the_whole_screen(&state, watch_id);
+    }
     let viewed = Arc::clone(&state);
     // ⚠️ THE SELECTED SUBPROTOCOL MUST BE ECHOED. A client that offers one and
     // is answered with none fails the handshake — so omitting this made the

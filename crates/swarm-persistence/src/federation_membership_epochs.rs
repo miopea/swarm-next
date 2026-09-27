@@ -17,8 +17,16 @@ pub(crate) fn migrate(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
             state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','departed')),
             departed_at INTEGER CHECK (departed_at >= joined_at)
         );
+        -- Named, not `SELECT *`: a column added by a later version made the
+        -- star carry one value too many whenever this step ran again.
         INSERT INTO apiary_federation_memberships_v168
-            SELECT * FROM apiary_federation_memberships;
+                (receipt_id, invitation_id, apiary_id, member_node_id, member_hive_id,
+                 member_operator_id, receipt_json, node_credential, credential_digest,
+                 joined_at, credential_expires_at, state, departed_at)
+            SELECT receipt_id, invitation_id, apiary_id, member_node_id, member_hive_id,
+                 member_operator_id, receipt_json, node_credential, credential_digest,
+                 joined_at, credential_expires_at, state, departed_at
+            FROM apiary_federation_memberships;
         DROP TABLE apiary_federation_memberships;
         ALTER TABLE apiary_federation_memberships_v168 RENAME TO apiary_federation_memberships;
         CREATE UNIQUE INDEX active_federation_hive ON apiary_federation_memberships(member_hive_id) WHERE state = 'active';

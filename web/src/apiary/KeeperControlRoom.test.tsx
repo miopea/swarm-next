@@ -72,7 +72,7 @@ test("an empty Apiary does not imply Jira is required or grants project access",
 test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }, { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false }, { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false }]));
+    if (url.endsWith("/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }, { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false, last_contact_at: Math.floor(Date.now() / 1000) - 20 }, { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false }]));
     if (url.endsWith("/jira-projects")) return Promise.resolve(ok([{ apiary_id: "apiary-1", project_id: "10001", project_key: "WWD", project_name: "Website Development", promoted_by_operator_id: "operator-1", promoted_at: 1 }]));
     if (url.endsWith("/shared-work")) return Promise.resolve(ok([{ id: "claim-1", apiary_id: "apiary-1", project_id: "10001", issue_id: "20001", issue_key: "WWD-101", home_node_id: "node-2", home_hive_id: "hive-2", home_operator_id: "operator-2", state: "confirmed", reserved_at: 1, reservation_expires_at: 2, confirmed_at: 2, released_at: null, project_key: "WWD", project_name: "Website Development", home_hive_name: "Clover Hive", home_operator_display_name: "Cora" }]));
     if (url.endsWith("/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Coordinate release", description: "", priority: "normal", state: "ready", home_node_id: "node-3", home_hive_id: "hive-3", revision: 1, created_at: 1, updated_at: 1 }]));
@@ -94,7 +94,10 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   // into yourself is a mirror — the terminal is already on this machine — and
   // the absence here is what proves the guard rather than the presence
   // elsewhere.
-  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveNo version reportedWatchTake overRemoveFern HiveFayeHiveNo version reportedWatchTake overRemove");
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveNo version reported · heard from just nowWatchTake overRemoveFern HiveFayeHiveNo version reported · no contact recordedWatchTake overRemove");
+  // A member never heard from is raised, so a stale version cannot pass for a current one.
+  expect(screen.getByText("No version reported · no contact recorded")).toHaveClass("raised");
+  expect(screen.getByText("No version reported · heard from just now")).not.toHaveClass("raised");
   expect(screen.getByRole("list", { name: "Keeper shared work ownership" })).toHaveTextContent("WWD-101WWD · OwnedClover HiveCora");
   expect(screen.getByRole("list", { name: "Keeper Swarm tasks" })).toHaveTextContent("Coordinate releaseSwarm · readyFern HiveRouted by Steward Cora · revision 1");
   expect(screen.getByRole("list", { name: "Keeper promoted Jira projects" })).toHaveTextContent("WWDWebsite Development");

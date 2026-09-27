@@ -14,8 +14,11 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
     window.fetch = async (input) => {
       if (mode.current === "failed") throw new Error("Fictional observation failure");
       const url = String(input);
+      const now = Math.floor(Date.now() / 1000);
       const payload = url.endsWith("/catalog-readiness") ? { acknowledgement: null, jira_connection: "not_connected", projects: [], blockers: [] }
-        : url.endsWith("/sync-health") ? { condition: "current", last_attempt_at: 100, last_success_at: 100, consecutive_failures: 0 }
+        // Stopped at one step and waiting out its backoff: the state a field
+        // member sat in for days while saying only "needs attention".
+        : url.endsWith("/sync-health") ? { condition: "incompatible", last_attempt_at: now - 20, last_success_at: now - 3 * 86_400, consecutive_failures: 4, next_attempt_at: now + 100, failed_step: "project catalog" }
         : url.endsWith("/task-sync-status") ? { cursor: 0, task_count: 0 }
         : url.endsWith("/task-outbox-status") ? { queued_count: 0, conflict_count: 0, rejected_count: 0 }
         : url.endsWith("/my-stewardship") ? null
@@ -30,8 +33,10 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
         : url.endsWith("/members")
         ? [
             { hive_id: "fictional", hive_name: "Meadow Hive", operator_id: "fictional", operator_display_name: "Bea", role: "keeper", is_local: true },
-            { hive_id: "clover", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", operator_email: "cora@example.invalid", role: "member", is_local: false },
-            { hive_id: "thistle", hive_name: "Thistle Hive", operator_id: "operator-3", operator_display_name: "Wren", operator_email: "wren@example.invalid", role: "member", is_local: false },
+            { hive_id: "clover", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", operator_email: "cora@example.invalid", role: "member", is_local: false, last_contact_at: now - 25 },
+            // Silent for days while still listing the release it last reported —
+            // how a Hive already updated went on reading as behind.
+            { hive_id: "thistle", hive_name: "Thistle Hive", operator_id: "operator-3", operator_display_name: "Wren", operator_email: "wren@example.invalid", role: "member", is_local: false, last_contact_at: now - 3 * 86_400 },
             { hive_id: "heather", hive_name: "Heather Hive", operator_id: "operator-4", operator_display_name: "Fen", role: "member", is_local: false },
           ]
         : url.endsWith("/fleet-versions")

@@ -942,6 +942,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .member-detail-list.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .member-sync-panel > header { align-items: center; }
 .member-sync-copy { margin: 0 0 13px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.member-sync-failure { margin: -6px 0 13px; color: var(--warn-strong); font-size: .78rem; font-weight: 650; overflow-wrap: anywhere; }
 .member-blocker-list { display: grid; margin: 12px 0 0; padding: 10px 10px 10px 28px; gap: 5px; border: 1px solid color-mix(in srgb, var(--honey-strong) 38%, var(--line)); border-radius: var(--radius-sm); color: var(--muted); background: var(--honey-soft); font-size: .75rem; }
 .member-ready-copy { margin: 12px 0 0; padding: 9px 10px; border-radius: var(--radius-sm); color: var(--good); background: var(--good-soft); font-size: .75rem; }
 .apiary-optional-setup { margin-top: 12px; color: var(--muted); font-size: .8rem; }
@@ -1852,6 +1853,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .apiary-member-sync > div:first-child { display: flex; align-items: center; gap: 10px; }
 .apiary-member-sync > div:first-child > span:last-child { display: grid; gap: 2px; }
 .apiary-member-sync small { color: var(--muted); }
+.apiary-member-sync small.apiary-sync-failure { color: var(--warn-strong); font-weight: 650; }
 .apiary-member-sync dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .apiary-member-sync dl > div { display: grid; gap: 2px; padding: 8px 9px; border-radius: var(--radius-sm); background: var(--panel); }
 .apiary-member-sync dt { color: var(--muted); font-size: .67rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }

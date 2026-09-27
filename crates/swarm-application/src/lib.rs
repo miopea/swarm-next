@@ -1570,10 +1570,11 @@ impl ApiaryService {
     pub fn record_federation_sync_failure(
         &self,
         condition: FederationSyncCondition,
+        failed_step: &str,
         now: i64,
     ) -> Result<FederationSyncHealth, ApplicationError> {
         self.store
-            .record_federation_sync_failure(condition, now)
+            .record_federation_sync_failure(condition, failed_step, now)
             .map_err(Into::into)
     }
 
@@ -1665,6 +1666,8 @@ impl ApiaryService {
                         operator_email: profile.contact_email,
                         role: entry.role,
                         is_local,
+                        // A member reads the directory; only Keeper sees contact.
+                        last_contact_at: None,
                     }
                 })
                 .collect());

@@ -42,14 +42,6 @@ const FRAME_POLL: Duration = Duration::from_millis(100);
 /// A keystroke from whoever holds the lease, exactly as their window sends it.
 pub(crate) const INPUT_FRAME_TYPE: u8 = 9;
 
-/// Keeper asking for the whole screen again, because a window just attached.
-///
-/// ⚠️ WITHOUT THIS A WINDOW OPENED AFTER THE HELD HIVE CONNECTED STARTS EMPTY.
-/// The relay forwards live frames and keeps none, so the snapshot sent on
-/// connect is gone by the time a later window subscribes, and deltas alone
-/// draw fragments of a screen rather than the screen.
-pub(crate) const RESNAPSHOT_FRAME_TYPE: u8 = 10;
-
 /// Relays this Hive's Queen terminal while a takeover of it is live.
 ///
 /// Returns promptly when nothing holds this Hive, which is the ordinary case.
@@ -121,7 +113,7 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
                     Some(&INPUT_FRAME_TYPE) => {
                         write_input(host, session, &installed, &frame[1..]).await;
                     }
-                    Some(&RESNAPSHOT_FRAME_TYPE) => after = None,
+                    Some(&watch_producer::RESNAPSHOT_FRAME_TYPE) => after = None,
                     _ => {}
                 },
                 Some(Ok(ClientMessage::Close(_))) | None => return Ok(()),

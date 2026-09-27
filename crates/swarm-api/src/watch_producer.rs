@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use swarm_domain::ApiaryWatchId;
 use swarm_terminal::{HostRequest, HostResponse, Resume};
 use tokio_tungstenite::tungstenite::{Message as ClientMessage, client::IntoClientRequest};
@@ -35,6 +35,13 @@ const FRAME_POLL: Duration = Duration::from_millis(200);
 
 const OUTPUT_FRAME_TYPE: u8 = 1;
 const SNAPSHOT_FRAME_TYPE: u8 = 2;
+
+/// Keeper asking the Hive for its whole screen, because a window just attached.
+///
+/// ⚠️ WITHOUT THIS A WINDOW OPENED AFTER THE HIVE CONNECTED STARTS EMPTY. The
+/// relay forwards live frames and keeps none, so the snapshot sent on connect is
+/// gone by the time a later window subscribes. Watching and takeover both use it.
+pub(crate) const RESNAPSHOT_FRAME_TYPE: u8 = 10;
 
 /// Sends this Hive's Queen terminal to whoever it has acknowledged watching it.
 ///
@@ -126,7 +133,19 @@ async fn relay_one(state: &AppState, watch: ApiaryWatchId) -> Result<(), String>
                     .map_err(|error| error.to_string())?;
             }
         }
-        tokio::time::sleep(FRAME_POLL).await;
+        // Wait out the poll, but hear Keeper while waiting: a window that just
+        // attached asks for the whole screen, and a closed connection ends the
+        // pass rather than being noticed at the next send.
+        tokio::select! {
+            () = tokio::time::sleep(FRAME_POLL) => {}
+            message = socket.next() => match message {
+                Some(Ok(ClientMessage::Binary(frame))) if frame.first() == Some(&RESNAPSHOT_FRAME_TYPE) => {
+                    after = None;
+                }
+                Some(Ok(ClientMessage::Close(_)) | Err(_)) | None => return Ok(()),
+                Some(Ok(_)) => {}
+            },
+        }
     }
 }
 

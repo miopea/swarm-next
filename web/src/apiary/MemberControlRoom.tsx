@@ -47,7 +47,7 @@ import WatchWindow from "./WatchWindow";
 import TakeoverWindow from "./TakeoverWindow";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
 import MemberSetup from "./MemberSetup";
-import { catalogReadinessLabel, federationSyncCopy } from "./presentation";
+import { catalogReadinessLabel, federationSyncCopy, federationSyncFailure } from "./presentation";
 import SharedCatalogStatus from "./SharedCatalogStatus";
 
 type Props = {
@@ -159,6 +159,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const projectCount = snapshot.catalog?.projects.length ?? 0;
   const syncCondition = snapshot.sync?.condition ?? "idle";
   const [syncTitle, syncDetail] = federationSyncCopy[syncCondition];
+  const syncFailure = failed.has("sync") ? undefined : federationSyncFailure(snapshot.sync, Math.floor(Date.now() / 1000));
   const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
   const [watchError, setWatchError] = useState<string>();
   // ⚠️ A STEWARD'S TAKEOVER DOES NOT EXIST UNTIL KEEPER GRANTS IT. The request
@@ -406,6 +407,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel member-sync-panel">
           <header><div><p className="eyebrow">Synchronization</p><h4>{failed.has("sync") ? "Synchronization status unavailable" : observed.has("sync") ? syncTitle : "Checking synchronization"}</h4></div>{observed.has("sync") && !failed.has("sync") ? <span className={`apiary-sync-indicator apiary-sync-${syncCondition}`} aria-hidden="true" /> : null}</header>
           <p className="member-sync-copy">{failed.has("sync") ? "The latest status could not be read. Retained values below are marked last known." : observed.has("sync") ? syncDetail : "Waiting for this Hive's synchronization status."}</p>
+          {syncFailure ? <p className="member-sync-failure">{syncFailure}</p> : null}
           <dl className="member-detail-list compact">
             <div><dt>Retries</dt><dd>{value("sync", snapshot.sync?.consecutive_failures ?? 0)}</dd></div>
             <div><dt>Last success</dt><dd>{value("sync", formatTimestamp(snapshot.sync?.last_success_at))}</dd></div>

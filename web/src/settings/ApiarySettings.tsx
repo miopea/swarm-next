@@ -30,7 +30,7 @@ import {
   type StewardCapability,
   type Stewardship,
 } from "../api";
-import { catalogReadinessLabel, federationSyncCopy, jiraSetupLabel } from "../apiary/presentation";
+import { catalogReadinessLabel, federationSyncCopy, federationSyncFailure, jiraSetupLabel } from "../apiary/presentation";
 import SharedCatalogStatus from "../apiary/SharedCatalogStatus";
 import KeeperInvitationManager from "./KeeperInvitationManager";
 import MemberDeparturePanel from "./MemberDeparturePanel";
@@ -417,6 +417,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  const syncFailure = federationSyncFailure(memberSync, Math.floor(Date.now() / 1000));
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -519,6 +521,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 <span>
                   <strong>{federationSyncCopy[memberSync?.condition ?? "idle"][0]}</strong>
                   <small>{federationSyncCopy[memberSync?.condition ?? "idle"][1]}</small>
+                  {syncFailure ? <small className="apiary-sync-failure">{syncFailure}</small> : null}
                 </span>
               </div>
               <dl>

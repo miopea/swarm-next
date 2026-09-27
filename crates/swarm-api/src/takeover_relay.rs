@@ -199,7 +199,7 @@ async fn serve_takeover(
         // The relay keeps no frames, so a window attaching after the held Hive
         // connected would otherwise start blank. Subscribed first, so the
         // snapshot this asks for cannot arrive before anyone is listening.
-        outbound.publish(lease, vec![crate::takeover_producer::RESNAPSHOT_FRAME_TYPE]);
+        outbound.publish(lease, vec![crate::watch_producer::RESNAPSHOT_FRAME_TYPE]);
     }
     let mut last_renewal: i64 = 0;
     let mut liveness = tokio::time::interval(Duration::from_secs(RELAY_LIVENESS_CHECK_SECONDS));
@@ -308,7 +308,11 @@ fn should_renew(now: i64, last_renewal: i64, expires_at: i64) -> bool {
 }
 
 /// Whether an active, unexpired lease still names this takeover.
-fn lease_is_live(state: &AppState, lease: FederationStewardTakeoverLeaseId, now: i64) -> bool {
+pub(crate) fn lease_is_live(
+    state: &AppState,
+    lease: FederationStewardTakeoverLeaseId,
+    now: i64,
+) -> bool {
     let Ok(store) = crate::task_store(state) else {
         return false;
     };

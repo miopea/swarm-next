@@ -364,7 +364,11 @@ const TYPED_OPERATOR_PARK_SCHEMA_MARKER: i64 = 193;
 const WITHDRAWN_TAKEOVER_SCHEMA_MARKER: i64 = 194;
 /// A Hive may install an ordinary release by itself while the operator is away.
 const RELEASE_AUTO_INSTALL_SCHEMA_MARKER: i64 = 195;
-const CURRENT_SCHEMA_VERSION: i64 = RELEASE_AUTO_INSTALL_SCHEMA_MARKER;
+/// A member records which part of its Apiary sync last failed.
+const FEDERATION_FAILED_STEP_SCHEMA_MARKER: i64 = 196;
+/// Keeper records when each member last reached it.
+const MEMBER_LAST_CONTACT_SCHEMA_MARKER: i64 = 197;
+const CURRENT_SCHEMA_VERSION: i64 = MEMBER_LAST_CONTACT_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1384,7 +1388,8 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT h.id, h.name, o.id, o.display_name,
                     CASE WHEN h.id = ?3 THEN (SELECT contact_email FROM local_public_hive_profile WHERE singleton = 1)
-                         ELSE json_extract(p.payload_json, '$.profile.contact_email') END
+                         ELSE json_extract(p.payload_json, '$.profile.contact_email') END,
+                    m.last_contact_at
              FROM hives h
              JOIN operators o ON o.id = h.operator_id
              LEFT JOIN apiary_federation_memberships m ON m.member_hive_id = h.id AND m.apiary_id = h.apiary_id AND m.state = 'active'
@@ -1413,6 +1418,7 @@ impl TaskStore {
                         LocalApiaryRole::Member
                     },
                     is_local: hive_id == identity.hive.id,
+                    last_contact_at: row.get(5)?,
                 })
             },
         )?;
@@ -4675,7 +4681,46 @@ fn migrate_engine_history_schema_steps(
     if schema_version < RELEASE_AUTO_INSTALL_SCHEMA_MARKER {
         migrate_release_auto_install(transaction)?;
     }
+    if schema_version < FEDERATION_FAILED_STEP_SCHEMA_MARKER {
+        add_column_once(
+            transaction,
+            "local_federation_sync",
+            "failed_step",
+            "TEXT",
+            FEDERATION_FAILED_STEP_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < MEMBER_LAST_CONTACT_SCHEMA_MARKER {
+        add_column_once(
+            transaction,
+            "apiary_federation_memberships",
+            "last_contact_at",
+            "INTEGER",
+            MEMBER_LAST_CONTACT_SCHEMA_MARKER,
+        )?;
+    }
     Ok(())
+}
+
+/// Adds one nullable column if it is not there yet, then records the version.
+fn add_column_once(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    column: &str,
+    definition: &str,
+    version: i64,
+) -> rusqlite::Result<()> {
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        [table, column],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        transaction.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+        ))?;
+    }
+    transaction.pragma_update(None, "user_version", version)
 }
 
 /// Whether an ordinary release installs itself while the operator is away.
@@ -10589,6 +10634,18 @@ mod tests {
         SchemaStep {
             table: "release_check_preferences",
             artifact: "auto_install",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "local_federation_sync",
+            artifact: "failed_step",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "apiary_federation_memberships",
+            artifact: "last_contact_at",
             undo_sql: "",
             probe_sql: "",
         },

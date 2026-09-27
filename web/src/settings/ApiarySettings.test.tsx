@@ -769,6 +769,32 @@ test("shows honest Member convergence while waiting for the first automatic poll
   expect(status).not.toHaveTextContent("credential");
 });
 
+test("a member that cannot synchronize names the step it stopped at and when it tries again", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/members") return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
+    ]);
+    if (url === "/api/v1/apiary/sync-health") return ok({
+      condition: "incompatible", last_attempt_at: now - 10, last_success_at: now - 600, consecutive_failures: 3,
+      next_attempt_at: now + 120, failed_step: "project catalog",
+    });
+    if (url === "/api/v1/apiary/catalog-readiness") return ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: ["catalog_missing"] });
+    if (url === "/api/v1/apiary/departure-readiness") return ok(departureStatus());
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={memberIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  const status = await screen.findByLabelText("Keeper synchronization status");
+  expect(status).toHaveTextContent("Shared setup needs attention");
+  expect(status).toHaveTextContent("It keeps retrying on its own");
+  expect(status).toHaveTextContent("Stopped at project catalog · next try in 2m");
+  expect(status).toHaveTextContent("Retries3");
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },

@@ -12,6 +12,7 @@ import FleetVersions from "./FleetVersions";
 import WatchWindow from "./WatchWindow";
 import TakeoverAudit from "./TakeoverAudit";
 import TakeoverWindow from "./TakeoverWindow";
+import { memberContact } from "./presentation";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
@@ -75,6 +76,8 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
   const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);
   const memberByHive = useMemo(() => new Map(members.map((member) => [member.hive_id, member])), [members]);
+  // Read at render, which the eight-second poll drives; a roster left open keeps its ages honest.
+  const nowSeconds = Math.floor(Date.now() / 1000);
   // ⚠️ THE ROSTER SHOWED NOTHING ABOUT A HIVE BUT ITS NAME. The version data
   // already arrived for the fleet panel; a roster row is where an operator
   // actually looks before deciding to watch or take one over.
@@ -113,9 +116,10 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel">
           <header><div><p className="eyebrow">People and Hives</p><h4>Apiary Hives</h4></div><small>Registration, not live presence</small></header>
           {section("members", "Hive roster", <>
-{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? null : <span className="hive-actions"><small className={`hive-standing${versionByHive.get(member.hive_id)?.raises ? " raised" : ""}`}>{(() => {
+{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? null : <span className="hive-actions"><small className={`hive-standing${versionByHive.get(member.hive_id)?.raises || memberContact(member, nowSeconds).silent ? " raised" : ""}`}>{(() => {
             const seen = versionByHive.get(member.hive_id);
-            if (!seen) return "No version reported";
+            const contact = memberContact(member, nowSeconds).label;
+            if (!seen) return `No version reported · ${contact}`;
             const standing = seen.standing === "current" ? "up to date"
               : seen.standing === "behind" ? "behind"
               : seen.standing === "behind_within_grace" ? "behind, within grace"
@@ -123,7 +127,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
               : seen.standing === "development" ? "development build"
               : seen.standing === "unreadable" ? "version unreadable"
               : "not compared";
-            return `${seen.swarm_version} · ${standing}`;
+            return `${seen.swarm_version} · ${standing} · ${contact}`;
           })()}</small><button type="button" className="secondary-button" onClick={async () => {
             setWatchError(undefined);
             try {

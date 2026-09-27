@@ -1,0 +1,12 @@
+#!/bin/sh
+# A stand-in for the provider, so the member's Queen has a real terminal that
+# prints something recognisable and echoes what is typed into it. Never talks to
+# a model; the acceptance run never contacts one.
+case " $* " in
+  *" --version "*) echo "2.1.280 (Claude Code)"; exit 0 ;;
+  *" --print "*|*" -p "*) exit 0 ;;
+esac
+printf 'two-hive-queen ready\r\n> '
+while IFS= read -r line; do
+  printf 'typed:%s\r\n> ' "$line"
+done
