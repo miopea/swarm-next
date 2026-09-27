@@ -4589,6 +4589,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/tunnel/start", post(tunnel::start))
         .route("/api/v1/runtime/tunnel/stop", post(tunnel::stop))
         .route("/api/v1/runtime/release/download", post(release::download))
+        .route(
+            "/api/v1/runtime/release/auto-install",
+            axum::routing::put(release::set_auto_install),
+        )
         .route("/api/v1/runtime/release/apply", post(release::apply))
         .route(
             "/api/v1/runtime/development/reload",
@@ -5544,7 +5548,7 @@ async fn apiary_fleet_versions(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let report = apiary_service(&state)?
-        .raise_hives_left_behind(unix_timestamp())
+        .raise_hives_left_behind(unix_timestamp(), build_version())
         .map_err(application_error)?;
     let view = FleetVersionView {
         expected_release: report
@@ -6680,7 +6684,9 @@ async fn accept_hive_capability(
         // A member reporting is one of exactly two moments the fleet's standing
         // can change, so it is where the raise is evaluated. The other is a new
         // release appearing.
-        if let Err(error) = apiary_service(&state)?.raise_hives_left_behind(unix_timestamp()) {
+        if let Err(error) =
+            apiary_service(&state)?.raise_hives_left_behind(unix_timestamp(), build_version())
+        {
             tracing::warn!(message = %error, "could not judge the fleet against the current release");
         }
         state.control_room_notify.notify_waiters();
@@ -14359,6 +14365,7 @@ mod tests {
     /// this machinery is a card that keeps coming back after it has been dealt
     /// with, and a raise that outlives its cause is that same bug.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn a_member_on_an_old_build_raises_a_card_that_clears_when_it_catches_up() {
         let now = unix_timestamp();
         let member_store = TaskStore::in_memory().unwrap();
@@ -14425,7 +14432,9 @@ mod tests {
 
         let service = swarm_application::ApiaryService::new(keeper.clone());
         let raised_at = now + swarm_domain::VERSION_GRACE_SECONDS;
-        let report = service.raise_hives_left_behind(raised_at).unwrap();
+        let report = service
+            .raise_hives_left_behind(raised_at, "1.13.0")
+            .unwrap();
         assert_eq!(report.raised().len(), 1);
         let cards = |state: swarm_domain::DecisionRequestState| {
             keeper
@@ -14445,26 +14454,76 @@ mod tests {
         );
 
         // Asking again while it is still true must not add a second card.
-        service.raise_hives_left_behind(raised_at + 1).unwrap();
+        service
+            .raise_hives_left_behind(raised_at + 1, "1.13.0")
+            .unwrap();
         assert_eq!(
             cards(swarm_domain::DecisionRequestState::Pending),
             1,
             "a repeat evaluation is not a repeat question"
         );
 
+        // ⚠️ ANSWERED IS ANSWERED. Only a pending card used to hold the next
+        // one back, so "Leave them behind for now" was asked again at the next
+        // check — eleven times for one Hive in four days (ADR 0110).
+        let pending = keeper
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .find(|request| {
+                request.title == "Hives are behind the current release"
+                    && request.state == swarm_domain::DecisionRequestState::Pending
+            })
+            .unwrap();
+        keeper
+            .resolve_decision_request(pending.id, "Leave them behind for now", "", "control_room")
+            .unwrap();
+        service
+            .raise_hives_left_behind(raised_at + 1, "1.13.0")
+            .unwrap();
+        assert_eq!(
+            cards(swarm_domain::DecisionRequestState::Pending),
+            0,
+            "the same Hive behind the same release is not asked about twice"
+        );
+
         // The Hive upgrades.
         let current = member_store
-            .seal_local_hive_capability(&[worker], false, "1.12.0", schema, raised_at + 2)
+            .seal_local_hive_capability(
+                std::slice::from_ref(&worker),
+                false,
+                "1.12.0",
+                schema,
+                raised_at + 2,
+            )
             .unwrap();
         keeper
             .accept_hive_capability(&credential, &current, raised_at + 3)
             .unwrap();
-        let settled = service.raise_hives_left_behind(raised_at + 4).unwrap();
+        let settled = service
+            .raise_hives_left_behind(raised_at + 4, "1.13.0")
+            .unwrap();
         assert!(settled.raised().is_empty());
         assert_eq!(
             cards(swarm_domain::DecisionRequestState::Pending),
             0,
             "catching up clears the card by itself"
+        );
+
+        // A newer release is a new question, even for a Hive already answered for.
+        keeper
+            .note_expected_release("1.13.0", raised_at + 5)
+            .unwrap();
+        service
+            .raise_hives_left_behind(
+                raised_at + 5 + swarm_domain::VERSION_GRACE_SECONDS,
+                "1.13.0",
+            )
+            .unwrap();
+        assert_eq!(
+            cards(swarm_domain::DecisionRequestState::Pending),
+            1,
+            "falling behind a newer release is asked about again"
         );
     }
 

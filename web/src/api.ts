@@ -543,6 +543,8 @@ export type ReleaseStatus = {
   available: boolean;
   /** "unset" is a Hive nobody asked, which is not the same as one that said no. */
   mode: "unset" | "off" | "daily";
+  /** Whether an ordinary release installs itself while the operator is away (ADR 0110). */
+  auto_install: boolean;
   current_version: string;
   development_build: boolean;
   last_checked_at: number | null;
@@ -589,6 +591,16 @@ export async function setReleaseCheckMode(operatorToken: string, mode: "off" | "
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mode }),
+  });
+  return response.json() as Promise<ReleaseStatus>;
+}
+
+/** Turns this Hive's automatic install of ordinary releases on or off. */
+export async function setReleaseAutoInstall(operatorToken: string, enabled: boolean): Promise<ReleaseStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release/auto-install", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
   });
   return response.json() as Promise<ReleaseStatus>;
 }

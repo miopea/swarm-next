@@ -230,10 +230,15 @@ six-hour grace window RAISES a decision the operator sees, rather than showing a
 version in a column — the distinction the September 2026 wedge made, when this
 Hive sat on a stale build for roughly a day with its version on screen the whole
 time. The card is raised once, not per Hive, and withdraws itself when the fleet
-catches up. Schema drift is judged against Keeper's own schema, is a different
-problem from staleness rather than a worse degree of it, and gets no grace.
-Development builds are exempt from the version raise because their own reload
-card reports drift locally; they are NOT exempt from schema drift. With no
+catches up. Schema drift is judged against Keeper's own schema only while Keeper
+runs a release — a working-copy Keeper's schema is no release's (ADR 0110). A
+member behind the expected release gets the same grace whether or not its schema
+is behind too, so a member installing itself has time to; a member ON the
+expected release with an older schema is raised at once, as a migration that did
+not run. An answered raise is not asked again until a newer release or a
+different set of Hives is behind. Development builds are exempt from the version
+raise because their own reload card reports drift locally; they are NOT exempt
+from schema drift. With no
 release check ever having returned an offer, every Hive reads "not compared" and
 the surface says so, because a version check that fails open would report the
 whole fleet healthy on the strength of not having looked. Keeper pushing an
@@ -282,7 +287,7 @@ is pushed to the member and no connection is opened to it. ADR 0108.
 | Legacy migration | Redesign | Preview-first, versioned migration packages keep Legacy read-only during import. Open Legacy tasks exclude Jira and closed work; selected repository workers import sleeping with an explicit choice to resume exact provider conversations or start fresh. A second opt-in can replace the conversation on an already-configured matching worker, but only while she is sleeping; the prior Next conversation is retained for untouched rollback. The commit is atomic and provenanced, starts no workers, and remains reversible only while the batch is untouched. Exact Claude resume stages the matching local provider transcript into Swarm's isolated Claude profile without parsing or exposing its content; first wake repairs earlier imports and fails closed rather than silently starting fresh. A separate backed-up receipt finalization leaves transferred Legacy tasks visible but read-only rather than completed; no dual write is allowed. |
 | Configuration UI | Redesign | Human-oriented settings grouped by outcome; durable workers can be created, renamed, assigned an always-active policy, and ordered without path entry. Local Hive names and Keeper-owned Apiary names are editable public labels without changing durable identity, ownership, membership, or signing keys. The control room shows the current Hive plus Personal, Keeper, or Member context from that same private identity snapshot on desktop and mobile. No competing YAML/DB precedence after import. |
 | CLI | Redesign | Installation, service, diagnostics, import/export, and automation only; normal operation remains web-first. |
-| Self-update and restart | Redesign | Atomic update, compatibility check, worker preservation, health verification, and rollback. Development Settings refreshes working-copy detection while it remains open, so a newly pulled App/API revision becomes actionable without restarting the page; activation remains an explicit worker-preserving action. Release pruning also retains the release actually executed by a live terminal host, because future provider lifecycle hooks name that exact binary even after an unchanged engine is relinked to a newer App/API release. |
+| Self-update and restart | Redesign | Atomic update, compatibility check, worker preservation, health verification, and rollback. Development Settings refreshes working-copy detection while it remains open, so a newly pulled App/API revision becomes actionable without restarting the page; activation remains an explicit worker-preserving action. Release pruning also retains the release actually executed by a live terminal host, because future provider lifecycle hooks name that exact binary even after an unchanged engine is relinked to a newer App/API release. Since ADR 0110 an ordinary release — newer, no terminal-host protocol change, on a Hive running a release rather than a working copy — downloads and installs itself while the operator is away, once per release; a failed or refused attempt waits for the operator, and the Updates card offers the switch (on by default). A protocol change still waits for the operator. |
 | Health/readiness/resource diagnostics | Keep/Redesign | First-class subsystem health and correlated traces from day one. ADR 0083 adds bounded, content-free system/temporary/Hive storage observations, Runtime warnings and diagnostic export; observation only, with rendered and live deployment acceptance pending. ADR 0091 adds private, bounded Queen finish history and Developer Dogfood build comparisons, verified against an ordinary live finish on September 9; run outcomes are not verified task productivity and broader orchestration metrics remain open. |
 | Authentication/password/passkeys | Redesign | Threat-model local, tunnel, and remote modes separately; least privilege by default. |
 | OAuth provider for MCP | Investigate | Implement only for confirmed remote MCP journeys. |

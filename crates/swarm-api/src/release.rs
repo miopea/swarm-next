@@ -67,6 +67,9 @@ pub(super) struct ReleaseStatusResponse {
     available: bool,
     /// `unset` until the operator answers, which is not the same as `off`.
     mode: String,
+    /// Whether an ordinary release installs itself while the operator is away
+    /// (ADR 0110).
+    auto_install: bool,
     current_version: String,
     /// A working copy is told about releases and offered none of them.
     development_build: bool,
@@ -224,6 +227,27 @@ pub(super) async fn set_mode(
 ///
 /// A poll you cannot force is one you do not trust, so this exists even
 /// though the daily check would get there eventually.
+#[derive(serde::Deserialize)]
+pub(super) struct AutoInstallRequest {
+    enabled: bool,
+}
+
+pub(super) async fn set_auto_install(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<AutoInstallRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    crate::task_store(&state)?
+        .set_release_auto_install(request.enabled)
+        .map_err(|error| crate::task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(build_status(&state, None)?),
+    )
+        .into_response())
+}
+
 pub(super) async fn check_now(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -348,7 +372,17 @@ pub(super) async fn apply(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let status = build_status(&state, None)?;
+    request_install(&state).await?;
+    Ok(StatusCode::ACCEPTED.into_response())
+}
+
+/// Asks the install unit to install the downloaded release.
+///
+/// The operator's Install button and the automatic install (ADR 0110) both come
+/// through here, so every guard — one install at a time, workers owed a return
+/// recorded first — holds for both.
+async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
+    let status = build_status(state, None)?;
     let request_path = state.release_apply_request_path.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
@@ -356,7 +390,7 @@ pub(super) async fn apply(
             "this Hive cannot install a release itself",
         )
     })?;
-    let root = download_root(&state).ok_or_else(|| {
+    let root = download_root(state).ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
             "no_release_downloaded",
@@ -384,7 +418,7 @@ pub(super) async fn apply(
     // 2026-09-22 as "it said nothing changed ... I restarted the service and it
     // was updated".
     if install_in_flight(
-        &state,
+        state,
         status.offer.as_ref().map(|offer| offer.version.as_str()),
         request_path,
     ) {
@@ -407,9 +441,9 @@ pub(super) async fn apply(
     // holds, so a worker cannot start between the roster being read and the
     // intents being written. Recorded BEFORE the request rather than after,
     // because the install can begin the moment the file appears.
-    if carries_protocol_change(&state, &status).await {
+    if carries_protocol_change(state, &status).await {
         let guard = state.worker_lifecycle.lock().await;
-        let recorded = record_revival_intents(&state).await;
+        let recorded = record_revival_intents(state).await;
         drop(guard);
         if let Err(error) = recorded {
             // Not fatal: an operator who accepted a protocol release should get
@@ -430,7 +464,7 @@ pub(super) async fn apply(
                 "the install request could not be written",
             )
         })?;
-    Ok(StatusCode::ACCEPTED.into_response())
+    Ok(())
 }
 
 fn build_status(
@@ -455,6 +489,7 @@ fn build_status(
     Ok(ReleaseStatusResponse {
         available: manifest_url(state).is_some(),
         mode: stored.mode,
+        auto_install: stored.auto_install,
         current_version: build_version().to_owned(),
         development_build,
         last_checked_at: stored.last_checked_at,
@@ -538,15 +573,154 @@ pub(super) async fn poll(state: &Arc<AppState>, startup: bool) {
     let Ok(stored) = store.release_check_state() else {
         return;
     };
-    if !check_is_due(
+    if check_is_due(
         &stored.mode,
         stored.last_checked_at,
         chrono::Utc::now().timestamp(),
         startup,
     ) {
+        check(state).await;
+    }
+    auto_install(state).await;
+}
+
+/// Why an ordinary release is not installing itself right now (ADR 0110).
+///
+/// Every hold is a reason to wait, not an error: the pass runs again, and the
+/// operator can always install from the Updates card.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AutoInstallHold {
+    TurnedOff,
+    DevelopmentBuild,
+    NothingNewer,
+    /// It stops every worker session, which only the operator decides.
+    ProtocolChange,
+    /// Unknown is not "no": a Hive that cannot tell does not install.
+    ProtocolUnknown,
+    /// Installing restarts the API, which should not land under somebody's hands.
+    OperatorPresent,
+    InFlight,
+    /// This release already had its automatic attempt and it did not install.
+    AlreadyAttempted,
+}
+
+/// What the automatic install is decided on.
+///
+/// Independent yes/no facts read from different places, not a state encoded in
+/// flags, so the bools are each the honest type.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug)]
+struct AutoInstallFacts<'a> {
+    enabled: bool,
+    development_build: bool,
+    upgrade_available: bool,
+    protocol_change: Option<bool>,
+    presence: Option<swarm_domain::PresenceMode>,
+    in_flight: bool,
+    last_outcome: Option<&'a str>,
+}
+
+/// The rule, pure so each hold can be tested without a network or a clock.
+fn auto_install_hold(facts: &AutoInstallFacts<'_>) -> Option<AutoInstallHold> {
+    let AutoInstallFacts {
+        enabled,
+        development_build,
+        upgrade_available,
+        protocol_change,
+        presence,
+        in_flight,
+        last_outcome,
+    } = *facts;
+    if !enabled {
+        return Some(AutoInstallHold::TurnedOff);
+    }
+    if development_build {
+        return Some(AutoInstallHold::DevelopmentBuild);
+    }
+    if !upgrade_available {
+        return Some(AutoInstallHold::NothingNewer);
+    }
+    match protocol_change {
+        Some(true) => return Some(AutoInstallHold::ProtocolChange),
+        None => return Some(AutoInstallHold::ProtocolUnknown),
+        Some(false) => {}
+    }
+    // Unreadable presence is treated as present: the only evidence that a
+    // restart will not land under somebody's hands is evidence they are away.
+    if presence.is_none_or(|mode| mode == swarm_domain::PresenceMode::AtHive) {
+        return Some(AutoInstallHold::OperatorPresent);
+    }
+    if in_flight {
+        return Some(AutoInstallHold::InFlight);
+    }
+    // ⚠️ ONE ATTEMPT PER RELEASE. Without this, a release that cannot install
+    // is retried on every pass for as long as the operator is away.
+    if last_outcome.is_some_and(|outcome| outcome != "installed") {
+        return Some(AutoInstallHold::AlreadyAttempted);
+    }
+    None
+}
+
+/// Downloads and installs an ordinary release while the operator is away.
+async fn auto_install(state: &Arc<AppState>) {
+    let Ok(store) = crate::task_store(state) else {
+        return;
+    };
+    let Ok(stored) = store.release_check_state() else {
+        return;
+    };
+    let Ok(status) = build_status(state, None) else {
+        return;
+    };
+    let offered = status.offer.as_ref().map(|offer| offer.version.as_str());
+    let in_flight = state
+        .release_apply_request_path
+        .as_ref()
+        .is_some_and(|path| install_in_flight(state, offered, path));
+    let presence = store
+        .operator_presence(chrono::Utc::now().timestamp())
+        .ok()
+        .map(|presence| presence.mode);
+    let protocol_change = if status.upgrade_available {
+        offered_protocol_change(state).await
+    } else {
+        Some(false)
+    };
+    if let Some(hold) = auto_install_hold(&AutoInstallFacts {
+        enabled: stored.auto_install,
+        development_build: status.development_build,
+        upgrade_available: status.upgrade_available,
+        protocol_change,
+        presence,
+        in_flight,
+        last_outcome: status.apply_state.as_deref(),
+    }) {
+        tracing::debug!(?hold, "an ordinary release is not installing itself yet");
         return;
     }
-    check(state).await;
+    let Some(offer) = status.offer.clone() else {
+        return;
+    };
+    if status.downloaded_version.as_deref() != Some(offer.version.as_str()) {
+        let Some(root) = download_root(state) else {
+            return;
+        };
+        if let Err(reason) = fetch_artifact(&offer, &root).await {
+            tracing::warn!(%reason, version = %offer.version, "an automatic install could not download its release");
+            return;
+        }
+    }
+    match request_install(state).await {
+        Ok(()) => tracing::info!(
+            version = %offer.version,
+            "installing an ordinary release automatically while the operator is away"
+        ),
+        Err(error) => tracing::warn!(
+            message = %error.message,
+            version = %offer.version,
+            "an automatic install could not be requested"
+        ),
+    }
 }
 
 /// Whether to ask the manifest anything right now. Pure so the policy is
@@ -611,7 +785,7 @@ pub(super) async fn check(state: &Arc<AppState>) {
                     // A new release appearing is the other moment the fleet's
                     // standing can change, so it is judged here too.
                     if let Ok(apiary) = crate::apiary_service(state) {
-                        let _ = apiary.raise_hives_left_behind(now);
+                        let _ = apiary.raise_hives_left_behind(now, build_version());
                     }
                     let current = SwarmVersion::parse(build_version());
                     let supersedes = current.as_ref().is_some_and(|current| {
@@ -906,6 +1080,218 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use swarm_domain::PresenceMode::{AtHive, NightWatch, Reachable};
+
+    /// Positional, so each case reads as one line of the rule's inputs.
+    #[allow(clippy::fn_params_excessive_bools)]
+    fn hold(
+        enabled: bool,
+        development_build: bool,
+        upgrade_available: bool,
+        protocol_change: Option<bool>,
+        presence: Option<swarm_domain::PresenceMode>,
+        in_flight: bool,
+        last_outcome: Option<&str>,
+    ) -> Option<AutoInstallHold> {
+        auto_install_hold(&AutoInstallFacts {
+            enabled,
+            development_build,
+            upgrade_available,
+            protocol_change,
+            presence,
+            in_flight,
+            last_outcome,
+        })
+    }
+
+    /// A Hive whose store holds a verified offer newer than this build, with the
+    /// release already downloaded, and a real terminal host speaking the
+    /// offer's protocol. Returns the state, the request path, and the host task.
+    fn hive_with_an_ordinary_release(
+        directory: &tempfile::TempDir,
+        presence: swarm_domain::PresenceMode,
+    ) -> (
+        Arc<AppState>,
+        std::path::PathBuf,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let workspace = std::env::temp_dir().canonicalize().unwrap();
+        let registry = std::sync::Arc::new(
+            swarm_terminal::SessionRegistry::new(
+                swarm_terminal::JournalLimits::new(4096, 64),
+                2,
+                [workspace],
+            )
+            .unwrap(),
+        );
+        let socket = directory.path().join("terminal.sock");
+        let server = swarm_terminal_host::HostServer::bind(&socket, registry).unwrap();
+        let host = tokio::spawn(async move {
+            let _ = server.run().await;
+        });
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let offer = swarm_domain::ReleaseOffer {
+            version: "99.0.0".to_owned(),
+            protocol: swarm_terminal::PROTOCOL_VERSION.to_string(),
+            artifact_url: "https://releases.invalid/swarm-99.0.0.tar.gz".to_owned(),
+            artifact_sha256: "b".repeat(64),
+            artifact_bytes: 4096,
+            worker_engine_build_id: worker_engine_build_id().to_owned(),
+            notes_url: None,
+        };
+        store
+            .record_release_check("offered", Some(&serde_json::to_string(&offer).unwrap()), 1)
+            .unwrap();
+        store.set_manual_presence(Some(presence), 1).unwrap();
+        let downloaded = directory.path().join("downloads").join("99.0.0");
+        std::fs::create_dir_all(&downloaded).unwrap();
+        std::fs::write(downloaded.join("swarm-package"), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            downloaded.join(DOWNLOAD_DIGEST_FILE),
+            &offer.artifact_sha256,
+        )
+        .unwrap();
+        let request = directory.path().join("release-apply.request");
+        let state = AppState::default()
+            .with_terminal_host(swarm_terminal::HostClient::new(&socket), "secret")
+            .with_task_store(store)
+            .with_release_paths(directory.path().to_owned(), request.clone());
+        (Arc::new(state), request, host)
+    }
+
+    /// ⚠️ THE PASS ITSELF, NOT ONLY ITS RULE: with the operator away it asks the
+    /// install unit for the downloaded release, exactly as the button does.
+    #[tokio::test]
+    async fn an_ordinary_release_is_requested_for_install_while_the_operator_is_away() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, request, host) =
+            hive_with_an_ordinary_release(&directory, swarm_domain::PresenceMode::Reachable);
+        auto_install(&state).await;
+        let requested = std::fs::read_to_string(&request).expect("an install was requested");
+        assert!(requested.ends_with("downloads/99.0.0"), "{requested}");
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn nothing_is_requested_while_the_operator_is_at_the_hive() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, request, host) =
+            hive_with_an_ordinary_release(&directory, swarm_domain::PresenceMode::AtHive);
+        auto_install(&state).await;
+        assert!(
+            !request.exists(),
+            "installing restarts the API under the operator's hands"
+        );
+        host.abort();
+    }
+
+    /// The ordinary case, which is the whole point of ADR 0110: a newer
+    /// release, no protocol change, nobody at the Hive.
+    #[test]
+    fn an_ordinary_release_installs_while_the_operator_is_away() {
+        assert_eq!(
+            hold(true, false, true, Some(false), Some(Reachable), false, None),
+            None
+        );
+        assert_eq!(
+            hold(
+                true,
+                false,
+                true,
+                Some(false),
+                Some(NightWatch),
+                false,
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn nothing_installs_under_the_operators_hands() {
+        assert_eq!(
+            hold(true, false, true, Some(false), Some(AtHive), false, None),
+            Some(AutoInstallHold::OperatorPresent)
+        );
+        assert_eq!(
+            hold(true, false, true, Some(false), None, false, None),
+            Some(AutoInstallHold::OperatorPresent),
+            "presence that cannot be read is not evidence of absence"
+        );
+    }
+
+    /// A protocol change stops every worker session, so it stays the
+    /// operator's call — and a Hive that cannot tell does not guess.
+    #[test]
+    fn a_protocol_change_or_an_unknown_one_waits_for_the_operator() {
+        assert_eq!(
+            hold(true, false, true, Some(true), Some(Reachable), false, None),
+            Some(AutoInstallHold::ProtocolChange)
+        );
+        assert_eq!(
+            hold(true, false, true, None, Some(Reachable), false, None),
+            Some(AutoInstallHold::ProtocolUnknown)
+        );
+    }
+
+    /// ⚠️ ONE ATTEMPT PER RELEASE. A release that failed to install must not be
+    /// retried every fifteen minutes for as long as the operator is away.
+    #[test]
+    fn a_release_that_did_not_install_is_not_tried_again_by_itself() {
+        for outcome in ["failed", "refused", "deferred"] {
+            assert_eq!(
+                hold(
+                    true,
+                    false,
+                    true,
+                    Some(false),
+                    Some(Reachable),
+                    false,
+                    Some(outcome)
+                ),
+                Some(AutoInstallHold::AlreadyAttempted),
+                "{outcome}"
+            );
+        }
+        assert_eq!(
+            hold(true, false, true, Some(false), Some(Reachable), true, None),
+            Some(AutoInstallHold::InFlight)
+        );
+    }
+
+    #[test]
+    fn the_switch_a_development_build_and_nothing_newer_each_hold_it() {
+        assert_eq!(
+            hold(
+                false,
+                false,
+                true,
+                Some(false),
+                Some(Reachable),
+                false,
+                None
+            ),
+            Some(AutoInstallHold::TurnedOff)
+        );
+        assert_eq!(
+            hold(true, true, true, Some(false), Some(Reachable), false, None),
+            Some(AutoInstallHold::DevelopmentBuild),
+            "ADR 0050 §4: a working copy is never replaced by a release"
+        );
+        assert_eq!(
+            hold(
+                true,
+                false,
+                false,
+                Some(false),
+                Some(Reachable),
+                false,
+                None
+            ),
+            Some(AutoInstallHold::NothingNewer)
+        );
+    }
 
     /// A Hive nobody configured still learns there is an update.
     ///

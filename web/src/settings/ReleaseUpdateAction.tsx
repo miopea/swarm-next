@@ -7,6 +7,7 @@ import {
   checkForRelease,
   downloadRelease,
   fetchReleaseStatus,
+  setReleaseAutoInstall,
   setReleaseCheckMode,
   fetchReleaseNotes,
   type ReleaseStatus,
@@ -47,6 +48,18 @@ function changedSentence(changed: string | null, version: string): string | null
   if (changed === "partial") return "Part of it was applied. This Hive may be between releases — check the version below before retrying.";
   if (changed === "unknown") return "Whether anything changed could not be determined.";
   return null;
+}
+
+/**
+ * What happens to an ordinary release on this Hive without anyone pressing
+ * Install (ADR 0110). A development build is never replaced by a release, and a
+ * Hive that does not check has nothing to install, so neither says anything.
+ */
+function automaticInstallLine(status: ReleaseStatus): string {
+  if (status.development_build || status.mode === "off") return "";
+  return status.auto_install
+    ? "Ordinary releases install themselves while you are away; one that stops workers waits for you. "
+    : "Releases install only when you press Install. ";
 }
 
 /** The step named the way an operator thinks of it, not the way we spell it. */
@@ -289,6 +302,8 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
   const offered = status.upgrade_available && status.offer;
   const ready = status.downloaded_version !== null;
+  // Only a release that keeps workers running installs itself (ADR 0110).
+  const installsItself = status.auto_install && status.carries_protocol_change === false;
 
   return (
     <article
@@ -404,7 +419,9 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
               <button className="primary-action" disabled={disabled} onClick={() => void run(() => downloadRelease(operatorToken), "The release could not be downloaded.")}>{working ? "Downloading and verifying…" : "Download Swarm " + (status.offer?.version ?? "")}</button>
             </div>
           )}
-          {ready && !installed && <small>Downloaded and verified against the signed digest. Nothing is installed until you say so.</small>}
+          {ready && !installed && <small>{installsItself
+            ? "Downloaded and verified against the signed digest. It installs itself while you are away, or now if you press Install."
+            : "Downloaded and verified against the signed digest. Nothing is installed until you say so."}</small>}
         </>
       )}
 
@@ -415,11 +432,15 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
       <footer className="release-check-footer">
         <small>
           {status.mode === "off" ? "Automatic checks are off. " : "Checked about every four hours. "}
+          {automaticInstallLine(status)}
           {status.last_outcome === "unreachable" ? "The last check could not reach the origin." : status.last_outcome === "rejected" ? "The last check found a manifest it could not verify, and ignored it." : status.last_checked_at ? `Last checked ${new Date(status.last_checked_at * 1000).toLocaleString()}.` : "Not checked yet."}
         </small>
         <span className="settings-actions">
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => checkForRelease(operatorToken), "The check could not be completed.")}>{working ? "Checking…" : "Check now"}</button>
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "off" ? "daily" : "off"), "The preference could not be saved.")}>{status.mode === "off" ? "Start checking" : "Stop checking"}</button>
+          {!status.development_build && status.mode !== "off" ? (
+            <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseAutoInstall(operatorToken, !status.auto_install), "The preference could not be saved.")}>{status.auto_install ? "Stop installing automatically" : "Install automatically"}</button>
+          ) : null}
           <button className="secondary-button" disabled={disabled} onClick={() => void openNotes()}>Release notes</button>
         </span>
       </footer>

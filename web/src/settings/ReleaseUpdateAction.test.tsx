@@ -9,6 +9,7 @@ vi.mock("../api", async (importOriginal) => ({
   fetchHealth: vi.fn(),
   fetchReleaseStatus: vi.fn(),
   setReleaseCheckMode: vi.fn(),
+  setReleaseAutoInstall: vi.fn(),
   checkForRelease: vi.fn(),
   downloadRelease: vi.fn(),
   applyRelease: vi.fn(),
@@ -20,6 +21,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
   return {
     available: true,
     mode: "daily",
+    auto_install: false,
     current_version: "0.1.0",
     development_build: false,
     last_checked_at: 1_755_800_000,
@@ -50,6 +52,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
 beforeEach(() => {
   vi.mocked(api.fetchReleaseStatus).mockReset();
   vi.mocked(api.setReleaseCheckMode).mockReset();
+  vi.mocked(api.setReleaseAutoInstall).mockReset();
   vi.mocked(api.checkForRelease).mockReset();
   vi.mocked(api.downloadRelease).mockReset();
   vi.mocked(api.applyRelease).mockReset();
@@ -64,7 +67,8 @@ test("a prepared release waits without claiming installation or offering another
   }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   expect(await screen.findByText(/Release prepared · waiting for engine maintenance/)).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /Install/ })).not.toBeInTheDocument();
+  // The install ACTION, not the automatic-install setting beside it.
+  expect(screen.queryByRole("button", { name: /^Install (Swarm )?\d/ })).not.toBeInTheDocument();
   expect(screen.queryByText(/Installing Swarm/)).not.toBeInTheDocument();
   expect(api.applyRelease).not.toHaveBeenCalled();
 });
@@ -507,4 +511,44 @@ test("does not claim parity when the distance cannot be counted", async () => {
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   expect(await screen.findByText(/builds from a working copy and runs/)).toBeInTheDocument();
   expect(screen.queryByText(/level with the release/)).not.toBeInTheDocument();
+});
+
+/**
+ * ADR 0110. The card has to say what will happen without anyone pressing
+ * Install, because the moment of consent is gone for an ordinary release.
+ */
+test("an ordinary release says it installs itself while the operator is away", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true, downloaded_version: "0.2.0" }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/It installs itself while you are away/)).toBeInTheDocument();
+  expect(screen.getByText(/Ordinary releases install themselves while you are away/)).toBeInTheDocument();
+  expect(screen.queryByText(/Nothing is installed until you say so/)).not.toBeInTheDocument();
+});
+
+/** A protocol change stops every worker, so it still waits for the operator. */
+test("a release that stops workers still says nothing installs until you say so", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
+    auto_install: true, downloaded_version: "0.2.0", carries_protocol_change: true,
+  }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/Nothing is installed until you say so/)).toBeInTheDocument();
+});
+
+test("the operator can turn automatic installs off from the card", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true }));
+  vi.mocked(api.setReleaseAutoInstall).mockResolvedValue(status({ auto_install: false }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Stop installing automatically" }));
+  await waitFor(() => expect(api.setReleaseAutoInstall).toHaveBeenCalledWith("token", false));
+  expect(await screen.findByRole("button", { name: "Install automatically" })).toBeInTheDocument();
+  expect(screen.getByText(/Releases install only when you press Install/)).toBeInTheDocument();
+});
+
+/** A working copy is never replaced by a release, so it is offered no switch. */
+test("a development build offers no automatic install", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true, development_build: true, upgrade_available: false }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  await screen.findByRole("button", { name: /Check now|Checking/ });
+  expect(screen.queryByRole("button", { name: /installing automatically|Install automatically/ })).not.toBeInTheDocument();
+  expect(screen.queryByText(/install themselves/)).not.toBeInTheDocument();
 });

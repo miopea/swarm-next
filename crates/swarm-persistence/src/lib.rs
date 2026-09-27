@@ -362,7 +362,9 @@ const CLOSURE_EVIDENCE_SCHEMA_MARKER: i64 = 192;
 const TYPED_OPERATOR_PARK_SCHEMA_MARKER: i64 = 193;
 /// A takeover request withdrawn before it was taken up is recorded as expired.
 const WITHDRAWN_TAKEOVER_SCHEMA_MARKER: i64 = 194;
-const CURRENT_SCHEMA_VERSION: i64 = WITHDRAWN_TAKEOVER_SCHEMA_MARKER;
+/// A Hive may install an ordinary release by itself while the operator is away.
+const RELEASE_AUTO_INSTALL_SCHEMA_MARKER: i64 = 195;
+const CURRENT_SCHEMA_VERSION: i64 = RELEASE_AUTO_INSTALL_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -396,6 +398,9 @@ pub(crate) fn normalize_public_identity_name(value: &str) -> Option<&str> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReleaseCheckState {
     pub mode: String,
+    /// Whether an ordinary release installs itself while the operator is away.
+    /// On unless the operator turned it off (ADR 0110).
+    pub auto_install: bool,
     pub last_checked_at: Option<i64>,
     pub last_outcome: Option<String>,
     /// The verified offer as it was last seen, kept so the card says something
@@ -407,6 +412,7 @@ impl Default for ReleaseCheckState {
     fn default() -> Self {
         Self {
             mode: "unset".to_owned(),
+            auto_install: true,
             last_checked_at: None,
             last_outcome: None,
             last_offer: None,
@@ -1563,7 +1569,8 @@ impl TaskStore {
         let state = connection
             .query_row(
                 "SELECT preference.mode, preference.last_checked_at,
-                        preference.last_outcome, preference.last_offer
+                        preference.last_outcome, preference.last_offer,
+                        preference.auto_install
                  FROM release_check_preferences preference
                  JOIN local_hive_identity local ON local.singleton = 1
                  JOIN hives hive ON hive.id = local.hive_id
@@ -1575,6 +1582,7 @@ impl TaskStore {
                         last_checked_at: row.get(1)?,
                         last_outcome: row.get(2)?,
                         last_offer: row.get(3)?,
+                        auto_install: row.get::<_, i64>(4)? != 0,
                     })
                 },
             )
@@ -1609,6 +1617,29 @@ impl TaskStore {
         self.release_check_state()
     }
 
+    /// Turns this Hive's automatic install of ordinary releases on or off.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn set_release_auto_install(
+        &self,
+        enabled: bool,
+    ) -> Result<ReleaseCheckState, TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO release_check_preferences (operator_id, auto_install, updated_at)
+             SELECT hive.operator_id, ?1, unixepoch()
+             FROM local_hive_identity local
+             JOIN hives hive ON hive.id = local.hive_id
+             WHERE local.singleton = 1
+             ON CONFLICT(operator_id) DO UPDATE
+                 SET auto_install = excluded.auto_install, updated_at = excluded.updated_at",
+            [i64::from(enabled)],
+        )?;
+        drop(connection);
+        self.release_check_state()
+    }
+
     /// Records what a check saw, without disturbing the operator's choice.
     ///
     /// A failed check keeps the previous offer rather than erasing it: an
@@ -1629,18 +1660,24 @@ impl TaskStore {
             )));
         }
         let connection = self.connection()?;
+        // ⚠️ INSERTED WHEN ABSENT. This was an UPDATE, and the row only exists
+        // once the operator has chosen a check mode — but an unconfigured Hive
+        // checks too ("unset means yes"). Its checks were recorded nowhere: the
+        // card never showed the offer, the check was due again on every pass,
+        // and an ordinary release could never install itself (ADR 0110). The
+        // mode stays `unset`; recording a check is not answering the question.
         connection.execute(
-            "UPDATE release_check_preferences
-             SET last_checked_at = ?2,
-                 last_outcome = ?1,
-                 last_offer = COALESCE(?3, last_offer),
-                 updated_at = ?2
-             WHERE operator_id = (
-                 SELECT hive.operator_id
-                 FROM local_hive_identity local
-                 JOIN hives hive ON hive.id = local.hive_id
-                 WHERE local.singleton = 1
-             )",
+            "INSERT INTO release_check_preferences
+                 (operator_id, last_checked_at, last_outcome, last_offer, updated_at)
+             SELECT hive.operator_id, ?2, ?1, ?3, ?2
+             FROM local_hive_identity local
+             JOIN hives hive ON hive.id = local.hive_id
+             WHERE local.singleton = 1
+             ON CONFLICT(operator_id) DO UPDATE
+                 SET last_checked_at = excluded.last_checked_at,
+                     last_outcome = excluded.last_outcome,
+                     last_offer = COALESCE(excluded.last_offer, last_offer),
+                     updated_at = excluded.updated_at",
             params![outcome, now, offer],
         )?;
         drop(connection);
@@ -4635,7 +4672,30 @@ fn migrate_engine_history_schema_steps(
     if schema_version < WITHDRAWN_TAKEOVER_SCHEMA_MARKER {
         crate::federation_steward_takeovers::migrate_withdrawn_takeover_requests(transaction)?;
     }
+    if schema_version < RELEASE_AUTO_INSTALL_SCHEMA_MARKER {
+        migrate_release_auto_install(transaction)?;
+    }
     Ok(())
+}
+
+/// Whether an ordinary release installs itself while the operator is away.
+///
+/// Defaults to on for every Hive, existing ones included, on the operator's
+/// ruling that most Hives should update themselves (ADR 0110).
+fn migrate_release_auto_install(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('release_check_preferences')
+         WHERE name = 'auto_install')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        transaction.execute_batch(
+            "ALTER TABLE release_check_preferences
+             ADD COLUMN auto_install INTEGER NOT NULL DEFAULT 1;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", RELEASE_AUTO_INSTALL_SCHEMA_MARKER)
 }
 
 /// How many times a review has reached the same conclusion about unchanged work.
@@ -10526,6 +10586,12 @@ mod tests {
             undo_sql: "SELECT 1",
             probe_sql: "SELECT user_version >= 194 FROM pragma_user_version",
         },
+        SchemaStep {
+            table: "release_check_preferences",
+            artifact: "auto_install",
+            undo_sql: "",
+            probe_sql: "",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.
@@ -11239,6 +11305,45 @@ mod tests {
         assert_eq!(store.set_release_check_mode("off").unwrap().mode, "off");
         assert!(store.set_release_check_mode("hourly").is_err());
         assert_eq!(store.release_check_state().unwrap().mode, "off");
+    }
+
+    /// An unconfigured Hive checks, so what it saw has to be kept — without
+    /// that counting as the operator having chosen to check.
+    #[test]
+    fn a_hive_nobody_configured_still_records_what_its_check_saw() {
+        let store = TaskStore::in_memory().unwrap();
+        let recorded = store
+            .record_release_check("offered", Some("{\"version\":\"9.9.9\"}"), 42)
+            .unwrap();
+        assert_eq!(recorded.last_checked_at, Some(42));
+        assert_eq!(recorded.last_outcome.as_deref(), Some("offered"));
+        assert!(recorded.last_offer.is_some());
+        assert_eq!(
+            recorded.mode, "unset",
+            "recording a check is not answering the question"
+        );
+        assert!(recorded.auto_install);
+    }
+
+    /// ADR 0110: ordinary releases install themselves unless the operator turns
+    /// that off, and the switch is independent of whether the Hive checks.
+    #[test]
+    fn automatic_install_is_on_until_the_operator_turns_it_off() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(store.release_check_state().unwrap().auto_install);
+
+        store.set_release_check_mode("daily").unwrap();
+        assert!(
+            store.release_check_state().unwrap().auto_install,
+            "choosing to check does not change the install choice"
+        );
+        let off = store.set_release_auto_install(false).unwrap();
+        assert!(!off.auto_install);
+        assert_eq!(
+            off.mode, "daily",
+            "and turning it off leaves checking alone"
+        );
+        assert!(store.set_release_auto_install(true).unwrap().auto_install);
     }
 
     /// An origin that is unreachable today does not make yesterday's answer

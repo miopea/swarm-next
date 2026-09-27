@@ -403,8 +403,8 @@ fn degrade<T>(
 
 fn start_background_services(state: &AppState) -> BackgroundServices {
     let mut services = BackgroundServices::new();
-    // Hourly ticks; the check itself decides whether anything is due, and an
-    // operator who chose `off` is never contacted.
+    // The check itself decides whether anything is due, and an operator who
+    // chose `off` is never contacted.
     //
     // IMMEDIATE ON START, which is the point of the `true`. A Hive restarted
     // minutes after a release used to wait for the next tick AND the full
@@ -413,7 +413,10 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
     // shorter floor so a restart loop cannot turn it into a request per boot.
     let release_poller = std::sync::Arc::new(state.clone());
     let mut first_pass = true;
-    services.periodic(std::time::Duration::from_secs(60 * 60), true, move || {
+    // Every fifteen minutes rather than hourly since ADR 0110: the same pass
+    // installs an ordinary release once the operator is away, and an hour's
+    // wait after they leave is most of a lunch break.
+    services.periodic(std::time::Duration::from_secs(15 * 60), true, move || {
         let state = release_poller.clone();
         let startup = std::mem::take(&mut first_pass);
         async move {

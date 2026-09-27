@@ -118,6 +118,17 @@ pub struct FederationJoinInvitationOverview {
 /// names the Hives in its summary instead, and it is the dedup key.
 const FLEET_BEHIND_QUESTION_TITLE: &str = "Hives are behind the current release";
 
+/// What a "Hives are behind" raise was raised for: the release and exactly which
+/// Hives. Recorded on the raise so the same question is not asked twice (ADR 0110).
+fn fleet_raise_key(expected: &str, raised: &[&swarm_persistence::HiveVersionStanding]) -> String {
+    let mut behind = raised
+        .iter()
+        .map(|hive| hive.identity.hive_id.to_string())
+        .collect::<Vec<_>>();
+    behind.sort();
+    format!("Raised for {expected}: {}", behind.join(", "))
+}
+
 impl ApiaryService {
     /// Raises the Hives that have fallen behind, and withdraws the raise once
     /// they catch up.
@@ -135,22 +146,24 @@ impl ApiaryService {
     pub fn raise_hives_left_behind(
         &self,
         now: i64,
+        keeper_build: &str,
     ) -> Result<swarm_persistence::FleetVersionReport, ApplicationError> {
-        let report = self.store.fleet_version_report(now)?;
+        let report = self.store.fleet_version_report(now, keeper_build)?;
         let raised = report.raised();
         // ⚠️ THE CARD MUST GO AWAY BY ITSELF. The operator's standing complaint
         // about this machinery is a card that keeps coming back after being
         // dealt with. A Hive that upgraded has answered the question, and
         // leaving the card up would make catching up look like nothing
         // happened.
-        let open = self
+        let asked = self
             .store
             .list_decision_requests()?
             .into_iter()
-            .filter(|request| {
-                request.title == FLEET_BEHIND_QUESTION_TITLE
-                    && request.state == swarm_domain::DecisionRequestState::Pending
-            })
+            .filter(|request| request.title == FLEET_BEHIND_QUESTION_TITLE)
+            .collect::<Vec<_>>();
+        let open = asked
+            .iter()
+            .filter(|request| request.state == swarm_domain::DecisionRequestState::Pending)
             .collect::<Vec<_>>();
         if raised.is_empty() {
             for request in open {
@@ -172,6 +185,23 @@ impl ApiaryService {
         if !open.is_empty() {
             return Ok(report);
         }
+        let expected = report
+            .expected_release
+            .as_ref()
+            .map_or("an unknown release", |(version, _)| version.as_str());
+        // ⚠️ AN ANSWER HOLDS UNTIL SOMETHING NEW HAPPENS. Only a PENDING raise
+        // used to hold the next one back, so answering it — even "Leave them
+        // behind for now" — let the next check ask the same thing again: eleven
+        // times for one Hive in four days, and the operator's "the needs you
+        // keeps asking me about updating hives". A newer release or a different
+        // set of Hives behind is a new question; the same one is not (ADR 0110).
+        let raised_for = fleet_raise_key(expected, &raised);
+        if asked.iter().any(|request| {
+            request.state == swarm_domain::DecisionRequestState::Resolved
+                && request.evidence.lines().any(|line| line == raised_for)
+        }) {
+            return Ok(report);
+        }
         let Ok(Some(queen)) = self.store.queen_worker_id() else {
             tracing::warn!(
                 behind = raised.len(),
@@ -179,10 +209,6 @@ impl ApiaryService {
             );
             return Ok(report);
         };
-        let expected = report
-            .expected_release
-            .as_ref()
-            .map_or("an unknown release", |(version, _)| version.as_str());
         let listed = raised
             .iter()
             .map(|hive| {
@@ -214,7 +240,7 @@ impl ApiaryService {
             risk: "This Hive sat wedged on a stale build for roughly a day in \
                    September and every screen that could have said so showed a \
                    version and nothing else.",
-            evidence: &summary,
+            evidence: &format!("{summary}\n\n{raised_for}"),
             suggested_action: "Update them",
             allowed_actions: &[
                 "Update them".to_owned(),

@@ -86,31 +86,53 @@ pub fn version_standing(
     reported_version: &str,
     reported_schema: i64,
     expected: Option<&SwarmVersion>,
-    expected_schema: i64,
+    expected_schema: Option<i64>,
     release_cut_at: i64,
     now: i64,
 ) -> VersionStanding {
-    // Schema first: it is the failure that breaks things rather than merely
-    // dates them, and it applies even to a development build.
-    if reported_schema < expected_schema {
-        return VersionStanding::SchemaBehind;
-    }
+    // `None` when Keeper runs a development build: its schema is not any
+    // release's schema, and judging members against it raised a Hive on the
+    // newest published release as behind minutes after Keeper was rebuilt.
+    let schema_behind = expected_schema.is_some_and(|schema| reported_schema < schema);
     let Some(reported) = SwarmVersion::parse(reported_version) else {
         return VersionStanding::Unreadable;
     };
     if reported.is_development() {
-        return VersionStanding::Development;
+        return if schema_behind {
+            VersionStanding::SchemaBehind
+        } else {
+            VersionStanding::Development
+        };
     }
     let Some(expected) = expected else {
-        return VersionStanding::Unknown;
+        return if schema_behind {
+            VersionStanding::SchemaBehind
+        } else {
+            VersionStanding::Unknown
+        };
     };
     if expected.supersedes(&reported) {
+        // ⚠️ THE SAME GRACE WHETHER OR NOT THE SCHEMA IS BEHIND TOO. A release
+        // that migrates is still an ordinary release, and a member that
+        // installs it by itself (ADR 0110) needs the window to do so before
+        // anyone is asked about it. Raising at once asked the operator about
+        // every migrating release across the whole fleet.
         if now.saturating_sub(release_cut_at) < VERSION_GRACE_SECONDS {
             return VersionStanding::BehindWithinGrace;
         }
-        return VersionStanding::Behind;
+        return if schema_behind {
+            VersionStanding::SchemaBehind
+        } else {
+            VersionStanding::Behind
+        };
     }
-    VersionStanding::Current
+    // On the expected release with an older schema is a migration that did not
+    // run, which no amount of waiting fixes.
+    if schema_behind {
+        VersionStanding::SchemaBehind
+    } else {
+        VersionStanding::Current
+    }
 }
 
 #[cfg(test)]
@@ -123,7 +145,7 @@ mod tests {
 
     #[test]
     fn a_hive_on_the_expected_release_is_current_and_raises_nothing() {
-        let standing = version_standing("1.12.0", 186, Some(&expected()), 186, 0, 10_000_000);
+        let standing = version_standing("1.12.0", 186, Some(&expected()), Some(186), 0, 10_000_000);
         assert_eq!(standing, VersionStanding::Current);
         assert!(!standing.raises());
     }
@@ -131,7 +153,7 @@ mod tests {
     #[test]
     fn a_hive_ahead_of_the_apiary_is_not_behind() {
         assert_eq!(
-            version_standing("1.13.0", 186, Some(&expected()), 186, 0, 10_000_000),
+            version_standing("1.13.0", 186, Some(&expected()), Some(186), 0, 10_000_000),
             VersionStanding::Current,
             "running newer than the Apiary expects is not a fault"
         );
@@ -147,7 +169,7 @@ mod tests {
             "1.11.0",
             186,
             Some(&expected()),
-            186,
+            Some(186),
             cut_at,
             cut_at + VERSION_GRACE_SECONDS - 1,
         );
@@ -161,7 +183,7 @@ mod tests {
             "1.11.0",
             186,
             Some(&expected()),
-            186,
+            Some(186),
             cut_at,
             cut_at + VERSION_GRACE_SECONDS,
         );
@@ -169,23 +191,30 @@ mod tests {
         assert!(outside.raises(), "and it must eventually say so");
     }
 
-    /// ⚠️ SCHEMA BEATS EVERYTHING, INCLUDING THE GRACE WINDOW AND THE DEV
-    /// EXEMPTION. A schema behind can mean a member cannot read what Keeper
-    /// sends, which is correctness rather than freshness.
+    /// ⚠️ A MEMBER ON THE EXPECTED RELEASE WITH AN OLDER SCHEMA IS RAISED AT
+    /// ONCE, and so is a development build: that is a migration that did not
+    /// run, which waiting does not fix.
     #[test]
     fn schema_drift_is_raised_immediately_and_even_for_a_dev_build() {
         let cut_at = 1_000_000;
         assert_eq!(
-            version_standing("1.12.0", 185, Some(&expected()), 186, cut_at, cut_at + 1),
+            version_standing(
+                "1.12.0",
+                185,
+                Some(&expected()),
+                Some(186),
+                cut_at,
+                cut_at + 1
+            ),
             VersionStanding::SchemaBehind,
-            "no grace for a schema mismatch"
+            "no grace for a schema mismatch on the expected release"
         );
         assert_eq!(
             version_standing(
                 "1.12.0-dev-a597c3ad7f3f-20260921195509-1986653",
                 185,
                 Some(&expected()),
-                186,
+                Some(186),
                 cut_at,
                 cut_at + 1
             ),
@@ -194,13 +223,54 @@ mod tests {
         );
     }
 
+    /// A release that migrates is still an ordinary release. A member behind on
+    /// it waits out the same window as any other, so it can install the
+    /// release by itself before anyone is asked (ADR 0110).
+    #[test]
+    fn a_member_behind_a_migrating_release_gets_the_same_grace() {
+        let cut_at = 1_000_000;
+        assert_eq!(
+            version_standing(
+                "1.11.0",
+                185,
+                Some(&expected()),
+                Some(186),
+                cut_at,
+                cut_at + 1
+            ),
+            VersionStanding::BehindWithinGrace
+        );
+        assert_eq!(
+            version_standing(
+                "1.11.0",
+                185,
+                Some(&expected()),
+                Some(186),
+                cut_at,
+                cut_at + VERSION_GRACE_SECONDS
+            ),
+            VersionStanding::SchemaBehind,
+            "and says it is the schema once the window has passed"
+        );
+    }
+
+    /// ⚠️ THE 2026-09-25 FALSE ALARM. Keeper was rebuilt from a working copy with
+    /// a migration no release carried yet, and a member on the newest published
+    /// release was raised as `schema_behind` minutes later.
+    #[test]
+    fn a_development_keeper_does_not_judge_members_by_its_own_schema() {
+        let standing = version_standing("1.12.0", 185, Some(&expected()), None, 0, 10_000_000);
+        assert_eq!(standing, VersionStanding::Current);
+        assert!(!standing.raises());
+    }
+
     #[test]
     fn a_development_build_is_exempt_from_the_version_raise() {
         let standing = version_standing(
             "1.12.0-dev-a597c3ad7f3f-20260921195509-1986653",
             186,
             Some(&SwarmVersion::parse("1.13.0").unwrap()),
-            186,
+            Some(186),
             0,
             10_000_000,
         );
@@ -217,14 +287,14 @@ mod tests {
     /// fleet as up to date while every member sat behind.
     #[test]
     fn with_no_known_release_a_hive_is_unknown_rather_than_current() {
-        let standing = version_standing("1.11.0", 186, None, 186, 0, 10_000_000);
+        let standing = version_standing("1.11.0", 186, None, Some(186), 0, 10_000_000);
         assert_eq!(standing, VersionStanding::Unknown);
         assert!(
             !standing.raises(),
             "one missing check is a fact about the Apiary, not a fault in every member"
         );
         assert_eq!(
-            version_standing("1.11.0", 185, None, 186, 0, 10_000_000),
+            version_standing("1.11.0", 185, None, Some(186), 0, 10_000_000),
             VersionStanding::SchemaBehind,
             "schema is measured against Keeper directly, so it survives a missing release check"
         );
@@ -232,8 +302,14 @@ mod tests {
 
     #[test]
     fn an_unreadable_version_is_raised_rather_than_assumed_current() {
-        let standing =
-            version_standing("not-a-version", 186, Some(&expected()), 186, 0, 10_000_000);
+        let standing = version_standing(
+            "not-a-version",
+            186,
+            Some(&expected()),
+            Some(186),
+            0,
+            10_000_000,
+        );
         assert_eq!(standing, VersionStanding::Unreadable);
         assert!(standing.raises());
     }

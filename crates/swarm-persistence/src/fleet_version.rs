@@ -132,9 +132,20 @@ impl TaskStore {
 
     /// Where every Hive in the Apiary stands.
     ///
+    /// `keeper_build` is the version this Keeper is running. Members' schemas
+    /// are judged against this Keeper's only when that is a release: a
+    /// development build's schema is not any release's (ADR 0110).
+    ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
-    pub fn fleet_version_report(&self, now: i64) -> Result<FleetVersionReport, TaskStoreError> {
+    pub fn fleet_version_report(
+        &self,
+        now: i64,
+        keeper_build: &str,
+    ) -> Result<FleetVersionReport, TaskStoreError> {
+        let judged_schema = SwarmVersion::parse(keeper_build)
+            .filter(|build| !build.is_development())
+            .map(|_| CURRENT_SCHEMA_VERSION);
         let expected_release = self.expected_release()?;
         let expected = expected_release
             .as_ref()
@@ -150,7 +161,7 @@ impl TaskStore {
                     &report.payload.swarm_version,
                     report.payload.database_schema_version,
                     expected.as_ref(),
-                    CURRENT_SCHEMA_VERSION,
+                    judged_schema,
                     cut_at,
                     now,
                 ),
@@ -210,7 +221,7 @@ mod tests {
             .unwrap();
         keeper.note_expected_release("1.12.0", now + 20).unwrap();
 
-        let fresh = keeper.fleet_version_report(now + 20).unwrap();
+        let fresh = keeper.fleet_version_report(now + 20, "1.12.0").unwrap();
         assert_eq!(fresh.hives.len(), 1);
         assert_eq!(fresh.hives[0].standing, VersionStanding::BehindWithinGrace);
         assert!(
@@ -219,7 +230,7 @@ mod tests {
         );
 
         let settled = keeper
-            .fleet_version_report(now + 20 + VERSION_GRACE_SECONDS)
+            .fleet_version_report(now + 20 + VERSION_GRACE_SECONDS, "1.12.0")
             .unwrap();
         assert_eq!(settled.hives[0].standing, VersionStanding::Behind);
         assert_eq!(settled.raised().len(), 1, "and then it must say so");
@@ -282,7 +293,9 @@ mod tests {
             .accept_hive_capability(&credential, &report, now + 10)
             .unwrap();
 
-        let fleet = keeper.fleet_version_report(now + 999_999).unwrap();
+        let fleet = keeper
+            .fleet_version_report(now + 999_999, "1.12.0")
+            .unwrap();
         assert_eq!(fleet.expected_release, None, "and the surface is told so");
         assert_eq!(fleet.hives[0].standing, VersionStanding::Unknown);
     }
@@ -310,13 +323,45 @@ mod tests {
             .accept_hive_capability(&credential, &report, now + 10)
             .unwrap();
 
-        let fleet = keeper.fleet_version_report(now + 11).unwrap();
+        let fleet = keeper.fleet_version_report(now + 11, "1.12.0").unwrap();
         assert_eq!(fleet.expected_schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(fleet.hives[0].standing, VersionStanding::SchemaBehind);
         assert_eq!(
             fleet.raised().len(),
             1,
-            "schema drift has no grace window to wait out"
+            "schema drift with no release to compare against has no grace to wait out"
         );
+    }
+
+    /// ⚠️ THE 2026-09-25 FALSE ALARM, THROUGH THE REPORT. A Keeper rebuilt from a
+    /// working copy carries a migration no release has, and judging members
+    /// against it raised a Hive on the newest published release (ADR 0110).
+    #[test]
+    fn a_development_keeper_does_not_raise_members_for_its_own_schema() {
+        let now = 130_000;
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let report = member
+            .seal_local_hive_capability(
+                &[worker()],
+                false,
+                "1.12.0",
+                CURRENT_SCHEMA_VERSION - 1,
+                now + 9,
+            )
+            .unwrap();
+        keeper
+            .accept_hive_capability(&credential, &report, now + 10)
+            .unwrap();
+        keeper.note_expected_release("1.12.0", now + 10).unwrap();
+
+        let fleet = keeper
+            .fleet_version_report(now + 11, "1.13.0-dev-3a69af5ed36e-20260925213321-1302789")
+            .unwrap();
+        assert_eq!(fleet.hives[0].standing, VersionStanding::Current);
+        assert!(fleet.raised().is_empty());
     }
 }
