@@ -9,7 +9,8 @@
 #               target/release binaries and web/dist, built first if missing.
 #
 # Everything is disposable: state lives under /tmp/swarm-two-hive.*, the
-# processes are transient user units, and all of it is removed on exit.
+# processes are transient user units, and all of it is removed on exit. What a
+# failure leaves behind to look at goes to target/two-hive/ instead.
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -21,7 +22,12 @@ units="swarm-two-hive-keeper swarm-two-hive-member swarm-two-hive-engine-keeper 
 cleanup() {
   for unit in $units; do systemctl --user stop "$unit" >/dev/null 2>&1 || true; done
   for unit in $units; do systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true; done
-  case "$test_root" in /tmp/swarm-two-hive.*) rm -rf -- "$test_root" ;; esac
+  # TWO_HIVE_KEEP=1 leaves both Hives' databases behind to read afterwards.
+  if [ "${TWO_HIVE_KEEP:-0}" = 1 ]; then
+    echo "kept: $test_root" >&2
+  else
+    case "$test_root" in /tmp/swarm-two-hive.*) rm -rf -- "$test_root" ;; esac
+  fi
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -60,6 +66,7 @@ start_side() {
     --setenv=SWARM_WORKSPACE_ROOTS="$side_root/workspaces" \
     --setenv=SWARM_TERMINAL_HISTORY_DIR="$side_root/history" \
     --setenv=SWARM_TERMINAL_SOCKET="$side_root/engine.sock" \
+    --setenv=RUST_LOG="swarm_terminal_host=debug,swarm_terminal=debug" \
     "$bundle/bin/swarm-terminal-host"
   # Written out so the driver can bring this side back after stopping it: a
   # transient unit is gone once stopped and cannot simply be started again.
@@ -79,6 +86,7 @@ exec systemd-run --user --quiet --unit="swarm-two-hive-$side" \\
   --setenv=SWARM_AGENT_CONFIG_ROOT="$side_root/agents" \\
   --setenv=SWARM_TERMINAL_SOCKET="$side_root/engine.sock" \\
   --setenv=SWARM_OPERATOR_TOKEN="$token" \\
+  --setenv=RUST_LOG="swarm_api=debug,swarm_terminal=debug" \\
   "$bundle/bin/swarm-api"
 START
   sh "$side_root/start-api.sh"
@@ -92,7 +100,34 @@ systemd-run --user --quiet --unit=swarm-two-hive-proxy \
 start_side keeper "$keeper_port" "http://localhost:$proxy_port"
 start_side member "$member_port" "http://localhost:$member_port"
 
+started_at=$(date '+%Y-%m-%d %H:%M:%S')
+artifacts="$repo_root/target/two-hive"
+rm -rf "$artifacts"
 KEEPER="http://127.0.0.1:$keeper_port" MEMBER="http://127.0.0.1:$member_port" \
   TOKEN="$token" KEEPER_UNIT=swarm-two-hive-keeper KEEPER_START="$test_root/keeper/start-api.sh" \
-  PROXY_FAULT="$test_root/proxy-fault" \
-  node "$repo_root/scripts/dogfood/two-hive/driver.cjs"
+  PROXY_FAULT="$test_root/proxy-fault" ARTIFACTS="$artifacts" \
+  node "$repo_root/scripts/dogfood/two-hive/driver.cjs" && passed=0 || passed=1
+
+# Both Hives' own accounts of the run, kept whether it passed or not. Asking
+# someone to reproduce a failure by hand, to find out what each side thought
+# happened, is the leg work this run exists to remove — and a pass can still
+# hide a side that was misbehaving the whole time.
+mkdir -p "$artifacts"
+for side in keeper member; do
+  journalctl --user --no-pager -o short-iso --since "$started_at" \
+    -u "swarm-two-hive-$side" -u "swarm-two-hive-engine-$side" > "$artifacts/$side.log" 2>&1 || true
+done
+echo "logs: $artifacts/keeper.log $artifacts/member.log" >&2
+
+# ⚠️ A PASS CAN HIDE A LOOP. The member and Keeper once set each other off
+# about fifty times a second — every check above still passed, and only the
+# member's own log showed it. A run this long needs a few dozen passes at most:
+# the 15-second pacing, plus one per watch, takeover and restart announcement.
+passes=$(grep -c "federation pass starting" "$artifacts/member.log" || true)
+if [ "$passes" -gt 150 ]; then
+  echo "FAIL  the member ran $passes synchronization passes in one run; something is starting them in a loop" >&2
+  passed=1
+else
+  echo "PASS  the member ran $passes synchronization passes, not a loop" >&2
+fi
+exit "$passed"

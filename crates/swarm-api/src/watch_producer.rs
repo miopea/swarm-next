@@ -86,16 +86,19 @@ async fn relay_one(state: &AppState, watch: ApiaryWatchId) -> Result<(), String>
     let (mut socket, _) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|error| error.to_string())?;
+    tracing::debug!(%watch, "watch relay connected to Keeper");
 
     let Some(host) = state.terminal_host.as_ref() else {
-        return Ok(());
+        return Err("no terminal host to read Queen from".to_owned());
     };
     let Ok(store) = task_store(state) else {
         return Ok(());
     };
     let Ok(Some(session)) = store.active_queen_session_id() else {
-        // Nothing is running to look at. Not an error — an idle Hive is a
-        // perfectly ordinary thing to be watching.
+        // Nothing is running to look at. Not a failure — an idle Hive is a
+        // perfectly ordinary thing to be watching — but the watcher sees a
+        // blank window, so it is worth being able to tell apart from one.
+        tracing::debug!(%watch, "watch relay has no running Queen to send");
         return Ok(());
     };
 
@@ -114,6 +117,7 @@ async fn relay_one(state: &AppState, watch: ApiaryWatchId) -> Result<(), String>
                 .any(|held| held.id == watch && held.is_live(now))
         });
         if !still_watched {
+            tracing::debug!(%watch, "watch relay stopping: the watch is no longer live here");
             return Ok(());
         }
         let response = host
@@ -140,9 +144,13 @@ async fn relay_one(state: &AppState, watch: ApiaryWatchId) -> Result<(), String>
             () = tokio::time::sleep(FRAME_POLL) => {}
             message = socket.next() => match message {
                 Some(Ok(ClientMessage::Binary(frame))) if frame.first() == Some(&RESNAPSHOT_FRAME_TYPE) => {
+                    tracing::debug!(%watch, "Keeper asked for the whole screen");
                     after = None;
                 }
-                Some(Ok(ClientMessage::Close(_)) | Err(_)) | None => return Ok(()),
+                Some(Ok(ClientMessage::Close(_)) | Err(_)) | None => {
+                    tracing::debug!(%watch, "watch relay stopping: Keeper closed the connection");
+                    return Ok(());
+                }
                 Some(Ok(_)) => {}
             },
         }

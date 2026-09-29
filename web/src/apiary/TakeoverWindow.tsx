@@ -33,6 +33,8 @@ export interface Surface {
 const OUTPUT_FRAME_TYPE = 1;
 const SNAPSHOT_FRAME_TYPE = 2;
 const INPUT_FRAME_TYPE = 9;
+/** The held Hive refused this window's keystrokes; the rest says why. */
+const INPUT_REFUSED_FRAME_TYPE = 11;
 /**
  * How long to wait for the target to acknowledge before giving up.
  *
@@ -62,6 +64,10 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
   const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"connecting" | "live" | "closed">("connecting");
   const [detail, setDetail] = useState<string>();
+  // ⚠️ "LIVE — YOU ARE TYPING ON THIS HIVE" WAS SHOWN WHILE EVERY KEY WAS
+  // REFUSED, and nothing on this screen could say otherwise. Kept until the
+  // window closes: typing that did not land is not made right by a quiet spell.
+  const [refused, setRefused] = useState<string>();
 
   useEffect(() => {
     const element = host.current;
@@ -118,6 +124,10 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
       socket.addEventListener("message", (event) => {
         if (!(event.data instanceof ArrayBuffer)) return;
         const frame = new Uint8Array(event.data);
+        if (frame[0] === INPUT_REFUSED_FRAME_TYPE) {
+          setRefused(new TextDecoder().decode(frame.slice(1)) || "no reason given");
+          return;
+        }
         if (frame.byteLength < 9) return;
         if (frame[0] === OUTPUT_FRAME_TYPE) {
           surface?.write(frame.slice(9));
@@ -157,7 +167,7 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
       <section className="watch-window takeover-window">
         <header>
           <div><p className="eyebrow">Controlling</p><h4>{hiveName}</h4></div>
-          <span className={`watch-window-state ${state}`} role="status">{detail ?? (state === "live" ? "Live — you are typing on this Hive" : "Opening…")}</span>
+          <span className={`watch-window-state ${refused && state === "live" ? "refused" : state}`} role="status">{detail ?? (state !== "live" ? "Opening…" : refused ? `${hiveName} is not accepting your typing: ${refused}` : "Live — you are typing on this Hive")}</span>
           <span className="watch-window-tools">
             <button type="button" className="secondary-button" onClick={onClose}>Hand back</button>
           </span>

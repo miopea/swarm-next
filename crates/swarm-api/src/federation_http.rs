@@ -720,6 +720,15 @@ impl FederationHttpClient {
         if !status.is_success() {
             return Err(status_error(status));
         }
+        // ⚠️ 204 IS SUCCESS WITH NOTHING TO READ. Decoding its empty body as JSON
+        // failed, so Keeper accepting a capability report was logged on every
+        // pass as "invalid federation response" and retried. Read as `null`: a
+        // caller expecting nothing gets it, and one that needed data still
+        // fails as a protocol error.
+        if status == StatusCode::NO_CONTENT {
+            return serde_json::from_value(serde_json::Value::Null)
+                .map_err(|_| FederationHttpError::InvalidResponse);
+        }
         if response
             .content_length()
             .is_some_and(|length| length > MAX_FEDERATION_RESPONSE_BYTES as u64)
@@ -887,6 +896,22 @@ mod tests {
         }
         assert!(FederationHttpClient::new("https://keeper.example.test/swarm").is_ok());
         assert!(FederationHttpClient::new("http://127.0.0.1:8766").is_ok());
+    }
+
+    #[tokio::test]
+    async fn no_content_is_success_for_a_call_that_expects_nothing() {
+        let watch = swarm_domain::ApiaryWatchId::new();
+        let app = Router::new().route(
+            &format!("/api/v1/federation/watches/{watch}/acknowledgement"),
+            axum::routing::put(|| async { StatusCode::NO_CONTENT }),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}")).unwrap();
+
+        client
+            .acknowledge_watch("credential", watch)
+            .await
+            .expect("a 204 from Keeper is an acceptance, not a protocol error");
     }
 
     #[tokio::test]

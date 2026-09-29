@@ -1194,8 +1194,38 @@ impl AppState {
         self.reconcile_federation_inner(true).await;
     }
 
+    /// Reconcile because THIS Hive just queued something for Keeper — a
+    /// reclaim, a handoff answer, a Steward request.
+    ///
+    /// ⚠️ SKIPS THE PACING GATE, AS AN ANNOUNCEMENT DOES, AND FOR THE SAME
+    /// REASON: it is not a guess. These call sites used to run the paced pass,
+    /// which returns at once when the last one is under a minute old, so what
+    /// the operator had just done sat in the outbox for up to a minute — a
+    /// "Take back control" the Keeper went on not knowing about. A loop that
+    /// ran passes fifty times a second hid it until 2026-09-29. Refusals still
+    /// wait out their backoff.
+    pub async fn reconcile_federation_for_local_change(&self) {
+        self.reconcile_federation_inner(true).await;
+    }
+
+    /// `prompted` is a Keeper announcement or a local change to send: a known
+    /// reason to synchronise now rather than at the paced interval.
+    async fn reconcile_federation_inner(&self, prompted: bool) {
+        // Timed, because a slow pass is invisible otherwise: the doorbell
+        // handler runs passes inline, so one that stalls stops this Hive
+        // hearing anything else Keeper says until it finishes.
+        let started = std::time::Instant::now();
+        tracing::debug!(prompted, "federation pass starting");
+        self.reconcile_federation_pass(prompted).await;
+        tracing::debug!(
+            prompted,
+            elapsed_ms = started.elapsed().as_millis(),
+            "federation pass finished"
+        );
+    }
+
     #[allow(clippy::too_many_lines)]
-    async fn reconcile_federation_inner(&self, announced: bool) {
+    async fn reconcile_federation_pass(&self, prompted: bool) {
         self.reconcile_apiary_enrollments().await;
         let Some(store) = self.task_store.as_ref() else {
             return;
@@ -1214,14 +1244,15 @@ impl AppState {
         // failures used to return here forever, and one refused request was
         // enough to reach them, so a member went silent — no version report, no
         // watch or takeover acknowledgement, no shared tasks — until someone
-        // noticed. They now wait out the same bounded backoff as an outage. An
-        // announcement skips the wait only when the last failure was an outage:
-        // a refusal is not made more likely to succeed by a doorbell.
+        // noticed. They now wait out the same bounded backoff as an outage. A
+        // prompted pass — an announcement, or a local change to send — skips the
+        // wait only when the last failure was an outage: a refusal is not made
+        // more likely to succeed by a doorbell.
         let refused = matches!(
             health.condition,
             FederationSyncCondition::AuthenticationRequired | FederationSyncCondition::Incompatible
         );
-        if (!announced || refused) && health.next_attempt_at.is_some_and(|next| next > now) {
+        if (!prompted || refused) && health.next_attempt_at.is_some_and(|next| next > now) {
             return;
         }
         let connection = match service.federation_member_connection() {
@@ -5525,7 +5556,11 @@ async fn apiary_accept_claim_handoff(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     let reconcile_state = Arc::clone(&state);
-    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -6070,6 +6105,14 @@ async fn reclaim_apiary_takeover(
             .await;
     }
     state.control_room_notify.notify_waiters();
+    // The terminal is already this operator's again; this tells Keeper now
+    // rather than at the next paced pass, so the other window closes too.
+    let reconcile_state = Arc::clone(&state);
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         StatusCode::NO_CONTENT,
@@ -6725,11 +6768,18 @@ async fn exchange_federation_directory(
     Json(update): Json<swarm_domain::FederationProfileUpdate>,
 ) -> Result<Response, ApiError> {
     let credential = federation_node_credential(&headers)?;
-    let directory = apiary_service(&state)?
+    let (directory, changed) = apiary_service(&state)?
         .exchange_federation_directory(credential, &update, unix_timestamp())
         .map_err(federation_catalog_error)?;
-    state.control_room_notify.notify_waiters();
-    announce_federation_change(&state, swarm_domain::FederationChangeKind::Directory);
+    // ⚠️ ONLY WHEN SOMETHING CHANGED. Every member pass makes this exchange,
+    // and the announcement starts another pass on every member, so ringing on
+    // an identical profile made each connected member and its Keeper
+    // ping-pong about fifty times a second for as long as the doorbell was up.
+    // Found in the two-Hive acceptance run's logs, 2026-09-29.
+    if changed {
+        state.control_room_notify.notify_waiters();
+        announce_federation_change(&state, swarm_domain::FederationChangeKind::Directory);
+    }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(directory)).into_response())
 }
 
@@ -7100,7 +7150,11 @@ async fn queue_federation_steward_task(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     let reconcile_state = state.clone();
-    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -7131,7 +7185,11 @@ async fn queue_federation_steward_assist(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     let reconcile_state = state.clone();
-    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -7152,7 +7210,11 @@ async fn queue_federation_steward_assist_response(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     let reconcile_state = state.clone();
-    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -9208,7 +9270,9 @@ async fn reconcile_apiary_takeovers(
             .await
         {
             Ok(receipt) => {
-                let _ = store.apply_federation_steward_takeover_receipt(&receipt, now);
+                if let Err(error) = store.apply_federation_steward_takeover_receipt(&receipt, now) {
+                    tracing::warn!(%error, "Keeper's receipt for a takeover command could not be applied");
+                }
             }
             Err(error) => return Err(error.to_string()),
         }
@@ -9224,6 +9288,7 @@ async fn reconcile_apiary_takeovers(
     store
         .apply_federation_steward_takeover_inbox(&inbox, now)
         .map_err(|_| "takeover projection could not be saved".to_owned())?;
+    let mut acknowledged = false;
     for lease in inbox.leases.iter().filter(|lease| {
         lease.target_hive_id == local_hive
             && lease.state == swarm_domain::FederationStewardTakeoverState::Requested
@@ -9240,10 +9305,28 @@ async fn reconcile_apiary_takeovers(
             .await
         {
             Ok(receipt) => {
-                let _ = store.apply_federation_steward_takeover_receipt(&receipt, now);
+                if let Err(error) = store.apply_federation_steward_takeover_receipt(&receipt, now) {
+                    tracing::warn!(%error, "Keeper's receipt for a takeover command could not be applied");
+                }
+                acknowledged = true;
             }
             Err(error) => return Err(error.to_string()),
         }
+    }
+    // ⚠️ READ IT BACK, OR THIS HIVE DOES NOT KNOW IT SAID YES. The projection
+    // saved above says `requested`, and only an active lease is relayed; the
+    // receipt updates the outbox, not the projection. Without this the held
+    // Hive started sending its screen on the NEXT pass, paced to a minute, and
+    // the Keeper's takeover window sat blank for as long. Hidden until
+    // 2026-09-29 by a loop that ran passes fifty times a second.
+    if acknowledged {
+        let inbox = client
+            .takeover_inbox(credential)
+            .await
+            .map_err(|error| error.to_string())?;
+        store
+            .apply_federation_steward_takeover_inbox(&inbox, now)
+            .map_err(|_| "takeover projection could not be saved".to_owned())?;
     }
     Ok(())
 }
@@ -9268,6 +9351,7 @@ async fn reconcile_apiary_watches(
     store
         .apply_federation_watch_inbox(&watches, now)
         .map_err(|_| "watch notices could not be saved".to_owned())?;
+    let mut acknowledged = false;
     for watch in watches
         .iter()
         .filter(|watch| watch.state == swarm_domain::WatchState::Requested)
@@ -9275,6 +9359,21 @@ async fn reconcile_apiary_watches(
         if let Err(error) = client.acknowledge_watch(credential, watch.id).await {
             return Err(error.to_string());
         }
+        acknowledged = true;
+    }
+    // ⚠️ READ IT BACK, OR THIS HIVE DOES NOT KNOW IT SAID YES. The copy saved
+    // above says `requested`, and only an active watch relays; without this the
+    // mirror learned it was active on the NEXT full pass, which is paced to a
+    // minute, so a watch window sat blank for up to that long. A loop that ran
+    // passes fifty times a second hid it until 2026-09-29.
+    if acknowledged {
+        let watches = client
+            .watches(credential)
+            .await
+            .map_err(|error| error.to_string())?;
+        store
+            .apply_federation_watch_inbox(&watches, now)
+            .map_err(|_| "watch notices could not be saved".to_owned())?;
     }
     Ok(())
 }

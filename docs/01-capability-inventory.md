@@ -196,6 +196,21 @@ real terminal. It fails on 1.16.5 and passes on this change. It is two
 processes, not two machines: tunnels, NAT and WSL networking are still not
 covered.
 
+Correction (2026-09-29): the live check on 1.16.6 showed the takeover window
+live, but typing never landed. The held Hive's terminal engine refused raw writes
+once its own browser had claimed Queen, which is always true on a real Hive.
+Takeover input now has its own engine gate rule, and a refused keystroke is
+logged as a warning and shown in the Keeper's window (ADR 0036 addendum). The
+two-Hive run now also:
+- opens Queen in the member's own browser;
+- takes over and types from a real Keeper browser;
+- keeps both Hives' logs on every run;
+- fails if the member syncs in a loop.
+
+Those logs found a directory-announcement loop, about fifty passes a second,
+that had been hiding four minute-long delays in watch, takeover and reclaim. All
+four are fixed (ADR 0111 addendum).
+
 Hive watching checkpoint: the control plane, the frame relay and the Keeper's
 viewer surface are implemented. A Keeper opens a window from the Apiary Hive
 roster — offered for remote Hives and not for this one — and closing it ENDS the

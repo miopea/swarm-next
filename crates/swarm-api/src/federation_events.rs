@@ -50,7 +50,9 @@ impl FederationEventBus {
     /// because a change with no connected member is ordinary rather than a
     /// failure — that member will poll when it reconnects.
     pub(crate) fn announce(&self, notice: FederationChangeNotice) {
-        let _ = self.sender.send(notice);
+        let kind = notice.kind;
+        let listening = self.sender.send(notice).unwrap_or(0);
+        tracing::debug!(?kind, listening, "rang the federation doorbell");
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<FederationChangeNotice> {
@@ -215,11 +217,18 @@ async fn connect_and_listen(state: &AppState) -> Result<(), String> {
     // socket was down produced a notice nobody received. Fetching once here is
     // what lets every other part of this design treat a lost notice as
     // harmless.
-    state.reconcile_federation().await;
+    //
+    // ⚠️ AND AS AN ANNOUNCEMENT, NOT A PACED PASS. It stands in for the notices
+    // it missed. The paced pass returns at once when the last one is under a
+    // minute old, so a takeover requested between two connections waited up to
+    // a minute to be accepted, and its window sat blank. Hidden until
+    // 2026-09-29 by a loop that ran passes fifty times a second.
+    state.reconcile_federation_announced().await;
 
     while let Some(message) = socket.next().await {
         match message.map_err(|error| error.to_string())? {
-            ClientMessage::Text(_) => {
+            ClientMessage::Text(notice) => {
+                tracing::debug!(notice = %notice.as_str(), "Keeper rang the federation doorbell");
                 // The notice names which feed moved, and this deliberately does
                 // not read it: the reconciliation owner already fetches every
                 // feed and applies each atomically. Acting on the KIND would be

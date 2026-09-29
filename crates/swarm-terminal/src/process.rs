@@ -861,6 +861,13 @@ impl ProcessTerminalSession {
             .map_err(control_error)
     }
 
+    /// Writes input under takeover authority the registry has already checked.
+    fn write_takeover_input(&self, bytes: &[u8]) -> Result<(), SessionRegistryError> {
+        self.control
+            .takeover(|| self.write_input_unchecked(bytes))
+            .map_err(control_error)
+    }
+
     fn write_coordination(&self, bytes: &[u8]) -> Result<(), SessionRegistryError> {
         self.control
             .legacy(true, || self.write_input_unchecked(bytes))
@@ -1498,7 +1505,7 @@ impl SessionRegistry {
             bytes,
             || {
                 self.require_takeover(session_id, lease_id, revision)?;
-                self.get(session_id)?.write_input(bytes)
+                self.get(session_id)?.write_takeover_input(bytes)
             },
         )
     }
@@ -2340,6 +2347,61 @@ pub(crate) mod control_tests {
             registry.admit_maintenance(&[session.id]).unwrap(),
             MaintenanceOutcome::refused(MaintenanceRefusal::ReturnSetMismatch, None)
         );
+    }
+
+    /// ⚠️ EVERY REAL HIVE'S BROWSER HAS HELD QUEEN BEFORE A TAKEOVER ARRIVES.
+    /// Takeover input went through the pre-generation compatibility path,
+    /// which refuses raw writes forever once anyone has claimed control, so a
+    /// Keeper's keystrokes all failed in the field while every test passed.
+    #[cfg(unix)]
+    #[test]
+    fn takeover_input_lands_after_a_browser_has_held_the_terminal() {
+        let (registry, session) = fixture();
+        let local = identity();
+        let grant = registry
+            .claim_control(session.id(), local, None, TerminalSize::new(24, 80))
+            .unwrap();
+        // While a local owner holds it, takeover input is refused outright.
+        assert!(matches!(
+            session.write_takeover_input(b"too-early\n"),
+            Err(SessionRegistryError::ControlDenied(
+                TerminalControlError::OwnedElsewhere
+            ))
+        ));
+        session.release_control(local, grant.generation).unwrap();
+        let lease_id = FederationStewardTakeoverLeaseId::new();
+        registry
+            .install_takeover(
+                session.id(),
+                TerminalTakeoverLease {
+                    lease_id,
+                    revision: 2,
+                    expires_at: unix_timestamp() + 300,
+                },
+            )
+            .unwrap();
+
+        registry
+            .write_takeover(session.id(), lease_id, 2, b"remote-typed\n")
+            .expect("a takeover keystroke is written after a browser held Queen");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let output = match session.resume_after(None).unwrap() {
+                Resume::Snapshot { snapshot } => snapshot.bytes,
+                Resume::Deltas { frames } => {
+                    frames.into_iter().flat_map(|frame| frame.bytes).collect()
+                }
+            };
+            if String::from_utf8_lossy(&output).contains("remote-typed") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the keystroke never reached the terminal"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

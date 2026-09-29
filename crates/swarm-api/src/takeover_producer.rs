@@ -42,6 +42,18 @@ const FRAME_POLL: Duration = Duration::from_millis(100);
 /// A keystroke from whoever holds the lease, exactly as their window sends it.
 pub(crate) const INPUT_FRAME_TYPE: u8 = 9;
 
+/// This Hive refused the holder's keystrokes; the rest of the frame says why.
+///
+/// ⚠️ THE WINDOW SAID "LIVE — YOU ARE TYPING ON THIS HIVE" WHILE EVERY KEY WAS
+/// REFUSED. The refusal was logged at debug on the held Hive and nowhere else,
+/// so the one person typing had no way to know, and an operator had to find
+/// it by hand. Sent back up the screen channel so the window can say so.
+pub(crate) const INPUT_REFUSED_FRAME_TYPE: u8 = 11;
+
+/// The least time between two refusal reports for the same reason, so a
+/// stream of refused keystrokes is one warning rather than one per key.
+const REFUSAL_REPORT_SECONDS: u64 = 5;
+
 /// Relays this Hive's Queen terminal while a takeover of it is live.
 ///
 /// Returns promptly when nothing holds this Hive, which is the ordinary case.
@@ -64,6 +76,7 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
     let store = task_store(state).map_err(|_| "task store unavailable".to_owned())?;
     let Ok(Some(session)) = store.active_queen_session_id() else {
         // Nothing running to control; restart reconciliation ends the lease.
+        tracing::debug!(lease = %lease.id, "takeover relay has no running Queen to hand over");
         return Ok(());
     };
     let service = apiary_service(state).map_err(|_| "no apiary service".to_owned())?;
@@ -87,9 +100,11 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
     let (mut socket, _) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|error| error.to_string())?;
+    tracing::debug!(lease = %lease.id, revision = installed.revision, "takeover relay connected to Keeper");
 
     let deadline = tokio::time::Instant::now() + RELAY_WINDOW;
     let mut after: Option<u64> = None;
+    let mut last_refusal: Option<(String, tokio::time::Instant)> = None;
     loop {
         if tokio::time::Instant::now() >= deadline {
             return Ok(());
@@ -97,9 +112,11 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
         // Re-read every pass: a reclaim from this machine, a release, or expiry
         // must stop the relay without waiting for Keeper to hang up.
         let Ok(Some(current)) = store.held_takeover(unix_timestamp()) else {
+            tracing::debug!(lease = %lease.id, "takeover relay stopping: this Hive is no longer held");
             return Ok(());
         };
         if current.id != lease.id {
+            tracing::debug!(lease = %lease.id, "takeover relay stopping: a different takeover holds this Hive");
             return Ok(());
         }
         // A keystroke renews the lease at Keeper, and the host's copy of it
@@ -111,12 +128,25 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
             message = socket.next() => match message {
                 Some(Ok(ClientMessage::Binary(frame))) => match frame.first() {
                     Some(&INPUT_FRAME_TYPE) => {
-                        write_input(host, session, &installed, &frame[1..]).await;
+                        if let Some(reason) = write_input(host, session, &installed, &frame[1..]).await
+                            && refusal_is_news(&mut last_refusal, &reason)
+                        {
+                            tracing::warn!(lease = %lease.id, %reason, "the takeover holder's keystrokes were refused");
+                            let mut report = vec![INPUT_REFUSED_FRAME_TYPE];
+                            report.extend_from_slice(reason.as_bytes());
+                            socket
+                                .send(ClientMessage::Binary(report.into()))
+                                .await
+                                .map_err(|error| error.to_string())?;
+                        }
                     }
                     Some(&watch_producer::RESNAPSHOT_FRAME_TYPE) => after = None,
                     _ => {}
                 },
-                Some(Ok(ClientMessage::Close(_))) | None => return Ok(()),
+                Some(Ok(ClientMessage::Close(_))) | None => {
+                    tracing::debug!(lease = %lease.id, "takeover relay stopping: Keeper closed the connection");
+                    return Ok(());
+                }
                 Some(Ok(_)) => {}
                 Some(Err(error)) => return Err(error.to_string()),
             },
@@ -198,7 +228,21 @@ async fn install_authority(
     }
 }
 
-/// Writes one keystroke under the installed lease.
+/// Whether a refusal is worth reporting: a new reason, or the same one again
+/// after a quiet spell.
+fn refusal_is_news(last: &mut Option<(String, tokio::time::Instant)>, reason: &str) -> bool {
+    let now = tokio::time::Instant::now();
+    let news = last.as_ref().is_none_or(|(previous, at)| {
+        previous != reason || now.duration_since(*at).as_secs() >= REFUSAL_REPORT_SECONDS
+    });
+    if news {
+        *last = Some((reason.to_owned(), now));
+    }
+    news
+}
+
+/// Writes one keystroke under the installed lease, returning why it was
+/// refused if it was.
 ///
 /// ⚠️ NEVER RETRIED. A refused or failed write may have accepted a prefix, and
 /// replaying it would type the same keys twice into someone else's machine.
@@ -207,9 +251,9 @@ async fn write_input(
     session: swarm_domain::WorkerSessionId,
     authority: &TerminalTakeoverLease,
     bytes: &[u8],
-) {
+) -> Option<String> {
     if bytes.is_empty() || bytes.len() > MAX_CONTROL_INPUT_BYTES {
-        return;
+        return Some("the keystroke was empty or too large".to_owned());
     }
     let refused = match host
         .request(&HostRequest::TakeoverWrite {
@@ -220,12 +264,12 @@ async fn write_input(
         })
         .await
     {
-        Ok(HostResponse::Acknowledged) => return,
-        Ok(HostResponse::Error { code, .. }) => code,
+        Ok(HostResponse::Acknowledged) => return None,
+        Ok(HostResponse::Error { code, message }) => format!("{code}: {message}"),
         Ok(_) => "unexpected response".to_owned(),
         Err(error) => error.to_string(),
     };
-    tracing::debug!(lease = %authority.lease_id, %refused, "a takeover keystroke was not written");
+    Some(refused)
 }
 
 fn relay_url(

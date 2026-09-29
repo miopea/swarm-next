@@ -240,6 +240,34 @@ impl TerminalControlGate {
             .map_err(ControlGateError::Authority)
     }
 
+    /// Input under a remote takeover the registry has already verified.
+    ///
+    /// ⚠️ NOT `legacy`. That refuses every raw write once anyone has claimed
+    /// generation-bound control, which on a real Hive is always: its own
+    /// operator's browser claims Queen the moment it shows her. Routing takeover
+    /// input through it made every keystroke from a Keeper fail with
+    /// "requires generation-bound control" while the window looked live —
+    /// found 2026-09-29, and invisible to any test in which nobody on the held
+    /// Hive had opened Queen. The takeover lease is the authority here; the
+    /// local owner was released when it was installed and cannot claim while it
+    /// lasts, so an owner that somehow exists still wins.
+    pub(crate) fn takeover<E>(
+        &self,
+        effect: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), ControlGateError<E>> {
+        let control = self
+            .control
+            .lock()
+            .map_err(|_| ControlGateError::Poisoned)?;
+        self.require_running()?;
+        if control.owner(self.now()).is_some() {
+            return Err(ControlGateError::Authority(
+                TerminalControlError::OwnedElsewhere,
+            ));
+        }
+        self.complete_effect(effect())
+    }
+
     /// Compatibility ends for operator writes/resizes as soon as a session has
     /// used the new contract, even after expiry/release. Coordination still uses
     /// its existing API authorization but cannot inject under an active owner.

@@ -27,7 +27,11 @@ const { requestTakeoverControlGrant } = await import("../api");
 const grant = vi.mocked(requestTakeoverControlGrant);
 const ticket = { grant: "ticket-1", websocket_path: "/api/v1/apiary/takeovers/lease-1/control" };
 
-afterEach(() => { sockets.length = 0; grant.mockReset(); });
+// A default ticket after every reset. Without one the grant resolves to
+// nothing, which the real API never does, and the window's wait-for-acceptance
+// loop spins without pausing — harmless at the end of the file, and enough to
+// exhaust memory in whatever test runs next.
+afterEach(() => { sockets.length = 0; grant.mockReset(); grant.mockResolvedValue(ticket); });
 
 function harness() {
   if (grant.mock.calls.length === 0 && grant.getMockImplementation() === undefined) grant.mockResolvedValue(ticket);
@@ -151,4 +155,26 @@ test("without a known expiry the window invents none", () => {
     createSurface={() => ({ write: vi.fn(), resize: vi.fn(), clear: vi.fn(), dispose: vi.fn() })}
   />);
   expect(screen.queryByText(/Lapses in about/)).not.toBeInTheDocument();
+});
+
+/**
+ * ⚠️ THE WINDOW SAID IT WAS LIVE WHILE EVERY KEY WAS REFUSED. The held Hive now
+ * says so on the screen channel, and the window has to stop claiming otherwise.
+ */
+test("a refusal from the held Hive replaces the claim that typing is live", async () => {
+  harness();
+  await waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].listeners.get("open")?.({});
+  expect(await screen.findByText("Live — you are typing on this Hive")).toBeInTheDocument();
+
+  const reason = new TextEncoder().encode("terminal_operation_failed: this terminal requires generation-bound control");
+  const frame = new Uint8Array(1 + reason.byteLength);
+  frame[0] = 11;
+  frame.set(reason, 1);
+  sockets[0].listeners.get("message")?.({ data: frame.buffer });
+
+  const status = await screen.findByRole("status");
+  await waitFor(() => expect(status).toHaveTextContent("Paul's Hive is not accepting your typing: terminal_operation_failed: this terminal requires generation-bound control"));
+  expect(status).toHaveClass("refused");
+  expect(status).not.toHaveTextContent("Live — you are typing");
 });

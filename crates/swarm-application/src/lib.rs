@@ -262,6 +262,8 @@ impl ApiaryService {
 
     /// Exchanges an authenticated member's signed public profile for a signed
     /// full directory. A retry after response loss does not duplicate changes.
+    /// Also returns whether the profile changed, so an identical exchange —
+    /// which every member makes on every pass — announces nothing.
     ///
     /// # Errors
     /// Rejects invalid member credentials, signatures, revisions or storage.
@@ -270,12 +272,12 @@ impl ApiaryService {
         credential: &str,
         update: &swarm_domain::FederationProfileUpdate,
         now: i64,
-    ) -> Result<swarm_domain::FederationDirectorySnapshot, ApplicationError> {
-        self.store
+    ) -> Result<(swarm_domain::FederationDirectorySnapshot, bool), ApplicationError> {
+        let changed = self
+            .store
             .accept_federation_public_profile(credential, update, now)?;
-        self.store
-            .signed_federation_directory(credential, now)
-            .map_err(Into::into)
+        let directory = self.store.signed_federation_directory(credential, now)?;
+        Ok((directory, changed))
     }
 
     /// Keeper signing the current policy body for one authenticated member.

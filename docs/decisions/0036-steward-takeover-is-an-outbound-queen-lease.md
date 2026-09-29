@@ -185,3 +185,31 @@ It also makes the implementation materially larger than Observe or Assist: the
 control-plane lease, target acknowledgement, memory-bounded live relay, owner
 reclaim, automation pause, audit, and desktop/mobile visibility are one safety
 unit and must not be released as disconnected partial features.
+
+## Addendum, 2026-09-29: takeover input and the generation contract
+
+The operator's live check on 1.16.6 showed the takeover window live, and the
+held Hive showed it was held. Nothing typed arrived. The held Hive's engine
+refused every keystroke with "this terminal requires generation-bound control".
+
+Takeover input was written through the terminal engine's compatibility path for
+raw writes (ADR 0062). That path refuses every raw write once anyone has claimed
+generation-bound control of the session. On a real Hive that is always the case:
+its own operator's browser claims Queen as soon as it shows her. So takeover
+input could never land on any Hive whose Queen had been opened in a browser. The
+two-Hive run missed it because nobody opened Queen on its member; it now does.
+
+- **Takeover input has its own gate rule in the engine.** A keystroke is written
+  once the registry has checked the exact installed lease, provided no local
+  owner holds control. Installing the takeover releases that owner, and claims
+  are refused while it lasts, so the check only guards against an impossible
+  state. It is not the raw-write compatibility path, and that path is unchanged.
+- **A refused keystroke is reported, not dropped.** The held Hive logs it as a
+  warning and sends frame type 11 (input refused, with the reason) up the screen
+  channel, at most once every five seconds for each reason. The Keeper's window
+  replaces "Live — you are typing on this Hive" with the reason. The window must
+  never claim typing is live while the held Hive is refusing it.
+
+The fix is in the terminal engine, so a held Hive gets it once its engine
+updates. An ordinary update swaps the engine when no session is mid-turn, and
+the worker engine card can apply it sooner.

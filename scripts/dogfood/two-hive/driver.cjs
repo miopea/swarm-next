@@ -6,7 +6,7 @@ const { execFileSync } = require("node:child_process");
 
 const fs = require("node:fs");
 
-const { KEEPER, MEMBER, TOKEN, KEEPER_UNIT, KEEPER_START, PROXY_FAULT } = process.env;
+const { KEEPER, MEMBER, TOKEN, KEEPER_UNIT, KEEPER_START, PROXY_FAULT, ARTIFACTS } = process.env;
 const started = Date.now();
 const elapsed = () => `${((Date.now() - started) / 1000).toFixed(1)}s`;
 
@@ -198,6 +198,82 @@ async function main() {
   });
   control.socket.close();
   pass("the member takes it back and the Keeper records it");
+
+  // ── 5. The same takeover from a real Keeper browser, typed on a keyboard ──
+  // Everything above speaks the wire protocol directly. The operator does not:
+  // they click Take over and type into an xterm, and on 2026-09-29 that is the
+  // path where keystrokes went nowhere while every check above passed.
+  const memberName = (await must(KEEPER, "GET", "/api/v1/apiary/members")).find((entry) => entry.hive_id === memberHive).hive_name;
+  const { chromium } = require("playwright");
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  try {
+    page.on("dialog", (dialog) => void dialog.accept("Two-Hive acceptance, from a browser"));
+    await page.goto(KEEPER);
+    // A browser on the Hive's own machine may already be trusted; unlock only
+    // when asked.
+    const tokenInput = page.getByLabel("Operator token");
+    const apiary = page.getByRole("button", { name: /^Apiary/ }).first();
+    await tokenInput.or(apiary).first().waitFor({ timeout: 20_000 });
+    if (await tokenInput.isVisible()) {
+      await tokenInput.fill(TOKEN);
+      await page.getByRole("button", { name: "Unlock Swarm" }).click();
+    }
+    await apiary.click();
+    // The member's operator has Queen open in their own browser, as they did in
+    // the field. Their page tries to take its terminal back while it is held,
+    // and a test with nobody at the member cannot see what that does.
+    const memberPage = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+    await memberPage.goto(MEMBER);
+    const memberToken = memberPage.getByLabel("Operator token");
+    const memberWorkers = memberPage.getByRole("button", { name: /^Workers/ }).first();
+    await memberToken.or(memberWorkers).first().waitFor({ timeout: 20_000 });
+    if (await memberToken.isVisible()) {
+      await memberToken.fill(TOKEN);
+      await memberPage.getByRole("button", { name: "Unlock Swarm" }).click();
+    }
+    await memberWorkers.click();
+    // Drawn on a canvas, so the screen is not readable here; its status is.
+    await memberPage.waitForFunction(() => /\bConnected\b/.test(document.body.innerText), undefined, { timeout: 30_000 });
+    console.log(`      ${elapsed()} the member's browser shows Queen`);
+    const row = page.getByRole("list", { name: "Keeper Apiary Hives" }).getByRole("listitem").filter({ hasText: memberName });
+    await row.getByRole("button", { name: "Take over" }).click();
+    const held = page.getByRole("dialog", { name: `Controlling ${memberName}` });
+    console.log(`      ${elapsed()} Take over clicked`);
+    await held.getByText("Live — you are typing on this Hive").waitFor({ timeout: 60_000 });
+    console.log(`      ${elapsed()} the takeover window is live`);
+    await waitFor("the browser takeover window shows the member's Queen", 30, async () => {
+      const text = await held.locator(".xterm-rows").innerText();
+      return { ok: text.includes("two-hive-queen ready"), seen: text.slice(-200) };
+    });
+    pass("a Keeper browser opens the takeover window on the member's screen");
+    await held.locator(".takeover-window-surface").click();
+    await page.keyboard.type("hello-from-browser");
+    await page.keyboard.press("Enter");
+    await waitFor("what the Keeper types in the browser reaches the member's terminal", 30, async () => {
+      const text = await held.locator(".xterm-rows").innerText();
+      const status = await held.getByRole("status").innerText();
+      return { ok: text.includes("typed:hello-from-browser"), seen: { status, text: text.slice(-300) } };
+    });
+    pass("typing in the browser's takeover window reaches the member's terminal");
+    await held.getByRole("button", { name: "Hand back" }).click();
+  } catch (error) {
+    // A browser failure without a picture sends someone off to reproduce it by
+    // hand, which is the leg work this run exists to remove.
+    fs.mkdirSync(ARTIFACTS, { recursive: true });
+    const pages = browser.contexts().flatMap((context) => context.pages());
+    const seen = [];
+    for (const [index, open] of pages.entries()) {
+      const name = `${ARTIFACTS}/browser-failure-${index + 1}`;
+      await open.screenshot({ path: `${name}.png`, fullPage: true }).catch(() => undefined);
+      const text = await open.locator("body").innerText().catch(() => "(page text unavailable)");
+      fs.writeFileSync(`${name}.txt`, `${open.url()}\n\n${text}`);
+      seen.push(`${open.url()}: ${text.replace(/\s+/g, " ").slice(0, 240)}`);
+    }
+    throw new Error(`${error.message}\n      ${seen.join("\n      ")}\n      saved: ${ARTIFACTS}/browser-failure-*.png`);
+  } finally {
+    await browser.close();
+  }
 
   console.log(`\nALL PASSED in ${elapsed()}`);
 }

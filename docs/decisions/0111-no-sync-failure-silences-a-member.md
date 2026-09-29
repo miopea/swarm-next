@@ -69,3 +69,32 @@ still not applied. The failed pass changes nothing. It is only retried later.
   this release.
 - The two-Hive acceptance run exercises decisions 1 and 4 end to end. It fails
   on 1.16.5 and passes on this change.
+
+## Addendum, 2026-09-29: a loop was doing the pacing's job
+
+The two-Hive run now keeps both Hives' logs. Those logs showed a member and its
+Keeper ringing each other about fifty times a second while a doorbell socket was
+connected. Every member pass exchanges its public profile. The Keeper announced
+a directory change on every exchange, and every announcement started another
+member pass. Every check still passed, because each thing the member was meant
+to do happened almost at once, just unintentionally.
+
+Stopping the loop exposed four places where pacing had quietly delayed what the
+loop had been doing immediately. Each is now fixed:
+
+1. **The Keeper announces a directory change only when a profile changed.** The
+   store already knew this; the application layer dropped it.
+2. **A member reads back what it just accepted.** Accepting a watch or a
+   takeover left its own copy `requested` until the next full pass, which is
+   paced to a minute, and only an active one relays. Both steps now re-read the
+   Keeper's list after accepting.
+3. **Local changes sync now.** A reclaim, a handoff answer or a Steward request
+   asked for a sync through the paced entry point, which returned at once, so it
+   waited up to a minute. They use a prompted pass, as an announcement does.
+4. **Reconnecting counts as an announcement.** The catch-up sync on reconnect
+   stands in for doorbells that were missed, but it was paced, so a takeover
+   requested between two connections was not seen for up to a minute.
+
+A prompted pass still waits out the backoff after a refusal, as in decision 2.
+The run now fails if the member makes more than 150 sync passes in a single
+run. A healthy run makes about fifteen, and the loop made more than 750.
