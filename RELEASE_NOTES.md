@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.6
+
+### New features
+- The Keeper's list of Hives shows when it last heard from each one, such as "heard from 3m ago", and highlights a Hive it has not heard from in ten minutes. A Hive that had stopped reaching the Keeper used to go on showing the release it last reported, so a Hive already updated could still read as behind.
+- When a member Hive cannot synchronize, its Apiary page and Settings name the step that failed and when it will try again, for example "Stopped at project catalog · next try in 2m".
+
+### Fixes
+- One refused request no longer cuts a member Hive off from its Keeper. A single refusal used to stop it synchronizing for good: it stopped reporting its version and never accepted a watch or a takeover. It now keeps retrying, waiting up to five minutes between attempts, and recovers by itself when the refusal stops. Install this on both the Keeper and the member.
+- A takeover no longer says "The takeover ended" a second after it opens. The window now waits until the other Hive has accepted.
+- A watch window shows the other Hive's screen as soon as it opens. It used to stay blank until that screen next changed.
+
 ## 1.16.5
 
 ### Fixes
