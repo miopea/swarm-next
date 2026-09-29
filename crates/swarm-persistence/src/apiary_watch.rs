@@ -507,7 +507,11 @@ impl TaskStore {
         self.renew_apiary_watch(operator, watch_id, now)
     }
 
-    fn authenticated_member_hive(
+    /// The Apiary and Hive one authenticated member node speaks for.
+    ///
+    /// # Errors
+    /// Rejects malformed, unknown and expired credentials.
+    pub fn authenticated_member_hive(
         &self,
         credential: &str,
         now: i64,

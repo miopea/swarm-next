@@ -4,11 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 use swarm_api::bundled_feedback::{FeedbackDestination, feedback_destination};
-use swarm_api::{AppState, router, router_with_asset_root, router_with_web_root};
+use swarm_api::{
+    AppState, DiagnosticLog, diagnostic_layer, router, router_with_asset_root, router_with_web_root,
+};
 use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{
+    EnvFilter, Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _,
+};
 mod background_services;
 use background_services::BackgroundServices;
 
@@ -176,10 +180,14 @@ fn configure_github_issue_intake(state: AppState) -> AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    // Two consumers with their own filters: the journal follows RUST_LOG, and
+    // the shared log keeps a fixed set whatever RUST_LOG says (ADR 0112).
+    let diagnostics = std::sync::Arc::new(DiagnosticLog::new());
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| "swarm_api=info".into()),
-        )
+        ))
+        .with(diagnostic_layer(std::sync::Arc::clone(&diagnostics)))
         .init();
     let terminal_socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
@@ -208,6 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_or_else(AppState::default, |token| {
             AppState::default().with_terminal_host(HostClient::new(terminal_socket), token)
         })
+        .with_diagnostic_log(diagnostics)
         .with_attachment_store(attachment_root_from_database(&database_path))
         .with_database_directory(
             database_path

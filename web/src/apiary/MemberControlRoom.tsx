@@ -415,6 +415,8 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
             <div><dt>Tasks applied</dt><dd>{value("taskSync", snapshot.taskSync?.task_count ?? 0)}</dd></div>
           </dl>
           {section("catalog", "Shared catalog", <SharedCatalogStatus catalog={snapshot.catalog} />)}
+          {/* Always on, by operator decision (ADR 0112), so it is said rather than switchable. */}
+          <p className="member-sync-copy member-log-notice">This Hive shares its log with the Keeper: Swarm&apos;s own warnings, errors and Apiary connection events, never terminal output or anything typed.</p>
         </article>
         <article className="keeper-panel member-task-panel">
           <header><div><p className="eyebrow">Shared work pulse</p><h4>Swarm tasks polled from Keeper</h4></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Manage in Tasks</button></header>

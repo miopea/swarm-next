@@ -94,7 +94,7 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   // into yourself is a mirror — the terminal is already on this machine — and
   // the absence here is what proves the guard rather than the presence
   // elsewhere.
-  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveClover HiveCoraHiveNo version reported · heard from just nowWatchTake overRemoveFern HiveFayeHiveNo version reported · no contact recordedWatchTake overRemove");
+  expect(screen.getByRole("list", { name: "Keeper Apiary Hives" })).toHaveTextContent("Meadow HiveBeaKeeper · This HiveLogsClover HiveCoraHiveNo version reported · heard from just nowLogsWatchTake overRemoveFern HiveFayeHiveNo version reported · no contact recordedLogsWatchTake overRemove");
   // A member never heard from is raised, so a stale version cannot pass for a current one.
   expect(screen.getByText("No version reported · no contact recorded")).toHaveClass("raised");
   expect(screen.getByText("No version reported · heard from just now")).not.toHaveClass("raised");

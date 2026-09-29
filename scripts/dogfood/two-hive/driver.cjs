@@ -275,6 +275,17 @@ async function main() {
     await browser.close();
   }
 
+  // ── 6. The Keeper can read the member's own log (ADR 0112) ──
+  // What made this run useful — the member's account of what went wrong — has
+  // to reach the Keeper by itself, not only this run's copy of the journal.
+  await waitFor("the member's log reaches the Keeper", 60, async () => {
+    const log = await must(KEEPER, "GET", `/api/v1/apiary/hives/${memberHive}/diagnostics`);
+    const stopped = log.entries.some((entry) => entry.message.includes("synchronisation stopped at this step"));
+    const relayed = log.entries.some((entry) => entry.message.includes("takeover relay connected to Keeper"));
+    return { ok: stopped && relayed, seen: { lines: log.entries.length, received_at: log.received_at, stopped, relayed } };
+  });
+  pass("the Keeper can read the member's own log, including why it stopped");
+
   console.log(`\nALL PASSED in ${elapsed()}`);
 }
 

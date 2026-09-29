@@ -247,6 +247,25 @@ impl FederationHttpClient {
         .map(|_| ())
     }
 
+    /// Sends a batch of this Hive's own log lines to its Keeper (ADR 0112).
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn publish_diagnostics(
+        &self,
+        credential: &str,
+        batch: &swarm_domain::DiagnosticBatch,
+    ) -> Result<(), FederationHttpError> {
+        self.send_json::<_, serde::de::IgnoredAny>(
+            Method::PUT,
+            "api/v1/federation/diagnostics",
+            Some(credential),
+            Some(batch),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Creates a bounded, redirect-free transport for one signed Keeper base
     /// endpoint. Plain HTTP is accepted only for loopback test/development
     /// peers; remote federation always requires HTTPS.

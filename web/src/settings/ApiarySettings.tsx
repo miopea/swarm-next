@@ -531,6 +531,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 <div><dt>Retries</dt><dd>{memberSync?.consecutive_failures ?? 0}</dd></div>
               </dl>
               <SharedCatalogStatus catalog={memberCatalog} />
+              <small className="apiary-log-notice">This Hive shares its log with the Keeper: Swarm&apos;s own warnings, errors and Apiary connection events, never terminal output or anything typed.</small>
               {memberSyncLoadError ? <p className="apiary-blockers">Synchronization status could not be refreshed. Local workers and owned work are unchanged.</p> : null}
             </div>
           ) : null}

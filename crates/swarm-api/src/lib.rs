@@ -19,14 +19,17 @@ mod decision_clarification;
 mod decisions;
 pub use database_integrity::monitor_database_integrity;
 mod apiary_enrollment;
+mod diagnostic_log;
 mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
 mod federation_events;
+mod member_diagnostics;
 mod takeover_producer;
 mod takeover_relay;
 mod watch_producer;
 mod watch_relay;
+pub use diagnostic_log::{DiagnosticLog, diagnostic_layer};
 pub use federation_events::poll_member_events;
 pub mod federation_http;
 mod feedback;
@@ -452,6 +455,11 @@ pub struct AppState {
     watch_grants: Arc<watch_relay::WatchGrantStore>,
     takeover_relay: Arc<takeover_relay::TakeoverRelay>,
     takeover_grants: Arc<takeover_relay::TakeoverGrantStore>,
+    /// This Hive's own recent log, shared with its Keeper when it is a member.
+    /// Absent in tests and tools that install no tracing layer.
+    diagnostic_log: Option<Arc<DiagnosticLog>>,
+    /// What members have shared of their logs with this Keeper (ADR 0112).
+    member_diagnostics: Arc<member_diagnostics::MemberDiagnostics>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -587,6 +595,8 @@ impl AppState {
             watch_grants: Arc::new(watch_relay::WatchGrantStore::default()),
             takeover_relay: Arc::new(takeover_relay::TakeoverRelay::default()),
             takeover_grants: Arc::new(takeover_relay::TakeoverGrantStore::default()),
+            diagnostic_log: None,
+            member_diagnostics: Arc::new(member_diagnostics::MemberDiagnostics::default()),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -811,6 +821,13 @@ impl AppState {
         }
         self.public_base_url = Some(Arc::from(public_base_url.trim().trim_end_matches('/')));
         Ok(self)
+    }
+
+    /// The buffer this Hive's tracing layer writes to, so it can be shared.
+    #[must_use]
+    pub fn with_diagnostic_log(mut self, log: Arc<DiagnosticLog>) -> Self {
+        self.diagnostic_log = Some(log);
+        self
     }
 
     #[must_use]
@@ -1216,12 +1233,59 @@ impl AppState {
         // hearing anything else Keeper says until it finishes.
         let started = std::time::Instant::now();
         tracing::debug!(prompted, "federation pass starting");
+        self.ship_diagnostics().await;
         self.reconcile_federation_pass(prompted).await;
-        tracing::debug!(
-            prompted,
-            elapsed_ms = started.elapsed().as_millis(),
-            "federation pass finished"
-        );
+        let elapsed_ms = started.elapsed().as_millis();
+        tracing::debug!(prompted, elapsed_ms, "federation pass finished");
+        if elapsed_ms >= SLOW_FEDERATION_PASS_MS {
+            tracing::info!(
+                prompted,
+                elapsed_ms,
+                "a federation pass was slow; this Hive heard nothing else from Keeper meanwhile"
+            );
+        }
+    }
+
+    /// Sends this Hive's new log lines to its Keeper (ADR 0112).
+    ///
+    /// ⚠️ BEFORE THE PACING AND REFUSAL GATES, ON PURPOSE. A member waiting out a
+    /// backoff, or refused at one step, is exactly the one whose log the Keeper
+    /// needs, and those gates return before anything else is sent. Nothing goes
+    /// when nothing is new, so a quiet Hive costs nothing.
+    ///
+    /// A failure is logged at DEBUG, which the shared log does not keep: a
+    /// warning here would be one more line to send, and an unreachable Keeper is
+    /// already reported by the pass itself.
+    async fn ship_diagnostics(&self) {
+        let (Some(log), Some(store)) = (self.diagnostic_log.as_ref(), self.task_store.as_ref())
+        else {
+            return;
+        };
+        let Some(batch) = log.pending_batch() else {
+            return;
+        };
+        let Ok(connection) = ApiaryService::new(store.clone()).federation_member_connection()
+        else {
+            return;
+        };
+        let Ok(client) = federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+        else {
+            return;
+        };
+        let last = batch.entries.last().map(|entry| entry.sequence);
+        match client
+            .publish_diagnostics(&connection.node_credential, &batch)
+            .await
+        {
+            Ok(()) => {
+                if let Some(last) = last {
+                    log.mark_shipped(last);
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, "this Hive's log could not reach its Keeper; it tries again next pass");
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4278,6 +4342,11 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/apiary/fleet-versions", get(apiary_fleet_versions))
         .route(
+            "/api/v1/apiary/hives/{hive_id}/diagnostics",
+            get(apiary_hive_diagnostics),
+        )
+        .route("/api/v1/diagnostics/log", get(local_diagnostic_log))
+        .route(
             "/api/v1/apiary/watches",
             get(apiary_watch_audit).post(open_apiary_watch),
         )
@@ -4399,6 +4468,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/capability",
             axum::routing::put(accept_hive_capability),
+        )
+        .route(
+            "/api/v1/federation/diagnostics",
+            axum::routing::put(accept_member_diagnostics),
         )
         .route(
             "/api/v1/federation/events",
@@ -6781,6 +6854,110 @@ async fn exchange_federation_directory(
         announce_federation_change(&state, swarm_domain::FederationChangeKind::Directory);
     }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(directory)).into_response())
+}
+
+/// A federation pass that takes this long is reported at INFO. The doorbell
+/// handler runs passes inline, so while one runs this Hive hears nothing else.
+const SLOW_FEDERATION_PASS_MS: u128 = 5_000;
+
+/// Keeper receiving a batch of one member's own log (ADR 0112).
+///
+/// Written to this Keeper's journal as well as kept for the roster, so the
+/// member's account of a failure sits beside the Keeper's own, where it can be
+/// read without asking that member's operator to go and look.
+async fn accept_member_diagnostics(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(batch): Json<swarm_domain::DiagnosticBatch>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let now = unix_timestamp();
+    let hive = apiary_service(&state)?
+        .authenticated_member_hive(credential, now)
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "invalid_federation_credential",
+                "a current federation node credential is required",
+            )
+        })?;
+    batch.validate().map_err(|reason| {
+        ApiError::new(StatusCode::BAD_REQUEST, "invalid_diagnostic_batch", reason)
+    })?;
+    if batch.dropped > 0 {
+        tracing::warn!(
+            target: diagnostic_log::MEMBER_LOG_TARGET,
+            %hive,
+            lost = batch.dropped,
+            "a member lost log lines before it could send them"
+        );
+    }
+    for entry in state.member_diagnostics.accept(hive, &batch, now) {
+        write_member_line(hive, &entry);
+    }
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+/// One member line into this Keeper's journal, at the member's own level —
+/// except DEBUG, which goes in as INFO so a default filter still shows it.
+fn write_member_line(hive: swarm_domain::HiveId, entry: &swarm_domain::DiagnosticEntry) {
+    use diagnostic_log::MEMBER_LOG_TARGET;
+    use swarm_domain::DiagnosticLevel;
+    let (member_target, at_ms, message) = (&entry.target, entry.at_ms, &entry.message);
+    match entry.level {
+        DiagnosticLevel::Error => {
+            tracing::error!(target: MEMBER_LOG_TARGET, %hive, %member_target, at_ms, "{message}");
+        }
+        DiagnosticLevel::Warn => {
+            tracing::warn!(target: MEMBER_LOG_TARGET, %hive, %member_target, at_ms, "{message}");
+        }
+        DiagnosticLevel::Info => {
+            tracing::info!(target: MEMBER_LOG_TARGET, %hive, %member_target, at_ms, "{message}");
+        }
+        DiagnosticLevel::Debug => {
+            tracing::info!(target: MEMBER_LOG_TARGET, %hive, %member_target, at_ms, member_level = "debug", "{message}");
+        }
+    }
+}
+
+/// What one Hive has shared of its log with this Keeper.
+async fn apiary_hive_diagnostics(
+    State(state): State<Arc<AppState>>,
+    Path(hive_id): Path<swarm_domain::HiveId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.member_diagnostics.view(hive_id)),
+    )
+        .into_response())
+}
+
+/// This Hive's own recent log, in the same shape as a member's.
+async fn local_diagnostic_log(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entries = state
+        .diagnostic_log
+        .as_ref()
+        .map(|log| log.recent(usize::MAX))
+        .unwrap_or_default();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(member_diagnostics::MemberLogView {
+            entries,
+            dropped: 0,
+            received_at: None,
+        }),
+    )
+        .into_response())
 }
 
 /// Keeper receiving one member's capability report.
@@ -14179,6 +14356,94 @@ mod tests {
     /// ⚠️ THE OPERATOR'S "TAKEOVER ENDS AFTER A SECOND", 2026-09-27. A control
     /// ticket for a takeover the member has not accepted opens a socket that is
     /// refused at once, which the window reports as the takeover ending.
+    /// ⚠️ ADR 0112: a member's log reaches its Keeper, only on that member's own
+    /// credential and only within the agreed bounds, and the Keeper's roster
+    /// can read it back.
+    #[tokio::test]
+    async fn a_member_shares_its_log_with_its_keeper_and_nobody_else_can() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let hive = member.local_hive_identity().unwrap().hive.id;
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let send = |app: Router, credential: String, body: Value| async move {
+            app.oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/federation/diagnostics")
+                    .header("authorization", format!("Bearer {credential}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        };
+        let line = |sequence: u64| {
+            serde_json::json!({
+                "sequence": sequence,
+                "at_ms": 1,
+                "level": "warn",
+                "target": "swarm_api::takeover_producer",
+                "message": "the takeover holder's keystrokes were refused"
+            })
+        };
+        let batch = |entries: Vec<Value>| serde_json::json!({ "boot_id": "boot-1", "entries": entries, "dropped": 0 });
+
+        assert_eq!(
+            send(
+                app.clone(),
+                "bm90LWEtY3JlZGVudGlhbA".to_owned(),
+                batch(vec![line(1)])
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(
+                app.clone(),
+                credential.clone(),
+                batch(vec![line(2), line(1)])
+            )
+            .await,
+            StatusCode::BAD_REQUEST,
+            "out-of-order lines are refused rather than stored"
+        );
+        assert_eq!(
+            send(
+                app.clone(),
+                credential.clone(),
+                batch(vec![line(1), line(2)])
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+
+        let view = response_json(
+            app.oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/apiary/hives/{hive}/diagnostics"))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(view["entries"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            view["entries"][0]["message"],
+            "the takeover holder's keystrokes were refused"
+        );
+        assert!(view["received_at"].is_i64());
+    }
+
     #[tokio::test]
     async fn no_control_ticket_is_issued_until_the_hive_accepts_the_takeover() {
         let now = unix_timestamp();

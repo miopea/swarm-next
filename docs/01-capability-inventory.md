@@ -211,6 +211,16 @@ Those logs found a directory-announcement loop, about fifty passes a second,
 that had been hiding four minute-long delays in watch, takeover and reclaim. All
 four are fixed (ADR 0111 addendum).
 
+Member logs (ADR 0112, 2026-09-29): every member keeps a bounded copy of its own
+log — Swarm's INFO-and-above lines plus the Apiary connection's DEBUG lines —
+and sends new lines to its Keeper on every sync pass, including while it is in
+a backoff. It is always on, and the member's screens say so. The Keeper keeps a
+bounded copy per Hive and writes each line to its own journal. Every roster row
+has a Logs view: the member's shared log, or the Keeper's own. Terminal output
+and input never travel. The two-Hive run checks that the member's account of
+why it stopped reaches the Keeper, through both the API and the Keeper's
+journal.
+
 Hive watching checkpoint: the control plane, the frame relay and the Keeper's
 viewer surface are implemented. A Keeper opens a window from the Apiary Hive
 roster — offered for remote Hives and not for this one — and closing it ENDS the

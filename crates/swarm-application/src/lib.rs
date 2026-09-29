@@ -340,6 +340,21 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// The Hive one authenticated member node speaks for.
+    ///
+    /// # Errors
+    /// Rejects malformed, unknown and expired credentials.
+    pub fn authenticated_member_hive(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<swarm_domain::HiveId, ApplicationError> {
+        self.store
+            .authenticated_member_hive(credential, now)
+            .map(|(_, hive)| hive)
+            .map_err(Into::into)
+    }
+
     /// Keeper accepting one authenticated member's capability report.
     ///
     /// # Errors

@@ -37,7 +37,10 @@ if [ -z "$bundle" ]; then
   # Always built: testing binaries older than the checkout is how a green run
   # can describe code nobody is shipping.
   (cd "$repo_root" && PATH="$HOME/.cargo/bin:$PATH" CARGO_INCREMENTAL=0 cargo build --release --quiet -p swarm-api -p swarm-terminal-host)
-  (cd "$repo_root/web" && pnpm build >/dev/null)
+  # Quiet unless it fails, and then loud: a build error hidden here reads as
+  # the run failing for no reason.
+  (cd "$repo_root/web" && pnpm build > "$test_root/web-build.log" 2>&1) \
+    || { cat "$test_root/web-build.log" >&2; exit 1; }
   for binary in swarm-api swarm-terminal-host swarmctl; do
     [ -x "$repo_root/target/release/$binary" ] && ln -s "$repo_root/target/release/$binary" "$bundle/bin/$binary"
   done
@@ -129,5 +132,13 @@ if [ "$passes" -gt 150 ]; then
   passed=1
 else
   echo "PASS  the member ran $passes synchronization passes, not a loop" >&2
+fi
+# The member's lines land in the Keeper's own journal too, which is where the
+# Keeper's operator — or anyone on that machine — reads them without the API.
+if grep -q "swarm_api::member_log" "$artifacts/keeper.log"; then
+  echo "PASS  the Keeper's own journal carries the member's log lines" >&2
+else
+  echo "FAIL  the Keeper's journal has none of the member's log lines" >&2
+  passed=1
 fi
 exit "$passed"

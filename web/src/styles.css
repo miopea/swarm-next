@@ -297,6 +297,22 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .watch-window-state { font-size: .74rem; color: var(--text-muted); }
 .watch-window-state.live { color: var(--good); }
 .watch-window-state.refused { color: var(--warn-strong); font-weight: 650; }
+.hive-log-window { width: min(1100px, 100%); margin: 0 auto; min-height: 0; }
+.hive-log-body { display: grid; align-content: start; gap: 8px; min-height: 0; overflow: auto; }
+.hive-log-status { margin: 0; color: var(--muted); font-size: .8rem; }
+.hive-log-filter { display: inline-flex; align-items: center; gap: 6px; font-size: .78rem; }
+.hive-log-lines { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font-family: var(--font-mono); font-size: .74rem; }
+.hive-log-line { display: grid; grid-template-columns: auto 3.6rem minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 4px 8px; border-radius: 6px; background: var(--panel); }
+.hive-log-line time { color: var(--muted); white-space: nowrap; }
+.hive-log-level { color: var(--muted); font-size: .66rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.hive-log-line.warn .hive-log-level { color: var(--warn-strong); }
+.hive-log-line.error .hive-log-level { color: var(--bad-strong); }
+.hive-log-message { min-width: 0; overflow-wrap: anywhere; }
+.hive-log-message small { display: block; color: var(--muted); }
+@media (max-width: 640px) {
+  .hive-log-line { grid-template-columns: auto minmax(0, 1fr); }
+  .hive-log-message { grid-column: 1 / -1; }
+}
 /* The frame is the room; the surface is the owner's grid, scaled into it. */
 .watch-window-frame { display: block; min-height: 0; min-width: 0; overflow: hidden; border-radius: 8px; background: var(--terminal-frame); }
 .watch-window-surface, .takeover-window-surface { min-width: 0; }

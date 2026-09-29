@@ -1672,6 +1672,35 @@ export type FleetVersions = {
   hives: FleetHiveVersion[];
 };
 
+export type DiagnosticLevel = "error" | "warn" | "info" | "debug";
+export type DiagnosticEntry = {
+  sequence: number;
+  /** Milliseconds since the Unix epoch, on the clock of the Hive that wrote it. */
+  at_ms: number;
+  level: DiagnosticLevel;
+  target: string;
+  message: string;
+};
+/** A Hive's recent log: a member's as shared with its Keeper, or this Hive's own (ADR 0112). */
+export type HiveLog = {
+  /** Oldest first. */
+  entries: DiagnosticEntry[];
+  /** Lines the member lost before it could send them. */
+  dropped: number;
+  /** When the Keeper last received anything from that Hive; null for this Hive's own log or never. */
+  received_at: number | null;
+};
+
+export async function fetchHiveLog(operatorToken: string, hiveId: string, signal?: AbortSignal): Promise<HiveLog> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/hives/${encodeURIComponent(hiveId)}/diagnostics`, { signal });
+  return response.json() as Promise<HiveLog>;
+}
+
+export async function fetchLocalLog(operatorToken: string, signal?: AbortSignal): Promise<HiveLog> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/diagnostics/log", { signal });
+  return response.json() as Promise<HiveLog>;
+}
+
 export async function fetchFleetVersions(operatorToken: string, signal?: AbortSignal): Promise<FleetVersions> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/fleet-versions", { signal });
   return response.json() as Promise<FleetVersions>;

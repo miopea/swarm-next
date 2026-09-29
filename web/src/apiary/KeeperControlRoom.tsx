@@ -12,6 +12,7 @@ import FleetVersions from "./FleetVersions";
 import WatchWindow from "./WatchWindow";
 import TakeoverAudit from "./TakeoverAudit";
 import TakeoverWindow from "./TakeoverWindow";
+import HiveLogDialog from "./HiveLogDialog";
 import { memberContact } from "./presentation";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
@@ -30,6 +31,8 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   // other people's terminals is surveillance wearing a dashboard, and nobody
   // asked for it.
   const [watching, setWatching] = useState<{ watch: ApiaryWatch; hiveName: string }>();
+  // Whose log is open: a member's as it shared it, or this Hive's own when undefined.
+  const [logOf, setLogOf] = useState<{ hiveId: string | undefined; hiveName: string }>();
   const [watchError, setWatchError] = useState<string>();
   // The Hive the operator is being asked to confirm removing, with whatever
   // still holds it to the Apiary. Confirmation is deliberate: removal is not
@@ -116,7 +119,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel">
           <header><div><p className="eyebrow">People and Hives</p><h4>Apiary Hives</h4></div><small>Registration, not live presence</small></header>
           {section("members", "Hive roster", <>
-{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? null : <span className="hive-actions"><small className={`hive-standing${versionByHive.get(member.hive_id)?.raises || memberContact(member, nowSeconds).silent ? " raised" : ""}`}>{(() => {
+{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? <span className="hive-actions"><button type="button" className="secondary-button" onClick={() => setLogOf({ hiveId: undefined, hiveName: member.hive_name })}>Logs</button></span> : <span className="hive-actions"><small className={`hive-standing${versionByHive.get(member.hive_id)?.raises || memberContact(member, nowSeconds).silent ? " raised" : ""}`}>{(() => {
             const seen = versionByHive.get(member.hive_id);
             const contact = memberContact(member, nowSeconds).label;
             if (!seen) return `No version reported · ${contact}`;
@@ -128,7 +131,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
               : seen.standing === "unreadable" ? "version unreadable"
               : "not compared";
             return `${seen.swarm_version} · ${standing} · ${contact}`;
-          })()}</small><button type="button" className="secondary-button" onClick={async () => {
+          })()}</small><button type="button" className="secondary-button" onClick={() => setLogOf({ hiveId: member.hive_id, hiveName: member.hive_name })}>Logs</button><button type="button" className="secondary-button" onClick={async () => {
             setWatchError(undefined);
             try {
               const watch = await openApiaryWatch(operatorToken, member.hive_id);
@@ -211,6 +214,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
               setControlling(undefined);
             }}
           /> : null}
+          {logOf ? <HiveLogDialog operatorToken={operatorToken} hiveName={logOf.hiveName} hiveId={logOf.hiveId} onClose={() => setLogOf(undefined)} /> : null}
           {watching ? <WatchWindow
             watchId={watching.watch.id}
             operatorToken={operatorToken}

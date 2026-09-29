@@ -15,7 +15,19 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
       if (mode.current === "failed") throw new Error("Fictional observation failure");
       const url = String(input);
       const now = Math.floor(Date.now() / 1000);
-      const payload = url.endsWith("/catalog-readiness") ? { acknowledgement: null, jira_connection: "not_connected", projects: [], blockers: [] }
+      const line = (sequence: number, secondsAgo: number, level: string, target: string, message: string) => ({ sequence, at_ms: (now - secondsAgo) * 1000, level, target, message });
+      const payload = url.endsWith("/diagnostics/log") ? { entries: [line(1, 90, "info", "swarm_api", "Swarm API listening address=127.0.0.1:8766")], dropped: 0, received_at: null }
+        : url.endsWith("/diagnostics") ? {
+            entries: [
+              line(40, 300, "info", "swarm_api", "Swarm API listening address=127.0.0.1:8766"),
+              line(41, 240, "warn", "swarm_api", "Apiary synchronisation stopped at this step; it retries on a backoff step=\"project catalog\" condition=Incompatible"),
+              line(42, 180, "debug", "swarm_api::takeover_producer", "takeover relay connected to Keeper lease=01a0eee4-2874-7491-85c3-5bc21d940346 revision=2"),
+              line(43, 120, "warn", "swarm_api::takeover_producer", "the takeover holder's keystrokes were refused lease=01a0eee4-2874-7491-85c3-5bc21d940346 reason=terminal_operation_failed: this terminal requires generation-bound control"),
+              line(44, 60, "error", "swarm_api", "the terminal host did not answer error=connection refused"),
+            ],
+            dropped: 2, received_at: now - 20,
+          }
+        : url.endsWith("/catalog-readiness") ? { acknowledgement: null, jira_connection: "not_connected", projects: [], blockers: [] }
         // Stopped at one step and waiting out its backoff: the state a field
         // member sat in for days while saying only "needs attention".
         : url.endsWith("/sync-health") ? { condition: "incompatible", last_attempt_at: now - 20, last_success_at: now - 3 * 86_400, consecutive_failures: 4, next_attempt_at: now + 100, failed_step: "project catalog" }
