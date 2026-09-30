@@ -12,6 +12,18 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.7
+
+### New features
+- The Keeper can read the log of every Hive in its Apiary. Each Hive on the Keeper's Apiary page has a Logs button showing that Hive's recent warnings, errors and Apiary connection events, newest first; the Keeper's own row shows its own log. Members send their log as they synchronise, even while they are retrying after a failure. Sharing is always on, and a member's Apiary page and Settings say so. Terminal output and anything typed are never shared.
+
+### Fixes
+- Typing in a takeover now reaches the other Hive. It was refused every time the other Hive's own browser had Queen open, which is almost always, while the takeover window still said you were typing. Install this on the Hive being taken over. (after the worker engine update)
+- If a Hive does refuse your typing, the takeover window says so and why, instead of claiming you are typing.
+- Watch and takeover windows show the other Hive's screen within a second or two of it accepting. Before, a window could sit blank for up to a minute.
+- "Take back control" reaches the Keeper at once, so the Keeper's takeover window closes straight away.
+- A member and its Keeper no longer contact each other dozens of times a second while connected.
+
 ## 1.16.6
 
 ### New features
