@@ -34,6 +34,8 @@ type Props = {
    * is nothing to escalate to.
    */
   onTakeOver?: () => void;
+  /** Said until the window is live, when the Hive has gone quiet (see `silenceWarning`). */
+  silence?: string;
   /** Injected by tests; the default builds an xterm surface. */
   createSurface?: (host: HTMLElement) => WatchSurface;
 };
@@ -59,7 +61,7 @@ const label: Record<WatchStreamState, string> = {
  * window discards it on close, because ADR 0107's bargain is that a watch shows
  * what is on screen now rather than accumulating a record of someone's machine.
  */
-export default function WatchWindow({ watchId, operatorToken, hiveName, onClose, onTakeOver, createSurface }: Props) {
+export default function WatchWindow({ watchId, operatorToken, hiveName, onClose, onTakeOver, silence, createSurface }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<WatchStreamState>("connecting");
@@ -153,6 +155,7 @@ export default function WatchWindow({ watchId, operatorToken, hiveName, onClose,
             {onTakeOver ? <button type="button" className="hive-takeover-button" onClick={onTakeOver}>Take over</button> : null}
             <button type="button" className="secondary-button" onClick={onClose}>Stop watching</button>
           </span>
+          {silence && state !== "live" ? <p className="watch-window-silence">{silence}</p> : null}
         </header>
         {/* Read-only. Nothing typed here goes anywhere, because nothing listens. */}
         <div className="watch-window-frame" ref={frame}>

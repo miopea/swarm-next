@@ -17,6 +17,8 @@ type Props = {
    * one person able to keep it alive could not see how long it had.
    */
   expiresAt?: number;
+  /** Said until the window is live, when the Hive has gone quiet (see `silenceWarning`). */
+  silence?: string;
   /** Injected by tests; the default builds an xterm surface. */
   createSurface?: (host: HTMLElement, onKey: (data: string) => void) => Surface;
 };
@@ -59,7 +61,7 @@ const ACKNOWLEDGEMENT_POLL_MS = 2_000;
  * relay watching uses; nothing is recorded anywhere but the audit, which says
  * who held the Hive and never what they typed.
  */
-export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClose, expiresAt, createSurface }: Props) {
+export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClose, expiresAt, silence, createSurface }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"connecting" | "live" | "closed">("connecting");
@@ -171,6 +173,7 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
           <span className="watch-window-tools">
             <button type="button" className="secondary-button" onClick={onClose}>Hand back</button>
           </span>
+          {silence && state !== "live" ? <p className="watch-window-silence">{silence}</p> : null}
         </header>
         <div className="watch-window-frame" ref={frame}>
           <div className="takeover-window-surface" ref={host} />

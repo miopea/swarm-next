@@ -178,3 +178,19 @@ test("a refusal from the held Hive replaces the claim that typing is live", asyn
   expect(status).toHaveClass("refused");
   expect(status).not.toHaveTextContent("Live — you are typing");
 });
+
+test("a quiet Hive is named while the takeover waits, and the note goes once it is live", async () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  render(<TakeoverWindow
+    leaseId="lease-1"
+    operatorToken="token"
+    hiveName="WSL Hive"
+    onClose={vi.fn()}
+    silence="WSL Hive was last heard from 4h ago, so it may be asleep or offline. This opens only once it reconnects."
+    createSurface={() => ({ write: vi.fn(), resize: vi.fn(), clear: vi.fn(), dispose: vi.fn() })}
+  />);
+  expect(screen.getByText(/may be asleep or offline/)).toBeInTheDocument();
+  await waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].listeners.get("open")?.({});
+  await waitFor(() => expect(screen.queryByText(/may be asleep or offline/)).not.toBeInTheDocument());
+});

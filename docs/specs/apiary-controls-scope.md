@@ -235,6 +235,20 @@ existing outbound reconciliation owner to fetch and apply them — and it is the
 reversible direction. Moving state onto the stream later is possible; adding a
 safety net under state-on-socket is the harder retrofit.
 
+## Settled in the 2026-09-30 interview
+
+- **A watch stays Queen-only.** Offered the watcher picking a worker, or
+  following whatever the watched operator has open, the operator kept ADR 0107's
+  narrower window. Do not widen it without asking again.
+- **A quiet Hive is named at the moment of use, and nowhere else.** Watch or Take
+  over on a Hive the Keeper has not heard from in more than ten minutes says so
+  at once ("was last heard from 4h ago, so it may be asleep or offline"), instead
+  of waiting a minute and failing. It does not raise in Needs you: a machine that
+  sleeps every night would raise every morning. The note leaves by itself if the
+  Hive reconnects while the window waits.
+- **A member's log is shared with its Keeper, always** (ADR 0112, ruled
+  2026-09-29).
+
 ## Not settled
 
 - **What a policy revision physically is** — a signed document, a key/value set,
@@ -242,3 +256,13 @@ safety net under state-on-socket is the harder retrofit.
   already carries an ordered manifest with a canonical digest.
 - Nothing further from the 2026-09-21 interview. Remaining opens live on the
   individual tasks.
+- **How this Keeper gets new code.** It runs development builds, which never
+  install a release on their own, so each live check has waited on someone
+  installing here. Asked on 2026-09-30, but the session ended before an answer.
+  Options were: reload it after each deploy, install releases like any other
+  Hive, or keep asking. On 2026-10-01 the operator chose a one-off reload to
+  1.16.7, which settles that occasion, not the policy.
+- **Log content from other operators' Hives.** A shared log can carry repository
+  paths, worker names and error text. That is fine for the operator's own Hives;
+  whether it should be redacted for Hives run by someone else was asked and not
+  answered.

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { ApiaryMember, FederationCatalogReadiness, FederationSyncHealth } from "../api";
-import { catalogReadinessLabel, federationSyncCopy, federationSyncFailure, memberContact, MEMBER_SILENCE_SECONDS } from "./presentation";
+import { catalogReadinessLabel, federationSyncCopy, federationSyncFailure, memberContact, MEMBER_SILENCE_SECONDS, silenceWarning } from "./presentation";
 
 test("queued synchronization does not imply that previous synchronization never happened", () => {
   expect(federationSyncCopy.idle[0]).toBe("Waiting to synchronize");
@@ -58,4 +58,14 @@ test("the Keeper raises a member it has not heard from in longer than the longes
   expect(memberContact(member(10_000 - 3 * 86_400), 10_000)).toEqual({ label: "heard from 3d ago", silent: true });
   expect(memberContact(member(null), 10_000)).toEqual({ label: "no contact recorded", silent: true });
   expect(memberContact(member(undefined), 10_000)).toEqual({ label: "no contact recorded", silent: true });
+});
+
+test("only a quiet Hive is warned about, and the warning says how quiet", () => {
+  const member = (last_contact_at: number | null): ApiaryMember => ({
+    hive_id: "hive-2", hive_name: "WSL Hive", operator_id: "operator-2", operator_display_name: "Brad", role: "member", is_local: false, last_contact_at,
+  });
+  expect(silenceWarning(member(10_000 - 60), 10_000)).toBeUndefined();
+  expect(silenceWarning(member(10_000 - MEMBER_SILENCE_SECONDS), 10_000)).toBeUndefined();
+  expect(silenceWarning(member(10_000 - 4 * 3_600), 10_000)).toBe("WSL Hive was last heard from 4h ago, so it may be asleep or offline. This opens only once it reconnects.");
+  expect(silenceWarning(member(null), 10_000)).toBe("WSL Hive has not reached this Keeper since it began recording contact, so it may be asleep or offline. This opens only once it reconnects.");
 });

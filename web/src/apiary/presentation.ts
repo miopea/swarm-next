@@ -47,6 +47,23 @@ export function memberContact(member: ApiaryMember, nowSeconds: number): { label
   return { label: since < 90 ? "heard from just now" : `heard from ${span(since)} ago`, silent: since > MEMBER_SILENCE_SECONDS };
 }
 
+/**
+ * What a watch or takeover window says at once when its Hive has gone quiet.
+ *
+ * ⚠️ OPERATOR RULING, 2026-09-30: "Warn when I use it." A Hive that has not
+ * reached the Keeper cannot accept anything, so the window used to wait out its
+ * whole minute and then fail. The roster's amber line only helps someone who
+ * looked at it first. Said at the moment of use instead, and nowhere else: a
+ * laptop that sleeps every night should not raise every morning.
+ */
+export function silenceWarning(member: ApiaryMember, nowSeconds: number): string | undefined {
+  if (!memberContact(member, nowSeconds).silent) return undefined;
+  const since = member.last_contact_at == null
+    ? "has not reached this Keeper since it began recording contact"
+    : `was last heard from ${span(Math.max(0, nowSeconds - member.last_contact_at))} ago`;
+  return `${member.hive_name} ${since}, so it may be asleep or offline. This opens only once it reconnects.`;
+}
+
 export function catalogReadinessLabel(catalog?: FederationCatalogReadiness) {
   if (!catalog?.acknowledgement) return "Waiting";
   if (catalog.blockers.includes("catalog_stale")) return "Refresh needed";

@@ -120,3 +120,15 @@ test("the window keeps its watch alive while open, and stops the moment it close
   await vi.advanceTimersByTimeAsync(WATCH_RENEWAL_INTERVAL_MS * 3);
   expect(renewals).toHaveLength(4);
 });
+
+/**
+ * ⚠️ OPERATOR RULING, 2026-09-30: a Hive that has gone quiet is said to be quiet
+ * the moment the window opens, rather than after a minute's wait that fails.
+ */
+test("a quiet Hive is named while the window waits, and the note goes once it is live", async () => {
+  render(<WatchWindow watchId="w1" operatorToken="token" hiveName="WSL Hive" onClose={vi.fn()} silence="WSL Hive was last heard from 4h ago, so it may be asleep or offline. This opens only once it reconnects." createSurface={() => surface()} />);
+  expect(screen.getByText(/was last heard from 4h ago, so it may be asleep or offline/)).toBeInTheDocument();
+  await waitFor(() => expect(opened).toHaveLength(1));
+  (opened[0].handlers as Handlers).onState("live");
+  await waitFor(() => expect(screen.queryByText(/may be asleep or offline/)).not.toBeInTheDocument());
+});

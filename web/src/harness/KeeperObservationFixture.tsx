@@ -11,11 +11,17 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     const previous = window.fetch;
-    window.fetch = async (input) => {
+    window.fetch = async (input, init) => {
       if (mode.current === "failed") throw new Error("Fictional observation failure");
       const url = String(input);
       const now = Math.floor(Date.now() / 1000);
       const line = (sequence: number, secondsAgo: number, level: string, target: string, message: string) => ({ sequence, at_ms: (now - secondsAgo) * 1000, level, target, message });
+      // Opening a watch answers with the watch, as the real route does, so the
+      // window knows which Hive it is waiting on.
+      if (url.endsWith("/apiary/watches") && init?.method === "POST") {
+        const target = (JSON.parse(String(init.body)) as { target_hive_id: string }).target_hive_id;
+        return new Response(JSON.stringify({ id: "fictional-watch", target_hive_id: target, state: "requested", requested_at: now, acknowledged_at: null, expires_at: now + 300, ended_at: null }), { headers: { "Content-Type": "application/json" } });
+      }
       const payload = url.endsWith("/diagnostics/log") ? { entries: [line(1, 90, "info", "swarm_api", "Swarm API listening address=127.0.0.1:8766")], dropped: 0, received_at: null }
         : url.endsWith("/diagnostics") ? {
             entries: [

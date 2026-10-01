@@ -13,7 +13,7 @@ import WatchWindow from "./WatchWindow";
 import TakeoverAudit from "./TakeoverAudit";
 import TakeoverWindow from "./TakeoverWindow";
 import HiveLogDialog from "./HiveLogDialog";
-import { memberContact } from "./presentation";
+import { memberContact, silenceWarning } from "./presentation";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
@@ -40,7 +40,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   // else in the Apiary and cannot be undone without a fresh invitation.
   const [removing, setRemoving] = useState<{ hiveId: string; hiveName: string; blockers: string[] }>();
   // The Hive this Keeper is currently controlling, if any.
-  const [controlling, setControlling] = useState<{ leaseId: string; hiveName: string }>();
+  const [controlling, setControlling] = useState<{ leaseId: string; hiveId: string; hiveName: string }>();
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
       const results = await Promise.allSettled([
@@ -81,6 +81,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const memberByHive = useMemo(() => new Map(members.map((member) => [member.hive_id, member])), [members]);
   // Read at render, which the eight-second poll drives; a roster left open keeps its ages honest.
   const nowSeconds = Math.floor(Date.now() / 1000);
+  // From the roster as it refreshes, so the warning leaves by itself if the Hive reconnects mid-wait.
+  const silenceOf = (hiveId: string) => {
+    const member = memberByHive.get(hiveId);
+    return member ? silenceWarning(member, nowSeconds) : undefined;
+  };
   // ⚠️ THE ROSTER SHOWED NOTHING ABOUT A HIVE BUT ITS NAME. The version data
   // already arrived for the fleet panel; a roster row is where an operator
   // actually looks before deciding to watch or take one over.
@@ -152,7 +157,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
               // the lease is found on the next status read rather than assumed.
               const status = await fetchTakeoverStatus(operatorToken);
               const lease = status.held_by_me.find((held) => held.target_hive_id === member.hive_id);
-              if (lease) setControlling({ leaseId: lease.id, hiveName: member.hive_name });
+              if (lease) setControlling({ leaseId: lease.id, hiveId: member.hive_id, hiveName: member.hive_name });
             } catch {
               setWatchError(`${member.hive_name} could not be taken over.`);
             }
@@ -204,6 +209,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             expiresAt={snapshot.takeovers.find((entry) => entry.lease.id === controlling.leaseId)?.lease.expires_at}
             operatorToken={operatorToken}
             hiveName={controlling.hiveName}
+            silence={silenceOf(controlling.hiveId)}
             onClose={() => {
               // ⚠️ ENDED, NOT MERELY HIDDEN — the same lesson the watch window
               // already carries three lines below. Closing this used to leave
@@ -219,6 +225,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             watchId={watching.watch.id}
             operatorToken={operatorToken}
             hiveName={watching.hiveName}
+            silence={silenceOf(watching.watch.target_hive_id)}
             onTakeOver={() => {
               // Watching is how an operator finds out a Hive needs hands on it.
               // The escalation belongs here rather than back in the roster.
@@ -232,7 +239,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
                   await openApiaryTakeover(operatorToken, member.hive_id, reason);
                   const status = await fetchTakeoverStatus(operatorToken);
                   const lease = status.held_by_me.find((held) => held.target_hive_id === member.hive_id);
-                  if (lease) setControlling({ leaseId: lease.id, hiveName: member.hive_name });
+                  if (lease) setControlling({ leaseId: lease.id, hiveId: member.hive_id, hiveName: member.hive_name });
                 } catch {
                   setWatchError(`${watching.hiveName} could not be taken over.`);
                 }
