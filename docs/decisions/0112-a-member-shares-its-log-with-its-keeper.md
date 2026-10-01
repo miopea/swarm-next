@@ -55,6 +55,11 @@ include terminal output or input:
 
 A future log line that carries content has to be written knowing it travels.
 
+Asked on 2026-10-01 whether paths and names should be stripped from Hives run by
+someone other than the Keeper's operator, the operator ruled "Share as is":
+paths and error text are what explain a failure, and stripping them would hide
+the cause.
+
 ## Consequences
 
 - A fault on a member can be read from the Keeper within one sync pass, and the

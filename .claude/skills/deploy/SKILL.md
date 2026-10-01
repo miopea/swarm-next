@@ -369,6 +369,29 @@ yet being offered to her.
 Report it as **"published; propagation may lag"**, never "live and installable",
 unless you have checked from the machine that matters.
 
+## 13. Reload this Hive onto the release — every time
+
+**Operator ruling, 2026-10-01: "Reload after each deploy."** This Hive is the
+Keeper, and it runs development builds from this checkout. ADR 0110 deliberately
+never auto-installs a development build, so without this step the Keeper stays
+on whatever it was last reloaded to. Members then install the release and the
+live check runs against a mismatched pair. On 2026-09-30 WSL had auto-installed
+1.16.7 while this Keeper was still on 1.16.6-dev, and the check waited on it.
+
+After step 11, with `releases.json` pushed (HEAD is the release plus the
+manifest commit, the same code):
+
+```
+swarm_reload_app action=request     # refused while you hold Active work: report it first
+swarm_reload_app action=status      # poll until state=ready
+```
+
+Compare `running_revision` with the `expect_revision` it gave you before saying
+the Keeper is on the release. A reload restarts the API: workers keep running and
+open pages reconnect once. It does NOT swap this Hive's worker engine. If
+`worker_engine_update_required` says so, leave the swap to the operator, because
+it stops running sessions.
+
 ## Never guess a path
 
 Twice on 2026-08-26 a download directory was guessed instead of listed, and both

@@ -247,7 +247,13 @@ safety net under state-on-socket is the harder retrofit.
   sleeps every night would raise every morning. The note leaves by itself if the
   Hive reconnects while the window waits.
 - **A member's log is shared with its Keeper, always** (ADR 0112, ruled
-  2026-09-29).
+  2026-09-29), **and as written, for every Hive** (ruled 2026-10-01). Paths,
+  worker names and error text are what explain a failure, and they travel from
+  other operators' Hives too. Terminal output and input never do, and each
+  member's screen says it shares.
+- **This Keeper is reloaded onto every release** (ruled 2026-10-01). It runs
+  development builds, which never auto-install, so the deploy procedure ends by
+  reloading it from the release commit.
 
 ## Not settled
 
@@ -256,13 +262,4 @@ safety net under state-on-socket is the harder retrofit.
   already carries an ordered manifest with a canonical digest.
 - Nothing further from the 2026-09-21 interview. Remaining opens live on the
   individual tasks.
-- **How this Keeper gets new code.** It runs development builds, which never
-  install a release on their own, so each live check has waited on someone
-  installing here. Asked on 2026-09-30, but the session ended before an answer.
-  Options were: reload it after each deploy, install releases like any other
-  Hive, or keep asking. On 2026-10-01 the operator chose a one-off reload to
-  1.16.7, which settles that occasion, not the policy.
-- **Log content from other operators' Hives.** A shared log can carry repository
-  paths, worker names and error text. That is fine for the operator's own Hives;
-  whether it should be redacted for Hives run by someone else was asked and not
-  answered.
+
