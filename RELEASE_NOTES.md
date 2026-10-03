@@ -12,6 +12,16 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.8
+
+### New features
+- Handing back a takeover keeps you watching that Hive. The takeover window becomes a watch window, so you can see what happens next; Stop watching closes it.
+- Watching or taking over a Hive the Keeper hasn't heard from in more than ten minutes says so straight away: when it was last heard from, and that it may be asleep or offline. Before, the window waited a minute and then failed.
+
+### Fixes
+- After a takeover is handed back, the Hive that was taken over gets its terminal back straight away. Its operator used to be unable to type or resume, even after refreshing, until the takeover's five-minute lease ran out. (after the worker engine update)
+- The Hive that was taken over shows that control was given back within a second or two, instead of at its next check-in.
+
 ## 1.16.7
 
 ### New features
