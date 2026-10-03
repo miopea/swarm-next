@@ -213,3 +213,39 @@ two-Hive run missed it because nobody opened Queen on its member; it now does.
 The fix is in the terminal engine, so a held Hive gets it once its engine
 updates. An ordinary update swaps the engine when no session is mid-turn, and
 the worker engine card can apply it sooner.
+
+## Addendum, 2026-10-03: handing back returns the machine at once, and keeps watching
+
+The operator's live check on 1.16.7 found three faults, all after typing had
+worked:
+- handing back closed the Keeper's window;
+- the held Hive took a while to show it was free;
+- the held Hive's own operator could not type or resume, even after a hard
+  refresh, until the lease ran out five minutes later.
+
+Their logs, now shared with the Keeper (ADR 0112), showed why:
+- **Handing back rang no doorbell.** The held Hive learned only at its next
+  paced pass, and meanwhile redialled the relay every second and was refused.
+- **Nothing told the engine.** The only step that released the engine's
+  authority named the lease's current revision. The engine held the older
+  revision it was installed with, and refused the release. That step counted the
+  refusal as success, so the operator stayed locked out until expiry.
+
+Settled:
+- **Ending a takeover is never fenced by revision, in the engine either.** A
+  release ends that lease's authority whatever revision is installed, as this
+  ADR already required of reclaim. Ending grants nothing, so the lease id is
+  enough. The revision stays on the wire, so the protocol is unchanged.
+- **The held Hive releases the moment it stops being held,** using the exact
+  revision it installed. It is checked every second, so this also works against
+  an engine from before this change. The step that settles a takeover's debt
+  also uses that revision.
+- **The Keeper rings the doorbell when it hands back.**
+- **Handing back keeps watching.** The Keeper's window turns into a fresh watch
+  of the same Hive. The other operator's notice changes from controlled to
+  watched, and Stop watching ends it as before.
+
+The two-Hive run now hands back from a real browser and types from the
+member's own browser. The member's typing must reach its terminal within 20
+seconds; it takes about 2. With the three release fixes removed, it never
+arrives.

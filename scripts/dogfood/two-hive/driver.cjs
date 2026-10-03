@@ -256,7 +256,37 @@ async function main() {
       return { ok: text.includes("typed:hello-from-browser"), seen: { status, text: text.slice(-300) } };
     });
     pass("typing in the browser's takeover window reaches the member's terminal");
+
+    // ── 5b. Handing back keeps the Keeper watching, and returns the member's terminal at once ──
+    // The live check on 2026-10-03: handing back closed the window, WSL took a
+    // while to notice, and WSL's own operator could neither type nor resume —
+    // not even after a hard refresh — until the lease lapsed five minutes later.
     await held.getByRole("button", { name: "Hand back" }).click();
+    const handedBack = Date.now();
+    const resume = memberPage.getByRole("button", { name: "Resume Here" });
+    let resumed = false;
+    await waitFor("the member's page stops showing it is held", 20, async () => {
+      if (await resume.isVisible().catch(() => false)) { resumed = true; await resume.click().catch(() => undefined); }
+      const text = await memberPage.locator("body").innerText();
+      const locked = /takeover authority is missing|Someone else is controlling this Hive/.test(text);
+      const viewingOnly = await resume.isVisible().catch(() => false);
+      return { ok: !locked && !viewingOnly, seen: text.replace(/\s+/g, " ").slice(0, 300) };
+    });
+    // Not a pass on its own: a page with no lock showing is not yet a terminal
+    // that takes input. The typing check below is the proof.
+    console.log(`      ${elapsed()} the member's page shows no lock${resumed ? " (after pressing Resume Here)" : ""}`);
+    const watchingAgain = page.getByRole("dialog", { name: `Live window into ${memberName}` });
+    await watchingAgain.waitFor({ timeout: 15_000 });
+    pass("handing back leaves the Keeper watching the member");
+    await memberPage.locator(".terminal-surface:visible").first().click();
+    await memberPage.keyboard.type("hello-from-member");
+    await memberPage.keyboard.press("Enter");
+    await waitFor("what the member types after hand-back reaches its terminal", 20, async () => {
+      const text = await watchingAgain.locator(".xterm-rows").innerText().catch(() => "");
+      return { ok: text.includes("typed:hello-from-member"), seen: text.slice(-200) };
+    });
+    pass(`what the member types reaches its own terminal ${((Date.now() - handedBack) / 1000).toFixed(1)}s after hand-back`);
+    await watchingAgain.getByRole("button", { name: "Stop watching" }).click();
   } catch (error) {
     // A browser failure without a picture sends someone off to reproduce it by
     // hand, which is the leg work this run exists to remove.

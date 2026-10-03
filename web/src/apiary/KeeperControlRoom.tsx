@@ -216,8 +216,22 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
               // the lease open: the Hive went on telling its operator someone
               // else was controlling it, and every later takeover of it was
               // refused, because a Hive may hold only one open lease.
-              void releaseApiaryTakeover(operatorToken, controlling.leaseId).catch(() => undefined);
+              //
+              // ⚠️ AND HANDING BACK KEEPS WATCHING. "When I give control back, the
+              // window disappears. It should stay monitoring the remote session"
+              // (2026-10-03). A fresh watch, so the other operator's notice
+              // changes from controlled to watched rather than vanishing, and
+              // Stop watching ends it as it always has.
+              const { leaseId, hiveId, hiveName } = controlling;
               setControlling(undefined);
+              void (async () => {
+                await releaseApiaryTakeover(operatorToken, leaseId).catch(() => undefined);
+                try {
+                  setWatching({ watch: await openApiaryWatch(operatorToken, hiveId), hiveName });
+                } catch {
+                  setWatchError(`${hiveName} is back in its operator's hands, but could not be watched.`);
+                }
+              })();
             }}
           /> : null}
           {logOf ? <HiveLogDialog operatorToken={operatorToken} hiveName={logOf.hiveName} hiveId={logOf.hiveId} onClose={() => setLogOf(undefined)} /> : null}

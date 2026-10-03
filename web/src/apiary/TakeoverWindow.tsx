@@ -180,7 +180,7 @@ export default function TakeoverWindow({ leaseId, operatorToken, hiveName, onClo
         </div>
         <small>
           {expiresAt === undefined ? null : <>Lapses in about {approximateRemaining(expiresAt)} unless you keep typing. </>}
-          {hiveName} is showing that you hold it, and can take it back at any moment. Handing back ends the takeover and clears that notice.
+          {hiveName} is showing that you hold it, and can take it back at any moment. Handing back returns it and keeps you watching.
         </small>
       </section>
     </div>

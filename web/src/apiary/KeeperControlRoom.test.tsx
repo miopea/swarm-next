@@ -196,12 +196,18 @@ test("a Hive with no shared work is removed, and is told its private work stays"
  * every later takeover was refused with "could not be taken over". Reported on
  * 2026-09-22: "once I do it once, I cannot take control again."
  */
-test("handing a Hive back ends the lease rather than only hiding the window", async () => {
+test("handing a Hive back ends the lease and keeps watching it", async () => {
   const released: string[] = [];
+  const watched: string[] = [];
   vi.stubGlobal("prompt", () => "Testing");
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (init?.method === "DELETE" && url.includes("/takeovers/")) { released.push(url); return ok(null); }
+    if (init?.method === "POST" && url.endsWith("/watches")) {
+      // Opened only once the lease is released, so the two never overlap.
+      watched.push(`${released.length}:${String(init.body)}`);
+      return ok({ id: "watch-1", target_hive_id: "hive-2", state: "requested", requested_at: 1, acknowledged_at: null, expires_at: 9_999_999_999, ended_at: null });
+    }
     if (init?.method === "POST" && url.endsWith("/takeovers")) return ok(null);
     // The lease is read back from status, because the target must acknowledge
     // before anything is controllable.
@@ -222,6 +228,10 @@ test("handing a Hive back ends the lease rather than only hiding the window", as
 
   await waitFor(() => expect(released)
     .toEqual(["/api/v1/apiary/takeovers/lease-1"]));
+  // ⚠️ "When I give control back, the window disappears. It should stay
+  // monitoring the remote session." (2026-10-03)
+  await waitFor(() => expect(watched).toEqual(['1:{"target_hive_id":"hive-2"}']));
+  expect(await screen.findByRole("dialog", { name: "Live window into Clover Hive" })).toBeInTheDocument();
 });
 
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }

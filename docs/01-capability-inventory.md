@@ -211,6 +211,16 @@ Those logs found a directory-announcement loop, about fifty passes a second,
 that had been hiding four minute-long delays in watch, takeover and reclaim. All
 four are fixed (ADR 0111 addendum).
 
+Correction (2026-10-03): on 1.16.7 typing in a takeover worked. After handing
+back, though, the held Hive's operator stayed locked out until the lease ran
+out. Its engine refused a release naming a newer revision than the one it held,
+and the settling step counted the refusal as success. Handing back also rang no
+doorbell and closed the Keeper's window. Now: a release ends a lease whatever
+its revision, the held Hive releases its exact installed revision within a
+second of no longer being held, the Keeper rings on hand-back, and the window
+becomes a watch (ADR 0036 addendum). The two-Hive run checks that the member's
+own typing lands about 2 seconds after hand-back.
+
 Member logs (ADR 0112, 2026-09-29): every member keeps a bounded copy of its own
 log — Swarm's INFO-and-above lines plus the Apiary connection's DEBUG lines —
 and sends new lines to its Keeper on every sync pass, including while it is in

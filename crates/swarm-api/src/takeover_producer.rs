@@ -18,7 +18,9 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use swarm_domain::{FederationStewardTakeoverLease, FederationStewardTakeoverLeaseId};
+use swarm_domain::{
+    FederationStewardTakeoverLease, FederationStewardTakeoverLeaseId, WorkerSessionId,
+};
 use swarm_terminal::{
     HostRequest, HostResponse, MAX_CONTROL_INPUT_BYTES, TerminalControlCommand,
     TerminalTakeoverLease,
@@ -61,7 +63,9 @@ pub(crate) async fn relay_held_terminal(state: &AppState) {
     let Ok(store) = task_store(state) else {
         return;
     };
-    let Ok(Some(lease)) = store.held_takeover(unix_timestamp()) else {
+    let held = store.held_takeover(unix_timestamp()).ok().flatten();
+    release_ended_authority(state, held.as_ref().map(|lease| lease.id)).await;
+    let Some(lease) = held else {
         return;
     };
     if let Err(error) = relay_one(state, lease).await {
@@ -87,6 +91,7 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
     // Authority first, then the connection: a window must never show a
     // takeover as live while this Hive's own browser can still type into it.
     let mut installed = install_authority(host, session, &lease).await?;
+    remember_installed(state, session, installed);
 
     let url = relay_url(&connection.keeper_endpoint, lease.id, lease.revision)?;
     let mut request = url
@@ -123,6 +128,7 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
         // carries the old expiry until it is told the new one.
         if current.revision != installed.revision || current.expires_at != installed.expires_at {
             installed = install_authority(host, session, &current).await?;
+            remember_installed(state, session, installed);
         }
         tokio::select! {
             message = socket.next() => match message {
@@ -169,6 +175,60 @@ async fn relay_one(state: &AppState, lease: FederationStewardTakeoverLease) -> R
                     }
                 }
             }
+        }
+    }
+}
+
+fn remember_installed(
+    state: &AppState,
+    session: WorkerSessionId,
+    authority: TerminalTakeoverLease,
+) {
+    if let Ok(mut installed) = state.installed_takeover.lock() {
+        *installed = Some((session, authority));
+    }
+}
+
+/// Forgets the installed authority for `lease`, once the host has answered for it.
+pub(crate) fn forget_installed(state: &AppState, lease: FederationStewardTakeoverLeaseId) {
+    if let Ok(mut installed) = state.installed_takeover.lock()
+        && installed.is_some_and(|(_, authority)| authority.lease_id == lease)
+    {
+        *installed = None;
+    }
+}
+
+/// Ends the terminal host's authority for a takeover this Hive no longer holds.
+///
+/// ⚠️ THE HOST KEEPS AUTHORITY UNTIL IT IS TOLD, OR UNTIL THE LEASE RUNS OUT.
+/// Nothing told it when the takeover ended from the far side — a Keeper handing
+/// back — so on 2026-10-03 the operator at the held Hive could not type or
+/// resume, not even after a hard refresh, until the lease lapsed five minutes
+/// later. Checked every pass of the relay service, so it ends within a second of
+/// this Hive learning, using the exact revision the host was given.
+async fn release_ended_authority(state: &AppState, held: Option<FederationStewardTakeoverLeaseId>) {
+    let ended =
+        state.installed_takeover.lock().ok().and_then(|installed| {
+            installed.filter(|(_, authority)| held != Some(authority.lease_id))
+        });
+    let (Some((session, authority)), Some(host)) = (ended, state.terminal_host.as_ref()) else {
+        return;
+    };
+    match host
+        .request(&HostRequest::ReleaseTakeover {
+            session_id: session,
+            lease_id: authority.lease_id,
+            revision: authority.revision,
+        })
+        .await
+    {
+        // Released, or already gone: either way the terminal is its operator's.
+        Ok(_) => {
+            forget_installed(state, authority.lease_id);
+            tracing::info!(lease = %authority.lease_id, "the takeover ended; this Hive's terminal is its operator's again");
+        }
+        Err(error) => {
+            tracing::warn!(lease = %authority.lease_id, %error, "the takeover ended but the terminal host could not be told; trying again");
         }
     }
 }

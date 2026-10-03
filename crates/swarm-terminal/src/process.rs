@@ -1536,20 +1536,36 @@ impl SessionRegistry {
         )
     }
 
-    /// Releases exact takeover authority without writing terminal input.
+    /// Ends one lease's authority without writing terminal input, whatever
+    /// revision of it is installed.
+    ///
+    /// ⚠️ NOT FENCED BY REVISION, AS ADR 0036 REQUIRES OF ENDING CONTROL. A
+    /// renewal moves the lease's revision everywhere except here, where it moves
+    /// only when the held Hive reinstalls. A fenced release named the newer
+    /// revision, this held the older one, and the release was refused — so on
+    /// 2026-10-03, after a Keeper handed back, the operator at the held Hive
+    /// could not type or resume until the lease ran out. Ending a lease grants
+    /// nothing, so its id is enough; the revision is kept on the wire only so the
+    /// protocol does not change.
     ///
     /// # Errors
     ///
-    /// Returns an error for stale or missing authority.
+    /// Returns an error when no authority for that lease is installed.
     pub fn release_takeover(
         &self,
         session_id: WorkerSessionId,
         lease_id: FederationStewardTakeoverLeaseId,
-        revision: u64,
+        _revision: u64,
     ) -> Result<(), SessionRegistryError> {
-        self.require_takeover(session_id, lease_id, revision)?;
-        lock(&self.takeovers)?.remove(&session_id);
-        Ok(())
+        let mut takeovers = lock(&self.takeovers)?;
+        if takeovers
+            .get(&session_id)
+            .is_some_and(|installed| installed.lease_id == lease_id)
+        {
+            takeovers.remove(&session_id);
+            return Ok(());
+        }
+        Err(SessionRegistryError::TakeoverDenied)
     }
 
     /// Writes ordinary local or automation input only when remote takeover is
@@ -2347,6 +2363,42 @@ pub(crate) mod control_tests {
             registry.admit_maintenance(&[session.id]).unwrap(),
             MaintenanceOutcome::refused(MaintenanceRefusal::ReturnSetMismatch, None)
         );
+    }
+
+    /// ⚠️ A RELEASE NAMING A NEWER REVISION STILL ENDS THE TAKEOVER. The held
+    /// Hive's record of a lease moves on with every renewal and release, and
+    /// this engine's copy does not; refusing that release left an operator
+    /// locked out of their own Queen until the lease ran out.
+    #[cfg(unix)]
+    #[test]
+    fn ending_a_takeover_is_not_fenced_by_its_revision() {
+        let (registry, session) = fixture();
+        let lease_id = FederationStewardTakeoverLeaseId::new();
+        registry
+            .install_takeover(
+                session.id(),
+                TerminalTakeoverLease {
+                    lease_id,
+                    revision: 2,
+                    expires_at: unix_timestamp() + 300,
+                },
+            )
+            .unwrap();
+        // Another lease's release ends nothing.
+        assert!(matches!(
+            registry.release_takeover(session.id(), FederationStewardTakeoverLeaseId::new(), 2),
+            Err(SessionRegistryError::TakeoverDenied)
+        ));
+        registry
+            .release_takeover(session.id(), lease_id, 3)
+            .expect("the Keeper's newer revision of the same lease ends it");
+        registry
+            .claim_control(session.id(), identity(), None, TerminalSize::new(24, 80))
+            .expect("the operator at the machine has it back at once");
+        assert!(matches!(
+            registry.release_takeover(session.id(), lease_id, 3),
+            Err(SessionRegistryError::TakeoverDenied)
+        ));
     }
 
     /// ⚠️ EVERY REAL HIVE'S BROWSER HAS HELD QUEEN BEFORE A TAKEOVER ARRIVES.

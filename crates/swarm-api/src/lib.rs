@@ -455,6 +455,17 @@ pub struct AppState {
     watch_grants: Arc<watch_relay::WatchGrantStore>,
     takeover_relay: Arc<takeover_relay::TakeoverRelay>,
     takeover_grants: Arc<takeover_relay::TakeoverGrantStore>,
+    /// The takeover authority this Hive last installed in its terminal host,
+    /// with the session it was installed on — the exact revision the host
+    /// holds, which the lease record moves past (see `takeover_producer`).
+    installed_takeover: Arc<
+        std::sync::Mutex<
+            Option<(
+                swarm_domain::WorkerSessionId,
+                swarm_terminal::TerminalTakeoverLease,
+            )>,
+        >,
+    >,
     /// This Hive's own recent log, shared with its Keeper when it is a member.
     /// Absent in tests and tools that install no tracing layer.
     diagnostic_log: Option<Arc<DiagnosticLog>>,
@@ -595,6 +606,7 @@ impl AppState {
             watch_grants: Arc::new(watch_relay::WatchGrantStore::default()),
             takeover_relay: Arc::new(takeover_relay::TakeoverRelay::default()),
             takeover_grants: Arc::new(takeover_relay::TakeoverGrantStore::default()),
+            installed_takeover: Arc::new(std::sync::Mutex::new(None)),
             diagnostic_log: None,
             member_diagnostics: Arc::new(member_diagnostics::MemberDiagnostics::default()),
             notification_sender: None,
@@ -1152,7 +1164,22 @@ impl AppState {
         let Some(host) = self.terminal_host.as_ref() else {
             return;
         };
-        for (lease, revision) in owed {
+        for (lease, recorded_revision) in owed {
+            // ⚠️ THE REVISION THE HOST HOLDS, NOT THE ONE THE LEASE RECORD SAYS.
+            // The record moves on with every renewal and with the end itself,
+            // and an engine from before 1.16.8 refuses a release naming any
+            // revision but its own — which this used to send, and then count
+            // the refusal as settled while the operator stayed locked out.
+            let revision = self
+                .installed_takeover
+                .lock()
+                .ok()
+                .and_then(|installed| {
+                    installed
+                        .filter(|(_, authority)| authority.lease_id == lease)
+                        .map(|(_, authority)| authority.revision)
+                })
+                .unwrap_or(recorded_revision);
             // Any ANSWER settles it: released, or nothing there to release.
             // Only an unreachable host leaves the debt standing.
             if host
@@ -1164,6 +1191,7 @@ impl AppState {
                 .await
                 .is_ok()
             {
+                takeover_producer::forget_installed(self, lease);
                 let _ = store.complete_takeover_recovery(lease, now);
             } else {
                 tracing::warn!(
@@ -6126,6 +6154,11 @@ async fn release_apiary_takeover(
     match lease {
         Ok(lease) => {
             state.control_room_notify.notify_waiters();
+            // ⚠️ RING, OR THE HELD HIVE GOES ON BELIEVING IT IS HELD. Handing back
+            // said nothing to the member, which learned at its next paced pass —
+            // "it takes a while for the remote to show control was given back" —
+            // and its own operator stayed locked out meanwhile (2026-10-03).
+            announce_federation_change(&state, swarm_domain::FederationChangeKind::Unspecified);
             Ok(([(header::CACHE_CONTROL, "no-store")], Json(lease)).into_response())
         }
         // Already closed, expired, or reclaimed by the person at that keyboard.
