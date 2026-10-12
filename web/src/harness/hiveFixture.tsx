@@ -96,9 +96,20 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       expires_in_ms: 60_000,
     };
   }
+  // ?updates=pending: a worker engine update and an App and API build both
+  // waiting on the operator, as the Keeper on 2026-10-12 had them for hours.
+  const updatesPending = new URLSearchParams(window.location.search).get("updates") === "pending";
   switch (path) {
     case "/health":
-      return { status: "ok", version: "1.0.0", degraded: [] };
+      return { status: "ok", version: "1.0.0", degraded: [], ...(updatesPending ? { worker_engine_build_id: "engine-new" } : {}) };
+    case "/api/v1/runtime/terminal-host":
+      return updatesPending
+        ? { type: "host_status", status: { protocol_version: 17, host_version: "1.0.0", host_build_id: "engine-old", draining: false, running_sessions: 8, retained_sessions: 8 } }
+        : undefined;
+    case "/api/v1/runtime/development":
+      return updatesPending
+        ? { enabled: true, version: "1.0.0", state: "idle", reload_available: true, deployed_source_revision: "e46308f51643", source_revision: "f15be478a2c1", source_dirty: false, deployed_source_published: true }
+        : undefined;
     // Answering this at all is what unlocks the app: App.tsx restores a browser
     // session before it will render anything but the token form.
     case "/api/v1/auth/session":

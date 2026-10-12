@@ -144,6 +144,7 @@ import MachinePressureBadge from "./runtime/MachinePressureBadge";
 import DailyBackupNotice from "./runtime/DailyBackupNotice";
 import { machinePressureNotice, type MachineResourceState } from "./runtime/machinePressure";
 import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
+import RuntimeUpdateCards from "./runtime/RuntimeUpdateCards";
 import HeldBriefingList from "./orchestration/HeldBriefingList";
 import WhatsNewModal from "./runtime/WhatsNewModal";
 import { readSeenVersion, storeSeenVersion, whatsNewFor } from "./runtime/whatsNew";
@@ -2224,33 +2225,14 @@ export function App() {
               <ConversationRetry onRetry={retryConversationChecks} />
             </details>
           ) : null}
-          {/* One per subsystem rather than only the most severe: they are
-              independent and can all be true at once, and ranking them into a
-              single pill hid the others until the first was dealt with.
-              Each states what it is and what it will do, and offers to do it —
-              a title attribute said none of that on a phone, and sending the
-              operator to Settings to press a button they can see from here is
-              a trip with nothing in it. */}
-          {operatorToken ? runtimeUpdates.map((update) => (
-            <div key={update.kind} className={`runtime-update-card runtime-update-${update.kind}${update.consequence ? " costly" : ""}`}>
-              <p className="runtime-update-label">
-                {update.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
-                {update.label}
-              </p>
-              <p className="runtime-update-detail">{update.detail}</p>
-              {update.action && !update.busy ? (
-                <button
-                  type="button"
-                  className="runtime-update-run"
-                  onClick={() => setRuntimeConfirm(update)}
-                  disabled={busy}
-                >{update.actionLabel}</button>
-              ) : null}
-              <button type="button" className="runtime-update-settings" onClick={() => openSettings("settings-updates")}>
-                Details
-              </button>
-            </div>
-          )) : null}
+          {operatorToken ? (
+            <RuntimeUpdateCards
+              updates={runtimeUpdates}
+              busy={busy}
+              onRun={setRuntimeConfirm}
+              onDetails={() => openSettings("settings-updates")}
+            />
+          ) : null}
         </div>}
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
       </aside>

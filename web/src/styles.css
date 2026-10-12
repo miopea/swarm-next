@@ -2191,6 +2191,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-update-detail { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.4; }
 .runtime-update-run { min-height: var(--pill-height); padding: 0 10px; border: 1px solid var(--accent-strong); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .69rem; font-weight: 600; }
 .runtime-update-card.costly .runtime-update-run { border-color: var(--bad); color: var(--bad); background: transparent; }
+/* A pending update as one line: its name opens Settings, its action confirms. */
+.runtime-update-card.compact { gap: 1px; padding: 3px 4px 3px 9px; }
+.runtime-update-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.runtime-update-name { min-width: 0; padding: 0; border: 0; color: var(--text); background: none; font-size: .72rem; font-weight: 600; text-align: left; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent); text-underline-offset: 2px; overflow-wrap: anywhere; }
+.runtime-update-card.compact .runtime-update-run { flex: 0 0 auto; min-height: 24px; padding: 0 10px; }
+.runtime-update-cost { margin: 0; color: var(--warn-strong); font-size: .66rem; font-weight: 600; }
 .runtime-update-settings { justify-self: start; padding: 0; border: 0; color: var(--muted); background: none; font-size: .66rem; text-decoration: underline; }
 /* Dev mode changes what every line beneath it means, so it is stated with the
    version rather than found in Settings. */
@@ -2865,6 +2871,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-toolbar { min-height: 44px; padding: 7px 12px; flex-wrap: wrap; gap: 8px; }
   .runtime-start-notice > summary { min-height: 44px; padding-block: 10px; }
   .runtime-start-notice .runtime-update-run { min-height: 44px; }
+  .runtime-update-card.compact .runtime-update-run, .runtime-update-name { min-height: 44px; }
+  .runtime-update-card.compact .runtime-update-run { padding: 0 18px; }
   .terminal-toolbar > div { gap: 8px; }
   .terminal-toolbar .terminal-worker-controls:empty { display: none; }
   /* ⚠️ THE HANDOFF BANNER WAS TAKING A QUARTER OF THE TERMINAL. Measured in the

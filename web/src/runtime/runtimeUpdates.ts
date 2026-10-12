@@ -21,6 +21,8 @@ export type RuntimeUpdateSummary = {
   actionLabel?: string;
   /** Set when running this takes workers away. Drives the stronger warning. */
   consequence?: string;
+  /** The same cost in a few words, for the rail's one-line row. */
+  costShort?: string;
 };
 
 const IDLE: RuntimeUpdateSummary = {
@@ -83,6 +85,7 @@ function workerEngineUpdate(
       action: "apply_worker_engine",
       actionLabel: "Apply the protocol migration",
       consequence: ENGINE_RESTART_CONSEQUENCE,
+      costShort: "Restarts loaded workers",
     };
   }
   if (workerEngineUpdateRequired(health, host)) {
@@ -94,6 +97,7 @@ function workerEngineUpdate(
       action: "apply_worker_engine",
       actionLabel: "Apply worker engine update",
       consequence: ENGINE_RESTART_CONSEQUENCE,
+      costShort: "Restarts loaded workers",
     };
   }
   return undefined;
@@ -113,6 +117,7 @@ function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary 
     action: "restart_providers",
     actionLabel: "Restart onto the new release",
     consequence: `${workers} running worker${workers === 1 ? "" : "s"} ${workers === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations on the newer release. Running work is interrupted; unsent terminal input may be lost.`,
+    costShort: `Restarts ${workers} running worker${workers === 1 ? "" : "s"}`,
   };
 }
 
