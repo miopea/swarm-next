@@ -1429,3 +1429,31 @@ test("an older API without probes reattaches without replaying input or raising 
   expect(sockets).toHaveLength(2);
   connection.dispose();
 });
+
+/**
+ * ⚠️ 2026-10-03: after a takeover the held Hive's own view stuck on "Checking
+ * terminal control…" with a Resume Here that sent nothing, even after a refresh.
+ */
+test("a takeover refusal leaves the view resumable, and Resume Here claims once it ends", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  const socket = sockets[0];
+  socket.open();
+  socket.message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
+  socket.message(JSON.stringify({ type: "control", control: { ...ownedControl, generation: "2", owned: false } }));
+
+  // Resume Here while another Hive holds the terminal: refused for a takeover.
+  expect(connection.resumeHere(24, 80)).toBe(true);
+  socket.message(JSON.stringify({ type: "error", code: "terminal_takeover_active", message: "terminal takeover authority is missing, stale, or expired" }));
+  expect(connection.controlView).toBe("available");
+  expect(handlers.onState).not.toHaveBeenCalledWith("error", expect.anything());
+
+  // The takeover ends; pressing Resume Here again actually asks.
+  expect(connection.resumeHere(24, 80)).toBe(true);
+  expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ type: "claim", observed_generation: "2", rows: 24, columns: 80 });
+  socket.message(JSON.stringify({ type: "control", control: { ...ownedControl, generation: "3" } }));
+  expect(connection.controlView).toBe("owned");
+  connection.dispose();
+});

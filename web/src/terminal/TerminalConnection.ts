@@ -477,6 +477,20 @@ export class TerminalConnection {
       // The following engine status explains an ownership refusal. It is not
       // a transport failure and no input is retried.
       if (["terminal_control_owned_elsewhere", "terminal_control_stale", "terminal_control_expired"].includes(message.code ?? "")) return;
+      // ⚠️ A TAKEOVER IS NOT A FAULT, AND IT MUST NOT STRAND THIS VIEW. The
+      // engine refuses a claim while another Hive holds this terminal and sends
+      // no status after it, so the view sat on "Checking terminal control…"
+      // with a dead Resume Here — on 2026-10-03 the held Hive's operator could
+      // not take their own Queen back, even after a refresh. Nobody here holds
+      // it while it is taken over, so the last state the engine reported is
+      // re-confirmed as unheld: the view says it is ready to resume, and
+      // Resume Here works the moment the takeover ends.
+      if (message.code === "terminal_takeover_active") {
+        const known = this.#control.status;
+        if (known.supported) this.#control.observe({ ...known, owned: false, occupied: false, lease_remaining_ms: 0 });
+        this.#publishControl();
+        return;
+      }
       if (message.code === "terminal_engine_update_required") {
         this.#control.observe({ supported: false, generation: null, owned: false, occupied: false, lease_remaining_ms: 0 });
         this.#publishControl();
