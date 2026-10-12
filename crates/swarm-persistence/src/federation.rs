@@ -848,7 +848,7 @@ impl TaskStore {
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         let existing = transaction
             .query_row(
-                "SELECT snapshot_json, snapshot_issued_at, acknowledged_at
+                "SELECT snapshot_json, snapshot_issued_at, acknowledged_at, policy_revision
                  FROM local_federation_catalog WHERE singleton = 1",
                 [],
                 |row| {
@@ -856,15 +856,21 @@ impl TaskStore {
                         row.get::<_, String>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
+                        row.get::<_, u64>(3)?,
                     ))
                 },
             )
             .optional()?;
-        if let Some((existing_json, issued_at, acknowledged_at)) = existing {
+        if let Some((existing_json, issued_at, acknowledged_at, policy_revision)) = existing {
             if existing_json == serialized {
                 return Ok(catalog_acknowledgement(snapshot, acknowledged_at));
             }
-            if snapshot.payload.issued_at <= issued_at {
+            // Ordered by the second it was issued, then by the policy revision,
+            // which only rises: a policy change rings the doorbell, so two
+            // catalogs from one second are routine (ADR 0113).
+            let newer = (snapshot.payload.issued_at, snapshot.payload.policy_revision)
+                > (issued_at, policy_revision);
+            if !newer {
                 return Err(TaskStoreError::InvalidFederationCatalog);
             }
         }
@@ -7712,6 +7718,52 @@ pub(crate) mod tests {
         assert!(matches!(
             member.acknowledge_federation_catalog(&altered, now + 1),
             Err(TaskStoreError::InvalidFederationCredential)
+        ));
+    }
+
+    /// ⚠️ A POLICY CHANGE RINGS THE DOORBELL (ADR 0113), so a member can fetch
+    /// two different catalogs inside one second: one from before the change and
+    /// one from after. Ordered by the second alone, the newer one read as stale,
+    /// and the member stopped synchronising on a backoff whenever a Keeper saved
+    /// its policy just after any other change. The policy revision only rises,
+    /// so it orders them.
+    #[test]
+    fn a_catalog_from_the_same_second_with_newer_policy_is_newer() {
+        let now = 130_000;
+        let (keeper, member) = joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let before = keeper
+            .signed_federation_catalog(&credential, now + 10)
+            .unwrap();
+        member
+            .acknowledge_federation_catalog(&before, now + 10)
+            .unwrap();
+        keeper
+            .set_apiary_policy_settings(
+                &[swarm_domain::ApiaryPolicySetting {
+                    key: "release.auto_install".to_owned(),
+                    value: "on".to_owned(),
+                }],
+                now + 10,
+            )
+            .unwrap();
+        let after = keeper
+            .signed_federation_catalog(&credential, now + 10)
+            .unwrap();
+        assert_eq!(after.payload.issued_at, before.payload.issued_at);
+        assert!(after.payload.policy_revision > before.payload.policy_revision);
+
+        let acknowledged = member
+            .acknowledge_federation_catalog(&after, now + 10)
+            .unwrap();
+        assert_eq!(acknowledged.policy_revision, after.payload.policy_revision);
+        // Still ordered: the one it replaced cannot come back.
+        assert!(matches!(
+            member.acknowledge_federation_catalog(&before, now + 10),
+            Err(TaskStoreError::InvalidFederationCatalog)
         ));
     }
 
