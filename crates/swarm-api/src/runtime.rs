@@ -755,6 +755,13 @@ const fn worst_pressure(left: ResourcePressure, right: ResourcePressure) -> Reso
     }
 }
 
+/// How full this machine's memory is, for the health a member reports to its
+/// Keeper (ADR 0114). Used memory, not stall, for the reason the stall reading
+/// is kept out of admission: it flaps.
+pub(super) fn memory_pressure_now() -> ResourcePressure {
+    sample_machine_resources().memory_pressure
+}
+
 fn sample_machine_resources() -> MachineResourceResponse {
     #[cfg(target_os = "linux")]
     {

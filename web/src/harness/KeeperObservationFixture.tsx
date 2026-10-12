@@ -28,6 +28,23 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
           supported: [{ key: "release.auto_install", kind: "choice", values: ["on", "off"] }, { key: "shared_work.minimum_version", kind: "version", values: [] }],
         }
         // Thistle's release is too old for either; the others comply and say nothing.
+        // Clover is reachable but stopping at a step and short of disk; Thistle
+        // is quiet, which the version and contact line already says.
+        : url.endsWith("/fleet-health") ? [
+          { hive_id: "clover", conditions: [
+            { kind: "failing_sync", step: "project catalog", last_success_at: now - 2 * 3_600, sustained: true },
+            { kind: "low_disk", lowest_available_bytes: 1_610_612_736, critical: false },
+            { kind: "engine_update_pending" },
+          ] },
+          { hive_id: "thistle", conditions: [{ kind: "quiet", last_contact_at: now - 3 * 86_400 }, { kind: "schema_behind", running: "1.11.0" }] },
+        ]
+        // A morning without DNS, as WSL had on 2026-10-01.
+        : url.includes("/contact-history") ? (() => {
+          const until = now - (now % 300);
+          const from = until - 86_400 + 300;
+          const outage = [from + 120 * 300, from + 158 * 300];
+          return { slot_seconds: 300, from, until, contacted: Array.from({ length: 288 }, (_, index) => from + index * 300).filter((at) => at < outage[0] || at >= outage[1]) };
+        })()
         : url.endsWith("/policy-gaps") ? [{ hive_id: "thistle", gaps: [
           { key: "release.auto_install", expected: "on", reason: "release_cannot_apply" },
           { key: "shared_work.minimum_version", expected: "1.16.10", reason: "below_minimum", running: "1.11.0" },

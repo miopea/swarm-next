@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchHiveLog, fetchLocalLog, type DiagnosticEntry, type HiveLog } from "../api";
+import { fetchContactHistory, fetchHiveLog, fetchLocalLog, type ContactHistory, type DiagnosticEntry, type HiveLog } from "../api";
+import ContactHistoryStrip from "./ContactHistoryStrip";
 
 type Props = {
   operatorToken: string;
@@ -22,6 +23,7 @@ const REFRESH_MS = 10_000;
  */
 export default function HiveLogDialog({ operatorToken, hiveName, hiveId, onClose }: Props) {
   const [log, setLog] = useState<HiveLog>();
+  const [contact, setContact] = useState<ContactHistory>();
   const [failed, setFailed] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const dialog = useRef<HTMLElement>(null);
@@ -31,6 +33,11 @@ export default function HiveLogDialog({ operatorToken, hiveName, hiveId, onClose
       const next = hiveId === undefined ? await fetchLocalLog(operatorToken, signal) : await fetchHiveLog(operatorToken, hiveId, signal);
       setLog(next);
       setFailed(false);
+      // A member's day of contact (ADR 0114). Its own failure costs only the strip.
+      if (hiveId !== undefined) {
+        const history = await fetchContactHistory(operatorToken, hiveId, signal).catch(() => undefined);
+        setContact(history && history.slot_seconds > 0 && Array.isArray(history.contacted) ? history : undefined);
+      }
     } catch (error) {
       if (!signal?.aborted && !(error instanceof DOMException && error.name === "AbortError")) setFailed(true);
     }
@@ -62,6 +69,7 @@ export default function HiveLogDialog({ operatorToken, hiveName, hiveId, onClose
           </span>
         </header>
         <div className="hive-log-body">
+          {contact ? <ContactHistoryStrip history={contact} /> : null}
           <p className="hive-log-status" role="status">{status(log, failed, hiveId === undefined)}</p>
           {shown.length ? (
             <ol className="hive-log-lines" aria-label={`Log lines from ${hiveName}, newest first`}>

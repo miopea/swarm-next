@@ -865,6 +865,15 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    the roster's 42px avatar column and the badge sat over the version. */
 .keeper-hive-list.fleet-version-list li { grid-template-columns: minmax(0, 1fr) auto; }
 .keeper-hive-list.fleet-version-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
+/* Only for a Hive with something wrong (ADR 0114): its worst condition, then
+   what to do. Wraps rather than clips, because the next step is the point. */
+/* A member's day of contact (ADR 0114), one cell per five minutes. */
+.contact-history { display: grid; gap: 4px; margin: 0 0 10px; }
+.contact-history figcaption { font-size: .8rem; font-weight: 600; }
+.contact-history-strip { display: grid; grid-template-columns: repeat(288, minmax(0, 1fr)); height: 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--bad-soft); }
+.contact-history-strip .is-contacted { background: var(--good); }
+.contact-history-axis { display: flex; justify-content: space-between; color: var(--muted); font-size: .7rem; }
+.keeper-hive-list .hive-health { color: var(--warn-strong); font-weight: 600; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .keeper-hive-list .hive-policy-gap { color: var(--warn-strong); font-weight: 600; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .apiary-policy-note { margin: 0 0 10px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .apiary-policy-list { display: grid; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }

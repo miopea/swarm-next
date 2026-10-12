@@ -129,12 +129,28 @@ async function main() {
     return { ok: sync.condition === "incompatible", value: sync, seen: sync };
   });
   console.log(`      a refused catalog request recorded: ${refused.condition} at "${refused.failed_step ?? "(no step recorded)"}"`);
+  // ADR 0114: the Keeper hears which step, from the member, while it is still
+  // refused — on 2026-10-01 only the member's own operator could see that.
+  const failingOf = async () => {
+    const fleet = await must(KEEPER, "GET", "/api/v1/apiary/fleet-health");
+    return fleet.find((entry) => entry.hive_id === memberHive)?.conditions.find((condition) => condition.kind === "failing_sync");
+  };
+  await waitFor("the Keeper sees where the member's sync is failing", 60, async () => {
+    const failing = await failingOf();
+    return { ok: failing?.step === refused.failed_step, seen: failing };
+  });
+  pass(`the Keeper sees the member failing at "${refused.failed_step}" while it is refused`);
   fs.rmSync(PROXY_FAULT);
   await waitFor("the member syncs again once the refusal stops", 150, async () => {
     const sync = await must(MEMBER, "GET", "/api/v1/apiary/sync-health");
     return { ok: sync.condition === "current", seen: sync };
   });
   pass("one refused request does not stop the member synchronising");
+  await waitFor("the Keeper sees the member's sync working again", 60, async () => {
+    const failing = await failingOf();
+    return { ok: failing === undefined, seen: failing };
+  });
+  pass("the Keeper's view clears by itself once the member recovers");
 
   // ── 2c. The Keeper can tell when a member last reached it ──
   const members = await must(KEEPER, "GET", "/api/v1/apiary/members");

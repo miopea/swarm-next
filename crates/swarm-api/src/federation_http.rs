@@ -266,6 +266,25 @@ impl FederationHttpClient {
         .map(|_| ())
     }
 
+    /// Tells the Keeper how this member is (ADR 0114).
+    ///
+    /// # Errors
+    /// Returns transport failures and the Keeper's refusals.
+    pub async fn publish_health(
+        &self,
+        credential: &str,
+        report: &swarm_domain::HiveHealthReport,
+    ) -> Result<(), FederationHttpError> {
+        self.send_json::<_, serde::de::IgnoredAny>(
+            Method::PUT,
+            "api/v1/federation/health",
+            Some(credential),
+            Some(report),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Creates a bounded, redirect-free transport for one signed Keeper base
     /// endpoint. Plain HTTP is accepted only for loopback test/development
     /// peers; remote federation always requires HTTPS.

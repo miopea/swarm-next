@@ -38,6 +38,35 @@ fn observation(scope: &'static str, capacity: Option<(u64, u64)>) -> StorageObse
     }
 }
 
+/// The tightest of the observations: its pressure, and the least space left
+/// anywhere. Roles may share a filesystem, so space is never summed (ADR 0083).
+pub(super) fn tightest(
+    observations: &[StorageObservation],
+) -> (swarm_domain::ResourcePressure, Option<u64>) {
+    use swarm_domain::ResourcePressure;
+    let rank = |pressure: &str| match pressure {
+        "critical" => 3,
+        "advisory" => 2,
+        "unavailable" => 1,
+        _ => 0,
+    };
+    let pressure = match observations
+        .iter()
+        .map(|observation| observation.pressure)
+        .max_by_key(|pressure| rank(pressure))
+    {
+        Some("critical") => ResourcePressure::Critical,
+        Some("advisory") => ResourcePressure::Advisory,
+        Some("normal") => ResourcePressure::Normal,
+        _ => ResourcePressure::Unavailable,
+    };
+    let lowest = observations
+        .iter()
+        .filter_map(|observation| observation.available_bytes)
+        .min();
+    (pressure, lowest)
+}
+
 fn unavailable() -> Vec<StorageObservation> {
     ["system", "temporary", "database"]
         .map(|scope| observation(scope, None))

@@ -25,6 +25,7 @@ mod dogfood_evidence;
 mod email_attachments;
 mod email_reply_ai;
 mod federation_events;
+mod fleet_health;
 mod member_diagnostics;
 mod takeover_producer;
 mod takeover_relay;
@@ -472,6 +473,8 @@ pub struct AppState {
     diagnostic_log: Option<Arc<DiagnosticLog>>,
     /// What members have shared of their logs with this Keeper (ADR 0112).
     member_diagnostics: Arc<member_diagnostics::MemberDiagnostics>,
+    /// What this member last told its Keeper about its health (ADR 0114).
+    health_shipping: fleet_health::SharedHealthShipping,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -610,6 +613,7 @@ impl AppState {
             installed_takeover: Arc::new(std::sync::Mutex::new(None)),
             diagnostic_log: None,
             member_diagnostics: Arc::new(member_diagnostics::MemberDiagnostics::default()),
+            health_shipping: fleet_health::SharedHealthShipping::default(),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -1263,6 +1267,7 @@ impl AppState {
         let started = std::time::Instant::now();
         tracing::debug!(prompted, "federation pass starting");
         self.ship_diagnostics().await;
+        fleet_health::ship_health(self).await;
         self.reconcile_federation_pass(prompted).await;
         let elapsed_ms = started.elapsed().as_millis();
         tracing::debug!(prompted, elapsed_ms, "federation pass finished");
@@ -4386,6 +4391,14 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/apiary/hives/{hive_id}/diagnostics",
             get(apiary_hive_diagnostics),
         )
+        .route(
+            "/api/v1/apiary/hives/{hive_id}/contact-history",
+            get(fleet_health::contact_history),
+        )
+        .route(
+            "/api/v1/apiary/fleet-health",
+            get(fleet_health::fleet_health),
+        )
         .route("/api/v1/diagnostics/log", get(local_diagnostic_log))
         .route(
             "/api/v1/apiary/watches",
@@ -4513,6 +4526,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/diagnostics",
             axum::routing::put(accept_member_diagnostics),
+        )
+        .route(
+            "/api/v1/federation/health",
+            axum::routing::put(fleet_health::accept_member_health),
         )
         .route(
             "/api/v1/federation/events",
@@ -14660,6 +14677,190 @@ mod tests {
             "the operator's own choice was kept underneath and is back"
         );
         assert!(member.local_policy_settings().unwrap().is_empty());
+    }
+
+    /// ⚠️ ADR 0114 PUSH: a fault is raised once, withdrawn when it clears,
+    /// raised again only when it comes back, and an answer holds while it lasts.
+    #[tokio::test]
+    async fn a_hive_fault_is_raised_once_and_goes_away_when_it_clears() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        keeper.ensure_queen("/tmp/keeper").unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let report = |disk: &str| {
+            serde_json::json!({
+                "schema_version": 1,
+                "observed_at": now,
+                "sync": { "condition": "current", "failed_step": null, "last_success_at": now, "consecutive_failures": 0 },
+                "engine": { "update_pending": false, "last_attempt": null },
+                "disk": { "pressure": disk, "lowest_available_bytes": 300 * 1024 * 1024 },
+                "memory": "normal",
+                "stuck_workers": 0
+            })
+        };
+        let send = |disk: &'static str| {
+            let (app, credential) = (app.clone(), credential.clone());
+            async move {
+                let status = app
+                    .oneshot(
+                        Request::builder()
+                            .method("PUT")
+                            .uri("/api/v1/federation/health")
+                            .header("authorization", format!("Bearer {credential}"))
+                            .header("content-type", "application/json")
+                            .body(Body::from(report(disk).to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+                    .status();
+                assert_eq!(status, StatusCode::NO_CONTENT);
+            }
+        };
+        let raised = || {
+            keeper
+                .list_decision_requests()
+                .unwrap()
+                .into_iter()
+                .filter(|request| request.title.ends_with(": disk about to run out"))
+                .collect::<Vec<_>>()
+        };
+        let pending = || {
+            raised()
+                .into_iter()
+                .filter(|request| request.state == swarm_domain::DecisionRequestState::Pending)
+                .collect::<Vec<_>>()
+        };
+
+        // Advisory is shown on the roster, never pushed.
+        send("advisory").await;
+        assert!(raised().is_empty());
+
+        send("critical").await;
+        send("critical").await;
+        assert_eq!(pending().len(), 1, "raised once, not once per report");
+        assert!(pending()[0].summary.contains("300 MiB free"));
+
+        // Back above the line but still short is not cleared, so a disk that
+        // hovers at the line does not push on every report (ADR 0058).
+        send("advisory").await;
+        send("critical").await;
+        send("advisory").await;
+        assert_eq!(pending().len(), 1);
+        assert_eq!(raised().len(), 1);
+
+        send("normal").await;
+        assert!(pending().is_empty(), "it clears by itself");
+        assert_eq!(raised().len(), 1);
+
+        // Back again is a new episode, and it is raised again.
+        send("critical").await;
+        let second = pending();
+        assert_eq!(second.len(), 1);
+        assert_eq!(raised().len(), 2);
+        keeper
+            .resolve_decision_request(second[0].id, "Leave it for now", "", "control_room")
+            .unwrap();
+        // An answer holds while the same fault lasts.
+        send("critical").await;
+        assert!(pending().is_empty());
+        assert_eq!(raised().len(), 2);
+    }
+
+    /// ⚠️ ADR 0114: a member's health reaches its Keeper only on its own
+    /// credential, and the Keeper shows what is wrong with it — and nothing at
+    /// all for a Hive with nothing wrong.
+    #[tokio::test]
+    async fn a_member_reports_its_health_and_the_keeper_shows_only_what_is_wrong() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let hive = member.local_hive_identity().unwrap().hive.id;
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let send = |credential: String, body: Value| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/v1/federation/health")
+                        .header("authorization", format!("Bearer {credential}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+            }
+        };
+        let report = |disk: &str| {
+            serde_json::json!({
+                "schema_version": 1,
+                "observed_at": now,
+                "sync": { "condition": "current", "failed_step": null, "last_success_at": now, "consecutive_failures": 0 },
+                "engine": { "update_pending": false, "last_attempt": null },
+                "disk": { "pressure": disk, "lowest_available_bytes": 300_000_000 },
+                "memory": "normal",
+                "stuck_workers": 0
+            })
+        };
+        let fleet = || async {
+            response_json(authorized_get(app.clone(), "/api/v1/apiary/fleet-health").await).await
+        };
+
+        assert_eq!(
+            send("bm90LWEtY3JlZGVudGlhbA".to_owned(), report("normal")).await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            send(credential.clone(), report("normal")).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            fleet().await,
+            serde_json::json!([]),
+            "a healthy Hive is absent"
+        );
+
+        assert_eq!(
+            send(credential.clone(), report("critical")).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            fleet().await,
+            serde_json::json!([{
+                "hive_id": hive,
+                "conditions": [{ "kind": "low_disk", "lowest_available_bytes": 300_000_000, "critical": true }]
+            }])
+        );
+        let mut unknown = report("normal");
+        unknown["schema_version"] = serde_json::json!(2);
+        assert_eq!(send(credential, unknown).await, StatusCode::BAD_REQUEST);
+
+        let history = response_json(
+            authorized_get(
+                app.clone(),
+                &format!("/api/v1/apiary/hives/{hive}/contact-history"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(history["slot_seconds"], 300);
+        let contacted = history["contacted"].as_array().unwrap();
+        assert!(
+            contacted.last().and_then(Value::as_i64) >= Some(swarm_domain::contact_slot(now)),
+            "the member's reports are contact: {history}"
+        );
     }
 
     /// ⚠️ ADR 0112: a member's log reaches its Keeper, only on that member's own

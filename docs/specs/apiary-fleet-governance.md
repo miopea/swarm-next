@@ -69,6 +69,12 @@ nothing to require. The other five need enforcement before they can be required.
   2026-09-30 ruling is to warn about silence when you go to use the Hive.
 - Not chosen: raising when shared work sits on a quiet Hive.
 
+**Built (ADR 0114):** all three. The member sends its health on its own channel.
+The roster shows each faulted Hive's worst condition with its next step, and the
+Hive's log view has the day of contact. Push covers sustained sync failure, an
+engine update whose swap failed, and disk under 512 MiB, once per fault episode.
+Schema behind is pushed by "Hives are behind" already.
+
 ## Usage
 
 "Time or token based or both" — both:
@@ -83,4 +89,6 @@ nothing to require. The other five need enforcement before they can be required.
 
 - The values each setting can take (for example the Queen autonomy levels), and
   what the Keeper's defaults are before it sets anything.
-- How "low disk" is defined, so it fires only when it needs acting on.
+- ~~How "low disk" is defined~~: settled in ADR 0114 with ADR 0083's
+  thresholds. It is shown under 2 GiB free and pushed under 512 MiB, and it stays
+  raised until the disk is back above 2 GiB.

@@ -234,6 +234,17 @@ why before it tries. The Keeper enforces this one, since a Hive too old to meet
 it is too old to know it exists. Engine updates already apply when idle on every
 packaged Hive. Five more settings ruled on 2026-10-12 await enforcement.
 
+Fleet health (ADR 0114, 2026-10-12): each member sends its Keeper a bounded,
+content-free health report on its own channel, before the sync gates. It covers
+sync condition and failed step, worker engine, disk, memory and stuck workers.
+The Keeper's roster shows each faulted Hive's worst condition with its next
+step, and nothing for a healthy one. Opening a member's log shows its last day of
+contact in five-minute slots, with the gaps named. Three faults are pushed once
+per episode and withdrawn when they clear: sustained sync failure, a failed
+engine swap, and disk under 512 MiB. The two-Hive run checks that a refused
+step is visible from the Keeper and clears by itself. Usage figures are still
+to come.
+
 Member logs (ADR 0112, 2026-09-29): every member keeps a bounded copy of its own
 log — Swarm's INFO-and-above lines plus the Apiary connection's DEBUG lines —
 and sends new lines to its Keeper on every sync pass, including while it is in

@@ -129,7 +129,231 @@ fn fleet_raise_key(expected: &str, raised: &[&swarm_persistence::HiveVersionStan
     format!("Raised for {expected}: {}", behind.join(", "))
 }
 
+/// The line a Hive-fault raise carries in its evidence: which Hive, which
+/// fault, and since when. It is the dedup key: one raise per fault episode.
+fn hive_fault_key(hive: swarm_domain::HiveId, fault: &str, since: i64) -> String {
+    format!("Hive fault: {hive} {fault} since {since}")
+}
+
+/// What a raise says about one fault on one Hive: its title, what is wrong,
+/// and the first thing to do.
+fn hive_fault_words(
+    hive_name: &str,
+    condition: &swarm_domain::HiveCondition,
+    now: i64,
+) -> Option<(String, String, &'static str)> {
+    use swarm_domain::HiveCondition;
+    match condition {
+        HiveCondition::FailingSync {
+            step,
+            last_success_at,
+            ..
+        } => Some((
+            format!(
+                "{hive_name}: Apiary sync failing{}",
+                step.as_ref()
+                    .map(|step| format!(" at {step}"))
+                    .unwrap_or_default()
+            ),
+            format!(
+                "{hive_name} has not finished a sync with this Keeper {}. It retries by \
+                 itself, so this has not fixed itself. Its log says why.",
+                last_success_at.map_or_else(
+                    || "since it joined".to_owned(),
+                    |at| format!("in {}", span(now.saturating_sub(at)))
+                )
+            ),
+            "Open its logs",
+        )),
+        HiveCondition::EngineUpdateFailing => Some((
+            format!("{hive_name}: worker engine update failing"),
+            format!(
+                "{hive_name} has a newer worker engine waiting, and its last attempt to swap \
+                 to one did not finish. Its workers keep running on the old engine meanwhile."
+            ),
+            "Open its logs",
+        )),
+        HiveCondition::LowDisk {
+            lowest_available_bytes,
+            critical: true,
+        } => Some((
+            format!("{hive_name}: disk about to run out"),
+            format!(
+                "{hive_name} has {} free on its fullest disk, under 512 MiB. Work there may \
+                 start failing until its operator frees space.",
+                lowest_available_bytes.map_or_else(
+                    || "almost nothing".to_owned(),
+                    |bytes| format!("{} MiB", bytes / (1024 * 1024))
+                )
+            ),
+            "Tell its operator",
+        )),
+        _ => None,
+    }
+}
+
+/// A length of time, in the largest unit that reads naturally.
+fn span(seconds: i64) -> String {
+    if seconds < 7_200 {
+        format!("{} minutes", seconds / 60)
+    } else if seconds < 172_800 {
+        format!("{} hours", seconds / 3_600)
+    } else {
+        format!("{} days", seconds / 86_400)
+    }
+}
+
 impl ApiaryService {
+    /// Pushes the Keeper about a member Hive's faults, one raise per fault, and
+    /// withdraws each raise when its fault clears (ADR 0114).
+    ///
+    /// Faults are failing sync that retrying has not fixed, an engine update
+    /// that will not apply, and disk about to run out. Schema behind is raised
+    /// already, by "Hives are behind". A quiet Hive is never raised, and its
+    /// faults are left as they are: going quiet is not getting better.
+    ///
+    /// ⚠️ ONE PER FAULT EPISODE. An answered raise holds while its fault lasts;
+    /// a fault that clears and returns is a new episode and is raised again.
+    /// The operator's standing complaint is a card that keeps coming back
+    /// after it has been dealt with.
+    ///
+    /// ⚠️ EVENT-DRIVEN, as `raise_hives_left_behind` is: run when a member
+    /// reports and when the fleet's health is read, never on a timer of its own.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn raise_hive_faults(&self, now: i64, keeper_build: &str) -> Result<(), ApplicationError> {
+        let members = self
+            .members()?
+            .into_iter()
+            .filter(|member| {
+                !member.is_local && member.role == swarm_domain::LocalApiaryRole::Member
+            })
+            .collect::<Vec<_>>();
+        let fleet = self.fleet_health(now, keeper_build)?;
+        let quiet = |hive: swarm_domain::HiveId| {
+            fleet.iter().any(|(id, conditions)| {
+                *id == hive
+                    && conditions.iter().any(|condition| {
+                        matches!(condition, swarm_domain::HiveCondition::Quiet { .. })
+                    })
+            })
+        };
+        let faulted = fleet
+            .iter()
+            .flat_map(|(hive, conditions)| {
+                conditions
+                    .iter()
+                    .filter(|condition| condition.pushes())
+                    .map(move |condition| (*hive, condition))
+            })
+            .collect::<Vec<_>>();
+        let asked = self
+            .store
+            .list_decision_requests()?
+            .into_iter()
+            .filter(|request| {
+                request
+                    .evidence
+                    .lines()
+                    .any(|line| line.starts_with("Hive fault: "))
+            })
+            .collect::<Vec<_>>();
+
+        for (hive, fault, since) in self.store.hive_fault_episodes()? {
+            // ⚠️ CLEARED ONLY WHEN IT IS GONE, NOT WHEN IT STOPS PUSHING. A disk
+            // hovering at the line would otherwise open and close an episode on
+            // every report, and each would push: the threshold alarm ADR 0058
+            // refuses. Raised below 512 MiB, it holds until the disk is back
+            // above 2 GiB; a sync failure holds until a sync gets through.
+            let still = fleet.iter().any(|(id, conditions)| {
+                *id == hive && conditions.iter().any(|condition| condition.key() == fault)
+            });
+            let member = members.iter().any(|member| member.hive_id == hive);
+            if still || (member && quiet(hive)) {
+                continue;
+            }
+            self.store.close_hive_fault_episode(hive, &fault)?;
+            let key = hive_fault_key(hive, &fault, since);
+            for request in asked.iter().filter(|request| {
+                request.state == swarm_domain::DecisionRequestState::Pending
+                    && request.evidence.lines().any(|line| line == key)
+            }) {
+                if let Err(error) = self.store.withdraw_decision_request(
+                    request.id,
+                    request.requesting_worker_id,
+                    if member {
+                        "It cleared by itself."
+                    } else {
+                        "The Hive left the Apiary."
+                    },
+                ) {
+                    tracing::warn!(message = %error, decision = %request.id, "a cleared Hive fault could not be withdrawn");
+                }
+            }
+        }
+
+        for (hive, condition) in faulted {
+            let name = members
+                .iter()
+                .find(|member| member.hive_id == hive)
+                .map_or_else(|| hive.to_string(), |member| member.hive_name.clone());
+            self.raise_hive_fault(hive, &name, condition, &asked, now)?;
+        }
+        Ok(())
+    }
+
+    /// Raises one fault on one Hive, unless this episode of it was already
+    /// raised: pending, or answered. A withdrawn raise was this key's episode
+    /// ending, so it never stands in the way of the next.
+    fn raise_hive_fault(
+        &self,
+        hive: swarm_domain::HiveId,
+        name: &str,
+        condition: &swarm_domain::HiveCondition,
+        asked: &[swarm_domain::DecisionRequest],
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        let since = self
+            .store
+            .open_hive_fault_episode(hive, condition.key(), now)?;
+        let key = hive_fault_key(hive, condition.key(), since);
+        if asked.iter().any(|request| {
+            request.state != swarm_domain::DecisionRequestState::Withdrawn
+                && request.evidence.lines().any(|line| line == key)
+        }) {
+            return Ok(());
+        }
+        let Some((title, summary, first_step)) = hive_fault_words(name, condition, now) else {
+            return Ok(());
+        };
+        let Ok(Some(queen)) = self.store.queen_worker_id() else {
+            tracing::warn!(%hive, fault = condition.key(), "a Hive has a fault and there is no Queen to raise it to");
+            return Ok(());
+        };
+        if let Err(error) = self.store.create_decision_request(&NewDecisionRequest {
+            requesting_worker_id: queen,
+            task_id: None,
+            kind: DecisionRequestKind::Input,
+            urgency: DecisionUrgency::Normal,
+            title: &title,
+            summary: &summary,
+            reason: "A fault on a member Hive is invisible from the Keeper unless it is \
+                     raised; on 2026-10-01 one was found only by reading logs.",
+            risk: "Left alone, the Hive stops taking part in the Apiary, or stops working.",
+            evidence: &format!("{summary}\n\n{key}"),
+            suggested_action: first_step,
+            allowed_actions: &[first_step.to_owned(), "Leave it for now".to_owned()],
+            operator_actions: &[first_step.to_owned()],
+            questions: &[],
+            deadline: None,
+            requested_command: None,
+        }) {
+            tracing::warn!(message = %error, %hive, fault = condition.key(), "a Hive fault could not be raised");
+        }
+        Ok(())
+    }
+
     /// Raises the Hives that have fallen behind, and withdraws the raise once
     /// they catch up.
     ///
@@ -377,6 +601,78 @@ impl ApiaryService {
             }
         }
         Ok(gaps)
+    }
+
+    /// Everything wrong with each member Hive, worst first (ADR 0114). A Hive
+    /// with nothing wrong is absent, so a healthy fleet is an empty list.
+    ///
+    /// # Errors
+    /// Returns storage failures and corrupt stored reports.
+    pub fn fleet_health(
+        &self,
+        now: i64,
+        keeper_build: &str,
+    ) -> Result<Vec<(swarm_domain::HiveId, Vec<swarm_domain::HiveCondition>)>, ApplicationError>
+    {
+        let versions = self.store.fleet_version_report(now, keeper_build)?;
+        let reports = self.store.apiary_hive_health()?;
+        let mut fleet = Vec::new();
+        for member in self.members()? {
+            if member.is_local || member.role != swarm_domain::LocalApiaryRole::Member {
+                continue;
+            }
+            let version = versions
+                .hives
+                .iter()
+                .find(|hive| hive.identity.hive_id == member.hive_id)
+                .map(|hive| (hive.standing, hive.swarm_version.as_str()));
+            let health = reports
+                .iter()
+                .find(|stored| stored.hive_id == member.hive_id)
+                .map(|stored| &stored.report);
+            let found = swarm_domain::hive_conditions(
+                &swarm_domain::HiveHealthEvidence {
+                    last_contact_at: member.last_contact_at,
+                    version,
+                    health,
+                },
+                now,
+            );
+            if !found.is_empty() {
+                fleet.push((member.hive_id, found));
+            }
+        }
+        Ok(fleet)
+    }
+
+    /// A member telling its Keeper how it is (ADR 0114).
+    ///
+    /// # Errors
+    /// Rejects an invalid credential or report, and storage failures.
+    pub fn accept_hive_health(
+        &self,
+        credential: &str,
+        report: &swarm_domain::HiveHealthReport,
+        now: i64,
+    ) -> Result<swarm_domain::HiveId, ApplicationError> {
+        self.store
+            .accept_hive_health(credential, report, now)
+            .map_err(Into::into)
+    }
+
+    /// When one member reached this Keeper over the last day, in five-minute
+    /// slots (ADR 0114).
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn member_contact_history(
+        &self,
+        hive: swarm_domain::HiveId,
+        now: i64,
+    ) -> Result<Vec<i64>, ApplicationError> {
+        self.store
+            .member_contact_history(hive, now)
+            .map_err(Into::into)
     }
 
     /// A member putting its Apiary's required settings into effect (ADR 0113),

@@ -257,5 +257,29 @@ test("a Hive with a required setting not in effect says why, and a compliant one
   expect(screen.getAllByText(/Not in effect:/)).toHaveLength(1);
 });
 
+/**
+ * ⚠️ ADR 0114: one line for a Hive with something wrong — its worst condition
+ * and what to do — and nothing for a healthy one.
+ */
+test("a Hive with something wrong says what and what to do, and a healthy one says nothing", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/members")) return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false, last_contact_at: Math.floor(Date.now() / 1000) },
+      { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false, last_contact_at: Math.floor(Date.now() / 1000) },
+    ]);
+    if (url.endsWith("/fleet-health")) return ok([{ hive_id: "hive-2", conditions: [
+      { kind: "failing_sync", step: "project catalog", last_success_at: Math.floor(Date.now() / 1000) - 7_200, sustained: true },
+      { kind: "low_disk", lowest_available_bytes: 300 * 1024 * 1024, critical: true },
+    ] }]);
+    return ok([]);
+  }));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  const roster = await screen.findByRole("list", { name: "Keeper Apiary Hives" });
+  await waitFor(() => expect(roster).toHaveTextContent("Sync failing at project catalog. Last worked 2h ago; open its logs to see why. Also: low disk: 300 MiB free."));
+  expect(roster.querySelectorAll(".hive-health")).toHaveLength(1);
+});
+
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }
 function ok(payload: unknown) { return { ok: true, status: 200, json: async () => payload }; }

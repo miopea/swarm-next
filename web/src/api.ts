@@ -1712,6 +1712,34 @@ export async function fetchPolicyGaps(operatorToken: string, signal?: AbortSigna
   return response.json() as Promise<HivePolicyGaps[]>;
 }
 
+/** One thing wrong with a member Hive (ADR 0114). Each is also its fix. */
+export type HiveCondition =
+  | { kind: "quiet"; last_contact_at: number | null }
+  | { kind: "failing_sync"; step: string | null; last_success_at: number | null; sustained: boolean }
+  | { kind: "schema_behind"; running: string }
+  | { kind: "behind"; running: string }
+  | { kind: "engine_update_failing" }
+  | { kind: "low_disk"; lowest_available_bytes: number | null; critical: boolean }
+  | { kind: "short_of_memory" }
+  | { kind: "workers_stuck"; count: number }
+  | { kind: "engine_update_pending" };
+
+/** A member Hive with something wrong, worst first. A healthy Hive is absent. */
+export type HiveHealth = { hive_id: string; conditions: HiveCondition[] };
+
+export async function fetchFleetHealth(operatorToken: string, signal?: AbortSignal): Promise<HiveHealth[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/fleet-health", { signal });
+  return response.json() as Promise<HiveHealth[]>;
+}
+
+/** When a member reached its Keeper over the last day, in fixed slots. */
+export type ContactHistory = { slot_seconds: number; from: number; until: number; contacted: number[] };
+
+export async function fetchContactHistory(operatorToken: string, hiveId: string, signal?: AbortSignal): Promise<ContactHistory> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/hives/${encodeURIComponent(hiveId)}/contact-history`, { signal });
+  return response.json() as Promise<ContactHistory>;
+}
+
 /** What this member Hive's Apiary requires of it, and whether that holds it back. */
 export type MemberRequirementsView = {
   settings: ApiaryPolicySetting[];

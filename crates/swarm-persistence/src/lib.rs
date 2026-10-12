@@ -35,6 +35,8 @@ mod apiary_policy;
 mod apiary_watch;
 mod fleet_version;
 mod hive_capability;
+mod hive_health;
+pub use hive_health::StoredHiveHealth;
 mod provider_usage;
 mod queen_recovery;
 mod queen_review;
@@ -368,7 +370,9 @@ const RELEASE_AUTO_INSTALL_SCHEMA_MARKER: i64 = 195;
 const FEDERATION_FAILED_STEP_SCHEMA_MARKER: i64 = 196;
 /// Keeper records when each member last reached it.
 const MEMBER_LAST_CONTACT_SCHEMA_MARKER: i64 = 197;
-const CURRENT_SCHEMA_VERSION: i64 = MEMBER_LAST_CONTACT_SCHEMA_MARKER;
+/// Keeper holds each member's health report and a day of its contact (ADR 0114).
+const HIVE_HEALTH_SCHEMA_MARKER: i64 = 198;
+const CURRENT_SCHEMA_VERSION: i64 = HIVE_HEALTH_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4698,6 +4702,21 @@ fn migrate_engine_history_schema_steps(
             "INTEGER",
             MEMBER_LAST_CONTACT_SCHEMA_MARKER,
         )?;
+    }
+    migrate_fleet_health_schema_steps(transaction, schema_version)
+}
+
+/// The steps from fleet health onwards (ADR 0114).
+///
+/// Split from `migrate_engine_history_schema_steps` for the reason that one was
+/// split from the function before it: adding a step took it past the length
+/// limit.
+fn migrate_fleet_health_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    if schema_version < HIVE_HEALTH_SCHEMA_MARKER {
+        crate::hive_health::migrate_hive_health(transaction)?;
     }
     Ok(())
 }
@@ -10648,6 +10667,17 @@ mod tests {
             artifact: "last_contact_at",
             undo_sql: "",
             probe_sql: "",
+        },
+        // Three tables in one step (ADR 0114), so all three are undone and all
+        // three must come back.
+        SchemaStep {
+            table: "apiary_hive_health",
+            artifact: "",
+            undo_sql: "DROP TABLE apiary_hive_health;
+                       DROP TABLE apiary_hive_fault_episodes;
+                       DROP TABLE apiary_member_contact_slots;",
+            probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type = 'table' AND name IN
+                        ('apiary_hive_health', 'apiary_hive_fault_episodes', 'apiary_member_contact_slots')",
         },
     ];
 

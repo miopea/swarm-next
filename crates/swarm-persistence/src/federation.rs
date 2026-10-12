@@ -3133,14 +3133,14 @@ pub(crate) fn authenticate_member_credential(
     let digest = invitation_secret_digest(credential);
     // Every authenticated request a member makes is contact. Throttled so a
     // member polling every few seconds costs one write per half minute.
-    connection.execute(
+    let contacted = connection.execute(
         "UPDATE apiary_federation_memberships SET last_contact_at = ?3
          WHERE apiary_id = ?1 AND credential_digest = ?2 AND state = 'active'
            AND credential_expires_at > ?3
            AND (last_contact_at IS NULL OR last_contact_at <= ?3 - 30)",
         params![apiary_id.to_string(), digest.as_slice(), now],
     )?;
-    connection
+    let member = connection
         .query_row(
             "SELECT member_node_id, member_hive_id, member_operator_id
              FROM apiary_federation_memberships
@@ -3157,7 +3157,17 @@ pub(crate) fn authenticate_member_credential(
             },
         )
         .optional()?
-        .ok_or(TaskStoreError::InvalidFederationCredential)
+        .ok_or(TaskStoreError::InvalidFederationCredential)?;
+    // The same throttle feeds the day of contact history (ADR 0114).
+    if contacted > 0 {
+        crate::hive_health::record_contact_slot(
+            connection,
+            &apiary_id.to_string(),
+            &member.hive.to_string(),
+            now,
+        )?;
+    }
+    Ok(member)
 }
 
 /// The same membership, found by the HIVE ID the Keeper can see.
