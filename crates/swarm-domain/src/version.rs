@@ -94,6 +94,16 @@ impl SwarmVersion {
         self.release_order().gt(&other.release_order())
     }
 
+    /// Whether this build is at least the release `minimum`, by release number.
+    ///
+    /// ⚠️ NOT `Ord`. Ordering puts a development build BELOW the release it was
+    /// built from; for "is this Hive new enough", a build of 1.16.9 from the
+    /// checkout carries everything 1.16.9 does, so only the numbers count.
+    #[must_use]
+    pub fn at_least(&self, minimum: &Self) -> bool {
+        self.release_order() >= minimum.release_order()
+    }
+
     fn release_order(&self) -> (u64, u64, u64) {
         (self.major, self.minor, self.patch)
     }

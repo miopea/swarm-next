@@ -248,7 +248,7 @@ test("a Hive with a required setting not in effect says why, and a compliant one
       { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
     ]);
     if (url.endsWith("/policy-gaps")) return ok([{ hive_id: "hive-2", gaps: [{ key: "release.auto_install", expected: "on", reason: "release_cannot_apply" }] }]);
-    if (url.endsWith("/policy-settings")) return ok({ revision: 2, settings: [{ key: "release.auto_install", value: "on" }], supported: [{ key: "release.auto_install", values: ["on", "off"] }] });
+    if (url.endsWith("/policy-settings")) return ok({ revision: 2, settings: [{ key: "release.auto_install", value: "on" }], supported: [{ key: "release.auto_install", kind: "choice", values: ["on", "off"] }] });
     return ok([]);
   }));
   render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);

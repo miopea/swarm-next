@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ApiaryId, FederationNodeId, HiveId, OperatorId};
+use crate::{ApiaryId, FederationNodeId, HiveId, OperatorId, SwarmVersion};
 
 pub const APIARY_POLICY_SCHEMA_VERSION: u16 = 1;
 
@@ -162,27 +162,42 @@ pub fn policy_drift(
     drift
 }
 
-/// A setting an Apiary can require, which a member knows how to apply.
+/// A setting an Apiary can require, which is enforced somewhere real.
 ///
 /// ⚠️ ONLY THESE, AND THAT IS THE POINT. Under "always required" (ADR 0113) a
-/// setting no member acts on would read as a requirement and change nothing —
+/// setting nothing enforces would read as a requirement and change nothing —
 /// the inert `checks.max_warnings` this replaces is exactly that. A Keeper can
-/// set only what members enforce; each new one arrives with its enforcement.
+/// set only what is enforced; each new one arrives with its enforcement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RequiredSetting {
     /// Whether ordinary releases install themselves while the operator is away
     /// (ADR 0110). Never a remote restart: it changes WHETHER a member installs
     /// on its own, not WHEN, and protocol changes still wait for its operator.
     ReleaseAutoInstall,
+    /// The oldest release that may take shared work. A Hive below it keeps its
+    /// own work but cannot claim Apiary tasks or take a handoff until it updates.
+    SharedWorkMinimumVersion,
+}
+
+/// Where a required setting is made true.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicyEnforcer {
+    /// The member applies it to itself and reports it as applied.
+    Member,
+    /// The Keeper enforces it at its own door. Needed when the Hive that falls
+    /// short is by definition one that cannot be trusted to know the rule — an
+    /// older release does not know a minimum version exists.
+    Keeper,
 }
 
 impl RequiredSetting {
-    pub const ALL: [Self; 1] = [Self::ReleaseAutoInstall];
+    pub const ALL: [Self; 2] = [Self::ReleaseAutoInstall, Self::SharedWorkMinimumVersion];
 
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::ReleaseAutoInstall => "release.auto_install",
+            Self::SharedWorkMinimumVersion => "shared_work.minimum_version",
         }
     }
 
@@ -191,33 +206,77 @@ impl RequiredSetting {
         Self::ALL.into_iter().find(|setting| setting.key() == key)
     }
 
-    /// The values a Keeper may require.
+    /// The fixed values a Keeper may choose from, or `None` for a free value.
     #[must_use]
-    pub const fn values(self) -> &'static [&'static str] {
+    pub const fn choices(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::ReleaseAutoInstall => &["on", "off"],
+            Self::ReleaseAutoInstall => Some(&["on", "off"]),
+            Self::SharedWorkMinimumVersion => None,
+        }
+    }
+
+    /// Whether `value` is one this setting accepts.
+    #[must_use]
+    pub fn accepts(self, value: &str) -> bool {
+        match self.choices() {
+            Some(choices) => choices.contains(&value),
+            // A release number. A development build is no one's minimum.
+            None => SwarmVersion::parse(value).is_some_and(|version| !version.is_development()),
+        }
+    }
+
+    #[must_use]
+    pub const fn enforced_by(self) -> PolicyEnforcer {
+        match self {
+            Self::ReleaseAutoInstall => PolicyEnforcer::Member,
+            Self::SharedWorkMinimumVersion => PolicyEnforcer::Keeper,
         }
     }
 }
 
-/// Checks that a Keeper is requiring only what members can apply.
+/// Checks that a Keeper is requiring only what is enforced, with values it
+/// accepts.
 ///
 /// # Errors
-/// Names the first setting no member knows, or a value it does not accept.
+/// Names the first setting nothing enforces, or a value it does not accept.
 pub fn validate_required_settings(settings: &[ApiaryPolicySetting]) -> Result<(), String> {
     for setting in settings {
         let Some(known) = RequiredSetting::from_key(&setting.key) else {
             return Err(format!("{} is not a setting Hives can apply", setting.key));
         };
-        if !known.values().contains(&setting.value.as_str()) {
-            return Err(format!(
-                "{} must be one of {}",
-                setting.key,
-                known.values().join(", ")
-            ));
+        if !known.accepts(&setting.value) {
+            return Err(match known.choices() {
+                Some(choices) => format!("{} must be one of {}", setting.key, choices.join(", ")),
+                None => format!("{} must be a release version such as 1.16.9", setting.key),
+            });
         }
     }
     Ok(())
+}
+
+/// The oldest release an Apiary lets take shared work, if it sets one.
+#[must_use]
+pub fn minimum_shared_work_version(settings: &[ApiaryPolicySetting]) -> Option<SwarmVersion> {
+    settings
+        .iter()
+        .find(|setting| setting.key == RequiredSetting::SharedWorkMinimumVersion.key())
+        .and_then(|setting| SwarmVersion::parse(&setting.value))
+}
+
+/// Why a Hive running `reported` may not take shared work under `minimum`, or
+/// `None` when it may. Said in words the Hive's operator can act on.
+#[must_use]
+pub fn shared_work_refusal(minimum: &SwarmVersion, reported: Option<&str>) -> Option<String> {
+    match reported.and_then(SwarmVersion::parse) {
+        Some(running) if running.at_least(minimum) => None,
+        Some(running) => Some(format!(
+            "this Hive runs {running}; the Apiary needs {minimum} or newer to take shared work, so update it"
+        )),
+        // Fails closed: a requirement nobody can check is not a requirement met.
+        None => Some(format!(
+            "this Hive has not told the Keeper which release it runs; the Apiary needs {minimum} or newer to take shared work"
+        )),
+    }
 }
 
 /// What an Apiary requires of an on/off setting, if it requires anything.
@@ -246,6 +305,9 @@ pub enum PolicyGapReason {
     ReleaseCannotApply,
     /// It applied a different value.
     Different { local: String },
+    /// Its release is older than the Apiary's minimum, so the Keeper refuses it
+    /// shared work.
+    BelowMinimum { running: String },
 }
 
 /// One required setting not in effect on one Hive.
@@ -257,13 +319,15 @@ pub struct PolicyGap {
     pub reason: PolicyGapReason,
 }
 
-/// What a member last told its Keeper about its policy.
+/// What a member last told its Keeper about its policy and itself.
 #[derive(Clone, Copy, Debug)]
 pub struct ReportedPolicy<'report> {
     /// The policy revision it holds a body for.
     pub revision: Option<u64>,
     /// What it applied.
     pub applied: &'report [ApiaryPolicySetting],
+    /// The release it runs.
+    pub version: &'report str,
 }
 
 /// The required settings not in effect on one Hive, each with why.
@@ -280,6 +344,31 @@ pub fn policy_gaps(
 ) -> Vec<PolicyGap> {
     let mut gaps = Vec::new();
     for setting in required {
+        // Enforced by the Keeper itself: nothing to receive or apply, only a
+        // release to compare.
+        if RequiredSetting::from_key(&setting.key)
+            .is_some_and(|known| known.enforced_by() == PolicyEnforcer::Keeper)
+        {
+            let reason = match reported {
+                None => PolicyGapReason::NotReported,
+                Some(report) => match SwarmVersion::parse(&setting.value) {
+                    Some(minimum)
+                        if shared_work_refusal(&minimum, Some(report.version)).is_some() =>
+                    {
+                        PolicyGapReason::BelowMinimum {
+                            running: report.version.to_owned(),
+                        }
+                    }
+                    _ => continue,
+                },
+            };
+            gaps.push(PolicyGap {
+                key: setting.key.clone(),
+                expected: setting.value.clone(),
+                reason,
+            });
+            continue;
+        }
         let reason = match reported {
             None => PolicyGapReason::NotReported,
             Some(report) if report.revision.is_none_or(|held| held < current_revision) => {
@@ -492,21 +581,24 @@ mod tests {
         assert_eq!(
             gap(Some(ReportedPolicy {
                 revision: Some(3),
-                applied: &[]
+                applied: &[],
+                version: "1.16.9",
             })),
             vec![PolicyGapReason::NotReceived]
         );
         assert_eq!(
             gap(Some(ReportedPolicy {
                 revision: None,
-                applied: &[]
+                applied: &[],
+                version: "1.16.9",
             })),
             vec![PolicyGapReason::NotReceived]
         );
         assert_eq!(
             gap(Some(ReportedPolicy {
                 revision: Some(4),
-                applied: &[]
+                applied: &[],
+                version: "1.16.9",
             })),
             vec![PolicyGapReason::ReleaseCannotApply]
         );
@@ -514,7 +606,8 @@ mod tests {
         assert_eq!(
             gap(Some(ReportedPolicy {
                 revision: Some(4),
-                applied: &other
+                applied: &other,
+                version: "1.16.9",
             })),
             vec![PolicyGapReason::Different {
                 local: "off".to_owned()
@@ -523,13 +616,79 @@ mod tests {
         assert!(
             gap(Some(ReportedPolicy {
                 revision: Some(4),
-                applied: &required
+                applied: &required,
+                version: "1.16.9",
             }))
             .is_empty()
         );
         assert!(
             policy_gaps(&[], 4, None).is_empty(),
             "no requirements, nothing to say"
+        );
+    }
+
+    /// ⚠️ THE KEEPER ENFORCES A MINIMUM, BECAUSE THE HIVE BELOW IT CANNOT. An
+    /// older release does not know a minimum exists, so the refusal and the
+    /// roster line both come from what the Hive reported, not what it applied.
+    #[test]
+    fn a_minimum_version_refuses_older_releases_and_counts_dev_builds_by_number() {
+        assert_eq!(
+            validate_required_settings(&[setting("shared_work.minimum_version", "1.16.9")]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_required_settings(&[setting(
+                "shared_work.minimum_version",
+                "1.16.9-dev-abc-1"
+            )]),
+            Err("shared_work.minimum_version must be a release version such as 1.16.9".to_owned()),
+            "a development build is no one's minimum"
+        );
+        let minimum = SwarmVersion::parse("1.16.9").unwrap();
+        assert_eq!(shared_work_refusal(&minimum, Some("1.16.9")), None);
+        assert_eq!(shared_work_refusal(&minimum, Some("1.17.0")), None);
+        assert_eq!(
+            shared_work_refusal(&minimum, Some("1.16.9-dev-e46308f51643-20261012195505")),
+            None,
+            "a build of 1.16.9 from the checkout carries what 1.16.9 does"
+        );
+        assert_eq!(
+            shared_work_refusal(&minimum, Some("1.16.8")),
+            Some("this Hive runs 1.16.8; the Apiary needs 1.16.9 or newer to take shared work, so update it".to_owned())
+        );
+        assert!(
+            shared_work_refusal(&minimum, None).is_some(),
+            "unknown fails closed"
+        );
+
+        let required = [setting("shared_work.minimum_version", "1.16.9")];
+        let reasons = |version: &str| {
+            policy_gaps(
+                &required,
+                4,
+                Some(ReportedPolicy {
+                    revision: None,
+                    applied: &[],
+                    version,
+                }),
+            )
+            .into_iter()
+            .map(|gap| gap.reason)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            reasons("1.16.8"),
+            vec![PolicyGapReason::BelowMinimum {
+                running: "1.16.8".to_owned()
+            }]
+        );
+        assert!(
+            reasons("1.16.9").is_empty(),
+            "nothing to receive or apply: met is met"
+        );
+        assert_eq!(
+            RequiredSetting::SharedWorkMinimumVersion.enforced_by(),
+            PolicyEnforcer::Keeper
         );
     }
 }

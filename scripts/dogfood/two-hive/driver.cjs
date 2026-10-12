@@ -351,6 +351,48 @@ async function main() {
   });
   pass("lifting the requirement gives the member its own choice back");
 
+  // ── 8. Below the Apiary's minimum, a Hive cannot take shared work (ADR 0113) ──
+  // Turned down at the Keeper, because a Hive too old to meet the minimum is
+  // too old to know one exists. Its own screen says why before it tries.
+  const release = memberHealth.version.split("-dev-")[0];
+  const shared = await must(KEEPER, "POST", "/api/v1/apiary/tasks", { title: "Two-Hive acceptance: shared work under a minimum" });
+  await waitFor("the member sees the shared task", 30, async () => {
+    const tasks = await must(MEMBER, "GET", "/api/v1/apiary/tasks");
+    return { ok: tasks.some((task) => task.id === shared.id), seen: tasks.length };
+  });
+  await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [{ key: "shared_work.minimum_version", value: "99.0.0" }] });
+  await waitFor("the member is told it is below the minimum", 30, async () => {
+    const own = await must(MEMBER, "GET", "/api/v1/apiary/required-settings");
+    return { ok: typeof own.shared_work_refusal === "string" && own.shared_work_refusal.includes("99.0.0"), seen: own };
+  });
+  pass("the member's own screen says it is below the Apiary's minimum");
+  await waitFor("the Keeper sees the member below the minimum", 30, async () => {
+    const gaps = await must(KEEPER, "GET", "/api/v1/apiary/policy-gaps");
+    const gap = gaps.find((entry) => entry.hive_id === memberHive)?.gaps.find((entry) => entry.key === "shared_work.minimum_version");
+    return { ok: gap?.reason === "below_minimum" && gap.running === memberHealth.version, seen: gaps };
+  });
+  pass("the Keeper sees which release keeps the member below the minimum");
+  const belowMinimum = await must(MEMBER, "POST", `/api/v1/apiary/tasks/${shared.id}/claim`);
+  await waitFor("the Keeper turns the claim down and says why", 30, async () => {
+    const entry = (await must(MEMBER, "GET", "/api/v1/apiary/task-outbox")).find((candidate) => candidate.command.id === belowMinimum.command.id);
+    return { ok: entry?.state === "rejected" && Boolean(entry.receipt?.reason?.includes("99.0.0")), seen: entry };
+  });
+  pass("a claim below the minimum is turned down, and the member keeps the reason");
+  // At its own release the same Hive meets the minimum and takes the work.
+  await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [{ key: "shared_work.minimum_version", value: release }] });
+  await waitFor("the member meets the minimum", 30, async () => {
+    const own = await must(MEMBER, "GET", "/api/v1/apiary/required-settings");
+    const gaps = await must(KEEPER, "GET", "/api/v1/apiary/policy-gaps");
+    return { ok: own.settings.some((setting) => setting.value === release) && own.shared_work_refusal === null && gaps.length === 0, seen: { own, gaps } };
+  });
+  const accepted = await must(MEMBER, "POST", `/api/v1/apiary/tasks/${shared.id}/claim`);
+  await waitFor("the Keeper accepts the claim", 30, async () => {
+    const entry = (await must(MEMBER, "GET", "/api/v1/apiary/task-outbox")).find((candidate) => candidate.command.id === accepted.command.id);
+    return { ok: entry?.state === "applied", seen: entry };
+  });
+  pass(`at the minimum (${release}) the member takes shared work`);
+  await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [] });
+
   console.log(`\nALL PASSED in ${elapsed()}`);
 }
 

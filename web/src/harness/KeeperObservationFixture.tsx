@@ -22,10 +22,20 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
         const target = (JSON.parse(String(init.body)) as { target_hive_id: string }).target_hive_id;
         return new Response(JSON.stringify({ id: "fictional-watch", target_hive_id: target, state: "requested", requested_at: now, acknowledged_at: null, expires_at: now + 300, ended_at: null }), { headers: { "Content-Type": "application/json" } });
       }
-      const payload = url.endsWith("/policy-settings") ? { revision: 3, settings: [{ key: "release.auto_install", value: "on" }], supported: [{ key: "release.auto_install", values: ["on", "off"] }] }
-        // Thistle's release is too old to apply it; the others comply and say nothing.
-        : url.endsWith("/policy-gaps") ? [{ hive_id: "thistle", gaps: [{ key: "release.auto_install", expected: "on", reason: "release_cannot_apply" }] }]
-        : url.endsWith("/required-settings") ? { settings: [{ key: "release.auto_install", value: "on" }] }
+      const payload = url.endsWith("/policy-settings") ? {
+          revision: 3,
+          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }],
+          supported: [{ key: "release.auto_install", kind: "choice", values: ["on", "off"] }, { key: "shared_work.minimum_version", kind: "version", values: [] }],
+        }
+        // Thistle's release is too old for either; the others comply and say nothing.
+        : url.endsWith("/policy-gaps") ? [{ hive_id: "thistle", gaps: [
+          { key: "release.auto_install", expected: "on", reason: "release_cannot_apply" },
+          { key: "shared_work.minimum_version", expected: "1.16.10", reason: "below_minimum", running: "1.11.0" },
+        ] }]
+        : url.endsWith("/required-settings") ? {
+          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }],
+          shared_work_refusal: "this Hive runs 1.16.9; the Apiary needs 1.16.10 or newer to take shared work, so update it",
+        }
         : url.endsWith("/diagnostics/log") ? { entries: [line(1, 90, "info", "swarm_api", "Swarm API listening address=127.0.0.1:8766")], dropped: 0, received_at: null }
         : url.endsWith("/diagnostics") ? {
             entries: [

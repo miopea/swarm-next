@@ -5,7 +5,10 @@ import type { KeeperPolicy } from "../api";
 import ApiaryPolicyPanel from "./ApiaryPolicyPanel";
 
 const ok = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
-const supported = [{ key: "release.auto_install", values: ["on", "off"] }];
+const supported: KeeperPolicy["supported"] = [
+  { key: "release.auto_install", kind: "choice", values: ["on", "off"] },
+  { key: "shared_work.minimum_version", kind: "version", values: [] },
+];
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -53,4 +56,33 @@ test("an unsaved choice survives the page refreshing underneath it", () => {
   fireEvent.change(screen.getByLabelText("Ordinary releases install automatically"), { target: { value: "off" } });
   view.rerender(<ApiaryPolicyPanel operatorToken="secret" policy={{ ...policy }} onSaved={vi.fn()} />);
   expect(screen.getByLabelText("Ordinary releases install automatically")).toHaveValue("off");
+});
+
+test("a minimum version for shared work is typed as a release number, and nothing else saves", async () => {
+  const saved: unknown[] = [];
+  vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { settings: unknown[] };
+    saved.push(body);
+    return ok({ revision: 2, settings: body.settings, supported });
+  }));
+  const policy: KeeperPolicy = { revision: 1, settings: [{ key: "release.auto_install", value: "on" }], supported };
+  render(<ApiaryPolicyPanel operatorToken="secret" policy={policy} onSaved={vi.fn()} />);
+
+  const field = screen.getByLabelText("Minimum version for shared work");
+  expect(field).toHaveValue("");
+  expect(screen.getByText(/keeps its own work but can't take Apiary tasks/)).toBeInTheDocument();
+
+  // A development build is no one's minimum, and the Keeper would refuse it.
+  fireEvent.change(field, { target: { value: "1.16.9-dev-abc" } });
+  expect(field).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByText("Use a release number, such as 1.16.9.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save policy" })).toBeDisabled();
+
+  fireEvent.change(field, { target: { value: " 1.16.10 " } });
+  expect(field).toHaveAttribute("aria-invalid", "false");
+  fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+  await waitFor(() => expect(saved).toEqual([{ settings: [
+    { key: "release.auto_install", value: "on" },
+    { key: "shared_work.minimum_version", value: "1.16.10" },
+  ] }]));
 });

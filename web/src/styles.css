@@ -867,11 +867,15 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .apiary-policy-list label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: .84rem; }
 .apiary-policy-list label > span { min-width: 0; font-weight: 600; }
 .apiary-policy-list select { min-height: 36px; }
+.apiary-policy-list input { width: 9rem; min-height: 36px; font-variant-numeric: tabular-nums; }
+.apiary-policy-hint { display: block; margin-top: 4px; color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.apiary-policy-hint.is-wrong { color: var(--bad-strong); font-weight: 650; }
 .apiary-policy-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .apiary-policy-actions small { color: var(--muted); }
 .member-requirements-list { display: grid; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; }
 .member-requirements-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: .84rem; }
 .member-requirements-list strong { color: var(--warn-strong); }
+.member-requirements-held { margin: 0 0 10px; color: var(--warn-strong); font-size: .8rem; font-weight: 650; }
 .keeper-hive-list .hive-actions button { min-height: 36px; padding: 0 12px; flex: 0 0 auto; }
 /* Takeover types on somebody else's machine. It reads as the weightier action
    rather than the default one, which is what the first build got backwards. */

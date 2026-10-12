@@ -1187,6 +1187,7 @@ mod tests {
             outcome: FederationTaskCommandOutcome::Applied,
             task_revision: Some(5),
             processed_at: 1_001,
+            reason: None,
         };
         let expected_command = command.clone();
         let expected_receipt = receipt.clone();

@@ -227,8 +227,12 @@ settings members apply can be required; the first is "ordinary releases install
 automatically", which also keeps release checks on. A requirement overrides the
 member's own choice without erasing it. The member's Updates card and Apiary
 page say who set it. The Keeper's roster shows a Hive only when something
-required is not in effect, with the reason. Seven more settings ruled on
-2026-10-12 await their member-side enforcement.
+required is not in effect, with the reason. A minimum version for shared work is
+the second setting. A Hive below it keeps its own work, but the Keeper turns down
+its claims on Apiary tasks, Jira issues and handoffs. Its own Apiary page says
+why before it tries. The Keeper enforces this one, since a Hive too old to meet
+it is too old to know it exists. Engine updates already apply when idle on every
+packaged Hive. Five more settings ruled on 2026-10-12 await enforcement.
 
 Member logs (ADR 0112, 2026-09-29): every member keeps a bounded copy of its own
 log — Swarm's INFO-and-above lines plus the Apiary connection's DEBUG lines —

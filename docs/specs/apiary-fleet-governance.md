@@ -27,7 +27,7 @@ setting is to leave the Apiary, and its policy screen says so.
 | Setting | What a member does with it |
 | --- | --- |
 | Ordinary releases install automatically | Auto-install (ADR 0110) locked on. It still installs only while that Hive's operator is away or in Night Watch; protocol changes still wait for them. |
-| Engine updates apply when idle | The worker engine swaps automatically once no session is mid-turn, instead of waiting for the engine card. |
+| Engine updates apply when idle | Already true on every packaged Hive: its timer swaps the worker engine once no session is mid-turn, with no opt-out. Nothing to require. |
 | Minimum version for shared work | Below it, a Hive keeps its own work but cannot claim Apiary tasks until it updates. |
 | Check strictness | Warnings allowed, and which checks must pass before work counts as done. |
 | Queen autonomy level | How much each Hive's Queen may do without its operator. |
@@ -44,9 +44,13 @@ allowed to execute.
 its value. What the Keeper sees is a Hive's policy state only when a setting is
 not in effect, with the reason.
 
-**Built so far (ADR 0113):** the control system end to end, with
-`release.auto_install` as the first enforced setting. The other seven are not
-requirable yet: each needs member-side enforcement first.
+**Built so far (ADR 0113):** the control system end to end, with two settings:
+- `release.auto_install`, applied by each member;
+- `shared_work.minimum_version`, enforced by the Keeper, because a Hive below it
+  is too old to know it exists.
+
+Engine updates already apply when idle on every packaged Hive, so there is
+nothing to require. The other five need enforcement before they can be required.
 
 ## Fleet health
 

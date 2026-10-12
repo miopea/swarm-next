@@ -12,13 +12,21 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
     name: "Ordinary releases install automatically",
     values: { on: "Required on", off: "Required off" },
   },
+  "shared_work.minimum_version": {
+    name: "Minimum version for shared work",
+    values: {},
+  },
 };
+
+/** How a version setting's value reads. */
+const VERSION_KEYS = new Set(["shared_work.minimum_version"]);
 
 export function settingName(key: string): string {
   return LABELS[key]?.name ?? key;
 }
 
 export function settingValue(key: string, value: string): string {
+  if (VERSION_KEYS.has(key)) return `${value} or newer`;
   return LABELS[key]?.values[value] ?? value;
 }
 
@@ -29,5 +37,6 @@ export function gapReason(gap: PolicyGap): string {
     case "not_received": return "This Hive hasn't picked up the current policy yet";
     case "release_cannot_apply": return "This Hive's release can't apply it; update it";
     case "different": return `This Hive runs "${gap.local}" instead`;
+    case "below_minimum": return `This Hive runs ${gap.running}, so it can't take Apiary tasks until it updates`;
   }
 }

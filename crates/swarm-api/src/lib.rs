@@ -9252,6 +9252,12 @@ fn application_error(error: ApplicationError) -> ApiError {
             "transition_not_permitted",
             error.to_string(),
         ),
+        // 409: the request is fine and this Hive may make it once it updates.
+        ApplicationError::SharedWorkRefused(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "update_required_for_shared_work",
+            error.to_string(),
+        ),
         ApplicationError::WorkerNotRunning => ApiError::new(
             StatusCode::CONFLICT,
             "worker_session_not_active",
@@ -14474,6 +14480,81 @@ mod tests {
         );
     }
 
+    /// ⚠️ ADR 0113: a Hive the Keeper cannot place at or above the Apiary's
+    /// minimum is refused shared work at the Keeper's own door — a task claim
+    /// comes back rejected with the reason, a Jira claim is a 409 that names it —
+    /// while work that is not TAKING shared work stays open to it.
+    #[tokio::test]
+    async fn a_hive_below_the_minimum_is_refused_shared_work_and_told_why() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let apiary_id = member
+            .local_hive_identity()
+            .unwrap()
+            .hive
+            .apiary_id
+            .unwrap();
+        keeper
+            .set_apiary_policy_settings(
+                &[swarm_domain::ApiaryPolicySetting {
+                    key: "shared_work.minimum_version".to_owned(),
+                    value: "1.16.9".to_owned(),
+                }],
+                now,
+            )
+            .unwrap();
+        let service = ApiaryService::new(keeper.clone());
+        let command = |kind| swarm_domain::FederationTaskCommand {
+            id: swarm_domain::FederationTaskCommandId::new(),
+            apiary_id,
+            task_id: swarm_domain::ApiaryTaskId::new(),
+            expected_revision: 1,
+            kind,
+            target_state: None,
+            filing: None,
+            closure: None,
+            created_at: now,
+        };
+
+        // This member has never reported its release, so it cannot be shown to
+        // meet the minimum: refused, and the receipt says why.
+        let claim = service
+            .apply_federation_task_command(
+                &credential,
+                &command(swarm_domain::FederationTaskCommandKind::Claim),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            claim.outcome,
+            swarm_domain::FederationTaskCommandOutcome::Rejected
+        );
+        assert_eq!(
+            claim.reason.as_deref(),
+            Some(
+                "this Hive has not told the Keeper which release it runs; the Apiary needs 1.16.9 or newer to take shared work"
+            )
+        );
+        let jira = service.reserve_federation_claim(&credential, "10001", "20001", "WWD-1", now);
+        assert!(
+            matches!(jira, Err(ApplicationError::SharedWorkRefused(_))),
+            "a Jira claim is refused the same way: {jira:?}"
+        );
+
+        // Lifting the minimum lets the same claim through to the ordinary rules.
+        keeper.set_apiary_policy_settings(&[], now + 1).unwrap();
+        let unrestricted = service.apply_federation_task_command(
+            &credential,
+            &command(swarm_domain::FederationTaskCommandKind::Claim),
+            now + 1,
+        );
+        assert!(
+            !matches!(&unrestricted, Ok(receipt) if receipt.reason.is_some()),
+            "no minimum, no refusal: {unrestricted:?}"
+        );
+    }
+
     /// ⚠️ ADR 0113 ON THE MEMBER: required means locked, the operator's own choice
     /// survives underneath, and it comes back when the Apiary stops requiring.
     #[tokio::test]
@@ -14502,18 +14583,7 @@ mod tests {
                 .with_task_store(member.clone()),
         );
         let status = |app: Router| async move {
-            response_json(
-                app.oneshot(
-                    Request::builder()
-                        .uri("/api/v1/runtime/release")
-                        .header("authorization", "Bearer secret")
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap(),
-            )
-            .await
+            response_json(authorized_get(app, "/api/v1/runtime/release").await).await
         };
 
         let locked = status(app.clone()).await;
@@ -14552,22 +14622,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stop_checking.status(), StatusCode::CONFLICT);
-        let listed = response_json(
-            app.clone()
-                .oneshot(
-                    Request::builder()
-                        .uri("/api/v1/apiary/required-settings")
-                        .header("authorization", "Bearer secret")
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap(),
-        )
-        .await;
+        let listed =
+            response_json(authorized_get(app.clone(), "/api/v1/apiary/required-settings").await)
+                .await;
         assert_eq!(
             listed,
-            serde_json::json!({ "settings": [{ "key": "release.auto_install", "value": "on" }] }),
+            serde_json::json!({
+                "settings": [{ "key": "release.auto_install", "value": "on" }],
+                "shared_work_refusal": null
+            }),
             "the member can show its operator what its Apiary requires"
         );
         assert_eq!(member.local_policy_settings().unwrap(), vec![required]);

@@ -511,6 +511,11 @@ pub struct FederationTaskCommandReceipt {
     pub outcome: FederationTaskCommandOutcome,
     pub task_revision: Option<u64>,
     pub processed_at: i64,
+    /// Why a command was rejected, when the Keeper can say — for example that
+    /// this Hive's release is below the Apiary's minimum for shared work
+    /// (ADR 0113). Absent from older Keepers, and ignored by older members.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

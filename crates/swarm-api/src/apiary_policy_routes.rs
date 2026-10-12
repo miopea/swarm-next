@@ -29,6 +29,8 @@ struct KeeperPolicyView {
 #[derive(Serialize)]
 struct SupportedSetting {
     key: &'static str,
+    /// "choice" picks from `values`; "version" takes a release number.
+    kind: &'static str,
     values: &'static [&'static str],
 }
 
@@ -61,7 +63,12 @@ fn view(state: &AppState) -> Result<KeeperPolicyView, ApiError> {
             .iter()
             .map(|setting| SupportedSetting {
                 key: setting.key(),
-                values: setting.values(),
+                kind: if setting.choices().is_some() {
+                    "choice"
+                } else {
+                    "version"
+                },
+                values: setting.choices().unwrap_or(&[]),
             })
             .collect(),
     })
@@ -131,9 +138,17 @@ pub(crate) async fn member_requirements(
     let settings = apiary_service(&state)?
         .required_settings()
         .map_err(application_error)?;
+    // Said on this Hive's own screen, so its operator learns it here rather
+    // than from a claim the Keeper turns down.
+    let shared_work_refusal =
+        swarm_domain::minimum_shared_work_version(&settings).and_then(|minimum| {
+            swarm_domain::shared_work_refusal(&minimum, Some(crate::build_version()))
+        });
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({ "settings": settings })),
+        Json(
+            serde_json::json!({ "settings": settings, "shared_work_refusal": shared_work_refusal }),
+        ),
     )
         .into_response())
 }

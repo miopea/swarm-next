@@ -1,4 +1,4 @@
-import type { ApiaryPolicySetting } from "../api";
+import type { MemberRequirementsView } from "../api";
 import { settingName, settingValue } from "./policyLabels";
 
 /**
@@ -10,7 +10,8 @@ import { settingName, settingValue } from "./policyLabels";
  * the page so it recovers when the page does, and rendered only when the Apiary
  * requires something: an empty panel would be noise.
  */
-export default function MemberRequirements({ settings }: { settings: ApiaryPolicySetting[] }) {
+export default function MemberRequirements({ requirements }: { requirements: MemberRequirementsView }) {
+  const { settings, shared_work_refusal: refusal } = requirements;
   if (settings.length === 0) return null;
   return (
     <article className="keeper-panel member-requirements" aria-labelledby="member-requirements-heading">
@@ -20,6 +21,7 @@ export default function MemberRequirements({ settings }: { settings: ApiaryPolic
           <li key={setting.key}><span>{settingName(setting.key)}</span><strong>{settingValue(setting.key, setting.value)}</strong></li>
         ))}
       </ul>
+      {refusal ? <p className="member-requirements-held" role="status">{refusal.charAt(0).toUpperCase() + refusal.slice(1)}.</p> : null}
       <p className="member-sync-copy">
         Set by your Apiary&apos;s Keeper, so they can&apos;t be changed on this Hive. If this Hive can&apos;t run with them, leaving the Apiary is the way out.
       </p>

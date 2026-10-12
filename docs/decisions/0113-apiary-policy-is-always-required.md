@@ -34,7 +34,8 @@
    - it has not reported;
    - it has not picked up the current policy;
    - its release cannot apply the setting;
-   - it runs a different value.
+   - it runs a different value;
+   - it runs a release below the Apiary's minimum (addendum below).
 
    A compliant Hive shows nothing extra, under the operator's rule against
    "data that we wouldn't act upon".
@@ -67,8 +68,6 @@ These stay refused in code, as before, and requiring is no exception:
   who set it.
 - The remaining settings the operator chose on 2026-10-12 each need their own
   member-side enforcement before they can be required:
-  - engine updates when idle;
-  - minimum version for shared work;
   - check strictness;
   - Queen autonomy;
   - Night Watch schedule;
@@ -82,3 +81,44 @@ These stay refused in code, as before, and requiring is no exception:
   - the member runs it within about a second and cannot undo it;
   - the Keeper sees it in effect;
   - lifting the requirement gives the member its own choice back.
+
+## Addendum 2026-10-12: a minimum version for shared work
+
+The operator chose this as the next setting. `shared_work.minimum_version` takes
+a release number, such as `1.16.10`. A development build is refused as a value,
+because it is no one's minimum.
+
+**The Keeper enforces it, not the member.** A Hive below the minimum runs an
+older release, and an older release does not know the setting exists. A check on
+the member's side would be skipped by exactly the Hives it is for. So the domain
+says who enforces each setting (`PolicyEnforcer`), and the Keeper judges this one
+from the release each member reports. A member never records it as applied,
+because nothing on the member made it true.
+
+Below the minimum, a Hive keeps its own work, and the Keeper turns down its
+shared work:
+- a claim on an Apiary task is rejected, and the receipt carries the reason,
+  which the member keeps in its outbox;
+- reserving a promoted Jira issue, or accepting a claim handoff, answers 409
+  `update_required_for_shared_work`, with the reason.
+
+Moving work it already holds, and filing new work, stay open. Losing those would
+strand work mid-flight, which is worse than the gap the minimum closes.
+
+- **Fails closed.** A Hive that has not reported its release cannot be shown to
+  meet the minimum, so it is refused, and the reason says that.
+- **A development build counts as its release.** A build of 1.16.9 meets a
+  1.16.9 minimum.
+- **Both sides see it before a claim fails.** The Keeper's roster names the
+  release the Hive runs. The member's Apiary page says it cannot take shared work
+  and why, judged from its own release, so it knows to update before it tries.
+
+**Engine updates when idle needs no setting.** Every packaged Hive already swaps
+its worker engine once no session is mid-turn, with no opt-out, so there is
+nothing to lock.
+
+The two-Hive acceptance run checks this loop:
+- the Keeper sets a minimum above the member, and the member's own screen and the
+  Keeper's roster both say so;
+- the member's claim on shared work is turned down, with the reason;
+- at the member's own release, the same claim goes through.

@@ -1680,13 +1680,15 @@ export type ApiaryPolicySetting = { key: string; value: string };
 export type KeeperPolicy = {
   revision: number;
   settings: ApiaryPolicySetting[];
-  supported: { key: string; values: string[] }[];
+  /** "choice" picks from `values`; "version" takes a release number. */
+  supported: { key: string; kind: "choice" | "version"; values: string[] }[];
 };
 export type PolicyGapReason =
   | { reason: "not_reported" }
   | { reason: "not_received" }
   | { reason: "release_cannot_apply" }
-  | { reason: "different"; local: string };
+  | { reason: "different"; local: string }
+  | { reason: "below_minimum"; running: string };
 export type PolicyGap = { key: string; expected: string } & PolicyGapReason;
 /** Only Hives with something required not in effect; a compliant Hive is absent. */
 export type HivePolicyGaps = { hive_id: string; gaps: PolicyGap[] };
@@ -1710,10 +1712,16 @@ export async function fetchPolicyGaps(operatorToken: string, signal?: AbortSigna
   return response.json() as Promise<HivePolicyGaps[]>;
 }
 
-/** What this member Hive's Apiary requires of it. */
-export async function fetchRequiredSettings(operatorToken: string, signal?: AbortSignal): Promise<ApiaryPolicySetting[]> {
+/** What this member Hive's Apiary requires of it, and whether that holds it back. */
+export type MemberRequirementsView = {
+  settings: ApiaryPolicySetting[];
+  /** Why this Hive can't take shared work under the Apiary's minimum release, if it can't. */
+  shared_work_refusal: string | null;
+};
+
+export async function fetchRequiredSettings(operatorToken: string, signal?: AbortSignal): Promise<MemberRequirementsView> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/required-settings", { signal });
-  return ((await response.json()) as { settings: ApiaryPolicySetting[] }).settings;
+  return response.json() as Promise<MemberRequirementsView>;
 }
 
 export type DiagnosticLevel = "error" | "warn" | "info" | "debug";

@@ -369,6 +369,7 @@ impl ApiaryService {
                 report.map(|report| swarm_domain::ReportedPolicy {
                     revision: report.payload.policy_revision,
                     applied: &report.payload.applied_policy,
+                    version: &report.payload.swarm_version,
                 }),
             );
             if !found.is_empty() {
@@ -392,11 +393,17 @@ impl ApiaryService {
     /// Returns storage failures.
     pub fn enforce_required_policy(&self, now: i64) -> Result<(), ApplicationError> {
         let received = self.store.received_policy_settings()?;
-        for setting in swarm_domain::RequiredSetting::ALL {
+        // Only what the member applies to itself; the Keeper enforces the rest
+        // at its own door, so recording those here would claim a fact nobody
+        // made true on this Hive.
+        for setting in swarm_domain::RequiredSetting::ALL
+            .into_iter()
+            .filter(|setting| setting.enforced_by() == swarm_domain::PolicyEnforcer::Member)
+        {
             match received
                 .iter()
                 .find(|candidate| candidate.key == setting.key())
-                .filter(|candidate| setting.values().contains(&candidate.value.as_str()))
+                .filter(|candidate| setting.accepts(&candidate.value))
             {
                 Some(required) => self.store.record_local_policy_setting(required, now)?,
                 None => self.store.clear_local_policy_setting(setting.key())?,
@@ -418,7 +425,7 @@ impl ApiaryService {
             .into_iter()
             .filter(|setting| {
                 swarm_domain::RequiredSetting::from_key(&setting.key)
-                    .is_some_and(|known| known.values().contains(&setting.value.as_str()))
+                    .is_some_and(|known| known.accepts(&setting.value))
             })
             .collect())
     }
@@ -1210,9 +1217,63 @@ impl ApiaryService {
         command: &FederationTaskCommand,
         now: i64,
     ) -> Result<FederationTaskCommandReceipt, ApplicationError> {
+        // A claim is taking shared work; a transition of work already held, or
+        // filing new work, is not, and stays open to a Hive below the minimum.
+        if command.kind == swarm_domain::FederationTaskCommandKind::Claim
+            && let Some(reason) = self.shared_work_refusal(node_credential, now)?
+        {
+            return Ok(FederationTaskCommandReceipt {
+                command_id: command.id,
+                outcome: swarm_domain::FederationTaskCommandOutcome::Rejected,
+                task_revision: None,
+                processed_at: now,
+                reason: Some(reason),
+            });
+        }
         self.store
             .apply_federation_task_command(node_credential, command, now)
             .map_err(Into::into)
+    }
+
+    /// Why this member may not take shared work under the Apiary's minimum
+    /// release, or `None` when it may (ADR 0113).
+    ///
+    /// ⚠️ ENFORCED HERE, AT THE KEEPER, ON PURPOSE. The Hive below the minimum is
+    /// by definition an older release, which does not know a minimum exists, so
+    /// a check on its side would be skipped by exactly the Hives it is for.
+    fn shared_work_refusal(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<Option<String>, ApplicationError> {
+        let Some((_, settings)) = self.keeper_policy()? else {
+            return Ok(None);
+        };
+        let Some(minimum) = swarm_domain::minimum_shared_work_version(&settings) else {
+            return Ok(None);
+        };
+        let (_, hive) = self.store.authenticated_member_hive(credential, now)?;
+        let reported = self
+            .store
+            .federation_hive_capabilities()?
+            .into_iter()
+            .find(|report| report.payload.identity.hive_id == hive)
+            .map(|report| report.payload.swarm_version);
+        Ok(swarm_domain::shared_work_refusal(
+            &minimum,
+            reported.as_deref(),
+        ))
+    }
+
+    fn refuse_shared_work_below_minimum(
+        &self,
+        credential: &str,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        match self.shared_work_refusal(credential, now)? {
+            Some(reason) => Err(ApplicationError::SharedWorkRefused(reason)),
+            None => Ok(()),
+        }
     }
 
     /// Queues one Member claim for delivery to Keeper.
@@ -1334,6 +1395,7 @@ impl ApiaryService {
         issue_key: &str,
         now: i64,
     ) -> Result<FederationSharedClaim, ApplicationError> {
+        self.refuse_shared_work_below_minimum(node_credential, now)?;
         self.store
             .reserve_federation_claim(node_credential, project_id, issue_id, issue_key, now)
             .map_err(Into::into)
@@ -1479,6 +1541,7 @@ impl ApiaryService {
         id: FederationClaimHandoffId,
         now: i64,
     ) -> Result<FederationClaimHandoff, ApplicationError> {
+        self.refuse_shared_work_below_minimum(credential, now)?;
         self.store
             .accept_federation_claim_handoff(credential, id, now)
             .map_err(Into::into)
@@ -4218,6 +4281,10 @@ pub enum ApplicationError {
     // than in more standing instruction.
     #[error("{0}")]
     TransitionNotPermitted(String),
+    /// The Apiary refuses this Hive shared work until it updates (ADR 0113).
+    /// The words say which release it runs and which it needs.
+    #[error("{0}")]
+    SharedWorkRefused(String),
     #[error("the target worker does not have an active session")]
     WorkerNotRunning,
     #[error("integration unavailable: {0}")]

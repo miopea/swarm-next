@@ -1496,6 +1496,7 @@ fn insert_task_command_receipt(
         outcome,
         task_revision,
         processed_at: now,
+        reason: None,
     };
     let receipt_json =
         serde_json::to_string(&receipt).map_err(|_| TaskStoreError::InvalidFederationTask)?;
