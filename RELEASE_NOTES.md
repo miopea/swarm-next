@@ -12,6 +12,16 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.16.9
+
+### New features
+- A Keeper can require settings of every Hive in its Apiary, from a new "What every Hive must run" panel on its Apiary page. The first is "Ordinary releases install automatically". A required setting is locked on every Hive: its Updates card shows "Set by your Apiary", and its operator can't turn it off, or turn off checking for releases, while the requirement stands. When the Keeper stops requiring it, each Hive's own choice comes back. A Hive that can't accept a requirement has to leave the Apiary, and its Apiary page says so.
+- The Keeper's list of Hives says when a required setting isn't in effect on a Hive, and why: it hasn't checked in, hasn't picked up the policy yet, or its release is too old. A Hive that's in line says nothing extra.
+
+### Fixes
+- After a takeover, the Hive that was taken over can take its own Queen back with Resume Here as soon as the takeover ends. Its terminal used to sit on "Checking terminal control…" with a Resume Here that did nothing.
+- Updated a networking library to fix five published security issues (quinn-proto 0.11.19).
+
 ## 1.16.8
 
 ### New features
