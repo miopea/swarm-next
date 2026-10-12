@@ -1740,6 +1740,34 @@ export async function fetchContactHistory(operatorToken: string, hiveId: string,
   return response.json() as Promise<ContactHistory>;
 }
 
+/** Spend in one bucket. `weighted` puts the four kinds of token on one scale; never a price. */
+export type UsageTotals = {
+  input_tokens: number;
+  cache_write_tokens: number;
+  cache_read_tokens: number;
+  output_tokens: number;
+  messages: number;
+  weighted: number;
+  /** Worker time, summed across a workspace's workers, and approximate. */
+  active_seconds: number;
+};
+export type NamedUsage = UsageTotals & { name: string };
+export type HiveUsage = {
+  hive_id: string;
+  is_local: boolean;
+  /** When the Keeper last heard this Hive's figures; null if it never has. */
+  received_at: number | null;
+  totals: UsageTotals;
+  by_model: NamedUsage[];
+  by_workspace: NamedUsage[];
+};
+export type ApiaryUsage = { days: number; hives: HiveUsage[]; totals: UsageTotals; by_model: NamedUsage[] };
+
+export async function fetchApiaryUsage(operatorToken: string, days: number, signal?: AbortSignal): Promise<ApiaryUsage> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/usage?days=${days}`, { signal });
+  return response.json() as Promise<ApiaryUsage>;
+}
+
 /** What this member Hive's Apiary requires of it, and whether that holds it back. */
 export type MemberRequirementsView = {
   settings: ApiaryPolicySetting[];

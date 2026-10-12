@@ -151,6 +151,14 @@ async function main() {
     return { ok: failing === undefined, seen: failing };
   });
   pass("the Keeper's view clears by itself once the member recovers");
+  // Usage travels on its own channel too (ADR 0114 addendum). A fresh member
+  // may have spent nothing; what is checked is that its figures arrive.
+  await waitFor("the Keeper hears the member's usage", 120, async () => {
+    const usage = await must(KEEPER, "GET", "/api/v1/apiary/usage?days=7");
+    const reported = usage.hives?.find((hive) => hive.hive_id === memberHive);
+    return { ok: typeof reported?.received_at === "number", seen: reported ?? usage };
+  });
+  pass("the Keeper hears the member's usage");
 
   // ── 2c. The Keeper can tell when a member last reached it ──
   const members = await must(KEEPER, "GET", "/api/v1/apiary/members");

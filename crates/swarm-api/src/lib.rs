@@ -20,6 +20,7 @@ mod decisions;
 pub use database_integrity::monitor_database_integrity;
 mod apiary_enrollment;
 mod apiary_policy_routes;
+mod apiary_usage;
 mod diagnostic_log;
 mod dogfood_evidence;
 mod email_attachments;
@@ -475,6 +476,11 @@ pub struct AppState {
     member_diagnostics: Arc<member_diagnostics::MemberDiagnostics>,
     /// What this member last told its Keeper about its health (ADR 0114).
     health_shipping: fleet_health::SharedHealthShipping,
+    /// What this member last told its Keeper about its usage.
+    usage_shipping: apiary_usage::SharedUsageShipping,
+    /// When this Hive last looked at which workers were busy, so the next look
+    /// can credit the time between (ADR 0114 addendum).
+    busy_sampled_at: Arc<std::sync::Mutex<Option<i64>>>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -614,6 +620,8 @@ impl AppState {
             diagnostic_log: None,
             member_diagnostics: Arc::new(member_diagnostics::MemberDiagnostics::default()),
             health_shipping: fleet_health::SharedHealthShipping::default(),
+            usage_shipping: apiary_usage::SharedUsageShipping::default(),
+            busy_sampled_at: Arc::new(std::sync::Mutex::new(None)),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -1268,6 +1276,7 @@ impl AppState {
         tracing::debug!(prompted, "federation pass starting");
         self.ship_diagnostics().await;
         fleet_health::ship_health(self).await;
+        apiary_usage::ship_usage(self).await;
         self.reconcile_federation_pass(prompted).await;
         let elapsed_ms = started.elapsed().as_millis();
         tracing::debug!(prompted, elapsed_ms, "federation pass finished");
@@ -4399,6 +4408,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/apiary/fleet-health",
             get(fleet_health::fleet_health),
         )
+        .route("/api/v1/apiary/usage", get(apiary_usage::apiary_usage))
         .route("/api/v1/diagnostics/log", get(local_diagnostic_log))
         .route(
             "/api/v1/apiary/watches",
@@ -4530,6 +4540,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/health",
             axum::routing::put(fleet_health::accept_member_health),
+        )
+        .route(
+            "/api/v1/federation/usage",
+            axum::routing::put(apiary_usage::accept_member_usage),
         )
         .route(
             "/api/v1/federation/events",
@@ -14677,6 +14691,107 @@ mod tests {
             "the operator's own choice was kept underneath and is back"
         );
         assert!(member.local_policy_settings().unwrap().is_empty());
+    }
+
+    /// ⚠️ ADR 0114 USAGE: a member's figures reach its Keeper only on its own
+    /// credential, and the Keeper totals them per Hive, per model and for the
+    /// whole Apiary, its own Hive included.
+    #[tokio::test]
+    async fn a_member_reports_its_usage_and_the_keeper_totals_the_apiary() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let hive = member.local_hive_identity().unwrap().hive.id;
+        let local = keeper.local_hive_identity().unwrap().hive.id;
+        let today = provider_usage::day_string(now);
+        let long_ago = provider_usage::day_string(now - 20 * 86_400);
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let send = |credential: String, body: Value| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/v1/federation/usage")
+                        .header("authorization", format!("Bearer {credential}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+            }
+        };
+        let tokens = |day: &str, model: &str, output: i64| {
+            serde_json::json!({
+                "day": day, "workspace": "/home/cora/budgetbug", "model": model,
+                "input_tokens": 1_000, "cache_write_tokens": 0, "cache_read_tokens": 0,
+                "output_tokens": output, "messages": 3
+            })
+        };
+        let report = serde_json::json!({
+            "schema_version": 1,
+            "observed_at": now,
+            "tokens": [
+                tokens(&today, "claude-opus-5-5", 2_000),
+                tokens(&today, "claude-sonnet-5-5", 2_000),
+                tokens(&long_ago, "claude-opus-5-5", 9_999_999)
+            ],
+            "active": [{ "day": today, "workspace": "/home/cora/budgetbug", "seconds": 5_400 }]
+        });
+
+        assert_eq!(
+            send("bm90LWEtY3JlZGVudGlhbA".to_owned(), report.clone()).await,
+            StatusCode::UNAUTHORIZED
+        );
+        let mut malformed = report.clone();
+        malformed["tokens"][0]["day"] = serde_json::json!("yesterday");
+        assert_eq!(
+            send(credential.clone(), malformed).await,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(send(credential, report).await, StatusCode::NO_CONTENT);
+
+        // Keeper-local busy time counts toward the Apiary as its own row.
+        keeper
+            .record_worker_active_seconds(&today, &[("/w/queen".to_owned(), 600)], &long_ago)
+            .unwrap();
+        let usage = response_json(authorized_get(app, "/api/v1/apiary/usage?days=7").await).await;
+        let opus = provider_usage::weigh(1_000, 0, 0, 2_000, "claude-opus-5-5");
+        let sonnet = provider_usage::weigh(1_000, 0, 0, 2_000, "claude-sonnet-5-5");
+        let of = |id: swarm_domain::HiveId| {
+            usage["hives"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["hive_id"] == serde_json::json!(id))
+                .cloned()
+                .unwrap()
+        };
+        let reported = of(hive);
+        assert_eq!(reported["is_local"], false);
+        assert_eq!(
+            reported["totals"]["output_tokens"], 4_000,
+            "the 20-day-old row is outside a week"
+        );
+        assert_eq!(reported["totals"]["weighted"], opus + sonnet);
+        assert_eq!(reported["totals"]["active_seconds"], 5_400);
+        assert_eq!(
+            reported["by_model"][0]["name"], "claude-opus-5-5",
+            "the bigger spender first"
+        );
+        assert_eq!(reported["by_workspace"][0]["name"], "/home/cora/budgetbug");
+        let own = of(local);
+        assert_eq!(own["is_local"], true);
+        assert_eq!(own["totals"]["active_seconds"], 600);
+        assert_eq!(usage["totals"]["weighted"], opus + sonnet);
+        assert_eq!(usage["totals"]["active_seconds"], 6_000);
+        assert_eq!(usage["by_model"].as_array().unwrap().len(), 2);
     }
 
     /// ⚠️ ADR 0114 PUSH: a fault is raised once, withdrawn when it clears,

@@ -42,7 +42,7 @@ use crate::{ApiError, AppState, authorize, task_store, task_store_error};
 
 /// How much history the panel keeps. Beyond this the daily rows and the
 /// replay-guard ids are both dropped, at the same boundary.
-const RETAIN_DAYS: i64 = 60;
+pub(super) const RETAIN_DAYS: i64 = 60;
 /// A pass is not repeated more often than this. The transcripts only grow while
 /// workers are running, and a panel that is a few minutes stale is honest as
 /// long as it says when it was read -- which it does.
@@ -126,7 +126,13 @@ fn model_milli(model: &str) -> i128 {
     }
 }
 
-fn weigh(input: i64, cache_write: i64, cache_read: i64, output: i64, model: &str) -> i64 {
+pub(super) fn weigh(
+    input: i64,
+    cache_write: i64,
+    cache_read: i64,
+    output: i64,
+    model: &str,
+) -> i64 {
     let raw = i128::from(input) * W_INPUT
         + i128::from(cache_write) * W_CACHE_WRITE
         + i128::from(cache_read) * W_CACHE_READ
@@ -305,7 +311,7 @@ fn unix_now() -> i64 {
         })
 }
 
-fn day_string(unix: i64) -> String {
+pub(super) fn day_string(unix: i64) -> String {
     // Days are UTC, matching the transcript timestamps they are cut from. A
     // local-time boundary would move spend between days depending on where the
     // reader is standing, which is worse than a boundary that is merely not

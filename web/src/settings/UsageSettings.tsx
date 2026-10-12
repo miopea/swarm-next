@@ -2,19 +2,11 @@ import { useCallback, useState } from "react";
 
 import { fetchUsage, type UsageReport } from "../api/usage";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
+import { compact, shortWorkspace } from "./usageFormat";
 
 type Props = { operatorToken: string; visible: boolean };
 
 const WINDOWS = [7, 14, 30] as const;
-
-/** 1_234_567_890 -> "1.23B". Tokens run to billions; digits stop being read. */
-function compact(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return `${value}`;
-}
 
 function percentChange(now: number, before: number): string | undefined {
   if (before <= 0) return undefined;
@@ -30,12 +22,6 @@ function ago(unix: number, now: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
-}
-
-/** The repository name, which is what the operator calls a workspace. */
-function shortWorkspace(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? path;
 }
 
 /**

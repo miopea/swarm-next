@@ -356,15 +356,22 @@ pub(super) async fn refresh(
     live: &HashSet<WorkerSessionId>,
 ) -> HashMap<WorkerSessionId, ProviderSignals> {
     let observed = observe(state, profiles, live).await;
-    let changed = {
+    let (changed, busy) = {
         let mut previous = state.provider_activity.write().await;
+        // The time since the last look goes to whoever was busy AT that look.
+        let busy = previous
+            .iter()
+            .filter(|(_, signals)| signals.activity == ProviderActivity::Active)
+            .map(|(session, _)| *session)
+            .collect::<HashSet<_>>();
         if *previous == observed {
-            false
+            (false, busy)
         } else {
             previous.clone_from(&observed);
-            true
+            (true, busy)
         }
     };
+    crate::apiary_usage::record_busy_time(state, profiles, &busy, crate::unix_timestamp());
     if changed {
         if let Some(store) = &state.task_store
             && let Err(error) =

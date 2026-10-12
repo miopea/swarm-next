@@ -242,8 +242,10 @@ step, and nothing for a healthy one. Opening a member's log shows its last day o
 contact in five-minute slots, with the gaps named. Three faults are pushed once
 per episode and withdrawn when they clear: sustained sync failure, a failed
 engine swap, and disk under 512 MiB. The two-Hive run checks that a refused
-step is visible from the Keeper and clears by itself. Usage figures are still
-to come.
+step is visible from the Keeper and clears by itself. Usage (addendum): each
+Hive keeps its workers' busy time per workspace and day, approximated from
+existing supervision passes. Members send it with their token figures, and the
+Keeper's Usage panel totals both per Hive, by model and for the Apiary.
 
 Member logs (ADR 0112, 2026-09-29): every member keeps a bounded copy of its own
 log — Swarm's INFO-and-above lines plus the Apiary connection's DEBUG lines —

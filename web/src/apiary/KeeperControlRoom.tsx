@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
-  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetHealth, fetchFleetVersions, fetchKeeperPolicy, fetchPolicyGaps, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
+  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchApiaryUsage, fetchFleetHealth, fetchFleetVersions, fetchKeeperPolicy, fetchPolicyGaps, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
   fetchApiaryMemberRemovalReadiness, removeApiaryMember, releaseApiaryTakeover,
-  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveCondition, type HiveHealth, type HiveIdentity, type HivePolicyGaps, type KeeperPolicy, type TakeoverAuditEntry, type Stewardship,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type ApiaryUsage, type HiveCondition, type HiveHealth, type HiveIdentity, type HivePolicyGaps, type KeeperPolicy, type TakeoverAuditEntry, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
@@ -14,15 +14,16 @@ import TakeoverAudit from "./TakeoverAudit";
 import TakeoverWindow from "./TakeoverWindow";
 import HiveLogDialog from "./HiveLogDialog";
 import ApiaryPolicyPanel from "./ApiaryPolicyPanel";
+import ApiaryUsagePanel, { USAGE_WINDOWS } from "./ApiaryUsagePanel";
 import { gapReason, settingName } from "./policyLabels";
 import { conditionText, shownOnHealthLine } from "./healthLabels";
 import { memberContact, silenceWarning } from "./presentation";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
-type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[]; fleet?: Fleet; takeovers: TakeoverAuditEntry[]; policyGaps: HivePolicyGaps[]; policy?: KeeperPolicy; health: HiveHealth[] };
-const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [], fleet: undefined, takeovers: [], policyGaps: [], policy: undefined, health: [] };
-const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs", "fleet", "takeovers", "policyGaps", "policy", "health"] as const;
+type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[]; fleet?: Fleet; takeovers: TakeoverAuditEntry[]; policyGaps: HivePolicyGaps[]; policy?: KeeperPolicy; health: HiveHealth[]; usage?: ApiaryUsage };
+const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [], fleet: undefined, takeovers: [], policyGaps: [], policy: undefined, health: [], usage: undefined };
+const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs", "fleet", "takeovers", "policyGaps", "policy", "health", "usage"] as const;
 
 export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
@@ -44,6 +45,9 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const [removing, setRemoving] = useState<{ hiveId: string; hiveName: string; blockers: string[] }>();
   // The Hive this Keeper is currently controlling, if any.
   const [controlling, setControlling] = useState<{ leaseId: string; hiveId: string; hiveName: string }>();
+  // The usage window is part of what the snapshot reads, so a new one is read
+  // with everything else rather than by a second, separately timed request.
+  const [usageDays, setUsageDays] = useState<number>(USAGE_WINDOWS[0]);
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
       const results = await Promise.allSettled([
@@ -56,6 +60,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         fetchPolicyGaps(operatorToken, signal),
         fetchKeeperPolicy(operatorToken, signal),
         fetchFleetHealth(operatorToken, signal),
+        fetchApiaryUsage(operatorToken, usageDays, signal),
       ]);
       if (signal.aborted) {
         if (signal.reason?.name === "TimeoutError") {
@@ -64,7 +69,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         }
         return;
       }
-      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs, fleet, takeovers, policyGaps, policy, health] = results;
+      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs, fleet, takeovers, policyGaps, policy, health, usage] = results;
       setObserved((current) => new Set([...current, ...snapshotKeys.filter((_, index) => results[index].status === "fulfilled")]));
       setFailed(new Set(snapshotKeys.filter((_, index) => results[index].status === "rejected")));
       setSnapshot((current) => ({
@@ -81,9 +86,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         policy: policy.status === "fulfilled" && Array.isArray(policy.value?.supported) ? policy.value : current.policy,
         takeovers: takeovers.status === "fulfilled" && Array.isArray(takeovers.value) ? takeovers.value : current.takeovers,
         health: health.status === "fulfilled" && Array.isArray(health.value) ? health.value : current.health,
+        // A different window is a different figure: never shown under the old one's label.
+        usage: usage.status === "fulfilled" && Array.isArray(usage.value?.hives) ? usage.value : current.usage?.days === usageDays ? current.usage : undefined,
       }));
       setState(results.some((result) => result.status === "rejected") ? "error" : "ready");
-  }, [operatorToken]);
+  }, [operatorToken, usageDays]);
   const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null, 8_000, { refreshKey });
 
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
@@ -300,6 +307,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             ? <ApiaryPolicyPanel operatorToken={operatorToken} policy={snapshot.policy} onSaved={(policy) => { setSnapshot((current) => ({ ...current, policy })); void refresh(); }} />
             : <p className="keeper-empty">This Apiary&apos;s policy could not be read.</p>)}
         </article>
+        <ApiaryUsagePanel usage={snapshot.usage} days={usageDays} onDays={setUsageDays} nameFor={(hiveId) => memberByHive.get(hiveId)?.hive_name} />
         {section("takeovers", "Takeover history", <TakeoverAudit entries={snapshot.takeovers} nameFor={(hiveId) => memberByHive.get(hiveId)?.hive_name} />)}
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Optional Jira work</p><h4>Promoted Jira projects</h4></div><small>Each Hive uses only projects its operator can access</small></header>

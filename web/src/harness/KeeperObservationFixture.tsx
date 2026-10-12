@@ -38,6 +38,24 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
           ] },
           { hive_id: "thistle", conditions: [{ kind: "quiet", last_contact_at: now - 3 * 86_400 }, { kind: "schema_behind", running: "1.11.0" }] },
         ]
+        : url.includes("/apiary/usage") ? (() => {
+          const totals = (weighted: number, active_seconds: number) => ({ input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, output_tokens: 0, messages: 0, weighted, active_seconds });
+          return {
+            days: url.endsWith("days=30") ? 30 : 7,
+            hives: [
+              { hive_id: "fictional", is_local: true, received_at: null, totals: totals(763_000_000, 41 * 3_600), by_model: [], by_workspace: [
+                { name: "/home/you/projects/queen", ...totals(512_000_000, 30 * 3_600) },
+                { name: "/home/you/projects/orchard-api", ...totals(251_000_000, 11 * 3_600) },
+              ] },
+              { hive_id: "clover", is_local: false, received_at: now - 240, totals: totals(248_000_000, 19 * 3_600 + 20 * 60), by_model: [], by_workspace: [
+                { name: "/home/cora/projects/sculpt-studio-with-a-long-repository-name", ...totals(248_000_000, 19 * 3_600 + 20 * 60) },
+              ] },
+              { hive_id: "heather", is_local: false, received_at: null, totals: totals(0, 0), by_model: [], by_workspace: [] },
+            ],
+            totals: totals(1_011_000_000, 60 * 3_600 + 20 * 60),
+            by_model: [{ name: "claude-opus-5-5", ...totals(804_000_000, 0) }, { name: "claude-sonnet-5-5", ...totals(207_000_000, 0) }],
+          };
+        })()
         // A morning without DNS, as WSL had on 2026-10-01.
         : url.includes("/contact-history") ? (() => {
           const until = now - (now % 300);

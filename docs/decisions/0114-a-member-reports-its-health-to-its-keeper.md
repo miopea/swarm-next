@@ -126,8 +126,8 @@ Memory pressure stays unpushed, as ADR 0058 decided.
 
 ### 5. Usage
 
-Usage (tokens and active time) is part of the same ruling and is not built here.
-An addendum will record it when it is.
+Usage is part of the same ruling, and the addendum below records how it is
+built.
 
 ## Consequences
 
@@ -140,3 +140,45 @@ An addendum will record it when it is.
 - The two-Hive run refuses the member's catalog through its proxy. It checks that
   the Keeper sees the member failing at that step while it is refused, and that
   the condition clears by itself once the member recovers.
+
+## Addendum 2026-10-12: usage, tokens and busy time
+
+The operator asked for usage "time or token based or both", and both are built.
+
+**Busy time is new, and it is approximate.**
+- Each Hive credits the time between two looks at its workers to the
+  workspaces whose worker was busy (provider activity `Active`) at the first
+  look.
+- The looks are the supervision passes that already run, so busy time adds no
+  timer of its own.
+- An interval longer than 90 seconds counts as 90, so a machine that slept
+  counts for nothing.
+- Busy time is worker time, summed across a workspace's workers: two workers
+  busy for an hour is two hours.
+- It is kept per UTC day and workspace, pruned to the same 60 days as the
+  token figures. Each row is bounded to a day for each of 256 workers.
+
+**Tokens already existed on each Hive** (from provider transcripts, by workspace,
+day and model) and are reused unchanged.
+
+**A member sends both on its own channel**, `PUT /api/v1/federation/usage`, with
+30 days of rows:
+- It is sampled at most once a minute, and sent when it changes or every ten
+  minutes.
+- A report keeps its newest 4,096 rows of each kind.
+- Totals only, never per message. Workspace names travel with the figures,
+  under the "share as is" ruling of ADR 0112.
+- An older Keeper answers 404, which is an ordinary rolling-update state.
+
+**The Keeper keeps each member's latest report** and shows a Usage panel:
+- each Hive's weighted tokens and busy time, its own Hive included;
+- the Apiary's totals and its split by model, over 7 or 30 days;
+- each Hive's workspaces when it is opened.
+
+The weighting is the local Usage page's, so the two panels agree: a comparison
+in input-token equivalents, never a price. A member that has never sent figures
+reads "no figures yet", not zero. The panel is read with the rest of the
+Keeper's page, never on a timer of its own.
+
+Schema 199 adds `worker_active_daily` on every Hive and `apiary_hive_usage` on a
+Keeper. The two-Hive run checks that a member's usage reaches its Keeper.

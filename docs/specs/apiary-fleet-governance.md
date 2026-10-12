@@ -85,6 +85,11 @@ Schema behind is pushed by "Hives are behind" already.
 - Totals only, no per-message telemetry. Workspace names travel with the
   figures, under the same "share as is" ruling as logs (ADR 0112).
 
+**Built (ADR 0114 addendum):** both. Busy time is credited from the supervision
+passes that already run, summed across a workspace's workers, and approximate.
+The Keeper's Usage panel shows each Hive, its own included, with Apiary totals
+and a split by model over 7 or 30 days.
+
 ## Still to decide when building
 
 - The values each setting can take (for example the Queen autonomy levels), and

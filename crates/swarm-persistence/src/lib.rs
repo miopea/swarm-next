@@ -37,6 +37,8 @@ mod fleet_version;
 mod hive_capability;
 mod hive_health;
 pub use hive_health::StoredHiveHealth;
+mod hive_usage;
+pub use hive_usage::StoredHiveUsage;
 mod provider_usage;
 mod queen_recovery;
 mod queen_review;
@@ -372,7 +374,9 @@ const FEDERATION_FAILED_STEP_SCHEMA_MARKER: i64 = 196;
 const MEMBER_LAST_CONTACT_SCHEMA_MARKER: i64 = 197;
 /// Keeper holds each member's health report and a day of its contact (ADR 0114).
 const HIVE_HEALTH_SCHEMA_MARKER: i64 = 198;
-const CURRENT_SCHEMA_VERSION: i64 = HIVE_HEALTH_SCHEMA_MARKER;
+/// Each Hive keeps its workers' busy time, and a Keeper each member's usage.
+const HIVE_USAGE_SCHEMA_MARKER: i64 = 199;
+const CURRENT_SCHEMA_VERSION: i64 = HIVE_USAGE_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4717,6 +4721,9 @@ fn migrate_fleet_health_schema_steps(
 ) -> rusqlite::Result<()> {
     if schema_version < HIVE_HEALTH_SCHEMA_MARKER {
         crate::hive_health::migrate_hive_health(transaction)?;
+    }
+    if schema_version < HIVE_USAGE_SCHEMA_MARKER {
+        crate::hive_usage::migrate_hive_usage(transaction)?;
     }
     Ok(())
 }
@@ -10678,6 +10685,14 @@ mod tests {
                        DROP TABLE apiary_member_contact_slots;",
             probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type = 'table' AND name IN
                         ('apiary_hive_health', 'apiary_hive_fault_episodes', 'apiary_member_contact_slots')",
+        },
+        SchemaStep {
+            table: "worker_active_daily",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_active_daily;
+                       DROP TABLE apiary_hive_usage;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN
+                        ('worker_active_daily', 'apiary_hive_usage')",
         },
     ];
 

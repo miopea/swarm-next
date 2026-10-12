@@ -281,5 +281,20 @@ test("a Hive with something wrong says what and what to do, and a healthy one sa
   expect(roster.querySelectorAll(".hive-health")).toHaveLength(1);
 });
 
+/** The usage window is read with the rest of the page, not by a timer of its own. */
+test("choosing a longer usage window reads the Apiary's usage for it", async () => {
+  const asked: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    asked.push(url);
+    if (url.includes("/apiary/usage")) return ok({ days: url.endsWith("days=30") ? 30 : 7, hives: [], totals: { input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, output_tokens: 0, messages: 0, weighted: 0, active_seconds: 0 }, by_model: [] });
+    return ok([]);
+  }));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  await waitFor(() => expect(asked.some((url) => url.endsWith("/api/v1/apiary/usage?days=7"))).toBe(true));
+  fireEvent.click(await screen.findByRole("button", { name: "30 days" }));
+  await waitFor(() => expect(asked.some((url) => url.endsWith("/api/v1/apiary/usage?days=30"))).toBe(true));
+});
+
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }
 function ok(payload: unknown) { return { ok: true, status: 200, json: async () => payload }; }
