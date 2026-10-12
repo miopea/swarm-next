@@ -7562,6 +7562,14 @@ async fn queue_federation_task_claim(
         .queue_federation_task_claim(parse_apiary_task_id(&task_id)?, unix_timestamp())
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
+    // Sent now rather than at the next paced pass, up to a minute away: the
+    // operator is waiting to learn whether the Keeper took it.
+    let reconcile_state = state.clone();
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
@@ -7585,6 +7593,14 @@ async fn queue_federation_task_transition(
         )
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
+    // Sent now rather than at the next paced pass, up to a minute away: the
+    // operator is waiting to learn whether the Keeper took it.
+    let reconcile_state = state.clone();
+    tokio::spawn(async move {
+        reconcile_state
+            .reconcile_federation_for_local_change()
+            .await;
+    });
     Ok((
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],

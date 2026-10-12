@@ -1227,6 +1227,7 @@ impl ServerHandler for AgentMcp {
                             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                         ApiaryService::new(self.tasks.store().clone())
                             .queue_federation_task_claim(task_id, crate::unix_timestamp())
+                            .inspect(|_| self.send_to_keeper_now())
                             .and_then(structured)
                     })
                 } else {
@@ -1263,6 +1264,7 @@ impl ServerHandler for AgentMcp {
                                 input.state,
                                 crate::unix_timestamp(),
                             )
+                            .inspect(|_| self.send_to_keeper_now())
                             .and_then(structured)
                     })
                 } else {
@@ -1552,6 +1554,15 @@ impl ServerHandler for AgentMcp {
 }
 
 impl AgentMcp {
+    /// Sends what Queen just queued for the Keeper now, rather than at the next
+    /// paced pass, as the operator's own claim does.
+    fn send_to_keeper_now(&self) {
+        let state = Arc::clone(&self.state);
+        tokio::spawn(async move {
+            state.reconcile_federation_for_local_change().await;
+        });
+    }
+
     fn require_automation_permission(
         &self,
         action: QueenActionClass,

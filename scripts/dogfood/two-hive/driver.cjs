@@ -372,12 +372,15 @@ async function main() {
     return { ok: gap?.reason === "below_minimum" && gap.running === memberHealth.version, seen: gaps };
   });
   pass("the Keeper sees which release keeps the member below the minimum");
+  // Five seconds, well inside a paced pass: a claim is sent when it is made,
+  // because its operator is waiting to learn whether the Keeper took it.
+  const claimedAt = Date.now();
   const belowMinimum = await must(MEMBER, "POST", `/api/v1/apiary/tasks/${shared.id}/claim`);
-  await waitFor("the Keeper turns the claim down and says why", 30, async () => {
+  await waitFor("the Keeper turns the claim down and says why", 5, async () => {
     const entry = (await must(MEMBER, "GET", "/api/v1/apiary/task-outbox")).find((candidate) => candidate.command.id === belowMinimum.command.id);
     return { ok: entry?.state === "rejected" && Boolean(entry.receipt?.reason?.includes("99.0.0")), seen: entry };
   });
-  pass("a claim below the minimum is turned down, and the member keeps the reason");
+  pass(`a claim below the minimum is turned down ${((Date.now() - claimedAt) / 1000).toFixed(1)}s after it was made, and the member keeps the reason`);
   // At its own release the same Hive meets the minimum and takes the work.
   await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [{ key: "shared_work.minimum_version", value: release }] });
   await waitFor("the member meets the minimum", 30, async () => {
@@ -385,12 +388,20 @@ async function main() {
     const gaps = await must(KEEPER, "GET", "/api/v1/apiary/policy-gaps");
     return { ok: own.settings.some((setting) => setting.value === release) && own.shared_work_refusal === null && gaps.length === 0, seen: { own, gaps } };
   });
+  // Claimed between passes, with the next paced one at least ten seconds out,
+  // so nothing but the claim itself can carry it to the Keeper in time.
+  await waitFor("the member is between passes", 60, async () => {
+    const health = await must(MEMBER, "GET", "/api/v1/apiary/sync-health");
+    const now = Date.now() / 1000;
+    return { ok: health.next_attempt_at !== null && health.next_attempt_at - now >= 10 && now - health.last_attempt_at >= 2, seen: health };
+  });
+  const reclaimedAt = Date.now();
   const accepted = await must(MEMBER, "POST", `/api/v1/apiary/tasks/${shared.id}/claim`);
-  await waitFor("the Keeper accepts the claim", 30, async () => {
+  await waitFor("the Keeper accepts the claim", 5, async () => {
     const entry = (await must(MEMBER, "GET", "/api/v1/apiary/task-outbox")).find((candidate) => candidate.command.id === accepted.command.id);
     return { ok: entry?.state === "applied", seen: entry };
   });
-  pass(`at the minimum (${release}) the member takes shared work`);
+  pass(`at the minimum (${release}) the member takes shared work, ${((Date.now() - reclaimedAt) / 1000).toFixed(1)}s after claiming it`);
   await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [] });
 
   console.log(`\nALL PASSED in ${elapsed()}`);
