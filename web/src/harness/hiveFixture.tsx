@@ -115,6 +115,8 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         available: true,
         mode: "daily",
         auto_install: new URLSearchParams(window.location.search).get("autoInstall") !== "off",
+        // ?apiaryRequires=autoInstall shows the card as a Hive whose Apiary locks it.
+        auto_install_required_by_apiary: new URLSearchParams(window.location.search).get("apiaryRequires") === "autoInstall",
         current_version: "1.16.4",
         development_build: false,
         last_checked_at: now - 600,

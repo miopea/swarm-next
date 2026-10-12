@@ -132,12 +132,13 @@ pub struct PolicyDrift {
     pub local: Option<String>,
 }
 
-/// How a member differs from the Apiary defaults it has been handed.
+/// How a member differs from the settings it has been handed.
 ///
-/// ⚠️ DRIFT IS REPORTED, NEVER PREVENTED, and that is the whole design. A
-/// federation that cannot be deviated from is remote control; one that cannot
-/// detect deviation is decoration. A local override still wins on the member's
-/// own machine — it simply stops being invisible.
+/// ⚠️ SUPERSEDED IN MEANING BY ADR 0113. This was written when Apiary settings
+/// were defaults a member could override, so drift meant "chose differently".
+/// The operator ruled on 2026-10-12 that every Apiary setting is REQUIRED, so
+/// drift now means "not in effect yet" and is a fault to fix — see
+/// [`policy_gaps`], which says why and what fixes it.
 #[must_use]
 pub fn policy_drift(
     expected: &[ApiaryPolicySetting],
@@ -159,6 +160,150 @@ pub fn policy_drift(
     }
     drift.sort_by(|first, second| first.key.cmp(&second.key));
     drift
+}
+
+/// A setting an Apiary can require, which a member knows how to apply.
+///
+/// ⚠️ ONLY THESE, AND THAT IS THE POINT. Under "always required" (ADR 0113) a
+/// setting no member acts on would read as a requirement and change nothing —
+/// the inert `checks.max_warnings` this replaces is exactly that. A Keeper can
+/// set only what members enforce; each new one arrives with its enforcement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequiredSetting {
+    /// Whether ordinary releases install themselves while the operator is away
+    /// (ADR 0110). Never a remote restart: it changes WHETHER a member installs
+    /// on its own, not WHEN, and protocol changes still wait for its operator.
+    ReleaseAutoInstall,
+}
+
+impl RequiredSetting {
+    pub const ALL: [Self; 1] = [Self::ReleaseAutoInstall];
+
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::ReleaseAutoInstall => "release.auto_install",
+        }
+    }
+
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|setting| setting.key() == key)
+    }
+
+    /// The values a Keeper may require.
+    #[must_use]
+    pub const fn values(self) -> &'static [&'static str] {
+        match self {
+            Self::ReleaseAutoInstall => &["on", "off"],
+        }
+    }
+}
+
+/// Checks that a Keeper is requiring only what members can apply.
+///
+/// # Errors
+/// Names the first setting no member knows, or a value it does not accept.
+pub fn validate_required_settings(settings: &[ApiaryPolicySetting]) -> Result<(), String> {
+    for setting in settings {
+        let Some(known) = RequiredSetting::from_key(&setting.key) else {
+            return Err(format!("{} is not a setting Hives can apply", setting.key));
+        };
+        if !known.values().contains(&setting.value.as_str()) {
+            return Err(format!(
+                "{} must be one of {}",
+                setting.key,
+                known.values().join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What an Apiary requires of an on/off setting, if it requires anything.
+#[must_use]
+pub fn required_switch(settings: &[ApiaryPolicySetting], setting: RequiredSetting) -> Option<bool> {
+    settings
+        .iter()
+        .find(|candidate| candidate.key == setting.key())
+        .and_then(|candidate| match candidate.value.as_str() {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        })
+}
+
+/// Why one required setting is not in effect on one Hive, which is also what
+/// fixes it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum PolicyGapReason {
+    /// The Hive has not reported to this Keeper at all.
+    NotReported,
+    /// It has not picked up this revision of the policy yet.
+    NotReceived,
+    /// It holds this policy but its release does not apply this setting.
+    ReleaseCannotApply,
+    /// It applied a different value.
+    Different { local: String },
+}
+
+/// One required setting not in effect on one Hive.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PolicyGap {
+    pub key: String,
+    pub expected: String,
+    #[serde(flatten)]
+    pub reason: PolicyGapReason,
+}
+
+/// What a member last told its Keeper about its policy.
+#[derive(Clone, Copy, Debug)]
+pub struct ReportedPolicy<'report> {
+    /// The policy revision it holds a body for.
+    pub revision: Option<u64>,
+    /// What it applied.
+    pub applied: &'report [ApiaryPolicySetting],
+}
+
+/// The required settings not in effect on one Hive, each with why.
+///
+/// ⚠️ EMPTY FOR A COMPLIANT HIVE, AND THAT IS THE WHOLE OUTPUT FOR ONE. The
+/// operator's rule for everything a Keeper sees: "we don't want to generate too
+/// much random noise for the sake of data that we wouldn't act upon." A Hive in
+/// policy produces nothing to read.
+#[must_use]
+pub fn policy_gaps(
+    required: &[ApiaryPolicySetting],
+    current_revision: u64,
+    reported: Option<ReportedPolicy<'_>>,
+) -> Vec<PolicyGap> {
+    let mut gaps = Vec::new();
+    for setting in required {
+        let reason = match reported {
+            None => PolicyGapReason::NotReported,
+            Some(report) if report.revision.is_none_or(|held| held < current_revision) => {
+                PolicyGapReason::NotReceived
+            }
+            Some(report) => match report
+                .applied
+                .iter()
+                .find(|applied| applied.key == setting.key)
+            {
+                None => PolicyGapReason::ReleaseCannotApply,
+                Some(applied) if applied.value == setting.value => continue,
+                Some(applied) => PolicyGapReason::Different {
+                    local: applied.value.clone(),
+                },
+            },
+        };
+        gaps.push(PolicyGap {
+            key: setting.key.clone(),
+            expected: setting.value.clone(),
+            reason,
+        });
+    }
+    gaps
 }
 
 #[cfg(test)]
@@ -304,5 +449,87 @@ mod tests {
             .map(|index| setting(&format!("checks.item-{index}"), "1"))
             .collect();
         assert!(!oversized.is_valid());
+    }
+
+    /// ⚠️ A KEEPER MAY REQUIRE ONLY WHAT MEMBERS ENFORCE. Under "always required"
+    /// an inert key would read as a requirement and change nothing.
+    #[test]
+    fn a_keeper_can_require_only_settings_members_apply() {
+        assert_eq!(
+            validate_required_settings(&[setting("release.auto_install", "on")]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_required_settings(&[setting("release.auto_install", "sometimes")]),
+            Err("release.auto_install must be one of on, off".to_owned())
+        );
+        assert_eq!(
+            validate_required_settings(&[setting("checks.max_warnings", "0")]),
+            Err("checks.max_warnings is not a setting Hives can apply".to_owned())
+        );
+        let policy = [setting("release.auto_install", "off")];
+        assert_eq!(
+            required_switch(&policy, RequiredSetting::ReleaseAutoInstall),
+            Some(false)
+        );
+        assert_eq!(
+            required_switch(&[], RequiredSetting::ReleaseAutoInstall),
+            None
+        );
+    }
+
+    /// Each gap says what fixes it, and a compliant Hive says nothing at all.
+    #[test]
+    fn a_gap_names_why_and_a_compliant_hive_has_none() {
+        let required = [setting("release.auto_install", "on")];
+        let gap = |reported| {
+            policy_gaps(&required, 4, reported)
+                .into_iter()
+                .map(|gap| gap.reason)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(gap(None), vec![PolicyGapReason::NotReported]);
+        assert_eq!(
+            gap(Some(ReportedPolicy {
+                revision: Some(3),
+                applied: &[]
+            })),
+            vec![PolicyGapReason::NotReceived]
+        );
+        assert_eq!(
+            gap(Some(ReportedPolicy {
+                revision: None,
+                applied: &[]
+            })),
+            vec![PolicyGapReason::NotReceived]
+        );
+        assert_eq!(
+            gap(Some(ReportedPolicy {
+                revision: Some(4),
+                applied: &[]
+            })),
+            vec![PolicyGapReason::ReleaseCannotApply]
+        );
+        let other = [setting("release.auto_install", "off")];
+        assert_eq!(
+            gap(Some(ReportedPolicy {
+                revision: Some(4),
+                applied: &other
+            })),
+            vec![PolicyGapReason::Different {
+                local: "off".to_owned()
+            }]
+        );
+        assert!(
+            gap(Some(ReportedPolicy {
+                revision: Some(4),
+                applied: &required
+            }))
+            .is_empty()
+        );
+        assert!(
+            policy_gaps(&[], 4, None).is_empty(),
+            "no requirements, nothing to say"
+        );
     }
 }

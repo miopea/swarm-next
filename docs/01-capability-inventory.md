@@ -221,6 +221,15 @@ second of no longer being held, the Keeper rings on hand-back, and the window
 becomes a watch (ADR 0036 addendum). The two-Hive run checks that the member's
 own typing lands about 2 seconds after hand-back.
 
+Apiary policy (ADR 0113, 2026-10-12): a Keeper requires settings from its
+Apiary page, and every member must run them, with no local override. Only
+settings members apply can be required; the first is "ordinary releases install
+automatically", which also keeps release checks on. A requirement overrides the
+member's own choice without erasing it. The member's Updates card and Apiary
+page say who set it. The Keeper's roster shows a Hive only when something
+required is not in effect, with the reason. Seven more settings ruled on
+2026-10-12 await their member-side enforcement.
+
 Member logs (ADR 0112, 2026-09-29): every member keeps a bounded copy of its own
 log — Swarm's INFO-and-above lines plus the Apiary connection's DEBUG lines —
 and sends new lines to its Keeper on every sync pass, including while it is in

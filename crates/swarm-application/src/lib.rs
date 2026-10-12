@@ -303,9 +303,138 @@ impl ApiaryService {
         snapshot: &swarm_domain::ApiaryPolicySnapshot,
         now: i64,
     ) -> Result<bool, ApplicationError> {
+        let changed = self.store.apply_apiary_policy(snapshot, now)?;
+        self.enforce_required_policy(now)?;
+        Ok(changed)
+    }
+
+    /// The Keeper's required settings and the revision they are, or `None` when
+    /// this Hive keeps no Apiary.
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn keeper_policy(
+        &self,
+    ) -> Result<Option<(u64, Vec<swarm_domain::ApiaryPolicySetting>)>, ApplicationError> {
+        let Some(revision) = self.store.apiary_policy_revision()? else {
+            return Ok(None);
+        };
+        Ok(Some((revision, self.store.apiary_policy_settings()?)))
+    }
+
+    /// The Keeper replacing what its Apiary requires. Callers validate the
+    /// settings against [`swarm_domain::validate_required_settings`] first, so a
+    /// refusal can say which setting and why.
+    ///
+    /// # Errors
+    /// Rejects a non-Keeper and forbidden or invalid settings.
+    pub fn require_policy_settings(
+        &self,
+        settings: &[swarm_domain::ApiaryPolicySetting],
+        now: i64,
+    ) -> Result<u64, ApplicationError> {
         self.store
-            .apply_apiary_policy(snapshot, now)
+            .set_apiary_policy_settings(settings, now)
             .map_err(Into::into)
+    }
+
+    /// Every member Hive with a required setting not in effect, and why.
+    ///
+    /// ⚠️ ONLY THE HIVES WITH SOMETHING TO FIX. A compliant Hive is absent, per
+    /// the operator's rule against data nobody acts on.
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn policy_gaps(
+        &self,
+    ) -> Result<Vec<(swarm_domain::HiveId, Vec<swarm_domain::PolicyGap>)>, ApplicationError> {
+        let Some((revision, required)) = self.keeper_policy()? else {
+            return Ok(Vec::new());
+        };
+        if required.is_empty() {
+            return Ok(Vec::new());
+        }
+        let reports = self.store.federation_hive_capabilities()?;
+        let mut gaps = Vec::new();
+        for member in self.members()? {
+            if member.is_local || member.role != swarm_domain::LocalApiaryRole::Member {
+                continue;
+            }
+            let report = reports
+                .iter()
+                .find(|report| report.payload.identity.hive_id == member.hive_id);
+            let found = swarm_domain::policy_gaps(
+                &required,
+                revision,
+                report.map(|report| swarm_domain::ReportedPolicy {
+                    revision: report.payload.policy_revision,
+                    applied: &report.payload.applied_policy,
+                }),
+            );
+            if !found.is_empty() {
+                gaps.push((member.hive_id, found));
+            }
+        }
+        Ok(gaps)
+    }
+
+    /// A member putting its Apiary's required settings into effect (ADR 0113),
+    /// and recording that it has, so its Keeper can see them in effect.
+    ///
+    /// ⚠️ IN EFFECT AT READ TIME, RECORDED HERE. A required setting overrides
+    /// this Hive's own choice wherever that choice is read, without rewriting
+    /// it — so when the Apiary stops requiring it, the operator's own choice is
+    /// still there. What this records is the fact the Keeper reads; a setting
+    /// this release cannot apply is never recorded, and shows to the Keeper as
+    /// "its release can't apply this".
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn enforce_required_policy(&self, now: i64) -> Result<(), ApplicationError> {
+        let received = self.store.received_policy_settings()?;
+        for setting in swarm_domain::RequiredSetting::ALL {
+            match received
+                .iter()
+                .find(|candidate| candidate.key == setting.key())
+                .filter(|candidate| setting.values().contains(&candidate.value.as_str()))
+            {
+                Some(required) => self.store.record_local_policy_setting(required, now)?,
+                None => self.store.clear_local_policy_setting(setting.key())?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The settings this member's Apiary requires and this release applies.
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn required_settings(
+        &self,
+    ) -> Result<Vec<swarm_domain::ApiaryPolicySetting>, ApplicationError> {
+        Ok(self
+            .store
+            .received_policy_settings()?
+            .into_iter()
+            .filter(|setting| {
+                swarm_domain::RequiredSetting::from_key(&setting.key)
+                    .is_some_and(|known| known.values().contains(&setting.value.as_str()))
+            })
+            .collect())
+    }
+
+    /// What this member's Apiary requires of an on/off setting, if anything.
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn required_switch(
+        &self,
+        setting: swarm_domain::RequiredSetting,
+    ) -> Result<Option<bool>, ApplicationError> {
+        Ok(swarm_domain::required_switch(
+            &self.store.received_policy_settings()?,
+            setting,
+        ))
     }
 
     /// Where this member stands against the Apiary's defaults.

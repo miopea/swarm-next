@@ -68,8 +68,11 @@ pub(super) struct ReleaseStatusResponse {
     /// `unset` until the operator answers, which is not the same as `off`.
     mode: String,
     /// Whether an ordinary release installs itself while the operator is away
-    /// (ADR 0110).
+    /// (ADR 0110) — this Hive's own choice, unless its Apiary requires one.
     auto_install: bool,
+    /// Whether this Hive's Apiary requires `auto_install` (ADR 0113), in which
+    /// case it is locked here and only the Keeper can change it.
+    auto_install_required_by_apiary: bool,
     current_version: String,
     /// A working copy is told about releases and offered none of them.
     development_build: bool,
@@ -213,6 +216,13 @@ pub(super) async fn set_mode(
     Json(request): Json<ReleaseModeRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    if request.mode == "off" && required_auto_install(&state) == Some(true) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "set_by_apiary",
+            "your Apiary requires automatic install, which needs checking for releases; only its Keeper can change that",
+        ));
+    }
     crate::task_store(&state)?
         .set_release_check_mode(&request.mode)
         .map_err(|error| crate::task_store_error(&error))?;
@@ -238,6 +248,15 @@ pub(super) async fn set_auto_install(
     Json(request): Json<AutoInstallRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    // ⚠️ AN APIARY REQUIREMENT IS NOT THIS HIVE'S TO CHANGE (ADR 0113). Refused
+    // with words that say who can, rather than accepted and silently ignored.
+    if required_auto_install(&state).is_some_and(|required| required != request.enabled) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "set_by_apiary",
+            "your Apiary requires this setting; only its Keeper can change it",
+        ));
+    }
     crate::task_store(&state)?
         .set_release_auto_install(request.enabled)
         .map_err(|error| crate::task_store_error(&error))?;
@@ -467,6 +486,18 @@ async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// What this Hive's Apiary requires of automatic install, if anything.
+///
+/// A Hive that is not a member, or cannot read its policy, has no requirement:
+/// its operator's own choice stands.
+fn required_auto_install(state: &AppState) -> Option<bool> {
+    crate::apiary_service(state)
+        .ok()?
+        .required_switch(swarm_domain::RequiredSetting::ReleaseAutoInstall)
+        .ok()
+        .flatten()
+}
+
 fn build_status(
     state: &Arc<AppState>,
     protocol_change: Option<bool>,
@@ -474,6 +505,7 @@ fn build_status(
     let stored = crate::task_store(state)?
         .release_check_state()
         .map_err(|error| crate::task_store_error(&error))?;
+    let required_auto_install = required_auto_install(state);
     let current = SwarmVersion::parse(build_version());
     let development_build = current.as_ref().is_some_and(SwarmVersion::is_development);
     let offer: Option<ReleaseOffer> = stored
@@ -488,8 +520,9 @@ fn build_status(
     };
     Ok(ReleaseStatusResponse {
         available: manifest_url(state).is_some(),
-        mode: stored.mode,
-        auto_install: stored.auto_install,
+        mode: effective_mode(&stored.mode, required_auto_install).to_owned(),
+        auto_install: required_auto_install.unwrap_or(stored.auto_install),
+        auto_install_required_by_apiary: required_auto_install.is_some(),
         current_version: build_version().to_owned(),
         development_build,
         last_checked_at: stored.last_checked_at,
@@ -574,7 +607,7 @@ pub(super) async fn poll(state: &Arc<AppState>, startup: bool) {
         return;
     };
     if check_is_due(
-        &stored.mode,
+        effective_mode(&stored.mode, required_auto_install(state)),
         stored.last_checked_at,
         chrono::Utc::now().timestamp(),
         startup,
@@ -666,9 +699,8 @@ async fn auto_install(state: &Arc<AppState>) {
     let Ok(store) = crate::task_store(state) else {
         return;
     };
-    let Ok(stored) = store.release_check_state() else {
-        return;
-    };
+    // The status carries the EFFECTIVE choice: this Hive's own, unless its
+    // Apiary requires one (ADR 0113).
     let Ok(status) = build_status(state, None) else {
         return;
     };
@@ -687,7 +719,7 @@ async fn auto_install(state: &Arc<AppState>) {
         Some(false)
     };
     if let Some(hold) = auto_install_hold(&AutoInstallFacts {
-        enabled: stored.auto_install,
+        enabled: status.auto_install,
         development_build: status.development_build,
         upgrade_available: status.upgrade_available,
         protocol_change,
@@ -720,6 +752,19 @@ async fn auto_install(state: &Arc<AppState>) {
             version = %offer.version,
             "an automatic install could not be requested"
         ),
+    }
+}
+
+/// The check mode in effect.
+///
+/// ⚠️ REQUIRING AUTOMATIC INSTALL REQUIRES CHECKING. A Hive that never asks for
+/// releases has nothing to install, so "Stop checking" would quietly undo an
+/// Apiary's requirement while every screen said it was in force (ADR 0113).
+fn effective_mode(stored: &str, required_auto_install: Option<bool>) -> &str {
+    if required_auto_install == Some(true) && stored == "off" {
+        "daily"
+    } else {
+        stored
     }
 }
 
@@ -1303,6 +1348,11 @@ mod tests {
     fn an_unconfigured_hive_checks_and_only_an_explicit_off_is_silence() {
         assert!(check_is_due("unset", None, 1_000_000, false));
         assert!(check_is_due("daily", None, 1_000_000, false));
+        // An Apiary requiring automatic install keeps checking on; nothing else does.
+        assert_eq!(effective_mode("off", Some(true)), "daily");
+        assert_eq!(effective_mode("off", Some(false)), "off");
+        assert_eq!(effective_mode("off", None), "off");
+        assert_eq!(effective_mode("unset", Some(true)), "unset");
         assert!(
             !check_is_due("off", None, 1_000_000, false),
             "someone who said off must never be contacted, including on startup"

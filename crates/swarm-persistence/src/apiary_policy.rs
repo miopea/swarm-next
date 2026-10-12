@@ -266,9 +266,11 @@ impl TaskStore {
 
     /// A member verifying and storing the Apiary's current defaults.
     ///
-    /// ⚠️ STORING IS NOT APPLYING. This records what the Apiary expects; it does
-    /// not change a single local setting. Convergence is the member's own act,
-    /// which is what keeps this shared defaults rather than remote control.
+    /// ⚠️ STORING IS NOT APPLYING. This records what the Apiary requires; it
+    /// does not rewrite a single local setting. Since ADR 0113 a requirement is
+    /// put into effect where each setting is READ, overriding the operator's own
+    /// choice without erasing it — `ApiaryService::enforce_required_policy`
+    /// records which ones this release has applied.
     ///
     /// # Errors
     /// Rejects non-members, bad signatures, wrong scope, expired snapshots, a
@@ -381,6 +383,57 @@ impl TaskStore {
             params![setting.key, setting.value, now],
         )?;
         Ok(())
+    }
+
+    /// A member forgetting that it applied a setting its Apiary no longer
+    /// requires, so it stops reporting it as in effect.
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn clear_local_policy_setting(&self, key: &str) -> Result<(), TaskStoreError> {
+        self.connection()?
+            .execute("DELETE FROM local_policy_settings WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
+    /// The settings this member's Apiary requires, as last received and
+    /// verified. Empty when it holds no policy body.
+    ///
+    /// # Errors
+    /// Returns corrupt stored evidence rather than an empty requirement.
+    pub fn received_policy_settings(&self) -> Result<Vec<ApiaryPolicySetting>, TaskStoreError> {
+        let settings: Option<String> = self
+            .connection()?
+            .query_row(
+                "SELECT settings_json FROM local_policy_manifest WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        settings.map_or_else(
+            || Ok(Vec::new()),
+            |settings| {
+                serde_json::from_str(&settings)
+                    .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+            },
+        )
+    }
+
+    /// The Keeper's current policy revision, or `None` when it keeps no Apiary.
+    ///
+    /// # Errors
+    /// Returns storage failures.
+    pub fn apiary_policy_revision(&self) -> Result<Option<u64>, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        self.connection()?
+            .query_row(
+                "SELECT policy_revision FROM apiaries
+                 WHERE keeper_operator_id = ?1 AND collapsed_at IS NULL",
+                [identity.operator.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// What this member actually runs, for the settings it has applied.

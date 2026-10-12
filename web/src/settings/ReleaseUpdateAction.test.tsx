@@ -22,6 +22,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
     available: true,
     mode: "daily",
     auto_install: false,
+    auto_install_required_by_apiary: false,
     current_version: "0.1.0",
     development_build: false,
     last_checked_at: 1_755_800_000,
@@ -551,4 +552,18 @@ test("a development build offers no automatic install", async () => {
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   await screen.findByRole("button", { name: /Check now|Checking/ });
   expect(screen.queryByRole("checkbox", { name: /Install ordinary releases automatically/ })).not.toBeInTheDocument();
+});
+
+/**
+ * ⚠️ ADR 0113: a setting the Apiary requires is locked, says who set it, and
+ * cannot be undone by the back door of turning checks off.
+ */
+test("an Apiary requirement locks automatic install and names who can change it", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true, auto_install_required_by_apiary: true }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  const box = await screen.findByRole("checkbox", { name: /Install ordinary releases automatically/ });
+  expect(box).toBeChecked();
+  expect(box).toBeDisabled();
+  expect(screen.getByText("Set by your Apiary. Only its Keeper can change this.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Stop checking" })).toBeDisabled();
 });

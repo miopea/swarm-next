@@ -39,7 +39,7 @@ import {
   type HiveIdentity,
   type LocalApiaryTaskExecution,
   openApiaryWatch, endApiaryWatch, type ApiaryWatch,
-  openApiaryTakeover, fetchTakeoverStatus, type TakeoverLease,
+  openApiaryTakeover, fetchTakeoverStatus, type TakeoverLease, fetchRequiredSettings, type ApiaryPolicySetting,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
@@ -48,6 +48,7 @@ import TakeoverWindow from "./TakeoverWindow";
 import MemberDirectoryStatus from "./MemberDirectoryStatus";
 import MemberSetup from "./MemberSetup";
 import { catalogReadinessLabel, federationSyncCopy, federationSyncFailure } from "./presentation";
+import MemberRequirements from "./MemberRequirements";
 import SharedCatalogStatus from "./SharedCatalogStatus";
 
 type Props = {
@@ -74,10 +75,12 @@ type MemberSnapshot = {
   handoffs: FederationClaimHandoff[];
   handoffTargets: FederationHandoffTarget[];
   executions: LocalApiaryTaskExecution[];
+  /** What this Hive's Apiary requires of it (ADR 0113). */
+  requirements: ApiaryPolicySetting[];
 };
 
-const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [], takeovers: [] };
-const snapshotKeys = ["members", "sharedWork", "tasks", "sync", "taskSync", "catalog", "outbox", "outboxStatus", "stewardship", "stewardTasks", "stewardAssists", "handoffs", "handoffTargets", "executions", "takeovers"] as const;
+const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [], takeovers: [], requirements: [] };
+const snapshotKeys = ["members", "sharedWork", "tasks", "sync", "taskSync", "catalog", "outbox", "outboxStatus", "stewardship", "stewardTasks", "stewardAssists", "handoffs", "handoffTargets", "executions", "takeovers", "requirements"] as const;
 
 export default function MemberControlRoom({ identity, operatorToken, onManage, onReviewProfile, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
@@ -87,7 +90,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const loadSnapshot = useCallback(async (signal: AbortSignal) => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers, requirements] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken, signal),
       fetchApiarySharedWork(operatorToken, signal),
       fetchApiaryTasks(operatorToken, signal),
@@ -103,6 +106,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       fetchApiaryHandoffTargets(operatorToken, signal),
       fetchLocalApiaryTaskExecutions(operatorToken, signal),
       fetchTakeoverStatus(operatorToken, signal),
+      fetchRequiredSettings(operatorToken, signal),
     ]);
     if (signal.aborted) {
       if (signal.reason?.name === "TimeoutError") {
@@ -111,7 +115,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       }
       return;
     }
-    const results = [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers];
+    const results = [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers, requirements];
     if (handoffs.status === "fulfilled" && Array.isArray(handoffs.value)) {
       setHandoffError(undefined);
       setHandoffOfferError(undefined);
@@ -134,8 +138,9 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
       handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
       handoffTargets: handoffTargets.status === "fulfilled" && Array.isArray(handoffTargets.value) ? handoffTargets.value : current.handoffTargets,
       executions: executions.status === "fulfilled" && Array.isArray(executions.value) ? executions.value : current.executions,
+      requirements: requirements.status === "fulfilled" && Array.isArray(requirements.value) ? requirements.value : current.requirements,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions, takeovers, requirements].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   const refresh = useVisiblePolling(loadSnapshot, Boolean(operatorToken), null, 8_000, { refreshKey });
   const value = (key: keyof MemberSnapshot, content: string | number) => observed.has(key)
@@ -404,6 +409,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
           </li>)}</ul> : <p className="keeper-empty">The Apiary roster has not arrived yet.</p>}
           </>)}
         </article>
+        <MemberRequirements settings={snapshot.requirements} />
         <article className="keeper-panel member-sync-panel">
           <header><div><p className="eyebrow">Synchronization</p><h4>{failed.has("sync") ? "Synchronization status unavailable" : observed.has("sync") ? syncTitle : "Checking synchronization"}</h4></div>{observed.has("sync") && !failed.has("sync") ? <span className={`apiary-sync-indicator apiary-sync-${syncCondition}`} aria-hidden="true" /> : null}</header>
           <p className="member-sync-copy">{failed.has("sync") ? "The latest status could not be read. Retained values below are marked last known." : observed.has("sync") ? syncDetail : "Waiting for this Hive's synchronization status."}</p>

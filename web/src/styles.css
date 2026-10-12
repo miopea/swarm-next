@@ -861,6 +861,17 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    The fleet panel raises it; the roster is where the decision to watch or take
    over is actually made. */
 .keeper-hive-list .hive-standing.raised { color: var(--warn-strong); font-weight: 600; }
+.keeper-hive-list .hive-policy-gap { color: var(--warn-strong); font-weight: 600; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.apiary-policy-note { margin: 0 0 10px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.apiary-policy-list { display: grid; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }
+.apiary-policy-list label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: .84rem; }
+.apiary-policy-list label > span { min-width: 0; font-weight: 600; }
+.apiary-policy-list select { min-height: 36px; }
+.apiary-policy-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.apiary-policy-actions small { color: var(--muted); }
+.member-requirements-list { display: grid; gap: 6px; margin: 0 0 10px; padding: 0; list-style: none; }
+.member-requirements-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: .84rem; }
+.member-requirements-list strong { color: var(--warn-strong); }
 .keeper-hive-list .hive-actions button { min-height: 36px; padding: 0 12px; flex: 0 0 auto; }
 /* Takeover types on somebody else's machine. It reads as the weightier action
    rather than the default one, which is what the first build got backwards. */
@@ -3089,6 +3100,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
    --quiet, which measured about 3.5:1 on this card, under AA. */
 .release-auto-install > span { display: grid; gap: 2px; min-width: 0; color: var(--text); font-weight: 500; }
 .release-auto-install small { color: var(--muted); font-size: .74rem; }
+.release-auto-install small.release-set-by-apiary { color: var(--warn-strong); font-weight: 650; }
+.release-auto-install:has(input:disabled) { cursor: default; }
 .runtime-status-badge.attention { color: var(--warn-strong); background: var(--warn-soft); }
 .runtime-status-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: .66rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .runtime-status-badge.restart { color: var(--danger); background: var(--bad-soft); }

@@ -44,6 +44,10 @@ allowed to execute.
 its value. What the Keeper sees is a Hive's policy state only when a setting is
 not in effect, with the reason.
 
+**Built so far (ADR 0113):** the control system end to end, with
+`release.auto_install` as the first enforced setting. The other seven are not
+requirable yet: each needs member-side enforcement first.
+
 ## Fleet health
 
 - **One status per Hive on the roster:** Healthy (nothing extra shown) / Behind

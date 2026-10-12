@@ -234,5 +234,28 @@ test("handing a Hive back ends the lease and keeps watching it", async () => {
   expect(await screen.findByRole("dialog", { name: "Live window into Clover Hive" })).toBeInTheDocument();
 });
 
+/**
+ * ⚠️ ONLY A HIVE WITH SOMETHING TO FIX SAYS ANYTHING ABOUT POLICY. The operator:
+ * "we don't want to generate too much random noise for the sake of data that we
+ * wouldn't act upon."
+ */
+test("a Hive with a required setting not in effect says why, and a compliant one says nothing", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/members")) return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+      { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
+    ]);
+    if (url.endsWith("/policy-gaps")) return ok([{ hive_id: "hive-2", gaps: [{ key: "release.auto_install", expected: "on", reason: "release_cannot_apply" }] }]);
+    if (url.endsWith("/policy-settings")) return ok({ revision: 2, settings: [{ key: "release.auto_install", value: "on" }], supported: [{ key: "release.auto_install", values: ["on", "off"] }] });
+    return ok([]);
+  }));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} onInvite={vi.fn()} onOpenTasks={vi.fn()} />);
+  const roster = await screen.findByRole("list", { name: "Keeper Apiary Hives" });
+  await waitFor(() => expect(roster).toHaveTextContent("Not in effect: Ordinary releases install automatically. This Hive's release can't apply it; update it."));
+  expect(screen.getAllByText(/Not in effect:/)).toHaveLength(1);
+});
+
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }
 function ok(payload: unknown) { return { ok: true, status: 200, json: async () => payload }; }

@@ -427,7 +427,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           <input
             type="checkbox"
             checked={status.auto_install}
-            disabled={disabled}
+            disabled={disabled || status.auto_install_required_by_apiary}
             onChange={(event) => {
               const enabled = event.currentTarget.checked;
               void run(() => setReleaseAutoInstall(operatorToken, enabled), "The preference could not be saved.");
@@ -435,7 +435,12 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           />
           <span>
             Install ordinary releases automatically while I’m away
-            <small>A release that would stop your workers still waits for you.</small>
+            {/* ⚠️ LOCKED, AND IT SAYS WHO BY (ADR 0113). A disabled box with no
+                reason reads as broken; this one names the only person who can
+                change it. */}
+            {status.auto_install_required_by_apiary
+              ? <small className="release-set-by-apiary">Set by your Apiary. Only its Keeper can change this.</small>
+              : <small>A release that would stop your workers still waits for you.</small>}
           </span>
         </label>
       ) : null}
@@ -447,7 +452,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
         </small>
         <span className="settings-actions">
           <button className="secondary-button" disabled={disabled} onClick={() => void run(() => checkForRelease(operatorToken), "The check could not be completed.")}>{working ? "Checking…" : "Check now"}</button>
-          <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "off" ? "daily" : "off"), "The preference could not be saved.")}>{status.mode === "off" ? "Start checking" : "Stop checking"}</button>
+          <button className="secondary-button" disabled={disabled || (status.auto_install_required_by_apiary && status.auto_install)} title={status.auto_install_required_by_apiary && status.auto_install ? "Your Apiary requires automatic install, which needs checking" : undefined} onClick={() => void run(() => setReleaseCheckMode(operatorToken, status.mode === "off" ? "daily" : "off"), "The preference could not be saved.")}>{status.mode === "off" ? "Start checking" : "Stop checking"}</button>
           <button className="secondary-button" disabled={disabled} onClick={() => void openNotes()}>Release notes</button>
         </span>
       </footer>

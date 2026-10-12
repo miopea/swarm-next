@@ -278,12 +278,21 @@ async function main() {
     const watchingAgain = page.getByRole("dialog", { name: `Live window into ${memberName}` });
     await watchingAgain.waitFor({ timeout: 15_000 });
     pass("handing back leaves the Keeper watching the member");
-    await memberPage.locator(".terminal-surface:visible").first().click();
-    await memberPage.keyboard.type("hello-from-member");
-    await memberPage.keyboard.press("Enter");
+    // Pressing Resume Here a moment before this Hive has released the takeover
+    // is refused, and an operator simply presses it again; so does this. Each
+    // attempt types again, and any echo counts.
+    let attempts = 0;
     await waitFor("what the member types after hand-back reaches its terminal", 20, async () => {
       const text = await watchingAgain.locator(".xterm-rows").innerText().catch(() => "");
-      return { ok: text.includes("typed:hello-from-member"), seen: text.slice(-200) };
+      if (text.includes("typed:hello-from-member")) return { ok: true };
+      if (attempts % 4 === 0) {
+        if (await resume.isVisible().catch(() => false)) await resume.click().catch(() => undefined);
+        await memberPage.locator(".terminal-surface:visible").first().click().catch(() => undefined);
+        await memberPage.keyboard.type("hello-from-member");
+        await memberPage.keyboard.press("Enter");
+      }
+      attempts += 1;
+      return { ok: false, seen: { attempts, text: text.slice(-200) } };
     });
     pass(`what the member types reaches its own terminal ${((Date.now() - handedBack) / 1000).toFixed(1)}s after hand-back`);
     await watchingAgain.getByRole("button", { name: "Stop watching" }).click();
@@ -315,6 +324,32 @@ async function main() {
     return { ok: stopped && relayed, seen: { lines: log.entries.length, received_at: log.received_at, stopped, relayed } };
   });
   pass("the Keeper can read the member's own log, including why it stopped");
+
+  // ── 7. The Keeper requires a setting, and the member runs it (ADR 0113) ──
+  // The member's own choice is off; the Apiary's requirement wins while it
+  // stands, cannot be undone from the member, and hands the choice back after.
+  await must(MEMBER, "PUT", "/api/v1/runtime/release/auto-install", { enabled: false });
+  await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [{ key: "release.auto_install", value: "on" }] });
+  const required = Date.now();
+  await waitFor("the member runs what its Apiary requires", 30, async () => {
+    const status = await must(MEMBER, "GET", "/api/v1/runtime/release");
+    return { ok: status.auto_install === true && status.auto_install_required_by_apiary === true, seen: { auto_install: status.auto_install, required: status.auto_install_required_by_apiary } };
+  });
+  pass(`the member runs the Keeper's requirement ${((Date.now() - required) / 1000).toFixed(1)}s after it was set`);
+  const undo = await api(MEMBER, "PUT", "/api/v1/runtime/release/auto-install", { enabled: false });
+  if (undo.status !== 409) throw new Error(`the member could undo a required setting: ${undo.status} ${JSON.stringify(undo.json)}`);
+  pass("the member cannot undo a required setting");
+  await waitFor("the Keeper sees the requirement in effect", 30, async () => {
+    const gaps = await must(KEEPER, "GET", "/api/v1/apiary/policy-gaps");
+    return { ok: Array.isArray(gaps) && gaps.length === 0, seen: gaps };
+  });
+  pass("the Keeper sees the requirement in effect on the member");
+  await must(KEEPER, "PUT", "/api/v1/apiary/policy-settings", { settings: [] });
+  await waitFor("the member's own choice comes back", 30, async () => {
+    const status = await must(MEMBER, "GET", "/api/v1/runtime/release");
+    return { ok: status.auto_install === false && status.auto_install_required_by_apiary === false, seen: { auto_install: status.auto_install, required: status.auto_install_required_by_apiary } };
+  });
+  pass("lifting the requirement gives the member its own choice back");
 
   console.log(`\nALL PASSED in ${elapsed()}`);
 }

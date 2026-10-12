@@ -19,6 +19,7 @@ mod decision_clarification;
 mod decisions;
 pub use database_integrity::monitor_database_integrity;
 mod apiary_enrollment;
+mod apiary_policy_routes;
 mod diagnostic_log;
 mod dogfood_evidence;
 mod email_attachments;
@@ -4369,6 +4370,18 @@ fn api_router(state: AppState) -> Router {
             post(apiary_decline_claim_handoff),
         )
         .route("/api/v1/apiary/fleet-versions", get(apiary_fleet_versions))
+        .route(
+            "/api/v1/apiary/policy-settings",
+            get(apiary_policy_routes::keeper_policy).put(apiary_policy_routes::require_policy),
+        )
+        .route(
+            "/api/v1/apiary/policy-gaps",
+            get(apiary_policy_routes::policy_gaps),
+        )
+        .route(
+            "/api/v1/apiary/required-settings",
+            get(apiary_policy_routes::member_requirements),
+        )
         .route(
             "/api/v1/apiary/hives/{hive_id}/diagnostics",
             get(apiary_hive_diagnostics),
@@ -14389,6 +14402,187 @@ mod tests {
     /// ⚠️ THE OPERATOR'S "TAKEOVER ENDS AFTER A SECOND", 2026-09-27. A control
     /// ticket for a takeover the member has not accepted opens a socket that is
     /// refused at once, which the window reports as the takeover ending.
+    /// ⚠️ ADR 0113: a Keeper requires only what members apply, a refusal names
+    /// the setting, and a member that has not reported is listed with why.
+    #[tokio::test]
+    async fn a_keeper_requires_only_settings_members_apply_and_sees_who_has_not() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let hive = member.local_hive_identity().unwrap().hive.id;
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let put = |app: Router, body: Value| async move {
+            app.oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/apiary/policy-settings")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        };
+
+        let refused = put(
+            app.clone(),
+            serde_json::json!({ "settings": [{ "key": "checks.max_warnings", "value": "0" }] }),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response_json(refused).await["message"],
+            "checks.max_warnings is not a setting Hives can apply"
+        );
+
+        let saved = put(
+            app.clone(),
+            serde_json::json!({ "settings": [{ "key": "release.auto_install", "value": "on" }] }),
+        )
+        .await;
+        assert_eq!(saved.status(), StatusCode::OK);
+        let view = response_json(saved).await;
+        assert_eq!(view["settings"][0]["key"], "release.auto_install");
+        assert_eq!(
+            view["supported"][0]["values"],
+            serde_json::json!(["on", "off"])
+        );
+
+        let gaps = response_json(
+            app.oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/policy-gaps")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            gaps,
+            serde_json::json!([{
+                "hive_id": hive.to_string(),
+                "gaps": [{ "key": "release.auto_install", "expected": "on", "reason": "not_reported" }]
+            }])
+        );
+    }
+
+    /// ⚠️ ADR 0113 ON THE MEMBER: required means locked, the operator's own choice
+    /// survives underneath, and it comes back when the Apiary stops requiring.
+    #[tokio::test]
+    async fn a_required_setting_is_locked_on_the_member_and_its_own_choice_survives() {
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let required = swarm_domain::ApiaryPolicySetting {
+            key: "release.auto_install".to_owned(),
+            value: "on".to_owned(),
+        };
+        keeper
+            .set_apiary_policy_settings(std::slice::from_ref(&required), now)
+            .unwrap();
+        member.set_release_auto_install(false).unwrap();
+        let receive = |at: i64| {
+            let snapshot = keeper.signed_apiary_policy(&credential, at).unwrap();
+            ApiaryService::new(member.clone())
+                .apply_apiary_policy(&snapshot, at)
+                .unwrap();
+        };
+        receive(now);
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(member.clone()),
+        );
+        let status = |app: Router| async move {
+            response_json(
+                app.oneshot(
+                    Request::builder()
+                        .uri("/api/v1/runtime/release")
+                        .header("authorization", "Bearer secret")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+            )
+            .await
+        };
+
+        let locked = status(app.clone()).await;
+        assert_eq!(
+            locked["auto_install"], true,
+            "the Apiary's requirement is in effect"
+        );
+        assert_eq!(locked["auto_install_required_by_apiary"], true);
+        let refused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/runtime/release/auto-install")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":false}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(refused).await["code"], "set_by_apiary");
+        // Nor by the back door: a Hive that stops checking never installs anything.
+        let stop_checking = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/runtime/release")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"mode":"off"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stop_checking.status(), StatusCode::CONFLICT);
+        let listed = response_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/apiary/required-settings")
+                        .header("authorization", "Bearer secret")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            listed,
+            serde_json::json!({ "settings": [{ "key": "release.auto_install", "value": "on" }] }),
+            "the member can show its operator what its Apiary requires"
+        );
+        assert_eq!(member.local_policy_settings().unwrap(), vec![required]);
+
+        keeper.set_apiary_policy_settings(&[], now + 1).unwrap();
+        receive(now + 1);
+        let released = status(app).await;
+        assert_eq!(released["auto_install_required_by_apiary"], false);
+        assert_eq!(
+            released["auto_install"], false,
+            "the operator's own choice was kept underneath and is back"
+        );
+        assert!(member.local_policy_settings().unwrap().is_empty());
+    }
+
     /// ⚠️ ADR 0112: a member's log reaches its Keeper, only on that member's own
     /// credential and only within the agreed bounds, and the Keeper's roster
     /// can read it back.

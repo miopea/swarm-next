@@ -91,6 +91,10 @@ things that can be seen to have been applied or not.
 
 Three properties, in order of importance:
 
+⚠️ Superseded on 2026-10-12 by ADR 0113: every Apiary setting is now
+REQUIRED, with no local override. The first property below no longer holds;
+the other two do.
+
 1. **Drift is visible rather than prevented.** A member may still override
    locally; the override shows as drift from the Apiary default instead of
    silently winning. A federation that cannot be deviated from is remote

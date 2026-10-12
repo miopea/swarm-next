@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
-  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
+  fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryStewardTaskAudit, fetchApiaryTasks, fetchFleetVersions, fetchKeeperPolicy, fetchPolicyGaps, fetchTakeoverAudit, fetchTakeoverStatus, openApiaryTakeover, openApiaryWatch, endApiaryWatch,
   fetchApiaryMemberRemovalReadiness, removeApiaryMember, releaseApiaryTakeover,
-  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type TakeoverAuditEntry, type Stewardship,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type FederationStewardTaskAuditEntry, type ApiaryWatch, type FleetVersions as Fleet, type HiveIdentity, type HivePolicyGaps, type KeeperPolicy, type TakeoverAuditEntry, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
@@ -13,13 +13,15 @@ import WatchWindow from "./WatchWindow";
 import TakeoverAudit from "./TakeoverAudit";
 import TakeoverWindow from "./TakeoverWindow";
 import HiveLogDialog from "./HiveLogDialog";
+import ApiaryPolicyPanel from "./ApiaryPolicyPanel";
+import { gapReason, settingName } from "./policyLabels";
 import { memberContact, silenceWarning } from "./presentation";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 type Props = { refreshKey?: string; identity: HiveIdentity; operatorToken: string; onManage: () => void; onReviewProfile?: () => void; onInvite: () => void; onOpenTasks: () => void };
-type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[]; fleet?: Fleet; takeovers: TakeoverAuditEntry[] };
-const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [], fleet: undefined, takeovers: [] };
-const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs", "fleet", "takeovers"] as const;
+type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; stewardAudit: FederationStewardTaskAuditEntry[]; handoffs: FederationClaimHandoff[]; fleet?: Fleet; takeovers: TakeoverAuditEntry[]; policyGaps: HivePolicyGaps[]; policy?: KeeperPolicy };
+const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], stewardAudit: [], handoffs: [], fleet: undefined, takeovers: [], policyGaps: [], policy: undefined };
+const snapshotKeys = ["members", "projects", "sharedWork", "tasks", "stewardships", "stewardAudit", "handoffs", "fleet", "takeovers", "policyGaps", "policy"] as const;
 
 export default function KeeperControlRoom({ identity, operatorToken, onManage, onReviewProfile, onInvite, onOpenTasks, refreshKey }: Props) {
   const context = identity.apiary_context;
@@ -50,6 +52,8 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         fetchApiaryClaimHandoffs(operatorToken, signal),
         fetchFleetVersions(operatorToken, signal),
         fetchTakeoverAudit(operatorToken, signal),
+        fetchPolicyGaps(operatorToken, signal),
+        fetchKeeperPolicy(operatorToken, signal),
       ]);
       if (signal.aborted) {
         if (signal.reason?.name === "TimeoutError") {
@@ -58,7 +62,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         }
         return;
       }
-      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs, fleet, takeovers] = results;
+      const [members, projects, sharedWork, tasks, stewardships, stewardAudit, handoffs, fleet, takeovers, policyGaps, policy] = results;
       setObserved((current) => new Set([...current, ...snapshotKeys.filter((_, index) => results[index].status === "fulfilled")]));
       setFailed(new Set(snapshotKeys.filter((_, index) => results[index].status === "rejected")));
       setSnapshot((current) => ({
@@ -70,6 +74,9 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         stewardAudit: stewardAudit.status === "fulfilled" && Array.isArray(stewardAudit.value) ? stewardAudit.value : current.stewardAudit,
         handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
         fleet: fleet.status === "fulfilled" ? fleet.value : current.fleet,
+        policyGaps: policyGaps.status === "fulfilled" && Array.isArray(policyGaps.value) ? policyGaps.value : current.policyGaps,
+        // A reply of the wrong shape is no policy at all, never an empty one.
+        policy: policy.status === "fulfilled" && Array.isArray(policy.value?.supported) ? policy.value : current.policy,
         takeovers: takeovers.status === "fulfilled" && Array.isArray(takeovers.value) ? takeovers.value : current.takeovers,
       }));
       setState(results.some((result) => result.status === "rejected") ? "error" : "ready");
@@ -79,6 +86,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
   const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);
   const memberByHive = useMemo(() => new Map(members.map((member) => [member.hive_id, member])), [members]);
+  const gapsByHive = useMemo(() => new Map(snapshot.policyGaps.map((entry) => [entry.hive_id, entry.gaps])), [snapshot.policyGaps]);
   // Read at render, which the eight-second poll drives; a roster left open keeps its ages honest.
   const nowSeconds = Math.floor(Date.now() / 1000);
   // From the roster as it refreshes, so the warning leaves by itself if the Hive reconnects mid-wait.
@@ -124,7 +132,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
         <article className="keeper-panel">
           <header><div><p className="eyebrow">People and Hives</p><h4>Apiary Hives</h4></div><small>Registration, not live presence</small></header>
           {section("members", "Hive roster", <>
-{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? <span className="hive-actions"><button type="button" className="secondary-button" onClick={() => setLogOf({ hiveId: undefined, hiveName: member.hive_name })}>Logs</button></span> : <span className="hive-actions"><small className={`hive-standing${versionByHive.get(member.hive_id)?.raises || memberContact(member, nowSeconds).silent ? " raised" : ""}`}>{(() => {
+{state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}{member.operator_email ? ` · ${member.operator_email}` : ""}</small>{/* Only when something required is not in effect: a compliant Hive shows nothing extra. */}{(gapsByHive.get(member.hive_id) ?? []).map((gap) => <small key={gap.key} className="hive-policy-gap">Not in effect: {settingName(gap.key)}. {gapReason(gap)}.</small>)}</span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span>{/* Not offered for this Hive: its terminal is already on this machine, and a window into yourself is a mirror. */}{member.is_local ? <span className="hive-actions"><button type="button" className="secondary-button" onClick={() => setLogOf({ hiveId: undefined, hiveName: member.hive_name })}>Logs</button></span> : <span className="hive-actions"><small className={`hive-standing${versionByHive.get(member.hive_id)?.raises || memberContact(member, nowSeconds).silent ? " raised" : ""}`}>{(() => {
             const seen = versionByHive.get(member.hive_id);
             const contact = memberContact(member, nowSeconds).label;
             if (!seen) return `No version reported · ${contact}`;
@@ -282,6 +290,12 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
           {section("handoffs", "Work handoffs", <>{activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}</>)}
         </article>
         {section("fleet", "Swarm versions", <FleetVersions fleet={snapshot.fleet} nameFor={(hiveId) => memberByHive.get(hiveId)?.hive_name} />)}
+        <article className="keeper-panel apiary-policy-panel" aria-labelledby="apiary-policy-heading">
+          <header><div><p className="eyebrow">Policy</p><h4 id="apiary-policy-heading">What every Hive must run</h4></div></header>
+          {section("policy", "Apiary policy", snapshot.policy
+            ? <ApiaryPolicyPanel operatorToken={operatorToken} policy={snapshot.policy} onSaved={(policy) => { setSnapshot((current) => ({ ...current, policy })); void refresh(); }} />
+            : <p className="keeper-empty">This Apiary&apos;s policy could not be read.</p>)}
+        </article>
         {section("takeovers", "Takeover history", <TakeoverAudit entries={snapshot.takeovers} nameFor={(hiveId) => memberByHive.get(hiveId)?.hive_name} />)}
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Optional Jira work</p><h4>Promoted Jira projects</h4></div><small>Each Hive uses only projects its operator can access</small></header>

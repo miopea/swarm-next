@@ -543,8 +543,10 @@ export type ReleaseStatus = {
   available: boolean;
   /** "unset" is a Hive nobody asked, which is not the same as one that said no. */
   mode: "unset" | "off" | "daily";
-  /** Whether an ordinary release installs itself while the operator is away (ADR 0110). */
+  /** Whether an ordinary release installs itself while the operator is away (ADR 0110), as in effect. */
   auto_install: boolean;
+  /** Whether this Hive's Apiary requires `auto_install`, which locks it here (ADR 0113). */
+  auto_install_required_by_apiary: boolean;
   current_version: string;
   development_build: boolean;
   last_checked_at: number | null;
@@ -1671,6 +1673,48 @@ export type FleetVersions = {
   expected_schema_version: number;
   hives: FleetHiveVersion[];
 };
+
+/** One setting an Apiary requires of every Hive in it (ADR 0113). */
+export type ApiaryPolicySetting = { key: string; value: string };
+/** What a Keeper's Apiary requires, and what it could require. */
+export type KeeperPolicy = {
+  revision: number;
+  settings: ApiaryPolicySetting[];
+  supported: { key: string; values: string[] }[];
+};
+export type PolicyGapReason =
+  | { reason: "not_reported" }
+  | { reason: "not_received" }
+  | { reason: "release_cannot_apply" }
+  | { reason: "different"; local: string };
+export type PolicyGap = { key: string; expected: string } & PolicyGapReason;
+/** Only Hives with something required not in effect; a compliant Hive is absent. */
+export type HivePolicyGaps = { hive_id: string; gaps: PolicyGap[] };
+
+export async function fetchKeeperPolicy(operatorToken: string, signal?: AbortSignal): Promise<KeeperPolicy> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/policy-settings", { signal });
+  return response.json() as Promise<KeeperPolicy>;
+}
+
+export async function requirePolicySettings(operatorToken: string, settings: ApiaryPolicySetting[]): Promise<KeeperPolicy> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/policy-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ settings }),
+  });
+  return response.json() as Promise<KeeperPolicy>;
+}
+
+export async function fetchPolicyGaps(operatorToken: string, signal?: AbortSignal): Promise<HivePolicyGaps[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/policy-gaps", { signal });
+  return response.json() as Promise<HivePolicyGaps[]>;
+}
+
+/** What this member Hive's Apiary requires of it. */
+export async function fetchRequiredSettings(operatorToken: string, signal?: AbortSignal): Promise<ApiaryPolicySetting[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/required-settings", { signal });
+  return ((await response.json()) as { settings: ApiaryPolicySetting[] }).settings;
+}
 
 export type DiagnosticLevel = "error" | "warn" | "info" | "debug";
 export type DiagnosticEntry = {
