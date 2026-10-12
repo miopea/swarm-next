@@ -861,6 +861,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    The fleet panel raises it; the roster is where the decision to watch or take
    over is actually made. */
 .keeper-hive-list .hive-standing.raised { color: var(--warn-strong); font-weight: 600; }
+/* Two parts, not the roster's three: without its own columns the name fell into
+   the roster's 42px avatar column and the badge sat over the version. */
+.keeper-hive-list.fleet-version-list li { grid-template-columns: minmax(0, 1fr) auto; }
+.keeper-hive-list.fleet-version-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
 .keeper-hive-list .hive-policy-gap { color: var(--warn-strong); font-weight: 600; white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
 .apiary-policy-note { margin: 0 0 10px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .apiary-policy-list { display: grid; gap: 8px; margin: 0 0 10px; padding: 0; list-style: none; }

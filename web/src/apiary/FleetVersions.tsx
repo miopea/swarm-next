@@ -44,7 +44,7 @@ export default function FleetVersions({ fleet, nameFor }: { fleet?: Fleet; nameF
       ? <p className="member-blocker-list" role="alert">{raised.length} {raised.length === 1 ? "Hive is" : "Hives are"} behind what the Apiary expects.</p>
       : null}
     {hives.length
-      ? <ul className="keeper-hive-list" aria-label="Swarm versions by Hive">{hives.map(row)}</ul>
+      ? <ul className="keeper-hive-list fleet-version-list" aria-label="Swarm versions by Hive">{hives.map(row)}</ul>
       : <p className="keeper-empty">No Hive has reported its version yet.</p>}
   </article>;
 }
