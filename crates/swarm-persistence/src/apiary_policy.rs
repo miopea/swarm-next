@@ -533,6 +533,43 @@ mod tests {
         ]
     }
 
+    /// ⚠️ LEAVING IS THE WAY OUT (ADR 0113), SO IT HAS TO BE ONE. A Hive that
+    /// kept its old Apiary's requirements after leaving would stay locked by a
+    /// Keeper it no longer belongs to, with nothing left to ask.
+    #[test]
+    fn leaving_the_apiary_lifts_what_it_required() {
+        let now = 120_000;
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let required = vec![setting("release.auto_install", "on")];
+        keeper
+            .set_apiary_policy_settings(&required, now + 5)
+            .unwrap();
+        let snapshot = keeper.signed_apiary_policy(&credential, now + 6).unwrap();
+        assert!(member.apply_apiary_policy(&snapshot, now + 7).unwrap());
+        member
+            .record_local_policy_setting(&required[0], now + 8)
+            .unwrap();
+        assert_eq!(member.received_policy_settings().unwrap(), required);
+
+        member.begin_federation_departure(now + 10).unwrap();
+        let receipt = keeper
+            .depart_federation_member(&credential, now + 11)
+            .unwrap();
+        member
+            .apply_federation_departure(&receipt, now + 12)
+            .unwrap();
+
+        assert!(member.received_policy_settings().unwrap().is_empty());
+        assert!(
+            member.local_policy_settings().unwrap().is_empty(),
+            "nor does it report a requirement as in effect"
+        );
+    }
+
     /// The whole loop: Keeper authors defaults, a member receives the signed
     /// body, and its gap from them is computable.
     #[test]

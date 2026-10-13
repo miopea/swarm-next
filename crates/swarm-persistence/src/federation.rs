@@ -2656,6 +2656,10 @@ impl TaskStore {
             "local_federation_catalog",
             "local_federation_sync",
             "local_apiary_directory",
+            // What the Apiary required, and what this Hive put into effect for
+            // it. Leaving is a member's way out of a requirement (ADR 0113).
+            "local_policy_manifest",
+            "local_policy_settings",
         ] {
             transaction.execute(&format!("DELETE FROM {table}"), [])?;
         }
