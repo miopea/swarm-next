@@ -12,6 +12,16 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.1
+
+No schema migration, and your workers are not stopped.
+
+### New features
+- A Keeper can set its Queen's autonomy for every Hive, in "What every Hive must run". Each presence is set on its own: At the Hive, Reachable and Night Watch. A level the Keeper sets is the one that Hive's Queen actually works to, and it shows in that Hive's Settings as locked, with "Set by your Apiary. Only its Keeper can change this." A level the Keeper leaves alone stays the Hive's own choice. When the Keeper stops setting it, each Hive gets its own level back. A Hive on an older release keeps its own levels, and the Keeper's list of Hives says its release can't apply them.
+
+### Fixes
+- Leaving an Apiary now frees a Hive from everything that Apiary required. Since 1.16.9, a Hive that left still had "Ordinary releases install automatically" locked, by an Apiary it no longer belonged to.
+
 ## 1.17.0
 
 ⚠️ This release carries two schema migrations, 198 and 199. Both add tables and
