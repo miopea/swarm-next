@@ -10746,6 +10746,9 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_collapse_not_ready",
             error.to_string(),
         ),
+        TaskStoreError::SetByApiary(_) => {
+            ApiError::new(StatusCode::CONFLICT, "set_by_apiary", error.to_string())
+        }
         TaskStoreError::ApiaryProjectPromotionNotReady => ApiError::new(
             StatusCode::CONFLICT,
             "apiary_project_promotion_not_ready",
@@ -14689,6 +14692,100 @@ mod tests {
         assert_eq!(
             released["auto_install"], false,
             "the operator's own choice was kept underneath and is back"
+        );
+        assert!(member.local_policy_settings().unwrap().is_empty());
+    }
+
+    /// ⚠️ QUEEN AUTONOMY UNDER ADR 0113: a required tier is the level every
+    /// decision reads, the member's screen can say it is locked, moving it is
+    /// refused with who can, the free tiers stay the operator's, and lifting it
+    /// hands back the operator's own level.
+    #[tokio::test]
+    async fn a_required_queen_autonomy_tier_is_locked_on_the_member() {
+        use swarm_domain::{QueenAutonomyLevel, QueenAutonomyPolicy};
+        let now = unix_timestamp();
+        let (keeper, member, card) = keeper_and_candidate(now);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+        let own = QueenAutonomyPolicy {
+            at_hive: QueenAutonomyLevel::Coordinate,
+            away: QueenAutonomyLevel::Coordinate,
+            night_watch: QueenAutonomyLevel::LocalExecution,
+        };
+        member.set_queen_autonomy_policy(own, now).unwrap();
+        let required = swarm_domain::ApiaryPolicySetting {
+            key: "queen.autonomy.night_watch".to_owned(),
+            value: "advisory".to_owned(),
+        };
+        keeper
+            .set_apiary_policy_settings(std::slice::from_ref(&required), now)
+            .unwrap();
+        let receive = |at: i64| {
+            let snapshot = keeper.signed_apiary_policy(&credential, at).unwrap();
+            ApiaryService::new(member.clone())
+                .apply_apiary_policy(&snapshot, at)
+                .unwrap();
+        };
+        receive(now);
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(member.clone()),
+        );
+        let put = |app: Router, body: &'static str| async move {
+            app.oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/orchestration/queen-policy")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        };
+
+        assert_eq!(
+            member.queen_autonomy_policy().unwrap().night_watch,
+            QueenAutonomyLevel::Advisory,
+            "what the conductor and deployment grants read is the Apiary's level"
+        );
+        let locked =
+            response_json(authorized_get(app.clone(), "/api/v1/orchestration/queen-policy").await)
+                .await;
+        assert_eq!(locked["night_watch"], "advisory");
+        assert_eq!(
+            locked["set_by_apiary"],
+            serde_json::json!({ "at_hive": null, "away": null, "night_watch": "advisory" })
+        );
+
+        let refused = put(
+            app.clone(),
+            r#"{"at_hive":"coordinate","away":"coordinate","night_watch":"local_execution"}"#,
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(refused).await["code"], "set_by_apiary");
+
+        // The screen sends every tier back, the locked one at its required level.
+        let free = put(
+            app.clone(),
+            r#"{"at_hive":"advisory","away":"coordinate","night_watch":"advisory"}"#,
+        )
+        .await;
+        assert_eq!(free.status(), StatusCode::OK);
+        assert_eq!(response_json(free).await["at_hive"], "advisory");
+        assert_eq!(member.local_policy_settings().unwrap(), vec![required]);
+
+        keeper.set_apiary_policy_settings(&[], now + 1).unwrap();
+        receive(now + 1);
+        assert_eq!(
+            member.queen_autonomy_policy().unwrap(),
+            QueenAutonomyPolicy {
+                at_hive: QueenAutonomyLevel::Advisory,
+                ..own
+            },
+            "lifted: the operator's own Night Watch level is back, with the change they made"
         );
         assert!(member.local_policy_settings().unwrap().is_empty());
     }

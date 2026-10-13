@@ -278,7 +278,13 @@ export async function setStartSurface(operatorToken: string, startSurface: strin
 
 export type NotificationSettings = { policy: NotificationPolicy; subscription_count: number; vapid_public_key: string };
 export type QueenAutonomyLevel = "advisory" | "coordinate" | "local_execution";
-export type QueenAutonomyPolicy = { at_hive: QueenAutonomyLevel; away: QueenAutonomyLevel; night_watch: QueenAutonomyLevel };
+export type QueenAutonomyPolicy = {
+  at_hive: QueenAutonomyLevel;
+  away: QueenAutonomyLevel;
+  night_watch: QueenAutonomyLevel;
+  /** The tiers this Hive's Apiary sets (ADR 0113): locked here, changed only by its Keeper. */
+  set_by_apiary?: Partial<Record<"at_hive" | "away" | "night_watch", QueenAutonomyLevel | null>>;
+};
 export type QueenAutomationStatus = {
   enabled: boolean;
   state: "idle" | "queued" | "delivering" | "running" | "completed" | "uncertain";
@@ -2669,7 +2675,7 @@ export async function setQueenAutonomyPolicy(
   const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-policy", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(policy),
+    body: JSON.stringify({ at_hive: policy.at_hive, away: policy.away, night_watch: policy.night_watch }),
   });
   return response.json() as Promise<QueenAutonomyPolicy>;
 }

@@ -231,8 +231,12 @@ required is not in effect, with the reason. A minimum version for shared work is
 the second setting. A Hive below it keeps its own work, but the Keeper turns down
 its claims on Apiary tasks, Jira issues and handoffs. Its own Apiary page says
 why before it tries. The Keeper enforces this one, since a Hive too old to meet
-it is too old to know it exists. Engine updates already apply when idle on every
-packaged Hive. Five more settings ruled on 2026-10-12 await enforcement.
+it is too old to know it exists. Queen autonomy is the third, one setting per
+presence tier. The member's conductor and deployment grants read the required
+level, its Settings show that tier locked, and leaving the Apiary lifts every
+requirement. Engine updates already apply when idle on every packaged Hive. Four
+more settings ruled on 2026-10-12 await enforcement; check strictness needs a
+check gate that no Hive has yet.
 
 Fleet health (ADR 0114, 2026-10-12): each member sends its Keeper a bounded,
 content-free health report on its own channel, before the sync gates. It covers

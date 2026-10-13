@@ -44,13 +44,17 @@ allowed to execute.
 its value. What the Keeper sees is a Hive's policy state only when a setting is
 not in effect, with the reason.
 
-**Built so far (ADR 0113):** the control system end to end, with two settings:
+**Built so far (ADR 0113):** the control system end to end, with three settings:
 - `release.auto_install`, applied by each member;
 - `shared_work.minimum_version`, enforced by the Keeper, because a Hive below it
-  is too old to know it exists.
+  is too old to know it exists;
+- Queen autonomy, as `queen.autonomy.at_hive`, `queen.autonomy.away` and
+  `queen.autonomy.night_watch`, applied by each member.
 
 Engine updates already apply when idle on every packaged Hive, so there is
-nothing to require. The other five need enforcement before they can be required.
+nothing to require. The other four need enforcement before they can be required.
+Check strictness has nothing to lock yet: no Hive has a gate on which checks
+must pass before work counts as done.
 
 ## Fleet health
 

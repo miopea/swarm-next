@@ -7,7 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ApiaryId, FederationNodeId, HiveId, OperatorId, SwarmVersion};
+use crate::{
+    ApiaryId, FederationNodeId, HiveId, OperatorId, QueenAutonomyLevel, QueenAutonomyPolicy,
+    SwarmVersion,
+};
 
 pub const APIARY_POLICY_SCHEMA_VERSION: u16 = 1;
 
@@ -177,6 +180,12 @@ pub enum RequiredSetting {
     /// The oldest release that may take shared work. A Hive below it keeps its
     /// own work but cannot claim Apiary tasks or take a handoff until it updates.
     SharedWorkMinimumVersion,
+    /// How far each member's Queen may carry work while its operator is at the
+    /// Hive, away, or in Night Watch — one setting per presence tier, because
+    /// that is how a Hive already holds it.
+    QueenAutonomyAtHive,
+    QueenAutonomyAway,
+    QueenAutonomyNightWatch,
 }
 
 /// Where a required setting is made true.
@@ -191,13 +200,22 @@ pub enum PolicyEnforcer {
 }
 
 impl RequiredSetting {
-    pub const ALL: [Self; 2] = [Self::ReleaseAutoInstall, Self::SharedWorkMinimumVersion];
+    pub const ALL: [Self; 5] = [
+        Self::ReleaseAutoInstall,
+        Self::SharedWorkMinimumVersion,
+        Self::QueenAutonomyAtHive,
+        Self::QueenAutonomyAway,
+        Self::QueenAutonomyNightWatch,
+    ];
 
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::ReleaseAutoInstall => "release.auto_install",
             Self::SharedWorkMinimumVersion => "shared_work.minimum_version",
+            Self::QueenAutonomyAtHive => "queen.autonomy.at_hive",
+            Self::QueenAutonomyAway => "queen.autonomy.away",
+            Self::QueenAutonomyNightWatch => "queen.autonomy.night_watch",
         }
     }
 
@@ -212,6 +230,9 @@ impl RequiredSetting {
         match self {
             Self::ReleaseAutoInstall => Some(&["on", "off"]),
             Self::SharedWorkMinimumVersion => None,
+            Self::QueenAutonomyAtHive | Self::QueenAutonomyAway | Self::QueenAutonomyNightWatch => {
+                Some(&["advisory", "coordinate", "local_execution"])
+            }
         }
     }
 
@@ -228,7 +249,10 @@ impl RequiredSetting {
     #[must_use]
     pub const fn enforced_by(self) -> PolicyEnforcer {
         match self {
-            Self::ReleaseAutoInstall => PolicyEnforcer::Member,
+            Self::ReleaseAutoInstall
+            | Self::QueenAutonomyAtHive
+            | Self::QueenAutonomyAway
+            | Self::QueenAutonomyNightWatch => PolicyEnforcer::Member,
             Self::SharedWorkMinimumVersion => PolicyEnforcer::Keeper,
         }
     }
@@ -290,6 +314,81 @@ pub fn required_switch(settings: &[ApiaryPolicySetting], setting: RequiredSettin
             "off" => Some(false),
             _ => None,
         })
+}
+
+/// What an Apiary requires of Queen's autonomy, tier by tier. `None` leaves
+/// that tier to the Hive's own operator.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RequiredQueenAutonomy {
+    pub at_hive: Option<QueenAutonomyLevel>,
+    pub away: Option<QueenAutonomyLevel>,
+    pub night_watch: Option<QueenAutonomyLevel>,
+}
+
+impl RequiredQueenAutonomy {
+    #[must_use]
+    pub fn from_settings(settings: &[ApiaryPolicySetting]) -> Self {
+        let level = |setting: RequiredSetting| {
+            settings
+                .iter()
+                .find(|candidate| candidate.key == setting.key())
+                .and_then(|candidate| candidate.value.parse().ok())
+        };
+        Self {
+            at_hive: level(RequiredSetting::QueenAutonomyAtHive),
+            away: level(RequiredSetting::QueenAutonomyAway),
+            night_watch: level(RequiredSetting::QueenAutonomyNightWatch),
+        }
+    }
+
+    /// The policy in effect: the Apiary's level wherever it requires one, the
+    /// Hive's own everywhere else.
+    ///
+    /// ⚠️ OVERRIDES WITHOUT ERASING (ADR 0113). The Hive keeps its own choice
+    /// underneath, so lifting a requirement hands back what its operator chose
+    /// rather than whatever the Apiary last said.
+    #[must_use]
+    pub fn apply(self, own: QueenAutonomyPolicy) -> QueenAutonomyPolicy {
+        QueenAutonomyPolicy {
+            at_hive: self.at_hive.unwrap_or(own.at_hive),
+            away: self.away.unwrap_or(own.away),
+            night_watch: self.night_watch.unwrap_or(own.night_watch),
+        }
+    }
+
+    /// What to keep as the Hive's own choice when its operator asks for
+    /// `requested`: their choice wherever it is theirs, and their previous one
+    /// wherever the Apiary decides.
+    ///
+    /// # Errors
+    /// Refuses, saying who can change it, a request to move a tier the Apiary
+    /// requires. Asking for the required level is not a change and passes, so a
+    /// screen that sends every tier back can still change the free ones.
+    pub fn own_choice(
+        self,
+        requested: QueenAutonomyPolicy,
+        previous_own: QueenAutonomyPolicy,
+    ) -> Result<QueenAutonomyPolicy, String> {
+        let tier = |required: Option<QueenAutonomyLevel>,
+                    requested: QueenAutonomyLevel,
+                    previous: QueenAutonomyLevel| match required {
+            None => Ok(requested),
+            Some(level) if level == requested => Ok(previous),
+            Some(_) => Err(
+                "your Apiary sets this Queen autonomy level; only its Keeper can change it"
+                    .to_owned(),
+            ),
+        };
+        Ok(QueenAutonomyPolicy {
+            at_hive: tier(self.at_hive, requested.at_hive, previous_own.at_hive)?,
+            away: tier(self.away, requested.away, previous_own.away)?,
+            night_watch: tier(
+                self.night_watch,
+                requested.night_watch,
+                previous_own.night_watch,
+            )?,
+        })
+    }
 }
 
 /// Why one required setting is not in effect on one Hive, which is also what
@@ -689,6 +788,80 @@ mod tests {
         assert_eq!(
             RequiredSetting::SharedWorkMinimumVersion.enforced_by(),
             PolicyEnforcer::Keeper
+        );
+    }
+
+    /// ⚠️ A REQUIRED TIER WINS AND THE HIVE'S OWN CHOICE SURVIVES UNDER IT.
+    /// Lifting the requirement must hand back what the operator chose, not
+    /// whatever the Apiary last said.
+    #[test]
+    fn a_required_queen_autonomy_tier_overrides_without_erasing() {
+        use QueenAutonomyLevel::{Advisory, Coordinate, LocalExecution};
+        let own = QueenAutonomyPolicy {
+            at_hive: Coordinate,
+            away: Coordinate,
+            night_watch: LocalExecution,
+        };
+        assert_eq!(
+            validate_required_settings(&[setting("queen.autonomy.night_watch", "advisory")]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_required_settings(&[setting("queen.autonomy.away", "unlimited")]),
+            Err(
+                "queen.autonomy.away must be one of advisory, coordinate, local_execution"
+                    .to_owned()
+            )
+        );
+        let required = RequiredQueenAutonomy::from_settings(&[
+            setting("queen.autonomy.night_watch", "advisory"),
+            setting("release.auto_install", "on"),
+        ]);
+        assert_eq!(
+            required.apply(own),
+            QueenAutonomyPolicy {
+                night_watch: Advisory,
+                ..own
+            },
+            "only the required tier moves"
+        );
+        assert_eq!(
+            RequiredQueenAutonomy::from_settings(&[]).apply(own),
+            own,
+            "lifted, the operator's own choice is back"
+        );
+
+        // The screen sends every tier back. A free tier changes; the locked one
+        // is sent at its required level and keeps the operator's own underneath.
+        let requested = QueenAutonomyPolicy {
+            at_hive: Advisory,
+            away: Coordinate,
+            night_watch: Advisory,
+        };
+        assert_eq!(
+            required.own_choice(requested, own),
+            Ok(QueenAutonomyPolicy {
+                at_hive: Advisory,
+                ..own
+            })
+        );
+        assert_eq!(
+            required.own_choice(
+                QueenAutonomyPolicy {
+                    night_watch: LocalExecution,
+                    ..requested
+                },
+                own
+            ),
+            Err(
+                "your Apiary sets this Queen autonomy level; only its Keeper can change it"
+                    .to_owned()
+            ),
+            "moving a locked tier is refused with who can change it"
+        );
+        assert_eq!(
+            RequiredSetting::QueenAutonomyAway.enforced_by(),
+            PolicyEnforcer::Member
         );
     }
 }

@@ -3,7 +3,7 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use swarm_domain::{
     APIARY_POLICY_SCHEMA_VERSION, ApiaryPolicySetting, ApiaryPolicySnapshot,
@@ -402,21 +402,7 @@ impl TaskStore {
     /// # Errors
     /// Returns corrupt stored evidence rather than an empty requirement.
     pub fn received_policy_settings(&self) -> Result<Vec<ApiaryPolicySetting>, TaskStoreError> {
-        let settings: Option<String> = self
-            .connection()?
-            .query_row(
-                "SELECT settings_json FROM local_policy_manifest WHERE singleton = 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
-        settings.map_or_else(
-            || Ok(Vec::new()),
-            |settings| {
-                serde_json::from_str(&settings)
-                    .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
-            },
-        )
+        received_policy_settings_from(&*self.connection()?)
     }
 
     /// The Keeper's current policy revision, or `None` when it keeps no Apiary.
@@ -512,6 +498,30 @@ impl TaskStore {
             .ok_or(TaskStoreError::InvalidApiary)?;
         Ok((revision, settings))
     }
+}
+
+/// The settings this member's Apiary requires, read on `connection` so a
+/// setting can be put into effect inside the transaction that reads it.
+///
+/// # Errors
+/// Returns corrupt stored evidence rather than an empty requirement.
+pub(super) fn received_policy_settings_from(
+    connection: &Connection,
+) -> Result<Vec<ApiaryPolicySetting>, TaskStoreError> {
+    let settings: Option<String> = connection
+        .query_row(
+            "SELECT settings_json FROM local_policy_manifest WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    settings.map_or_else(
+        || Ok(Vec::new()),
+        |settings| {
+            serde_json::from_str(&settings)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+        },
+    )
 }
 
 #[cfg(test)]

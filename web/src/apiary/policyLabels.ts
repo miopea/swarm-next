@@ -1,4 +1,5 @@
 import type { PolicyGap } from "../api";
+import { queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 
 /**
  * What each requirable setting is called on screen, and what its values mean.
@@ -16,6 +17,15 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
     name: "Minimum version for shared work",
     values: {},
   },
+  ...Object.fromEntries(
+    ([["at_hive", "At the Hive"], ["away", "Reachable"], ["night_watch", "Night Watch"]] as const).map(([tier, presence]) => [
+      `queen.autonomy.${tier}`,
+      {
+        name: `Queen autonomy: ${presence}`,
+        values: Object.fromEntries((["advisory", "coordinate", "local_execution"] as const).map((level) => [level, queenAutonomyLabel(level)])),
+      },
+    ]),
+  ),
 };
 
 /** How a version setting's value reads. */

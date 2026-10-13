@@ -24,8 +24,12 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
       }
       const payload = url.endsWith("/policy-settings") ? {
           revision: 3,
-          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }],
-          supported: [{ key: "release.auto_install", kind: "choice", values: ["on", "off"] }, { key: "shared_work.minimum_version", kind: "version", values: [] }],
+          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }],
+          supported: [
+            { key: "release.auto_install", kind: "choice", values: ["on", "off"] },
+            { key: "shared_work.minimum_version", kind: "version", values: [] },
+            ...(["at_hive", "away", "night_watch"] as const).map((tier) => ({ key: `queen.autonomy.${tier}`, kind: "choice", values: ["advisory", "coordinate", "local_execution"] })),
+          ],
         }
         // Thistle's release is too old for either; the others comply and say nothing.
         // Clover is reachable but stopping at a step and short of disk; Thistle
@@ -66,9 +70,10 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
         : url.endsWith("/policy-gaps") ? [{ hive_id: "thistle", gaps: [
           { key: "release.auto_install", expected: "on", reason: "release_cannot_apply" },
           { key: "shared_work.minimum_version", expected: "1.16.10", reason: "below_minimum", running: "1.11.0" },
+          { key: "queen.autonomy.night_watch", expected: "advisory", reason: "release_cannot_apply" },
         ] }]
         : url.endsWith("/required-settings") ? {
-          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }],
+          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }],
           shared_work_refusal: "this Hive runs 1.16.9; the Apiary needs 1.16.10 or newer to take shared work, so update it",
         }
         : url.endsWith("/diagnostics/log") ? { entries: [line(1, 90, "info", "swarm_api", "Swarm API listening address=127.0.0.1:8766")], dropped: 0, received_at: null }

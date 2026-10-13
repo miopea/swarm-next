@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use swarm_domain::{QueenAutonomyLevel, QueenAutonomyPolicy};
+use swarm_domain::{QueenAutonomyLevel, QueenAutonomyPolicy, RequiredQueenAutonomy};
 use swarm_persistence::AUTOMATIC_WAKE_BATCH_LIMIT;
 
 use super::{ApiError, AppState, authorize, task_store, task_store_error, unix_timestamp};
@@ -330,6 +330,27 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
     Ok(held)
 }
 
+/// The Queen autonomy policy in effect, and which tiers this Hive's Apiary
+/// sets (ADR 0113) — those are locked here and only its Keeper can change them.
+#[derive(Serialize)]
+struct QueenAutonomyPolicyView {
+    #[serde(flatten)]
+    policy: QueenAutonomyPolicy,
+    set_by_apiary: RequiredQueenAutonomy,
+}
+
+fn autonomy_view(
+    state: &AppState,
+    policy: QueenAutonomyPolicy,
+) -> Result<QueenAutonomyPolicyView, ApiError> {
+    Ok(QueenAutonomyPolicyView {
+        policy,
+        set_by_apiary: task_store(state)?
+            .required_queen_autonomy()
+            .map_err(|error| task_store_error(&error))?,
+    })
+}
+
 pub(super) async fn queen_autonomy_policy(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -338,7 +359,11 @@ pub(super) async fn queen_autonomy_policy(
     let policy = task_store(&state)?
         .queen_autonomy_policy()
         .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(autonomy_view(&state, policy)?),
+    )
+        .into_response())
 }
 
 pub(super) async fn set_queen_autonomy_policy(
@@ -358,7 +383,11 @@ pub(super) async fn set_queen_autonomy_policy(
         )
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(autonomy_view(&state, policy)?),
+    )
+        .into_response())
 }
 
 pub(super) async fn queen_automation_status(

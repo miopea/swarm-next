@@ -503,6 +503,28 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
   expect(screen.getByRole("button", { name: "Run Queen now" })).toBeDisabled();
 });
 
+/** ⚠️ ADR 0113: a tier the Apiary sets is locked here and says who can change it. */
+test("a Queen autonomy tier set by the Apiary is locked, and the others stay the operator's", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok({ type: "history_diagnostics", diagnostics: null })));
+  const onQueenPolicyChange = vi.fn().mockResolvedValue(undefined);
+  const queenPolicy = {
+    at_hive: "coordinate" as const,
+    away: "coordinate" as const,
+    night_watch: "advisory" as const,
+    set_by_apiary: { at_hive: null, away: null, night_watch: "advisory" as const },
+  };
+  render(<SettingsWorkspace {...minimalProps()} queenPolicy={queenPolicy} onQueenPolicyChange={onQueenPolicyChange} section="settings-workers" />);
+
+  const nightWatch = screen.getByLabelText("Night Watch");
+  expect(nightWatch).toBeDisabled();
+  expect(nightWatch).toHaveValue("advisory");
+  expect(nightWatch).toHaveAccessibleDescription("Set by your Apiary. Only its Keeper can change this.");
+  const atHive = screen.getByLabelText("At the Hive");
+  expect(atHive).toBeEnabled();
+  fireEvent.change(atHive, { target: { value: "advisory" } });
+  expect(onQueenPolicyChange).toHaveBeenCalledWith(expect.objectContaining({ at_hive: "advisory", night_watch: "advisory" }));
+});
+
 test("routes an existing Queen decision to Needs you instead of repeating the review", async () => {
   const onOpenQueenDecisions = vi.fn();
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

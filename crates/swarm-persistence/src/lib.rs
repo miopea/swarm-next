@@ -491,6 +491,9 @@ pub enum TaskStoreError {
     ApiaryJoinBlocked(Vec<swarm_domain::ApiaryJoinBlocker>),
     #[error("Apiary cannot collapse until all federation state is clear")]
     ApiaryCollapseNotReady,
+    /// A setting this Hive's Apiary requires (ADR 0113), with who can change it.
+    #[error("{0}")]
+    SetByApiary(String),
     #[error("Jira project is not ready for Apiary promotion")]
     ApiaryProjectPromotionNotReady,
     #[error("Hive connection card is invalid or expired")]

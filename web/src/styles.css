@@ -2987,6 +2987,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-policy-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .queen-policy-settings label { display: grid; grid-template-columns: 94px minmax(0, 1fr); min-width: 0; align-items: center; gap: .65rem; color: var(--text-muted); font-size: .78rem; font-weight: 700; }
 .queen-policy-settings select { width: 100%; min-width: 0; }
+.queen-policy-tier { display: grid; gap: 3px; min-width: 0; }
+.queen-policy-set-by-apiary { margin-left: calc(94px + .65rem); color: var(--warn-strong); font-size: .73rem; font-weight: 650; }
 .queen-policy-explainer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .queen-policy-explainer > div { display: grid; align-content: start; gap: 3px; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .queen-policy-explainer small { color: var(--muted); font-size: .73rem; line-height: 1.4; }

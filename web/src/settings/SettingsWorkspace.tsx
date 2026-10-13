@@ -337,20 +337,27 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           <div><p className="eyebrow">Queen autonomy</p><h3 id="queen-policy-heading">Choose how far she may carry work</h3></div>
           <p>Presence changes the ceiling for unattended work. Night Watch can use durable rules you already approved so the Hive keeps moving while you sleep. These limits never expand from model confidence.</p>
           <div className="queen-policy-grid">
-            {(["at_hive", "away", "night_watch"] as const).map((mode) => (
-              <label key={mode} htmlFor={`queen-policy-${mode}`}><span>{presenceLabel(mode)}</span>
-                <select
-                  id={`queen-policy-${mode}`}
-                  value={queenPolicy?.[mode] ?? "coordinate"}
-                  disabled={busy || !queenPolicy}
-                  onChange={(event) => void onQueenPolicyChange({ ...queenPolicy!, [mode]: event.target.value as QueenAutonomyLevel })}
-                >
-                  <option value="advisory">Advise only</option>
-                  <option value="coordinate">Coordinate the Hive</option>
-                  <option value="local_execution">Run approved work</option>
-                </select>
-              </label>
-            ))}
+            {(["at_hive", "away", "night_watch"] as const).map((mode) => {
+              const setByApiary = Boolean(queenPolicy?.set_by_apiary?.[mode]);
+              return (
+                <div key={mode} className="queen-policy-tier">
+                <label htmlFor={`queen-policy-${mode}`}><span>{presenceLabel(mode)}</span>
+                  <select
+                    id={`queen-policy-${mode}`}
+                    value={queenPolicy?.[mode] ?? "coordinate"}
+                    disabled={busy || !queenPolicy || setByApiary}
+                    aria-describedby={setByApiary ? `queen-policy-${mode}-apiary` : undefined}
+                    onChange={(event) => void onQueenPolicyChange({ ...queenPolicy!, [mode]: event.target.value as QueenAutonomyLevel })}
+                  >
+                    <option value="advisory">Advise only</option>
+                    <option value="coordinate">Coordinate the Hive</option>
+                    <option value="local_execution">Run approved work</option>
+                  </select>
+                </label>
+                {setByApiary && <small id={`queen-policy-${mode}-apiary`} className="queen-policy-set-by-apiary">Set by your Apiary. Only its Keeper can change this.</small>}
+                </div>
+              );
+            })}
           </div>
           <div className="queen-policy-explainer" aria-label="Queen autonomy levels">
             {(["advisory", "coordinate", "local_execution"] as const).map((level) => (

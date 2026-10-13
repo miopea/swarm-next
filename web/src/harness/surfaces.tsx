@@ -7,6 +7,7 @@ import DeveloperDogfoodWorkspace from "../settings/DeveloperDogfoodWorkspace";
 import DatabaseRecoveryCard from "../runtime/DatabaseRecoveryCard";
 import WorkerReturnAttentionCard from "../workers/WorkerReturnAttentionCard";
 import NightWatchSettings from "../settings/NightWatchSettings";
+import QueenAutonomyLockFixture from "./QueenAutonomyLockFixture";
 import TerminalPoolFixture from "./TerminalPoolFixture";
 import PerformanceEvidenceFixture from "./PerformanceEvidenceFixture";
 import DecisionAnswerFixture from "./DecisionAnswerFixture";
@@ -278,6 +279,7 @@ export const SURFACES: Surface[] = [
   },
   { id: "performance-evidence", title: "Browser and server performance evidence", why: "Synthetic simultaneous, stale and unavailable evidence; no live profiling", render: () => <PerformanceEvidenceFixture /> },
   { id: "terminal-burst", title: "Terminal burst application", why: "Bounded synthetic packets through the real parser; no live workers", render: () => <TerminalBurstFixture /> },
+  { id: "queen-autonomy-locked", title: "Queen autonomy set by the Apiary", why: "Fictional member whose Keeper sets the Night Watch level; nothing is saved.", render: () => <QueenAutonomyLockFixture /> },
   { id: "night-watch", title: "Night Watch schedule", why: "isolated schedule editor; saves are fixture responses only", render: () => <section className="settings-card"><NightWatchSettings operatorToken="fixture" /></section> },
   {
     id: "terminal-pool",

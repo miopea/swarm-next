@@ -86,3 +86,23 @@ test("a minimum version for shared work is typed as a release number, and nothin
     { key: "shared_work.minimum_version", value: "1.16.10" },
   ] }]));
 });
+
+test("Queen autonomy is required tier by tier, in the words a member's own settings use", async () => {
+  const saved: unknown[] = [];
+  const withAutonomy: KeeperPolicy["supported"] = [
+    ...supported,
+    { key: "queen.autonomy.night_watch", kind: "choice", values: ["advisory", "coordinate", "local_execution"] },
+  ];
+  vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { settings: unknown[] };
+    saved.push(body);
+    return ok({ revision: 2, settings: body.settings, supported: withAutonomy });
+  }));
+  render(<ApiaryPolicyPanel operatorToken="secret" policy={{ revision: 1, settings: [], supported: withAutonomy }} onSaved={vi.fn()} />);
+
+  const nightWatch = screen.getByLabelText("Queen autonomy: Night Watch");
+  expect(screen.getByRole("option", { name: "Advise only" })).toBeInTheDocument();
+  fireEvent.change(nightWatch, { target: { value: "advisory" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+  await waitFor(() => expect(saved).toEqual([{ settings: [{ key: "queen.autonomy.night_watch", value: "advisory" }] }]));
+});

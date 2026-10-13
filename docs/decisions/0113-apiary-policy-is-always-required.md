@@ -69,7 +69,7 @@ These stay refused in code, as before, and requiring is no exception:
 - The remaining settings the operator chose on 2026-10-12 each need their own
   member-side enforcement before they can be required:
   - check strictness;
-  - Queen autonomy;
+  - Queen autonomy (built, see the 2026-10-13 addendum);
   - Night Watch schedule;
   - terminal history retention;
   - worker model.
@@ -122,3 +122,39 @@ The two-Hive acceptance run checks this loop:
   Keeper's roster both say so;
 - the member's claim on shared work is turned down, with the reason;
 - at the member's own release, the same claim goes through.
+
+## Addendum 2026-10-13: Queen autonomy, and leaving
+
+The operator chose Queen autonomy next, after check strictness turned out to
+have nothing to lock: no Hive has a gate on which checks must pass before work
+counts as done, so that one needs the gate built first.
+
+**One setting per presence tier.** A Hive already holds its Queen's autonomy as
+three levels, for At the Hive, Reachable and Night Watch, so the Apiary sets
+them the same way:
+- `queen.autonomy.at_hive`
+- `queen.autonomy.away`
+- `queen.autonomy.night_watch`
+
+Each takes `advisory`, `coordinate` or `local_execution`. A tier the Keeper
+leaves unset stays the member's own.
+
+**Applied where it is read.** The member's store applies the required level in
+the one function that every reader goes through: the Queen conductor, deployment
+grants and the Settings screen. None of them needs to know about policy. The
+operator's own level is kept underneath, as with auto-install, and comes back
+when the requirement is lifted.
+
+**A locked tier cannot be moved.** Settings shows it disabled with "Set by your
+Apiary. Only its Keeper can change this." A request that moves it is refused
+with 409 `set_by_apiary`. A request that sends it back at its required level
+passes, so the screen can still change the tiers that are free.
+
+**Leaving lifts every requirement.** This ADR says leaving is a member's way
+out. Until now, departure kept the received policy and the settings applied for
+it, so a Hive that left stayed locked by an Apiary it no longer belonged to.
+Departure now clears both, along with the rest of the shared state.
+
+**What an older member does.** A Hive on a release without these keys keeps
+its own levels. The Keeper's roster says its release can't apply them.
+
