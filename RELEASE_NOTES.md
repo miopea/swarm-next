@@ -12,6 +12,13 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.2
+
+No schema migration, and your workers are not stopped.
+
+### New features
+- A Keeper can set Night Watch hours for every Hive, in "What every Hive must run". Each Hive runs them in its own time zone, so 10 PM to 7 AM means ten at night wherever that Hive is. On a member, the switch and the hours show as locked, with "Set by your Apiary", and its time zone stays its own to change. A Hive that has never chosen a time zone is asked for one, with the hours already filled in. Until then, the Keeper's list of Hives says its operator hasn't chosen one yet, not that it needs updating. When the Keeper stops setting the hours, each Hive gets its own back.
+
 ## 1.17.1
 
 No schema migration, and your workers are not stopped.
