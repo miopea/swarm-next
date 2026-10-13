@@ -20955,6 +20955,45 @@ mod tests {
         }
     }
 
+    /// Waits until a fake provider has drawn the resting prompt coordination
+    /// writes to.
+    ///
+    /// Coordination rightly defers on a screen it cannot read, so a test that
+    /// delivers before its shell has drawn anything sees Queued, not Delivered.
+    /// The shell starts while the test builds its store, about 0.4s here, and a
+    /// busy CI runner can lose that race. Delaying the prompt reproduces the
+    /// CI failures of 2026-09-23 and 2026-10-13 exactly, and it is the only
+    /// timing-dependent way those assertions see Queued.
+    async fn wait_until_resting(client: &HostClient, session_id: WorkerSessionId) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let response = client
+                .request(&HostRequest::Read {
+                    session_id,
+                    after_sequence: None,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output {
+                resume: swarm_terminal::Resume::Snapshot { snapshot },
+                ..
+            } = response
+            else {
+                panic!("terminal host should return the provider's screen");
+            };
+            if provider_activity::classify_observed_activity(ProviderKind::ClaudeCode, &snapshot)
+                == ProviderActivity::Resting
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the fake provider never drew a resting prompt"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     #[tokio::test]
     async fn resolving_a_decision_delivers_to_the_requesting_worker_terminal() {
         let runtime = TempDir::new().unwrap();
@@ -20998,6 +21037,7 @@ mod tests {
             .record_coordination_delivery(session.id(), unix_timestamp())
             .unwrap();
         let client = HostClient::new(&socket);
+        wait_until_resting(&client, session.id()).await;
         let app = router(
             AppState::default()
                 .with_terminal_host(client.clone(), "secret")
@@ -21274,6 +21314,7 @@ mod tests {
             )
             .unwrap();
 
+        wait_until_resting(&HostClient::new(&socket), queen_terminal.id()).await;
         let state = AppState::default()
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store.clone());
@@ -21442,6 +21483,7 @@ mod tests {
         assert_eq!(queued.state, swarm_domain::QueenAutomationState::Queued);
         assert_eq!(queued.actionable_count, 1);
 
+        wait_until_resting(&HostClient::new(&socket), queen_terminal.id()).await;
         let state = AppState::default()
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store.clone());
