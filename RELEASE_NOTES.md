@@ -12,6 +12,26 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.0
+
+⚠️ This release carries two schema migrations, 198 and 199. Both add tables and
+change none. **The pre-update backup is automatic — there is nothing for you to
+do.** Your workers are not stopped, because the terminal protocol has not changed.
+
+### New features
+- A Keeper can set a minimum Swarm release for shared work, in "What every Hive must run". A Hive below it keeps its own work, but its claims on Apiary tasks, promoted Jira issues and handoffs are turned down, with the release it runs and the one it needs. The Keeper's list of Hives names the release holding a Hive back, and that Hive's Apiary page says why it can't take shared work. Only the Keeper needs this release for the minimum to apply.
+- The Keeper's list of Hives shows what is wrong with each Hive, worst first, with what to do about it. It covers a sync stuck at a step, a worker engine update that's waiting or failed, low disk, memory running short, and stuck workers. A healthy Hive shows nothing extra.
+- Opening a Hive's log on the Keeper shows its last day of contact, in five-minute slots, with the gaps named.
+- The Keeper is notified through Needs you about three faults, once each time they happen: a sync failing for ten minutes, a worker engine update that failed, and disk under 512 MiB. Each clears by itself when the fault ends. Low disk stays raised until the Hive is back above 2 GiB, so a reading hovering at the line doesn't notify again and again.
+- A Usage panel on the Keeper shows what each Hive spent over 7 or 30 days, its own included. It shows tokens, weighted as on the local Usage page, and busy time, which is the time its workers spent working, summed across workers. It also shows Apiary totals and a split by model, and each Hive opens to its workspaces. Busy time is approximate and counts from this release on.
+- Health and usage come from members on this release. A Hive on an older release shows only its version and when it was last heard from until it updates.
+
+### Fixes
+- Pending updates no longer push the worker list out of the bottom left of the screen. Each one is now a single line with its action, which still asks before restarting anything. On a 1366×768 screen, both updates waiting used to hide the worker list completely.
+- A Keeper saving its required settings no longer stalls its members. Since 1.16.9, a member could read the new settings as out of date and stop with "Stopped at project catalog" for about 15 seconds.
+- A claim or move on Apiary work reaches the Keeper at once, instead of waiting up to a minute.
+- The Keeper's Swarm versions list shows each Hive's name in full. The name was cut off ("Meado") and the status badge sat on top of the version.
+
 ## 1.16.9
 
 ### New features
