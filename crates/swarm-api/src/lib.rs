@@ -14790,6 +14790,148 @@ mod tests {
         assert!(member.local_policy_settings().unwrap().is_empty());
     }
 
+    /// A member of a fresh Apiary, and the means to hand it the Keeper's policy.
+    struct NightWatchMember {
+        keeper: TaskStore,
+        member: TaskStore,
+        credential: String,
+        app: Router,
+    }
+
+    impl NightWatchMember {
+        fn joined(now: i64) -> Self {
+            let (keeper, member, card) = keeper_and_candidate(now);
+            let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", now);
+            let app = router(
+                AppState::default()
+                    .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                    .with_task_store(member.clone()),
+            );
+            Self {
+                keeper,
+                member,
+                credential,
+                app,
+            }
+        }
+
+        fn require(&self, settings: &[swarm_domain::ApiaryPolicySetting], at: i64) {
+            self.keeper
+                .set_apiary_policy_settings(settings, at)
+                .unwrap();
+            let snapshot = self
+                .keeper
+                .signed_apiary_policy(&self.credential, at)
+                .unwrap();
+            ApiaryService::new(self.member.clone())
+                .apply_apiary_policy(&snapshot, at)
+                .unwrap();
+        }
+
+        async fn put(&self, body: &'static str) -> axum::response::Response {
+            self.app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/v1/presence/night-watch")
+                        .header("authorization", "Bearer secret")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+
+        async fn get(&self) -> Value {
+            response_json(authorized_get(self.app.clone(), "/api/v1/presence/night-watch").await)
+                .await
+        }
+    }
+
+    fn night_watch_hours() -> swarm_domain::ApiaryPolicySetting {
+        swarm_domain::ApiaryPolicySetting {
+            key: "night_watch.hours".to_owned(),
+            value: "22:00-07:00".to_owned(),
+        }
+    }
+
+    /// ⚠️ NIGHT WATCH HOURS UNDER ADR 0113: they run in the member's own time
+    /// zone, so a member with none has nowhere to run them. They are not in
+    /// effect — and not reported as applied — until its operator picks one.
+    #[tokio::test]
+    async fn required_night_watch_hours_wait_for_the_members_time_zone() {
+        let now = unix_timestamp();
+        let hive = NightWatchMember::joined(now);
+        hive.require(&[night_watch_hours()], now);
+
+        assert_eq!(
+            hive.get().await,
+            serde_json::json!({ "set_by_apiary": { "start_minute": 1320, "end_minute": 420 } })
+        );
+        assert!(hive.member.local_policy_settings().unwrap().is_empty());
+
+        let moved = hive
+            .put(r#"{"enabled":true,"timezone":"Europe/London","start_minute":1380,"end_minute":420}"#)
+            .await;
+        assert_eq!(moved.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(moved).await["code"], "set_by_apiary");
+        let chosen = hive
+            .put(r#"{"enabled":true,"timezone":"Europe/London","start_minute":1320,"end_minute":420}"#)
+            .await;
+        assert_eq!(chosen.status(), StatusCode::OK);
+        assert_eq!(response_json(chosen).await["timezone"], "Europe/London");
+        assert_eq!(
+            hive.member.local_policy_settings().unwrap(),
+            vec![night_watch_hours()],
+            "in effect once there is a time zone, and recorded so the Keeper sees it"
+        );
+    }
+
+    /// ⚠️ A member that had its own schedule: the Apiary's hours win and are
+    /// locked, its own stay underneath, the time zone is still its own to
+    /// change, and lifting the requirement hands its own hours back.
+    #[tokio::test]
+    async fn required_night_watch_hours_override_a_schedule_without_erasing_it() {
+        let now = unix_timestamp();
+        let hive = NightWatchMember::joined(now);
+        let own = hive
+            .put(r#"{"enabled":false,"timezone":"Europe/London","start_minute":1380,"end_minute":360}"#)
+            .await;
+        assert_eq!(own.status(), StatusCode::OK);
+        hive.require(&[night_watch_hours()], now);
+
+        assert_eq!(
+            hive.get().await,
+            serde_json::json!({
+                "enabled": true, "timezone": "Europe/London",
+                "start_minute": 1320, "end_minute": 420,
+                "set_by_apiary": { "start_minute": 1320, "end_minute": 420 },
+            })
+        );
+        let rezoned = hive
+            .put(r#"{"enabled":true,"timezone":"America/Chicago","start_minute":1320,"end_minute":420}"#)
+            .await;
+        assert_eq!(rezoned.status(), StatusCode::OK);
+        let turned_off = hive
+            .put(r#"{"enabled":false,"timezone":"America/Chicago","start_minute":1320,"end_minute":420}"#)
+            .await;
+        assert_eq!(turned_off.status(), StatusCode::CONFLICT);
+
+        hive.require(&[], now + 1);
+        assert_eq!(
+            hive.get().await,
+            serde_json::json!({
+                "enabled": false, "timezone": "America/Chicago",
+                "start_minute": 1380, "end_minute": 360,
+                "set_by_apiary": null,
+            }),
+            "lifted: the operator's own hours are back, in the time zone they chose since"
+        );
+        assert!(hive.member.local_policy_settings().unwrap().is_empty());
+    }
+
     /// ⚠️ ADR 0114 USAGE: a member's figures reach its Keeper only on its own
     /// credential, and the Keeper totals them per Hive, per model and for the
     /// whole Apiary, its own Hive included.

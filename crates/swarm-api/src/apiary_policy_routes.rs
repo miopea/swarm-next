@@ -10,7 +10,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use swarm_domain::{ApiaryPolicySetting, FederationChangeKind, HiveId, PolicyGap, RequiredSetting};
+use swarm_domain::{
+    ApiaryPolicySetting, FederationChangeKind, HiveId, PolicyGap, RequiredSetting, RequiredValue,
+};
 
 use crate::{
     ApiError, AppState, announce_federation_change, apiary_service, application_error, authorize,
@@ -29,7 +31,8 @@ struct KeeperPolicyView {
 #[derive(Serialize)]
 struct SupportedSetting {
     key: &'static str,
-    /// "choice" picks from `values`; "version" takes a release number.
+    /// "choice" picks from `values`; "version" takes a release number; "hours"
+    /// takes a daily window such as `22:00-07:00`.
     kind: &'static str,
     values: &'static [&'static str],
 }
@@ -63,12 +66,15 @@ fn view(state: &AppState) -> Result<KeeperPolicyView, ApiError> {
             .iter()
             .map(|setting| SupportedSetting {
                 key: setting.key(),
-                kind: if setting.choices().is_some() {
-                    "choice"
-                } else {
-                    "version"
+                kind: match setting.value() {
+                    RequiredValue::Choice(_) => "choice",
+                    RequiredValue::Release => "version",
+                    RequiredValue::DailyHours => "hours",
                 },
-                values: setting.choices().unwrap_or(&[]),
+                values: match setting.value() {
+                    RequiredValue::Choice(values) => values,
+                    RequiredValue::Release | RequiredValue::DailyHours => &[],
+                },
             })
             .collect(),
     })

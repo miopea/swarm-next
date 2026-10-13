@@ -15,6 +15,7 @@
 }
 .night-watch-settings input[type="checkbox"] { width: auto; }
 .night-watch-settings button { justify-self: start; }
+.night-watch-settings .night-watch-set-by-apiary { margin: 0; color: var(--warn-strong); font-size: .78rem; font-weight: 650; }
 
 :root {
   /* ⚠️ THE UA DRAWS UNCOLOURED CONTROLS FROM THIS, NOT FROM OUR TOKENS.
@@ -901,6 +902,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .apiary-policy-list select { min-height: 36px; }
 .apiary-policy-list input { width: 9rem; min-height: 36px; font-variant-numeric: tabular-nums; }
 .apiary-policy-hint { display: block; margin-top: 4px; color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.apiary-policy-hours { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.apiary-policy-hours legend { margin-bottom: 6px; padding: 0; color: var(--quiet); font-size: .84rem; font-weight: 600; }
+.apiary-policy-list .apiary-policy-hours label { justify-content: flex-start; }
+.apiary-policy-list .apiary-policy-hours label > span { color: var(--muted); font-weight: 600; }
 .apiary-policy-hint.is-wrong { color: var(--bad-strong); font-weight: 650; }
 .apiary-policy-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .apiary-policy-actions small { color: var(--muted); }

@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use swarm_domain::{PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState};
 
 use super::{ApiError, AppState, application_error, authorize, task_service, unix_timestamp};
@@ -30,10 +30,42 @@ pub(super) async fn night_watch_configuration(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let config = task_service(&state)?
-        .night_watch_configuration()
-        .map_err(application_error)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(config)).into_response())
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(night_watch_view(&state)?),
+    )
+        .into_response())
+}
+
+/// The Night Watch schedule in effect, and the hours this Hive's Apiary sets,
+/// if any (ADR 0113): those are locked here, and the time zone stays its own.
+#[derive(Serialize)]
+struct NightWatchView {
+    #[serde(flatten)]
+    configuration: Option<swarm_persistence::NightWatchConfiguration>,
+    set_by_apiary: Option<RequiredHours>,
+}
+
+#[derive(Serialize)]
+struct RequiredHours {
+    start_minute: u16,
+    end_minute: u16,
+}
+
+fn night_watch_view(state: &AppState) -> Result<NightWatchView, ApiError> {
+    let service = task_service(state)?;
+    Ok(NightWatchView {
+        configuration: service
+            .night_watch_configuration()
+            .map_err(application_error)?,
+        set_by_apiary: service
+            .required_night_watch_hours()
+            .map_err(application_error)?
+            .map(|hours| RequiredHours {
+                start_minute: hours.start_minute(),
+                end_minute: hours.end_minute(),
+            }),
+    })
 }
 
 pub(super) async fn set_night_watch_configuration(
@@ -55,13 +87,18 @@ pub(super) async fn set_night_watch_configuration(
             "choose a valid IANA time zone and different start/end times within the day",
         )
     })?;
-    if task_service(&state)?
-        .set_night_watch_configuration(&config)
+    let service = task_service(&state)?;
+    if service
+        .set_night_watch_configuration(&config, unix_timestamp())
         .map_err(application_error)?
     {
         state.control_room_notify.notify_waiters();
     }
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(config)).into_response())
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(night_watch_view(&state)?),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]

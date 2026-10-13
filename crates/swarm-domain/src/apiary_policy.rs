@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ApiaryId, FederationNodeId, HiveId, OperatorId, QueenAutonomyLevel, QueenAutonomyPolicy,
-    SwarmVersion,
+    ApiaryId, FederationNodeId, HiveId, NightWatchSchedule, OperatorId, QueenAutonomyLevel,
+    QueenAutonomyPolicy, SwarmVersion,
 };
 
 pub const APIARY_POLICY_SCHEMA_VERSION: u16 = 1;
@@ -186,6 +186,22 @@ pub enum RequiredSetting {
     QueenAutonomyAtHive,
     QueenAutonomyAway,
     QueenAutonomyNightWatch,
+    /// The daily hours each member runs Night Watch, in that member's own time
+    /// zone: "22:00-07:00" is ten at night to seven in the morning wherever the
+    /// Hive is. The time zone stays the member's, because its operator's night
+    /// is local to them.
+    NightWatchHours,
+}
+
+/// What kind of value a required setting takes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequiredValue {
+    /// One of a fixed set.
+    Choice(&'static [&'static str]),
+    /// A release number, such as `1.16.9`.
+    Release,
+    /// A daily window, such as `22:00-07:00`.
+    DailyHours,
 }
 
 /// Where a required setting is made true.
@@ -200,12 +216,13 @@ pub enum PolicyEnforcer {
 }
 
 impl RequiredSetting {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ReleaseAutoInstall,
         Self::SharedWorkMinimumVersion,
         Self::QueenAutonomyAtHive,
         Self::QueenAutonomyAway,
         Self::QueenAutonomyNightWatch,
+        Self::NightWatchHours,
     ];
 
     #[must_use]
@@ -216,6 +233,7 @@ impl RequiredSetting {
             Self::QueenAutonomyAtHive => "queen.autonomy.at_hive",
             Self::QueenAutonomyAway => "queen.autonomy.away",
             Self::QueenAutonomyNightWatch => "queen.autonomy.night_watch",
+            Self::NightWatchHours => "night_watch.hours",
         }
     }
 
@@ -224,25 +242,51 @@ impl RequiredSetting {
         Self::ALL.into_iter().find(|setting| setting.key() == key)
     }
 
-    /// The fixed values a Keeper may choose from, or `None` for a free value.
+    /// What kind of value a Keeper sets.
     #[must_use]
-    pub const fn choices(self) -> Option<&'static [&'static str]> {
+    pub const fn value(self) -> RequiredValue {
         match self {
-            Self::ReleaseAutoInstall => Some(&["on", "off"]),
-            Self::SharedWorkMinimumVersion => None,
+            Self::ReleaseAutoInstall => RequiredValue::Choice(&["on", "off"]),
+            Self::SharedWorkMinimumVersion => RequiredValue::Release,
             Self::QueenAutonomyAtHive | Self::QueenAutonomyAway | Self::QueenAutonomyNightWatch => {
-                Some(&["advisory", "coordinate", "local_execution"])
+                RequiredValue::Choice(&["advisory", "coordinate", "local_execution"])
             }
+            Self::NightWatchHours => RequiredValue::DailyHours,
         }
     }
 
     /// Whether `value` is one this setting accepts.
     #[must_use]
     pub fn accepts(self, value: &str) -> bool {
-        match self.choices() {
-            Some(choices) => choices.contains(&value),
+        match self.value() {
+            RequiredValue::Choice(choices) => choices.contains(&value),
             // A release number. A development build is no one's minimum.
-            None => SwarmVersion::parse(value).is_some_and(|version| !version.is_development()),
+            RequiredValue::Release => {
+                SwarmVersion::parse(value).is_some_and(|version| !version.is_development())
+            }
+            RequiredValue::DailyHours => parse_daily_hours(value).is_some(),
+        }
+    }
+
+    /// The release from which a member applies this setting by itself unless
+    /// its own operator still has to choose something, or `None` when a member
+    /// that knows the setting always applies it.
+    ///
+    /// ⚠️ THIS IS HOW THE KEEPER TELLS "UPDATE IT" FROM "ITS OPERATOR HAS TO
+    /// CHOOSE", from the release a member reports, with no new field in the
+    /// report. Night Watch hours need the member's own time zone; a Hive that
+    /// never chose one cannot apply them, and telling its operator to update
+    /// would send them after the wrong fix. Keep this in step with the release
+    /// that first carries the setting.
+    #[must_use]
+    pub const fn local_choice_since(self) -> Option<&'static str> {
+        match self {
+            Self::NightWatchHours => Some("1.17.2"),
+            Self::ReleaseAutoInstall
+            | Self::SharedWorkMinimumVersion
+            | Self::QueenAutonomyAtHive
+            | Self::QueenAutonomyAway
+            | Self::QueenAutonomyNightWatch => None,
         }
     }
 
@@ -252,7 +296,8 @@ impl RequiredSetting {
             Self::ReleaseAutoInstall
             | Self::QueenAutonomyAtHive
             | Self::QueenAutonomyAway
-            | Self::QueenAutonomyNightWatch => PolicyEnforcer::Member,
+            | Self::QueenAutonomyNightWatch
+            | Self::NightWatchHours => PolicyEnforcer::Member,
             Self::SharedWorkMinimumVersion => PolicyEnforcer::Keeper,
         }
     }
@@ -269,9 +314,17 @@ pub fn validate_required_settings(settings: &[ApiaryPolicySetting]) -> Result<()
             return Err(format!("{} is not a setting Hives can apply", setting.key));
         };
         if !known.accepts(&setting.value) {
-            return Err(match known.choices() {
-                Some(choices) => format!("{} must be one of {}", setting.key, choices.join(", ")),
-                None => format!("{} must be a release version such as 1.16.9", setting.key),
+            return Err(match known.value() {
+                RequiredValue::Choice(choices) => {
+                    format!("{} must be one of {}", setting.key, choices.join(", "))
+                }
+                RequiredValue::Release => {
+                    format!("{} must be a release version such as 1.16.9", setting.key)
+                }
+                RequiredValue::DailyHours => format!(
+                    "{} must be two different times of day, such as 22:00-07:00",
+                    setting.key
+                ),
             });
         }
     }
@@ -301,6 +354,33 @@ pub fn shared_work_refusal(minimum: &SwarmVersion, reported: Option<&str>) -> Op
             "this Hive has not told the Keeper which release it runs; the Apiary needs {minimum} or newer to take shared work"
         )),
     }
+}
+
+/// A daily window written `HH:MM-HH:MM`, such as `22:00-07:00`. Only the
+/// zero-padded form is accepted, so one window has one spelling and a member's
+/// applied value compares equal to the Keeper's.
+#[must_use]
+pub fn parse_daily_hours(value: &str) -> Option<NightWatchSchedule> {
+    fn minute(time: &str) -> Option<u16> {
+        let (hours, minutes) = time.split_once(':')?;
+        if hours.len() != 2 || minutes.len() != 2 {
+            return None;
+        }
+        let hours: u16 = hours.parse().ok()?;
+        let minutes: u16 = minutes.parse().ok()?;
+        (hours < 24 && minutes < 60).then_some(hours * 60 + minutes)
+    }
+    let (start, end) = value.split_once('-')?;
+    NightWatchSchedule::new(minute(start)?, minute(end)?).ok()
+}
+
+/// The Night Watch hours an Apiary requires, if it requires any.
+#[must_use]
+pub fn required_night_watch_hours(settings: &[ApiaryPolicySetting]) -> Option<NightWatchSchedule> {
+    settings
+        .iter()
+        .find(|setting| setting.key == RequiredSetting::NightWatchHours.key())
+        .and_then(|setting| parse_daily_hours(&setting.value))
 }
 
 /// What an Apiary requires of an on/off setting, if it requires anything.
@@ -402,6 +482,9 @@ pub enum PolicyGapReason {
     NotReceived,
     /// It holds this policy but its release does not apply this setting.
     ReleaseCannotApply,
+    /// Its release applies this setting, but its own operator has to choose
+    /// something first — for Night Watch hours, the Hive's time zone.
+    NeedsLocalChoice,
     /// It applied a different value.
     Different { local: String },
     /// Its release is older than the Apiary's minimum, so the Keeper refuses it
@@ -478,7 +561,18 @@ pub fn policy_gaps(
                 .iter()
                 .find(|applied| applied.key == setting.key)
             {
-                None => PolicyGapReason::ReleaseCannotApply,
+                None => match RequiredSetting::from_key(&setting.key)
+                    .and_then(RequiredSetting::local_choice_since)
+                    .and_then(SwarmVersion::parse)
+                {
+                    Some(since)
+                        if SwarmVersion::parse(report.version)
+                            .is_some_and(|running| running.at_least(&since)) =>
+                    {
+                        PolicyGapReason::NeedsLocalChoice
+                    }
+                    _ => PolicyGapReason::ReleaseCannotApply,
+                },
                 Some(applied) if applied.value == setting.value => continue,
                 Some(applied) => PolicyGapReason::Different {
                     local: applied.value.clone(),
@@ -863,5 +957,65 @@ mod tests {
             RequiredSetting::QueenAutonomyAway.enforced_by(),
             PolicyEnforcer::Member
         );
+    }
+
+    /// One window, one spelling — so a member's applied value compares equal to
+    /// the Keeper's — and the Keeper tells "update it" from "its operator has
+    /// to choose a time zone" by the release the member reports.
+    #[test]
+    fn night_watch_hours_take_one_spelling_and_a_gap_says_which_fix() {
+        let hours = parse_daily_hours("22:00-07:00").unwrap();
+        assert_eq!((hours.start_minute(), hours.end_minute()), (1_320, 420));
+        for wrong in [
+            "22:00",
+            "22:00-22:00",
+            "9:00-17:00",
+            "24:00-07:00",
+            "22:60-07:00",
+            "22-07",
+        ] {
+            assert!(
+                parse_daily_hours(wrong).is_none(),
+                "{wrong:?} is not a window"
+            );
+        }
+        assert_eq!(
+            validate_required_settings(&[setting("night_watch.hours", "22:00-07:00")]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_required_settings(&[setting("night_watch.hours", "late")]),
+            Err(
+                "night_watch.hours must be two different times of day, such as 22:00-07:00"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            required_night_watch_hours(&[setting("night_watch.hours", "22:00-07:00")]),
+            Some(hours)
+        );
+
+        let required = [setting("night_watch.hours", "22:00-07:00")];
+        let reported = |version| ReportedPolicy {
+            revision: Some(4),
+            applied: &[],
+            version,
+        };
+        assert_eq!(
+            policy_gaps(&required, 4, Some(reported("1.17.1")))[0].reason,
+            PolicyGapReason::ReleaseCannotApply,
+            "a release that does not know the setting is told to update"
+        );
+        for knows in [
+            "1.17.2",
+            "1.17.2-dev-3c91e83b952e-20261013212652-1780948",
+            "1.18.0",
+        ] {
+            assert_eq!(
+                policy_gaps(&required, 4, Some(reported(knows)))[0].reason,
+                PolicyGapReason::NeedsLocalChoice,
+                "{knows} applies it once its operator chooses a time zone"
+            );
+        }
     }
 }

@@ -18,19 +18,38 @@ export type NightWatchConfiguration = {
   end_minute: number;
 };
 
-export async function fetchNightWatchConfiguration(operatorToken: string, signal?: AbortSignal): Promise<NightWatchConfiguration | null> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/presence/night-watch", { signal });
-  return response.json() as Promise<NightWatchConfiguration | null>;
+/** Daily hours, in minutes after local midnight. */
+export type NightWatchHours = { start_minute: number; end_minute: number };
+
+/**
+ * The schedule this Hive runs, and the hours its Apiary sets, if any (ADR 0113).
+ * Required hours are locked here; the time zone stays the Hive's own, and until
+ * it has one there is no schedule to put them into.
+ */
+export type NightWatchState = { configuration: NightWatchConfiguration | null; setByApiary: NightWatchHours | null };
+
+type NightWatchBody = (Partial<NightWatchConfiguration> & { set_by_apiary?: NightWatchHours | null }) | null;
+
+function nightWatchState(body: NightWatchBody): NightWatchState {
+  const configuration = body && typeof body.timezone === "string"
+    ? { enabled: Boolean(body.enabled), timezone: body.timezone, start_minute: Number(body.start_minute), end_minute: Number(body.end_minute) }
+    : null;
+  return { configuration, setByApiary: body?.set_by_apiary ?? null };
 }
 
-export async function saveNightWatchConfiguration(operatorToken: string, configuration: NightWatchConfiguration, signal?: AbortSignal): Promise<NightWatchConfiguration> {
+export async function fetchNightWatchConfiguration(operatorToken: string, signal?: AbortSignal): Promise<NightWatchState> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/presence/night-watch", { signal });
+  return nightWatchState(await response.json() as NightWatchBody);
+}
+
+export async function saveNightWatchConfiguration(operatorToken: string, configuration: NightWatchConfiguration, signal?: AbortSignal): Promise<NightWatchState> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/presence/night-watch", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(configuration),
     signal,
   });
-  return response.json() as Promise<NightWatchConfiguration>;
+  return nightWatchState(await response.json() as NightWatchBody);
 }
 
 export async function fetchPresence(operatorToken: string, signal?: AbortSignal): Promise<OperatorPresence> {

@@ -49,10 +49,12 @@ not in effect, with the reason.
 - `shared_work.minimum_version`, enforced by the Keeper, because a Hive below it
   is too old to know it exists;
 - Queen autonomy, as `queen.autonomy.at_hive`, `queen.autonomy.away` and
-  `queen.autonomy.night_watch`, applied by each member.
+  `queen.autonomy.night_watch`, applied by each member;
+- `night_watch.hours`, the Keeper's daily hours applied by each member in its
+  own time zone.
 
 Engine updates already apply when idle on every packaged Hive, so there is
-nothing to require. The other four need enforcement before they can be required.
+nothing to require. The other three need enforcement before they can be required.
 Check strictness has nothing to lock yet: no Hive has a gate on which checks
 must pass before work counts as done.
 

@@ -701,6 +701,15 @@ impl ApiaryService {
                 .find(|candidate| candidate.key == setting.key())
                 .filter(|candidate| setting.accepts(&candidate.value))
             {
+                // Night Watch hours run in this Hive's own time zone; without
+                // one they are not in effect, and saying so is the truth the
+                // Keeper needs (ADR 0113).
+                Some(_)
+                    if setting == swarm_domain::RequiredSetting::NightWatchHours
+                        && !self.store.has_night_watch_time_zone()? =>
+                {
+                    self.store.clear_local_policy_setting(setting.key())?;
+                }
                 Some(required) => self.store.record_local_policy_setting(required, now)?,
                 None => self.store.clear_local_policy_setting(setting.key())?,
             }
@@ -3030,6 +3039,16 @@ impl TaskService {
         self.store.operator_presence(now).map_err(Into::into)
     }
 
+    /// The Night Watch hours this Hive's Apiary requires, if any.
+    ///
+    /// # Errors
+    /// Returns a persistence or stored-policy error.
+    pub fn required_night_watch_hours(
+        &self,
+    ) -> Result<Option<swarm_domain::NightWatchSchedule>, ApplicationError> {
+        self.store.required_night_watch_hours().map_err(Into::into)
+    }
+
     /// Reads the optional operator-configured Night Watch schedule.
     ///
     /// # Errors
@@ -3042,15 +3061,22 @@ impl TaskService {
 
     /// Saves a validated schedule without changing provider capabilities.
     ///
+    /// Saving can put an Apiary's required hours into effect — they wait for
+    /// this Hive's time zone — so what is in effect is recorded again.
+    ///
     /// # Errors
-    /// Returns a persistence error; settings and event writes are atomic.
+    /// Refuses moving hours the Apiary requires, and returns a persistence
+    /// error; settings and event writes are atomic.
     pub fn set_night_watch_configuration(
         &self,
         config: &swarm_persistence::NightWatchConfiguration,
+        now: i64,
     ) -> Result<bool, ApplicationError> {
-        self.store
-            .set_night_watch_configuration(config)
-            .map_err(Into::into)
+        let changed = self.store.set_night_watch_configuration(config)?;
+        if changed {
+            ApiaryService::new(self.store.clone()).enforce_required_policy(now)?;
+        }
+        Ok(changed)
     }
 
     /// Sets or clears the operator's explicit presence override.

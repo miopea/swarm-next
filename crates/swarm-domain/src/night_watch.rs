@@ -32,6 +32,16 @@ impl NightWatchSchedule {
         })
     }
 
+    #[must_use]
+    pub const fn start_minute(self) -> u16 {
+        self.start_minute
+    }
+
+    #[must_use]
+    pub const fn end_minute(self) -> u16 {
+        self.end_minute
+    }
+
     /// Identifies the occurrence by its starting local date, including the
     /// after-midnight portion. Start is inclusive; end is exclusive. Repeated
     /// local minutes during a DST fold retain the same occurrence identity.

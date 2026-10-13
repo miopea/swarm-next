@@ -18,6 +18,14 @@ function draftOf(policy: KeeperPolicy): Draft {
 
 /** A release number, as the Keeper accepts one: no development builds. */
 const RELEASE_NUMBER = /^\d+\.\d+\.\d+$/;
+/** A daily window as the Keeper accepts one: "22:00-07:00", two different times. */
+const DAILY_HOURS = /^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/;
+
+function validHours(value: string) {
+  if (!DAILY_HOURS.test(value)) return false;
+  const [start, end] = value.split("-");
+  return start !== end;
+}
 
 function valueOf(draft: Draft, key: string): string {
   return (draft[key] ?? "").trim();
@@ -48,7 +56,13 @@ export default function ApiaryPolicyPanel({ operatorToken, policy, onSaved }: Pr
     const saved = draftOf(policy);
     return policy.supported.some((setting) => valueOf(draft, setting.key) !== (saved[setting.key] ?? ""));
   }, [draft, policy]);
-  const invalid = policy.supported.some((setting) => setting.kind === "version" && valueOf(draft, setting.key) !== "" && !RELEASE_NUMBER.test(valueOf(draft, setting.key)));
+  const invalid = policy.supported.some((setting) => {
+    const value = valueOf(draft, setting.key);
+    if (value === "") return false;
+    if (setting.kind === "version") return !RELEASE_NUMBER.test(value);
+    if (setting.kind === "hours") return !validHours(value);
+    return false;
+  });
 
   async function save() {
     setSaving(true);
@@ -74,6 +88,31 @@ export default function ApiaryPolicyPanel({ operatorToken, policy, onSaved }: Pr
       <ul className="apiary-policy-list" aria-label="Apiary policy settings">
         {policy.supported.map((setting) => {
           const change = (value: string) => setDraft((current) => ({ ...current, [setting.key]: value }));
+          if (setting.kind === "hours") {
+            const [start = "", end = ""] = (draft[setting.key] ?? "").split("-");
+            const value = valueOf(draft, setting.key);
+            const wrong = value !== "" && !validHours(value);
+            const hintId = `apiary-policy-hint-${setting.key}`;
+            // Both empty is "each Hive decides"; one empty is not a window yet.
+            const changeTime = (which: "start" | "end", time: string) => {
+              const next = which === "start" ? [time, end] : [start, time];
+              change(next[0] === "" && next[1] === "" ? "" : `${next[0]}-${next[1]}`);
+            };
+            return (
+              <li key={setting.key}>
+                <fieldset className="apiary-policy-hours" aria-describedby={hintId}>
+                  <legend>{settingName(setting.key)}</legend>
+                  <label><span>Starts</span><input type="time" value={start} disabled={saving} aria-invalid={wrong} onChange={(event) => changeTime("start", event.currentTarget.value)} /></label>
+                  <label><span>Ends</span><input type="time" value={end} disabled={saving} aria-invalid={wrong} onChange={(event) => changeTime("end", event.currentTarget.value)} /></label>
+                </fieldset>
+                <small id={hintId} className={wrong ? "apiary-policy-hint is-wrong" : "apiary-policy-hint"}>
+                  {wrong
+                    ? "Choose both times, and make them different."
+                    : "In each Hive's own time zone. Leave both empty and each Hive keeps its own hours."}
+                </small>
+              </li>
+            );
+          }
           if (setting.kind === "version") {
             const value = valueOf(draft, setting.key);
             const wrong = value !== "" && !RELEASE_NUMBER.test(value);

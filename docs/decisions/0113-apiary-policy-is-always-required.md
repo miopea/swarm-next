@@ -70,7 +70,7 @@ These stay refused in code, as before, and requiring is no exception:
   member-side enforcement before they can be required:
   - check strictness;
   - Queen autonomy (built, see the 2026-10-13 addendum);
-  - Night Watch schedule;
+  - Night Watch schedule (built, see the 2026-10-13 Night Watch addendum);
   - terminal history retention;
   - worker model.
 
@@ -157,4 +157,38 @@ Departure now clears both, along with the rest of the shared state.
 
 **What an older member does.** A Hive on a release without these keys keeps
 its own levels. The Keeper's roster says its release can't apply them.
+
+## Addendum 2026-10-13: Night Watch hours
+
+The operator ruled on what a required schedule means. Asked "should every Hive
+use the Keeper's hours in its own local time?", they chose "Hours in each Hive's
+time". The option they chose read: "For example, 10 PM to 7 AM wherever each
+Hive is. Each Hive keeps its own time zone. A Hive that has never set a time
+zone shows as not in effect until its operator picks one."
+
+**One setting, `night_watch.hours`, written `HH:MM-HH:MM`,** such as
+`22:00-07:00`. Only the zero-padded form is accepted, so the value a member
+applies compares equal to the Keeper's. Requiring hours also turns the schedule
+on.
+
+**The time zone stays the member's.** Its operator's night is local to them, so
+a member runs the Keeper's hours in its own IANA zone. A Hive that never set up
+Night Watch has no zone. It keeps no schedule and does not report the setting as
+applied until its operator chooses one. Its Settings say so, with the hours
+already filled in and locked.
+
+**The Keeper tells the two reasons apart from the reported release, with no new
+field in the report.** A member on a release that applies the setting, but that
+has not applied it, is waiting on its operator: "This Hive's operator hasn't
+chosen its time zone for Night Watch yet". An older member is told to update.
+`RequiredSetting::local_choice_since` names the first release that applies it,
+1.17.2, and must be kept in step if that release number changes.
+
+**Applied where presence reads the schedule.** That is one function, so the
+scheduled watch, dismissing tonight's watch on return to the desk, and the
+Settings screen all see the required hours. The member's own hours stay
+underneath and come back when the requirement is lifted. A request that turns
+the schedule off or moves the hours is refused with 409 `set_by_apiary`. A new
+time zone is accepted. Returning to Swarm on the desktop still ends tonight's
+watch, as before: that is the operator being present, not a schedule change.
 

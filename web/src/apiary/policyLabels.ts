@@ -17,6 +17,10 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
     name: "Minimum version for shared work",
     values: {},
   },
+  "night_watch.hours": {
+    name: "Night Watch hours",
+    values: {},
+  },
   ...Object.fromEntries(
     ([["at_hive", "At the Hive"], ["away", "Reachable"], ["night_watch", "Night Watch"]] as const).map(([tier, presence]) => [
       `queen.autonomy.${tier}`,
@@ -30,6 +34,8 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
 
 /** How a version setting's value reads. */
 const VERSION_KEYS = new Set(["shared_work.minimum_version"]);
+/** Settings whose value is a daily window, "22:00-07:00". */
+const HOURS_KEYS = new Set(["night_watch.hours"]);
 
 export function settingName(key: string): string {
   return LABELS[key]?.name ?? key;
@@ -37,6 +43,7 @@ export function settingName(key: string): string {
 
 export function settingValue(key: string, value: string): string {
   if (VERSION_KEYS.has(key)) return `${value} or newer`;
+  if (HOURS_KEYS.has(key)) return `${value.replace("-", "–")} in each Hive's own time`;
   return LABELS[key]?.values[value] ?? value;
 }
 
@@ -46,6 +53,9 @@ export function gapReason(gap: PolicyGap): string {
     case "not_reported": return "This Hive hasn't reported to the Keeper yet";
     case "not_received": return "This Hive hasn't picked up the current policy yet";
     case "release_cannot_apply": return "This Hive's release can't apply it; update it";
+    case "needs_local_choice": return gap.key === "night_watch.hours"
+      ? "This Hive's operator hasn't chosen its time zone for Night Watch yet"
+      : "This Hive's operator has a choice to make before it applies";
     case "different": return `This Hive runs "${gap.local}" instead`;
     case "below_minimum": return `This Hive runs ${gap.running}, so it can't take Apiary tasks until it updates`;
   }

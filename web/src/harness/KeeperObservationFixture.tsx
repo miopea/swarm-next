@@ -24,11 +24,12 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
       }
       const payload = url.endsWith("/policy-settings") ? {
           revision: 3,
-          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }],
+          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }, { key: "night_watch.hours", value: "22:00-07:00" }],
           supported: [
             { key: "release.auto_install", kind: "choice", values: ["on", "off"] },
             { key: "shared_work.minimum_version", kind: "version", values: [] },
             ...(["at_hive", "away", "night_watch"] as const).map((tier) => ({ key: `queen.autonomy.${tier}`, kind: "choice", values: ["advisory", "coordinate", "local_execution"] })),
+            { key: "night_watch.hours", kind: "hours", values: [] },
           ],
         }
         // Thistle's release is too old for either; the others comply and say nothing.
@@ -71,9 +72,12 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
           { key: "release.auto_install", expected: "on", reason: "release_cannot_apply" },
           { key: "shared_work.minimum_version", expected: "1.16.10", reason: "below_minimum", running: "1.11.0" },
           { key: "queen.autonomy.night_watch", expected: "advisory", reason: "release_cannot_apply" },
+          { key: "night_watch.hours", expected: "22:00-07:00", reason: "release_cannot_apply" },
+        ] }, { hive_id: "clover", gaps: [
+          { key: "night_watch.hours", expected: "22:00-07:00", reason: "needs_local_choice" },
         ] }]
         : url.endsWith("/required-settings") ? {
-          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }],
+          settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }, { key: "night_watch.hours", value: "22:00-07:00" }],
           shared_work_refusal: "this Hive runs 1.16.9; the Apiary needs 1.16.10 or newer to take shared work, so update it",
         }
         : url.endsWith("/diagnostics/log") ? { entries: [line(1, 90, "info", "swarm_api", "Swarm API listening address=127.0.0.1:8766")], dropped: 0, received_at: null }

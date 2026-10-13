@@ -92,3 +92,35 @@ test("a first schedule's time-zone edit is unsaved and does not enable automatio
   expect(screen.getByLabelText("Enable scheduled Night Watch")).not.toBeChecked();
   expect(screen.getByLabelText("Saved Night Watch schedule")).toHaveTextContent("No automatic Night Watch");
 });
+
+/** ⚠️ ADR 0113: the Apiary's hours are locked; the time zone stays this Hive's. */
+test("hours set by the Apiary are locked, and the time zone is still the operator's", async () => {
+  const required = { start_minute: 1320, end_minute: 420 };
+  const fetch = vi.fn().mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(ok(
+    init?.method === "PUT" ? { ...JSON.parse(String(init.body)), set_by_apiary: required } : { ...config, set_by_apiary: required },
+  )));
+  vi.stubGlobal("fetch", fetch);
+  render(<NightWatchSettings operatorToken="secret" />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save schedule" })).toBeEnabled());
+
+  for (const field of ["Enable scheduled Night Watch", "Starts", "Ends"]) {
+    expect(screen.getByLabelText(field)).toBeDisabled();
+    expect(screen.getByLabelText(field)).toHaveAccessibleDescription("Set by your Apiary. Only its Keeper can change these hours. The time zone is this Hive's own.");
+  }
+  const zone = screen.getByLabelText("Time zone");
+  expect(zone).toBeEnabled();
+  fireEvent.change(zone, { target: { value: "Europe/London" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+  expect(await screen.findByText("Schedule saved.")).toBeInTheDocument();
+  expect(fetch.mock.calls[1]?.[1].body).toBe(JSON.stringify({ ...config, timezone: "Europe/London" }));
+});
+
+test("a Hive with no time zone is asked for one before the Apiary's hours can run", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(ok({ set_by_apiary: { start_minute: 1320, end_minute: 420 } }))));
+  render(<NightWatchSettings operatorToken="secret" />);
+  expect(await screen.findByText(/Choose this Hive's time zone and save to put them into effect/)).toBeInTheDocument();
+  expect(screen.getByLabelText("Enable scheduled Night Watch")).toBeChecked();
+  expect(screen.getByLabelText("Starts")).toHaveValue("22:00");
+  expect(screen.getByLabelText("Ends")).toHaveValue("07:00");
+});
+

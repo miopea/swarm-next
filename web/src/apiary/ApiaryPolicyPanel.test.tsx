@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import type { KeeperPolicy } from "../api";
 import ApiaryPolicyPanel from "./ApiaryPolicyPanel";
+import { gapReason, settingValue } from "./policyLabels";
 
 const ok = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
 const supported: KeeperPolicy["supported"] = [
@@ -106,3 +107,29 @@ test("Queen autonomy is required tier by tier, in the words a member's own setti
   fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
   await waitFor(() => expect(saved).toEqual([{ settings: [{ key: "queen.autonomy.night_watch", value: "advisory" }] }]));
 });
+
+test("Night Watch hours are two times in each Hive's own zone, saved only as a whole window", async () => {
+  const saved: unknown[] = [];
+  const withHours: KeeperPolicy["supported"] = [...supported, { key: "night_watch.hours", kind: "hours", values: [] }];
+  vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { settings: unknown[] };
+    saved.push(body);
+    return ok({ revision: 2, settings: body.settings, supported: withHours });
+  }));
+  render(<ApiaryPolicyPanel operatorToken="secret" policy={{ revision: 1, settings: [], supported: withHours }} onSaved={vi.fn()} />);
+
+  const hours = screen.getByRole("group", { name: "Night Watch hours" });
+  expect(hours).toHaveAccessibleDescription(/In each Hive's own time zone/);
+  const [starts, ends] = [screen.getAllByLabelText("Starts")[0]!, screen.getAllByLabelText("Ends")[0]!];
+  fireEvent.change(starts, { target: { value: "22:00" } });
+  expect(screen.getByText("Choose both times, and make them different.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save policy" })).toBeDisabled();
+  fireEvent.change(ends, { target: { value: "07:00" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+  await waitFor(() => expect(saved).toEqual([{ settings: [{ key: "night_watch.hours", value: "22:00-07:00" }] }]));
+
+  expect(settingValue("night_watch.hours", "22:00-07:00")).toBe("22:00–07:00 in each Hive's own time");
+  expect(gapReason({ key: "night_watch.hours", expected: "22:00-07:00", reason: "needs_local_choice" }))
+    .toBe("This Hive's operator hasn't chosen its time zone for Night Watch yet");
+});
+

@@ -1687,12 +1687,13 @@ export type KeeperPolicy = {
   revision: number;
   settings: ApiaryPolicySetting[];
   /** "choice" picks from `values`; "version" takes a release number. */
-  supported: { key: string; kind: "choice" | "version"; values: string[] }[];
+  supported: { key: string; kind: "choice" | "version" | "hours"; values: string[] }[];
 };
 export type PolicyGapReason =
   | { reason: "not_reported" }
   | { reason: "not_received" }
   | { reason: "release_cannot_apply" }
+  | { reason: "needs_local_choice" }
   | { reason: "different"; local: string }
   | { reason: "below_minimum"; running: string };
 export type PolicyGap = { key: string; expected: string } & PolicyGapReason;

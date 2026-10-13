@@ -84,7 +84,15 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       terminal_grant: empty, terminal_socket: empty, terminal_restore: empty,
     }));
   }
-  if (path === "/api/v1/presence/night-watch") return { enabled: false, timezone: "America/New_York", start_minute: 1320, end_minute: 420 };
+  if (path === "/api/v1/presence/night-watch") {
+    // ?apiaryHours=1 is a member whose Apiary sets its hours; =nozone is one
+    // that has never chosen a time zone to run them in (ADR 0113).
+    const apiaryHours = new URLSearchParams(window.location.search).get("apiaryHours");
+    const required = { start_minute: 1320, end_minute: 420 };
+    if (apiaryHours === "nozone") return { set_by_apiary: required };
+    if (apiaryHours === "1") return { enabled: true, timezone: "America/New_York", ...required, set_by_apiary: required };
+    return { enabled: false, timezone: "America/New_York", start_minute: 1320, end_minute: 420, set_by_apiary: null };
+  }
   // A terminal attachment asks for a grant at a per-session path, so it cannot
   // be an arm of the switch below. The grant is a fiction like everything else
   // here: FixtureWebSocket never dials the websocket_path it names.

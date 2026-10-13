@@ -70,7 +70,38 @@ pub(super) fn migrate(
     transaction.pragma_update(None, "user_version", crate::NIGHT_WATCH_SCHEMA_VERSION)
 }
 
+/// The schedule in effect: this Hive's own, with its Apiary's hours wherever
+/// the Apiary requires them (ADR 0113).
+///
+/// ⚠️ APPLIED HERE, WHERE PRESENCE READS IT, and only on top of a schedule this
+/// Hive already has. The hours are in the Hive's own time zone, so a Hive whose
+/// operator never chose one has nothing to apply them in and keeps no schedule
+/// until they do; it reports the requirement as not in effect meanwhile.
 pub(super) fn read(
+    connection: &rusqlite::Connection,
+) -> Result<Option<NightWatchConfiguration>, TaskStoreError> {
+    let own = read_own(connection)?;
+    Ok(match (own, required_hours(connection)?) {
+        (Some(own), Some(hours)) => Some(NightWatchConfiguration {
+            enabled: true,
+            start_minute: hours.start_minute(),
+            end_minute: hours.end_minute(),
+            ..own
+        }),
+        (own, _) => own,
+    })
+}
+
+fn required_hours(
+    connection: &rusqlite::Connection,
+) -> Result<Option<NightWatchSchedule>, TaskStoreError> {
+    Ok(swarm_domain::required_night_watch_hours(
+        &crate::apiary_policy::received_policy_settings_from(connection)?,
+    ))
+}
+
+/// This Hive's operator's own schedule, before any Apiary requirement.
+fn read_own(
     connection: &rusqlite::Connection,
 ) -> Result<Option<NightWatchConfiguration>, TaskStoreError> {
     let operator = crate::presence::local_operator_id(connection)?;
@@ -89,7 +120,8 @@ pub(super) fn read(
 }
 
 impl TaskStore {
-    /// No configuration means no schedule, never an invented default bedtime.
+    /// The schedule in effect. No configuration means no schedule, never an
+    /// invented default bedtime.
     ///
     /// # Errors
     /// Returns persistence or configuration integrity errors.
@@ -100,17 +132,60 @@ impl TaskStore {
         read(&connection)
     }
 
+    /// The Night Watch hours this Hive's Apiary requires, if any.
+    ///
+    /// # Errors
+    /// Returns persistence or stored-policy integrity errors.
+    pub fn required_night_watch_hours(&self) -> Result<Option<NightWatchSchedule>, TaskStoreError> {
+        required_hours(&*self.connection()?)
+    }
+
+    /// Whether this Hive has a time zone to run Night Watch in, which is what
+    /// an Apiary's required hours need before they can be put into effect.
+    ///
+    /// # Errors
+    /// Returns persistence or configuration integrity errors.
+    pub fn has_night_watch_time_zone(&self) -> Result<bool, TaskStoreError> {
+        Ok(read_own(&*self.connection()?)?.is_some())
+    }
+
     /// Saves validated settings without turning them into a provider permission.
     ///
     /// # Errors
-    /// Returns persistence errors; settings and their event commit atomically.
+    /// Refuses turning off or moving hours this Hive's Apiary requires (ADR
+    /// 0113); its time zone stays the operator's to change. Returns persistence
+    /// errors; settings and their event commit atomically.
     pub fn set_night_watch_configuration(
         &self,
         config: &NightWatchConfiguration,
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        if read(&transaction)?.as_ref() == Some(config) {
+        let own_before = read_own(&transaction)?;
+        let config = &match required_hours(&transaction)? {
+            None => config.clone(),
+            Some(hours) => {
+                if !config.enabled
+                    || config.start_minute != hours.start_minute()
+                    || config.end_minute != hours.end_minute()
+                {
+                    return Err(TaskStoreError::SetByApiary(
+                        "your Apiary sets this Hive's Night Watch hours; only its Keeper can change them, and the time zone is still yours to choose"
+                            .to_owned(),
+                    ));
+                }
+                // The time zone is theirs; the hours they chose before the
+                // Apiary required its own stay underneath for when it stops.
+                match own_before.clone() {
+                    Some(own) => NightWatchConfiguration {
+                        timezone: config.timezone.clone(),
+                        ..own
+                    },
+                    None => config.clone(),
+                }
+            }
+        };
+        if own_before.as_ref() == Some(config) {
             return Ok(false);
         }
         let operator = crate::presence::local_operator_id(&transaction)?;
