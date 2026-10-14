@@ -313,6 +313,22 @@ pub(super) async fn start_worker_process_unlocked(
         // which is the safe direction and the state it was already in.
         tracing::warn!(%error, "could not write the approved-command grants for this worker");
     }
+    // The Hive's worker model, written after the grants because both share the
+    // file and each owns only its own key (ADR 0116). A model that cannot be
+    // applied must not stop a worker starting either: the start is recorded with
+    // whatever the file names, so a Hive that names a model counts this worker
+    // as not yet on it rather than assuming it is.
+    let launched_with = match (profile.provider, state.agent_bridge.as_ref()) {
+        (ProviderKind::ClaudeCode, Some(bridge)) => Some(
+            bridge
+                .apply_worker_model(worker_id, profile.role)
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "could not apply the Hive's worker model to this worker");
+                    bridge.worker_model_in_file(worker_id)
+                }),
+        ),
+        _ => None,
+    };
 
     let request = provider_start_request(state, worker_id, &profile, size, mcp_config)?;
     let response = request_host(state, request).await.map_err(|error| {
@@ -328,6 +344,17 @@ pub(super) async fn start_worker_process_unlocked(
     if let Err(error) = task_store(state)?.bind_worker_session(worker_id, session_id) {
         let _ = request_host(state, HostRequest::Stop { session_id }).await;
         return Err(task_store_error(&error));
+    }
+    if let Some(launched_with) = launched_with
+        && let Err(error) = task_store(state)?.record_worker_launch_model(
+            worker_id,
+            session_id,
+            launched_with.as_deref(),
+            crate::unix_timestamp(),
+        )
+    {
+        // Unrecorded reads as "not on the Hive's model", the honest direction.
+        tracing::warn!(%error, "could not record the model this worker started with");
     }
     forget_worker_failure(state, worker_id).await;
     state.control_room_notify.notify_waiters();

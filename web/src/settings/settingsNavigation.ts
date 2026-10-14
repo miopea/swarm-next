@@ -57,6 +57,8 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["queen", "autonomy", "ceiling", "coordinate", "night watch", "review", "automation"] },
   { id: "settings-check-gate", section: "settings-workers", title: "Check gate",
     keywords: ["check gate", "ci", "checks", "github", "actions", "strictness", "require", "passing", "done", "close", "review"] },
+  { id: "settings-worker-model", section: "settings-workers", title: "Worker model",
+    keywords: ["worker model", "model", "opus", "sonnet", "haiku", "claude", "cost", "cheaper"] },
   { id: "settings-answers", section: "settings-hive", title: "Terminal answers",
     keywords: ["terminal answers", "needs you", "native", "answer", "resolve", "decision", "terminal", "kill switch", "off"] },
   { id: "settings-presence", section: "settings-hive", title: "Presence",

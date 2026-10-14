@@ -237,9 +237,18 @@ level, its Settings show that tier locked, and leaving the Apiary lifts every
 requirement. Night Watch hours are the fourth: each member runs the Keeper's
 hours in its own time zone, and a member with no time zone is shown as waiting
 on its operator rather than told to update. Check strictness is the fifth, as
-the check gate (ADR 0115). Engine updates already apply when idle on every
-packaged Hive. Two more settings ruled on 2026-10-12 await enforcement: worker
-model and terminal history retention.
+the check gate (ADR 0115). Worker model is the sixth (ADR 0116). Engine updates
+already apply when idle on every packaged Hive. One more setting ruled on
+2026-10-12 awaits enforcement: terminal history retention.
+
+Worker model (ADR 0116, 2026-10-14): a Hive names one Claude model for its
+repository workers: Claude's default, Opus, Sonnet or Haiku.
+- It reaches each worker at its next start, through the settings file the
+  terminal host already launches from. Nothing is restarted for it.
+- Queen keeps her own Sonnet default, and Codex workers are not affected.
+- The settings card says how many running workers are still on another model.
+- A Keeper can require the model, and its roster shows a member whose workers
+  have not all started on it yet.
 
 Check gate (ADR 0115, 2026-10-13): a Hive can hold work to its CI. The levels
 are off, warn and require.

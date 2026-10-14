@@ -277,6 +277,7 @@ mod tests {
             memory: ResourcePressure::Normal,
             stuck_workers,
             ci_unreadable: None,
+            workers_off_model: None,
         }
     }
 

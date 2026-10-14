@@ -32,8 +32,9 @@ use swarm_application::{
 };
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
-    HiveId, JiraProjectBindingId, QueenActionClass, QueenAutomationOutcome, QueenAutomationState,
-    TaskId, TaskPriority, TaskState, WorkerId, WorkerMessagePurpose, WorkerRole,
+    HiveId, JiraProjectBindingId, LaunchModelChange, QueenActionClass, QueenAutomationOutcome,
+    QueenAutomationState, TaskId, TaskPriority, TaskState, WorkerId, WorkerMessagePurpose,
+    WorkerRole, launch_model_change,
 };
 use swarm_persistence::{
     CompletionEvidence, JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish,
@@ -189,6 +190,90 @@ impl AgentBridge {
             .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
         write_private_atomic(&path, &payload)?;
         Ok(if allow.is_empty() { None } else { Some(path) })
+    }
+
+    /// Puts the Hive's worker model beside a repository worker's config before
+    /// it starts (ADR 0116), and returns the model that start will carry.
+    ///
+    /// This writer owns the `model` key and nothing else, as the grants writer
+    /// owns `permissions`, and it runs after that one on every Claude start.
+    /// Queen is left alone: she keeps her own default (decision 01a13bc9).
+    ///
+    /// ⚠️ THE ANSWER IS READ BACK FROM THE FILE, never taken from what was meant
+    /// to be written. The host launches with whatever the file names, so that
+    /// is the only thing worth recording about the session.
+    ///
+    /// # Errors
+    /// Returns an error when the setting cannot be read or recorded, or the
+    /// file cannot be written privately.
+    pub fn apply_worker_model(
+        &self,
+        worker_id: WorkerId,
+        role: WorkerRole,
+    ) -> Result<Option<String>, AgentBridgeError> {
+        let path = self.worker_settings_path(worker_id);
+        if role == WorkerRole::Worker {
+            let store = self.tasks.store();
+            let hive = store.worker_model()?.model;
+            let mut document = match std::fs::read_to_string(&path) {
+                Ok(contents) => {
+                    serde_json::from_str::<Value>(&contents).unwrap_or_else(|_| json!({}))
+                }
+                Err(_) => json!({}),
+            };
+            // The grants writer has just made this an object. One that still is
+            // not is somebody's file to fix, and is left exactly as it is.
+            if let Some(object) = document.as_object_mut() {
+                let in_file = object
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let wrote = store.worker_model_written(worker_id)?;
+                match launch_model_change(hive, in_file.as_deref(), wrote.as_deref()) {
+                    LaunchModelChange::Write(model) => {
+                        // Claimed before it is written: a claim whose write then
+                        // fails is rewritten at the next start, while a write
+                        // nobody claimed would read as a hand edit for good.
+                        store.record_worker_model_written(worker_id, Some(model))?;
+                        object.insert("model".to_owned(), json!(model));
+                        std::fs::create_dir_all(self.config_root.as_ref())?;
+                        set_private_directory(self.config_root.as_ref())?;
+                        let payload = serde_json::to_vec_pretty(&document)
+                            .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
+                        write_private_atomic(&path, &payload)?;
+                    }
+                    LaunchModelChange::Remove => {
+                        object.remove("model");
+                        if object.is_empty() {
+                            if let Err(error) = std::fs::remove_file(&path)
+                                && error.kind() != std::io::ErrorKind::NotFound
+                            {
+                                return Err(AgentBridgeError::from(error));
+                            }
+                        } else {
+                            let payload =
+                                serde_json::to_vec_pretty(&document).map_err(|error| {
+                                    AgentBridgeError::Io(std::io::Error::other(error))
+                                })?;
+                            write_private_atomic(&path, &payload)?;
+                        }
+                        store.record_worker_model_written(worker_id, None)?;
+                    }
+                    LaunchModelChange::Leave => {}
+                }
+            }
+        }
+        Ok(self.worker_model_in_file(worker_id))
+    }
+
+    /// The model this worker's settings file names, as the terminal host reads
+    /// it at launch: trimmed, and absent when empty.
+    #[must_use]
+    pub fn worker_model_in_file(&self, worker_id: WorkerId) -> Option<String> {
+        let contents = std::fs::read_to_string(self.worker_settings_path(worker_id)).ok()?;
+        let document = serde_json::from_str::<Value>(&contents).ok()?;
+        let model = document.get("model")?.as_str()?.trim();
+        (!model.is_empty()).then(|| model.to_owned())
     }
 
     /// Where this worker's granted-command settings live.
@@ -4757,7 +4842,9 @@ mod tests {
     use axum::body::to_bytes;
     use axum::{Json, Router, routing::get};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use swarm_domain::{JiraProjectScope, JiraStatusMapping, ProviderKind, SharedWorkBackend};
+    use swarm_domain::{
+        JiraProjectScope, JiraStatusMapping, ProviderKind, SharedWorkBackend, WorkerModel,
+    };
     use swarm_persistence::JiraProjectBindingInput;
     use tempfile::tempdir;
 
@@ -5749,6 +5836,77 @@ mod tests {
         .unwrap();
         assert_eq!(settings["model"], "opus", "an explicit choice survives");
         assert_eq!(settings["keep"], "mine", "and so does everything beside it");
+    }
+
+    /// ⚠️ THE OPERATOR'S RULINGS (decision 01a13bc9) AT THE FILE THE HOST
+    /// LAUNCHES FROM: one model for every repository worker, written over a hand
+    /// edit; Queen kept on her own default; and back to Claude's default takes
+    /// out only what Swarm put there. Run in `start_worker`'s order, grants first.
+    #[test]
+    fn the_hives_worker_model_reaches_repository_workers_and_never_queen() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let start = |id: WorkerId, role: WorkerRole| {
+            bridge.ensure_worker_config(id).unwrap();
+            bridge.ensure_worker_settings(id).unwrap();
+            bridge.apply_worker_model(id, role).unwrap()
+        };
+        let file = |id: WorkerId| -> serde_json::Value {
+            std::fs::read_to_string(bridge.worker_settings_path(id)).map_or_else(
+                |_| json!(null),
+                |contents| serde_json::from_str(&contents).unwrap(),
+            )
+        };
+
+        // Claude's default: nothing is written, exactly as before the setting.
+        assert_eq!(start(worker_id, WorkerRole::Worker), None);
+        assert!(!bridge.worker_settings_path(worker_id).exists());
+
+        store.set_worker_model(WorkerModel::Haiku, 10).unwrap();
+        assert_eq!(
+            start(worker_id, WorkerRole::Worker).as_deref(),
+            Some("haiku")
+        );
+        assert_eq!(
+            start(queen_id, WorkerRole::Queen).as_deref(),
+            Some("sonnet"),
+            "Queen keeps her own default"
+        );
+
+        // A hand edit gives way: one model for all.
+        std::fs::write(
+            bridge.worker_settings_path(worker_id),
+            serde_json::to_vec_pretty(&json!({ "model": "opus", "keep": "mine" })).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            start(worker_id, WorkerRole::Worker).as_deref(),
+            Some("haiku")
+        );
+        assert_eq!(
+            file(worker_id)["keep"],
+            "mine",
+            "only the model key is Swarm's"
+        );
+
+        // Back to Claude's default: Swarm's own value comes out.
+        store.set_worker_model(WorkerModel::Default, 20).unwrap();
+        assert_eq!(start(worker_id, WorkerRole::Worker), None);
+        assert_eq!(file(worker_id), json!({ "keep": "mine" }));
+
+        // A model somebody wrote by hand while the Hive named none stays.
+        std::fs::write(
+            bridge.worker_settings_path(worker_id),
+            serde_json::to_vec_pretty(&json!({ "model": "opus" })).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            start(worker_id, WorkerRole::Worker).as_deref(),
+            Some("opus")
+        );
+        assert_eq!(
+            start(queen_id, WorkerRole::Queen).as_deref(),
+            Some("sonnet")
+        );
     }
 
     fn setup() -> (

@@ -146,6 +146,12 @@ impl TaskStore {
             "DELETE FROM worker_engagements WHERE session_id = ?1",
             [previous.to_string()],
         )?;
+        // The host relaunched from the same settings file, so the successor
+        // started on whatever model its parent did (ADR 0116).
+        tx.execute(
+            "UPDATE worker_model_launches SET session_id = ?2 WHERE session_id = ?1",
+            params![previous.to_string(), successor.to_string()],
+        )?;
         tx.execute("UPDATE worker_startup_context SET session_id = ?2, status = 'pending',
                     outcome = NULL, selection_revision = 0, selection_suspended = 0 WHERE worker_id = ?1",
             params![worker, successor.to_string()])?;

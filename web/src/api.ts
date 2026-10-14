@@ -1730,6 +1730,7 @@ export type HiveCondition =
   | { kind: "short_of_memory" }
   | { kind: "workers_stuck"; count: number }
   | { kind: "ci_unreadable"; why: string }
+  | { kind: "workers_off_model"; count: number; model: WorkerModel }
   | { kind: "engine_update_pending" };
 
 /** A member Hive with something wrong, worst first. A healthy Hive is absent. */
@@ -2690,6 +2691,28 @@ export async function setCheckGate(operatorToken: string, level: CheckGateLevel)
     body: JSON.stringify({ level }),
   });
   return response.json() as Promise<CheckGate>;
+}
+
+/** The model a Hive's Claude repository workers start with (ADR 0116). "default" names none. */
+export type WorkerModel = "default" | "opus" | "sonnet" | "haiku";
+/**
+ * The worker model in effect, the one this Hive's Apiary sets, if any (that one is locked here),
+ * and how many running workers started on another model and keep it until they next start.
+ */
+export type WorkerModelSetting = { model: WorkerModel; set_by_apiary: WorkerModel | null; workers_short: number };
+
+export async function fetchWorkerModel(operatorToken: string, signal?: AbortSignal): Promise<WorkerModelSetting> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/worker-model", { signal });
+  return response.json() as Promise<WorkerModelSetting>;
+}
+
+export async function setWorkerModel(operatorToken: string, model: WorkerModel): Promise<WorkerModelSetting> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/worker-model", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  return response.json() as Promise<WorkerModelSetting>;
 }
 
 export async function fetchTaskCi(operatorToken: string, taskId: string, signal?: AbortSignal): Promise<TaskCi> {

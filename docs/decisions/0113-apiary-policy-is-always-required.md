@@ -72,7 +72,7 @@ These stay refused in code, as before, and requiring is no exception:
   - Queen autonomy (built, see the 2026-10-13 addendum);
   - Night Watch schedule (built, see the 2026-10-13 Night Watch addendum);
   - terminal history retention;
-  - worker model.
+  - worker model (built, ADR 0116).
 
   Until then they are absent from `RequiredSetting`, so they cannot be required
   and nothing pretends otherwise.
@@ -200,3 +200,11 @@ member applies it where the level is read and refuses a local change with 409
 `set_by_apiary`. The GitHub login it reads CI with stays its own. A member that
 cannot read CI at all says so in its health report, and the roster shows it.
 
+## Addendum 2026-10-14: worker model, as `worker.model`
+
+Worker model had nothing to lock until ADR 0116 gave a Hive one model for its
+Claude repository workers. The Keeper now requires it as `worker.model`:
+`default`, `opus`, `sonnet` or `haiku`. The member applies it at each worker's
+next start and refuses a local change with 409 `set_by_apiary`. Queen keeps her
+own default. Nothing is restarted for it. A member that still has workers on
+another model says how many in its health report, and the roster shows it.

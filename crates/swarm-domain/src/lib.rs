@@ -43,6 +43,7 @@ mod task_prerequisites;
 mod tasks;
 mod terminal_control;
 mod version;
+mod worker_model;
 mod workers;
 
 pub use apiary::*;
@@ -86,6 +87,7 @@ pub use task_prerequisites::*;
 pub use tasks::*;
 pub use terminal_control::*;
 pub use version::{DevelopmentBuild, SwarmVersion};
+pub use worker_model::*;
 pub use workers::*;
 
 macro_rules! domain_id {

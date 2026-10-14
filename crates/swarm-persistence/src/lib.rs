@@ -41,6 +41,8 @@ mod hive_usage;
 pub use hive_usage::StoredHiveUsage;
 mod check_gate;
 pub use check_gate::{CheckGateSetting, CiCandidate};
+mod worker_model;
+pub use worker_model::WorkerModelSetting;
 mod provider_usage;
 mod queen_recovery;
 mod queen_review;
@@ -380,7 +382,10 @@ const HIVE_HEALTH_SCHEMA_MARKER: i64 = 198;
 const HIVE_USAGE_SCHEMA_MARKER: i64 = 199;
 /// A Hive's check gate level, and CI as last read for each task (ADR 0115).
 const CHECK_GATE_SCHEMA_MARKER: i64 = 200;
-const CURRENT_SCHEMA_VERSION: i64 = CHECK_GATE_SCHEMA_MARKER;
+/// The model a Hive's repository workers start with, and the model each
+/// worker's session started with (ADR 0116).
+const WORKER_MODEL_SCHEMA_MARKER: i64 = 201;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_MODEL_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4754,6 +4759,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < CHECK_GATE_SCHEMA_MARKER {
         crate::check_gate::migrate_check_gate(transaction)?;
+    }
+    if schema_version < WORKER_MODEL_SCHEMA_MARKER {
+        crate::worker_model::migrate_worker_model(transaction)?;
     }
     Ok(())
 }
@@ -10732,6 +10740,15 @@ mod tests {
                        DROP TABLE task_ci_observations;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN
                         ('check_gate_settings', 'task_ci_observations')",
+        },
+        // The worker model (ADR 0116): a Hive's choice, and each launch.
+        SchemaStep {
+            table: "worker_model_settings",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_model_settings;
+                       DROP TABLE worker_model_launches;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN
+                        ('worker_model_settings', 'worker_model_launches')",
         },
     ];
 

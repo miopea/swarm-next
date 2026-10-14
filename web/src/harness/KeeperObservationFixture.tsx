@@ -31,6 +31,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             ...(["at_hive", "away", "night_watch"] as const).map((tier) => ({ key: `queen.autonomy.${tier}`, kind: "choice", values: ["advisory", "coordinate", "local_execution"] })),
             { key: "night_watch.hours", kind: "hours", values: [] },
             { key: "checks.gate", kind: "choice", values: ["off", "warn", "require"] },
+            { key: "worker.model", kind: "choice", values: ["default", "opus", "sonnet", "haiku"] },
           ],
         }
         // Thistle's release is too old for either; the others comply and say nothing.
@@ -42,6 +43,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             { kind: "low_disk", lowest_available_bytes: 1_610_612_736, critical: false },
             { kind: "engine_update_pending" },
             { kind: "ci_unreadable", why: "gh is not logged in on this machine" },
+            { kind: "workers_off_model", count: 2, model: "sonnet" },
           ] },
           { hive_id: "thistle", conditions: [{ kind: "quiet", last_contact_at: now - 3 * 86_400 }, { kind: "schema_behind", running: "1.11.0" }] },
         ]

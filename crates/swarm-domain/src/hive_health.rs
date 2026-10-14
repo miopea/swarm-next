@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FederationSyncCondition, ResourcePressure, VersionStanding};
+use crate::{FederationSyncCondition, ResourcePressure, VersionStanding, WorkerModel};
 
 /// The report's shape. A Keeper refuses one it does not know rather than
 /// guessing at it.
@@ -47,6 +47,20 @@ pub struct HiveHealthReport {
     /// fault, so an older member and an older Keeper both read on unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci_unreadable: Option<String>,
+    /// Workers still running on another model than the Hive's worker model,
+    /// which they keep until they next start (ADR 0116). Absent when there are
+    /// none, and from releases before the setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers_off_model: Option<WorkersOffModel>,
+}
+
+/// Running Claude repository workers that started on another model than the
+/// one their Hive names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkersOffModel {
+    pub count: u32,
+    /// The model they switch to when they next start.
+    pub model: WorkerModel,
 }
 
 /// The member's Apiary sync, as it last recorded it.
@@ -108,6 +122,12 @@ impl HiveHealthReport {
         {
             return Err("the CI reason is empty or too long");
         }
+        if self
+            .workers_off_model
+            .is_some_and(|off| off.count == 0 || off.model.alias().is_none())
+        {
+            return Err("workers off the model must name a model and at least one worker");
+        }
         Ok(())
     }
 }
@@ -152,6 +172,13 @@ pub enum HiveCondition {
     CiUnreadable {
         why: String,
     },
+    /// Running workers that started on another model than the one the Hive
+    /// names; each switches when it next starts (ADR 0116). Never a remote
+    /// restart, so the fix is its operator's.
+    WorkersOffModel {
+        count: u32,
+        model: WorkerModel,
+    },
     /// A newer engine is waiting; it swaps by itself once workers are idle.
     EngineUpdatePending,
 }
@@ -186,6 +213,7 @@ impl HiveCondition {
             Self::ShortOfMemory => "short_of_memory",
             Self::WorkersStuck { .. } => "workers_stuck",
             Self::CiUnreadable { .. } => "ci_unreadable",
+            Self::WorkersOffModel { .. } => "workers_off_model",
             Self::EngineUpdatePending => "engine_update_pending",
         }
     }
@@ -274,6 +302,12 @@ pub fn hive_conditions(evidence: &HiveHealthEvidence<'_>, now: i64) -> Vec<HiveC
     if let Some(why) = &health.ci_unreadable {
         found.push(HiveCondition::CiUnreadable { why: why.clone() });
     }
+    if let Some(off) = health.workers_off_model {
+        found.push(HiveCondition::WorkersOffModel {
+            count: off.count,
+            model: off.model,
+        });
+    }
     if health.engine.update_pending && !engine_failing {
         found.push(HiveCondition::EngineUpdatePending);
     }
@@ -313,6 +347,7 @@ mod tests {
             memory: ResourcePressure::Normal,
             stuck_workers: 0,
             ci_unreadable: None,
+            workers_off_model: None,
         }
     }
 
@@ -500,5 +535,62 @@ mod tests {
             .validate(),
             Err("the CI reason is empty or too long")
         );
+    }
+
+    /// A member whose workers have not all started on the Hive's model says
+    /// how many, and the field travels both ways between releases (ADR 0116).
+    #[test]
+    fn workers_off_the_model_are_counted_and_older_reports_still_read() {
+        let report = HiveHealthReport {
+            workers_off_model: Some(WorkersOffModel {
+                count: 2,
+                model: WorkerModel::Sonnet,
+            }),
+            ..healthy()
+        };
+        assert_eq!(
+            hive_conditions(&evidence(&report), NOW),
+            vec![HiveCondition::WorkersOffModel {
+                count: 2,
+                model: WorkerModel::Sonnet
+            }]
+        );
+        assert!(
+            !HiveCondition::WorkersOffModel {
+                count: 2,
+                model: WorkerModel::Sonnet
+            }
+            .pushes(),
+            "they switch by themselves when they next start"
+        );
+        assert_eq!(
+            serde_json::to_value(&hive_conditions(&evidence(&report), NOW)[0]).unwrap(),
+            serde_json::json!({ "kind": "workers_off_model", "count": 2, "model": "sonnet" })
+        );
+
+        let mut older = serde_json::to_value(healthy()).unwrap();
+        assert!(older.get("workers_off_model").is_none(), "absent, not null");
+        older.as_object_mut().unwrap().remove("workers_off_model");
+        let read: HiveHealthReport = serde_json::from_value(older).unwrap();
+        assert_eq!(read.workers_off_model, None);
+        for nonsense in [
+            WorkersOffModel {
+                count: 0,
+                model: WorkerModel::Sonnet,
+            },
+            WorkersOffModel {
+                count: 1,
+                model: WorkerModel::Default,
+            },
+        ] {
+            assert!(
+                HiveHealthReport {
+                    workers_off_model: Some(nonsense),
+                    ..healthy()
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 }

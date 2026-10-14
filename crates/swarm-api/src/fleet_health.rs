@@ -151,6 +151,12 @@ async fn derive_health_report(state: &AppState, store: &TaskStore, now: i64) -> 
         memory: crate::runtime::memory_pressure_now(),
         stuck_workers: stuck_workers(store, now),
         ci_unreadable: store.hive_wide_ci_problem().ok().flatten(),
+        workers_off_model: store.worker_model().ok().and_then(|setting| {
+            (setting.workers_short > 0).then_some(swarm_domain::WorkersOffModel {
+                count: setting.workers_short,
+                model: setting.model,
+            })
+        }),
     }
 }
 

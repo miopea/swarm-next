@@ -1,4 +1,5 @@
 import type { HiveCondition } from "../api";
+import { WORKER_MODEL_LABELS } from "../settings/workerModelLabels";
 
 /**
  * What each condition on a member Hive reads as, and what to do about it
@@ -30,6 +31,10 @@ export function conditionText(condition: HiveCondition, nowSeconds: number): { s
       next: "Watch it to see where they stopped",
     };
     case "ci_unreadable": return { status: `Can't read CI: ${condition.why}`, next: "Work it closes goes unchecked; ask its operator to log gh in" };
+    case "workers_off_model": return {
+      status: `${condition.count} ${condition.count === 1 ? "worker" : "workers"} not yet on ${WORKER_MODEL_LABELS[condition.model]}`,
+      next: "Each switches when it next starts; its operator can restart them sooner",
+    };
     case "engine_update_pending": return { status: "Engine update pending", next: "It swaps by itself once its workers are idle" };
   }
 }

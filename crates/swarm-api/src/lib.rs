@@ -78,6 +78,7 @@ mod terminal_socket;
 mod tunnel;
 mod unprompted_engine_updates;
 mod worker_description_ai;
+mod worker_model_routes;
 mod worker_runtime;
 mod workers;
 
@@ -4817,6 +4818,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/runtime/check-gate",
             get(check_gate_routes::check_gate).put(check_gate_routes::set_check_gate),
+        )
+        .route(
+            "/api/v1/runtime/worker-model",
+            get(worker_model_routes::worker_model).put(worker_model_routes::set_worker_model),
         )
         .route("/api/v1/runtime/release/check", post(release::check_now))
         .route("/api/v1/runtime/release/notes", get(release::notes))
@@ -15056,6 +15061,55 @@ mod tests {
         observe(CiOutcome::Passed);
         assert_eq!(close(app).await.status(), StatusCode::OK);
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+    }
+
+    /// ⚠️ ADR 0113 for the worker model (ADR 0116): a model the Keeper sets is
+    /// the member's, locked, and its own choice comes back when the Keeper
+    /// stops setting one.
+    #[tokio::test]
+    async fn a_required_worker_model_is_locked_on_the_member() {
+        let now = unix_timestamp();
+        let hive = NightWatchMember::joined(now);
+        let chosen = send_json(
+            hive.app.clone(),
+            "PUT",
+            "/api/v1/runtime/worker-model",
+            serde_json::json!({ "model": "opus" }),
+        )
+        .await;
+        assert_eq!(chosen.status(), StatusCode::OK);
+        let required = swarm_domain::ApiaryPolicySetting {
+            key: "worker.model".to_owned(),
+            value: "sonnet".to_owned(),
+        };
+        hive.require(std::slice::from_ref(&required), now);
+
+        let shown =
+            response_json(authorized_get(hive.app.clone(), "/api/v1/runtime/worker-model").await)
+                .await;
+        assert_eq!(
+            shown,
+            serde_json::json!({ "model": "sonnet", "set_by_apiary": "sonnet", "workers_short": 0 })
+        );
+        let refused = send_json(
+            hive.app.clone(),
+            "PUT",
+            "/api/v1/runtime/worker-model",
+            serde_json::json!({ "model": "haiku" }),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(refused).await["code"], "set_by_apiary");
+        assert_eq!(hive.member.local_policy_settings().unwrap(), vec![required]);
+
+        hive.require(&[], now + 1);
+        let lifted =
+            response_json(authorized_get(hive.app.clone(), "/api/v1/runtime/worker-model").await)
+                .await;
+        assert_eq!(
+            lifted,
+            serde_json::json!({ "model": "opus", "set_by_apiary": null, "workers_short": 0 })
+        );
     }
 
     /// The Keeper sets a member's check gate like any other required setting:

@@ -44,7 +44,7 @@ allowed to execute.
 its value. What the Keeper sees is a Hive's policy state only when a setting is
 not in effect, with the reason.
 
-**Built so far (ADR 0113):** the control system end to end, with three settings:
+**Built so far (ADR 0113):** the control system end to end, with these settings:
 - `release.auto_install`, applied by each member;
 - `shared_work.minimum_version`, enforced by the Keeper, because a Hive below it
   is too old to know it exists;
@@ -53,11 +53,13 @@ not in effect, with the reason.
 - `night_watch.hours`, the Keeper's daily hours applied by each member in its
   own time zone;
 - `checks.gate`, check strictness: whether CI must pass on a task's commits
-  before the work counts as done (ADR 0115).
+  before the work counts as done (ADR 0115);
+- `worker.model`, the Claude model every member's repository workers start with
+  (ADR 0116).
 
 Engine updates already apply when idle on every packaged Hive, so there is
-nothing to require. Worker model and terminal history retention each need a Hive
-setting built before they can be required.
+nothing to require. Terminal history retention needs a Hive setting built before
+it can be required.
 
 ## Fleet health
 

@@ -1,5 +1,6 @@
 import type { PolicyGap } from "../api";
 import { queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
+import { WORKER_MODEL_LABELS } from "../settings/workerModelLabels";
 
 /**
  * What each requirable setting is called on screen, and what its values mean.
@@ -20,6 +21,10 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
   "checks.gate": {
     name: "Check gate",
     values: { off: "Off", warn: "Show CI", require: "Require passing CI" },
+  },
+  "worker.model": {
+    name: "Worker model",
+    values: WORKER_MODEL_LABELS,
   },
   "night_watch.hours": {
     name: "Night Watch hours",

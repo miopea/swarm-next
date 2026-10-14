@@ -89,6 +89,11 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
     const locked = new URLSearchParams(window.location.search).get("checkGate") === "locked";
     return { level: "require", set_by_apiary: locked ? "require" : null };
   }
+  // ?workerModel=locked is a member whose Apiary sets the worker model (ADR 0116).
+  if (path === "/api/v1/runtime/worker-model") {
+    const locked = new URLSearchParams(window.location.search).get("workerModel") === "locked";
+    return { model: "sonnet", set_by_apiary: locked ? "sonnet" : null, workers_short: 3 };
+  }
   // The board's review task failed CI; anything else waiting on review passed.
   if (path.startsWith("/api/v1/tasks/") && path.endsWith("/ci")) {
     const failed = path.includes("0199bbbb-0000-7000-8000-000000000004");
