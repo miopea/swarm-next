@@ -79,6 +79,9 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
           { key: "night_watch.hours", expected: "22:00-07:00", reason: "release_cannot_apply" },
         ] }, { hive_id: "clover", gaps: [
           { key: "night_watch.hours", expected: "22:00-07:00", reason: "needs_local_choice" },
+        ] }, { hive_id: "bramble", gaps: [
+          // Hidden behind its expired membership, which is the cause (ADR 0117).
+          { key: "release.auto_install", expected: "on", reason: "not_reported" },
         ] }]
         : url.endsWith("/required-settings") ? {
           settings: [{ key: "release.auto_install", value: "on" }, { key: "shared_work.minimum_version", value: "1.16.10" }, { key: "queen.autonomy.night_watch", value: "advisory" }, { key: "night_watch.hours", value: "22:00-07:00" }],
@@ -117,7 +120,11 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             // Silent for days while still listing the release it last reported —
             // how a Hive already updated went on reading as behind.
             { hive_id: "thistle", hive_name: "Thistle Hive", operator_id: "operator-3", operator_display_name: "Wren", operator_email: "wren@example.invalid", role: "member", is_local: false, last_contact_at: now - 3 * 86_400 },
-            { hive_id: "heather", hive_name: "Heather Hive", operator_id: "operator-4", operator_display_name: "Fen", role: "member", is_local: false },
+            // Its membership lapses in eight days and it has not renewed (ADR 0117).
+            { hive_id: "heather", hive_name: "Heather Hive", operator_id: "operator-4", operator_display_name: "Fen", role: "member", is_local: false, credential_expires_at: now + 8 * 86_400 },
+            // Joined, never reached the Keeper, and its membership expired: the
+            // roster used to say only that it "hasn't reported".
+            { hive_id: "bramble", hive_name: "Bramble Hive", operator_id: "operator-5", operator_display_name: "Rue", operator_email: "rue@example.invalid", role: "member", is_local: false, credential_expires_at: now - 3 * 86_400 },
           ]
         : url.endsWith("/fleet-versions")
         ? {

@@ -247,6 +247,25 @@ impl FederationHttpClient {
         .map(|_| ())
     }
 
+    /// Trades this member's credential for a fresh one and the membership
+    /// receipt re-signed to match (ADR 0117). Retry-stable: asking again with
+    /// the replaced credential returns the same renewal.
+    ///
+    /// # Errors
+    /// Returns typed bounded transport/protocol errors; no implicit retries.
+    pub async fn renew_membership(
+        &self,
+        credential: &str,
+    ) -> Result<swarm_domain::FederationJoinAcceptance, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::POST,
+            "api/v1/federation/membership/renewal",
+            Some(credential),
+            None,
+        )
+        .await
+    }
+
     /// Sends a batch of this Hive's own log lines to its Keeper (ADR 0112).
     ///
     /// # Errors
@@ -1546,6 +1565,7 @@ mod tests {
                     member_operator_id: submission.payload.invited_operator_id,
                     joined_at: 1_001,
                     credential_expires_at: 2_000,
+                    credential_issued_at: None,
                 },
                 signature: "keeper-signature".into(),
             },

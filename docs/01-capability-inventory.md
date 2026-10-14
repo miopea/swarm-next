@@ -263,6 +263,14 @@ are off, warn and require.
 - A Keeper can require the level, and sees on its roster a member that cannot
   read CI at all.
 
+Membership renewal (ADR 0117, 2026-10-14): a member's credential renews on its
+own sync pass from fifteen days before expiry.
+- Until then every member fell out of its Apiary thirty days after joining.
+- A lost renewal response is retried with the old credential.
+- An expired member may renew for sixty days unless its Keeper removed it.
+- The roster says when a membership expired or is about to, not that the Hive
+  "hasn't reported".
+
 Fleet health (ADR 0114, 2026-10-12): each member sends its Keeper a bounded,
 content-free health report on its own channel, before the sync gates. It covers
 sync condition and failed step, worker engine, disk, memory and stuck workers.

@@ -35,7 +35,7 @@ pub const MAX_ACTIVE_APIARY_JOIN_LINKS: usize = 16;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 5 * 60;
 const MAX_KEEPER_ENDPOINT_BYTES: usize = 2_048;
 const MAX_PROMOTED_PROJECTS_PER_INVITATION: usize = 1_000;
-const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
+pub(crate) const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 const FEDERATION_CATALOG_LIFETIME_SECONDS: i64 = 5 * 60;
 const FEDERATION_CLAIM_RESERVATION_SECONDS: i64 = 2 * 60;
 const MAX_ACTIVE_FEDERATION_CLAIMS: usize = 1_000;
@@ -2954,7 +2954,7 @@ fn bearer_secret_material() -> Result<([u8; 32], String), TaskStoreError> {
     Ok((secret, encoded))
 }
 
-fn node_credential_material() -> Result<([u8; 32], String), TaskStoreError> {
+pub(crate) fn node_credential_material() -> Result<([u8; 32], String), TaskStoreError> {
     let mut credential = [0_u8; 32];
     getrandom::fill(&mut credential).map_err(|_| TaskStoreError::FederationEntropyUnavailable)?;
     let encoded = Base64UrlUnpadded::encode_string(&credential);
@@ -2967,7 +2967,7 @@ fn canonical_join_submission_payload(
     serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
 }
 
-fn canonical_membership_receipt_payload(
+pub(crate) fn canonical_membership_receipt_payload(
     payload: &FederationMembershipReceiptPayload,
 ) -> Result<Vec<u8>, TaskStoreError> {
     serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
@@ -3694,6 +3694,7 @@ fn register_federation_membership(
         member_operator_id: payload.invited_operator_id,
         joined_at: now,
         credential_expires_at,
+        credential_issued_at: None,
     };
     let receipt_signature = local_node
         .signing_key
@@ -4024,7 +4025,7 @@ fn federation_join_invitation(
     }
 }
 
-fn invitation_secret_digest(secret: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn invitation_secret_digest(secret: &[u8; 32]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"swarm-next.apiary-invitation-secret.v1\0");
     digest.update(secret);
@@ -4147,6 +4148,9 @@ pub fn verify_federation_membership_receipt(
     now: i64,
 ) -> Result<(), TaskStoreError> {
     let payload = &receipt.payload;
+    // A renewed credential's lifetime runs from when it was issued, not from
+    // the day the member joined (ADR 0117).
+    let issued_at = payload.credential_issued_at.unwrap_or(payload.joined_at);
     if now < 0
         || payload.schema_version != FEDERATION_MEMBERSHIP_SCHEMA_VERSION
         || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
@@ -4154,10 +4158,11 @@ pub fn verify_federation_membership_receipt(
         || payload.policy_revision == 0
         || payload.joined_at < 0
         || payload.joined_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+        || issued_at < payload.joined_at
+        || issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
         || payload.credential_expires_at <= now
-        || payload.credential_expires_at <= payload.joined_at
-        || payload.credential_expires_at - payload.joined_at
-            > FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS
+        || payload.credential_expires_at <= issued_at
+        || payload.credential_expires_at - issued_at > FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS
     {
         return Err(TaskStoreError::InvalidFederationInvitation);
     }
@@ -4751,7 +4756,7 @@ pub(super) fn migrate_federation_departures(
     )
 }
 
-fn federation_column_exists(
+pub(crate) fn federation_column_exists(
     transaction: &rusqlite::Transaction<'_>,
     table: &str,
     column: &str,

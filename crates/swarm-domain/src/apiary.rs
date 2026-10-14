@@ -1419,6 +1419,15 @@ pub struct FederationMembershipReceiptPayload {
     pub member_operator_id: OperatorId,
     pub joined_at: i64,
     pub credential_expires_at: i64,
+    /// When the credential this receipt carries was issued, on a renewal (ADR
+    /// 0117). Absent on the receipt a member gets when it joins, where it is
+    /// `joined_at`.
+    ///
+    /// ⚠️ LAST, AND SKIPPED WHEN ABSENT. The signature covers this payload's
+    /// plain JSON, so a receipt issued before renewal existed must serialise to
+    /// exactly the bytes it was signed as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_issued_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1827,6 +1836,12 @@ pub struct ApiaryMemberSummary {
     /// exactly like one that had nothing to say.
     #[serde(default)]
     pub last_contact_at: Option<i64>,
+    /// When this member's credential expires, as the Keeper holds it (ADR
+    /// 0117). A member past it cannot sync until it renews, so the roster says
+    /// so rather than "hasn't reported". Absent where the reader is not the
+    /// Keeper, and for the Keeper itself.
+    #[serde(default)]
+    pub credential_expires_at: Option<i64>,
 }
 
 /// Public destination identity available to an authenticated Apiary member

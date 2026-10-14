@@ -1365,13 +1365,27 @@ impl AppState {
         if (!prompted || refused) && health.next_attempt_at.is_some_and(|next| next > now) {
             return;
         }
-        let connection = match service.federation_member_connection() {
+        let mut connection = match service.federation_member_connection() {
             Ok(connection) => connection,
             Err(error) => {
                 tracing::warn!(%error, "federation reconciliation could not load member transport");
                 return;
             }
         };
+        // ⚠️ RENEWED BEFORE IT IS JUDGED (ADR 0117). A credential lasts thirty
+        // days and nothing used to renew it, so every member fell silent a
+        // month after joining. Renewal comes before the expiry check below,
+        // because an expired credential may still renew within its grace period
+        // and nothing else will. A failure leaves the credential as it was and
+        // is tried again on the next pass.
+        if swarm_domain::membership_renewal_due(connection.credential_expires_at, now) {
+            match renew_federation_membership(&service, &connection, now).await {
+                Ok(renewed) => connection = renewed,
+                Err(error) => {
+                    tracing::warn!(%error, "this Hive's Apiary membership could not be renewed yet");
+                }
+            }
+        }
         if connection.credential_expires_at <= now {
             record_federation_failure(
                 &service,
@@ -4604,6 +4618,10 @@ fn api_router(state: AppState) -> Router {
             post(depart_federation_member),
         )
         .route(
+            "/api/v1/federation/membership/renewal",
+            post(renew_federation_member),
+        )
+        .route(
             "/api/v1/federation/stewardship",
             get(federation_stewardship),
         )
@@ -7133,6 +7151,19 @@ async fn depart_federation_member(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
+/// A member trading its credential for a fresh one before it lapses (ADR 0117).
+async fn renew_federation_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let renewal: swarm_domain::FederationJoinAcceptance = apiary_service(&state)?
+        .renew_remote_membership(credential, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(renewal)).into_response())
 }
 
 async fn federation_stewardship(
@@ -9667,6 +9698,27 @@ async fn reconcile_apiary_watches(
             .map_err(|_| "watch notices could not be saved".to_owned())?;
     }
     Ok(())
+}
+
+/// Trades this member's credential for a fresh one and keeps it (ADR 0117),
+/// returning the connection as it now stands.
+async fn renew_federation_membership(
+    service: &ApiaryService,
+    connection: &FederationMemberConnection,
+    now: i64,
+) -> Result<FederationMemberConnection, String> {
+    let client = federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+        .map_err(|error| error.to_string())?;
+    let renewal = client
+        .renew_membership(&connection.node_credential)
+        .await
+        .map_err(|error| error.to_string())?;
+    service
+        .apply_membership_renewal(&renewal, now)
+        .map_err(|error| error.to_string())?;
+    service
+        .federation_member_connection()
+        .map_err(|error| error.to_string())
 }
 
 async fn reconcile_apiary_policy(
@@ -13800,6 +13852,130 @@ mod tests {
             );
         tokio::spawn(async move { axum::serve(jira_listener, jira_server).await.unwrap() });
         jira_address
+    }
+
+    /// ⚠️ ADR 0117: A MEMBERSHIP OUTLIVES ITS FIRST CREDENTIAL. Before this,
+    /// every member fell out of its Apiary thirty days after joining and its
+    /// Keeper's roster said only that it had not reported.
+    #[test]
+    fn a_membership_renews_before_and_after_its_credential_lapses() {
+        const DAY: i64 = 86_400;
+        let joined = unix_timestamp() - 100 * DAY;
+        let (keeper, member, card) = keeper_and_candidate(joined);
+        let first = complete_join(&keeper, &member, &card, "https://keeper.invalid", joined);
+
+        // Twenty days in, the member renews for another thirty from now.
+        let at = joined + 20 * DAY;
+        let renewal = keeper.renew_federation_membership(&first, at).unwrap();
+        assert_eq!(renewal.receipt.payload.credential_issued_at, Some(at));
+        member
+            .apply_federation_membership_renewal(&renewal, at)
+            .unwrap();
+        let held = member.federation_member_connection().unwrap();
+        assert_ne!(held.node_credential, first);
+        assert_eq!(held.credential_expires_at, at + 30 * DAY);
+
+        // A lost response: the old credential asks again and gets the same
+        // renewal, and can do nothing else.
+        assert_eq!(
+            keeper.renew_federation_membership(&first, at + 60).unwrap(),
+            renewal
+        );
+        assert!(keeper.signed_apiary_policy(&first, at + 60).is_err());
+
+        // Past day thirty of the first credential, both sides still accept the
+        // renewed one: the Keeper's lookups and the member's own receipt check.
+        let later = joined + 40 * DAY;
+        let policy = keeper
+            .signed_apiary_policy(&held.node_credential, later)
+            .unwrap();
+        ApiaryService::new(member.clone())
+            .apply_apiary_policy(&policy, later)
+            .unwrap();
+        let directory = keeper
+            .signed_federation_directory(&held.node_credential, later)
+            .unwrap();
+        member
+            .apply_federation_directory(&directory, later)
+            .unwrap();
+
+        // Lapsed: it can renew within the grace period, and only renew.
+        let lapsed = held.credential_expires_at + 10 * DAY;
+        assert!(
+            keeper
+                .signed_apiary_policy(&held.node_credential, lapsed)
+                .is_err()
+        );
+        let back = keeper
+            .renew_federation_membership(&held.node_credential, lapsed)
+            .unwrap();
+        member
+            .apply_federation_membership_renewal(&back, lapsed)
+            .unwrap();
+        assert!(
+            member
+                .apply_federation_membership_renewal(&renewal, lapsed)
+                .is_err(),
+            "an older renewal never replaces a newer one"
+        );
+
+        // Past the grace period only a new invitation brings it back.
+        let current = member.federation_member_connection().unwrap();
+        assert!(
+            keeper
+                .renew_federation_membership(
+                    &current.node_credential,
+                    current.credential_expires_at + 60 * DAY,
+                )
+                .is_err()
+        );
+    }
+
+    /// A Keeper's Remove ends the grace period: a removed Hive cannot renew its
+    /// way back in (ADR 0108, ADR 0117).
+    #[test]
+    fn a_removed_member_cannot_renew() {
+        let joined = unix_timestamp() - 3_600;
+        let (keeper, member, card) = keeper_and_candidate(joined);
+        let credential = complete_join(&keeper, &member, &card, "https://keeper.invalid", joined);
+        keeper
+            .remove_apiary_member(card.payload.hive_id, joined + 60)
+            .unwrap();
+        assert!(
+            keeper
+                .renew_federation_membership(&credential, joined + 120)
+                .is_err()
+        );
+    }
+
+    /// The whole loop, as a member runs it: its own sync pass notices the
+    /// credential is in its last fortnight and renews it from a live Keeper.
+    #[tokio::test]
+    async fn a_members_own_sync_pass_renews_it_through_the_keeper() {
+        let now = unix_timestamp();
+        let joined = now - 20 * 86_400;
+        let (keeper, member, card) = keeper_and_candidate(joined);
+        let (endpoint, server) = start_keeper_join_test_server(keeper.clone()).await;
+        let first = complete_join(&keeper, &member, &card, &endpoint, joined);
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new("/unreachable/terminal.sock"),
+                "member-secret",
+            )
+            .with_task_store(member.clone());
+
+        state.reconcile_federation().await;
+
+        let held = member.federation_member_connection().unwrap();
+        assert_ne!(held.node_credential, first, "the pass renewed it");
+        assert!(held.credential_expires_at >= now + 29 * 86_400);
+        assert!(
+            keeper
+                .signed_apiary_policy(&held.node_credential, unix_timestamp())
+                .is_ok(),
+            "and the Keeper accepts what the member now holds"
+        );
+        server.abort();
     }
 
     async fn start_keeper_join_test_server(

@@ -1991,6 +1991,37 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Keeper: renews one member's credential and re-signs its membership
+    /// receipt (ADR 0117). Retry-stable: the replaced credential gets the same
+    /// renewal again.
+    ///
+    /// # Errors
+    /// Rejects unknown, removed, and past-grace credentials.
+    pub fn renew_remote_membership(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationJoinAcceptance, ApplicationError> {
+        self.store
+            .renew_federation_membership(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Member: keeps the credential and receipt its Keeper renewed (ADR 0117).
+    ///
+    /// # Errors
+    /// Rejects a renewal for another membership, or one that is unsigned or
+    /// lasts no longer than the credential held now.
+    pub fn apply_membership_renewal(
+        &self,
+        renewal: &FederationJoinAcceptance,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .apply_federation_membership_renewal(renewal, now)
+            .map_err(Into::into)
+    }
+
     /// Atomically ends one Keeper-side membership and returns its signed,
     /// retry-stable receipt.
     ///
@@ -2182,6 +2213,7 @@ impl ApiaryService {
                         is_local,
                         // A member reads the directory; only Keeper sees contact.
                         last_contact_at: None,
+                        credential_expires_at: None,
                     }
                 })
                 .collect());

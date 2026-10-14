@@ -77,6 +77,7 @@ mod federation_handoff_reconciliation;
 mod federation_handoffs;
 mod federation_jira_claims;
 mod federation_membership_epochs;
+mod federation_renewal;
 mod federation_steward_assists;
 mod federation_steward_takeovers;
 mod federation_steward_tasks;
@@ -385,7 +386,10 @@ const CHECK_GATE_SCHEMA_MARKER: i64 = 200;
 /// The model a Hive's repository workers start with, and the model each
 /// worker's session started with (ADR 0116).
 const WORKER_MODEL_SCHEMA_MARKER: i64 = 201;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_MODEL_SCHEMA_MARKER;
+/// A member's credential renews before it lapses: the Keeper keeps the one it
+/// replaced, and both sides let the credential and receipt change (ADR 0117).
+const MEMBERSHIP_RENEWAL_SCHEMA_MARKER: i64 = 202;
+const CURRENT_SCHEMA_VERSION: i64 = MEMBERSHIP_RENEWAL_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1412,7 +1416,7 @@ impl TaskStore {
             "SELECT h.id, h.name, o.id, o.display_name,
                     CASE WHEN h.id = ?3 THEN (SELECT contact_email FROM local_public_hive_profile WHERE singleton = 1)
                          ELSE json_extract(p.payload_json, '$.profile.contact_email') END,
-                    m.last_contact_at
+                    m.last_contact_at, m.credential_expires_at
              FROM hives h
              JOIN operators o ON o.id = h.operator_id
              LEFT JOIN apiary_federation_memberships m ON m.member_hive_id = h.id AND m.apiary_id = h.apiary_id AND m.state = 'active'
@@ -1442,6 +1446,7 @@ impl TaskStore {
                     },
                     is_local: hive_id == identity.hive.id,
                     last_contact_at: row.get(5)?,
+                    credential_expires_at: row.get(6)?,
                 })
             },
         )?;
@@ -4762,6 +4767,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < WORKER_MODEL_SCHEMA_MARKER {
         crate::worker_model::migrate_worker_model(transaction)?;
+    }
+    if schema_version < MEMBERSHIP_RENEWAL_SCHEMA_MARKER {
+        crate::federation_renewal::migrate_membership_renewal(transaction)?;
     }
     Ok(())
 }
@@ -10749,6 +10757,13 @@ mod tests {
                        DROP TABLE worker_model_launches;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN
                         ('worker_model_settings', 'worker_model_launches')",
+        },
+        // Membership renewal (ADR 0117): the credential a renewal replaced.
+        SchemaStep {
+            table: "apiary_federation_memberships",
+            artifact: "previous_credential_digest",
+            undo_sql: "",
+            probe_sql: "",
         },
     ];
 

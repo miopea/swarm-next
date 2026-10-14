@@ -720,6 +720,8 @@ export type ApiaryMember = {
   is_local: boolean;
   /** When this Hive last reached the Keeper; only the Keeper knows, and only for members. */
   last_contact_at?: number | null;
+  /** When this member's credential expires, as the Keeper holds it (ADR 0117). Keeper only. */
+  credential_expires_at?: number | null;
 };
 export type StewardCapability =
   | "observe"
