@@ -155,7 +155,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
               : seen.standing === "unreadable" ? "version unreadable"
               : "not compared";
             return `${seen.swarm_version} · ${standing} · ${contact}`;
-          })()}</small><button type="button" className="secondary-button" onClick={() => setLogOf({ hiveId: member.hive_id, hiveName: member.hive_name })}>Logs</button><button type="button" className="secondary-button" onClick={async () => {
+          })()}</small><span className="hive-buttons"><button type="button" className="secondary-button" onClick={() => setLogOf({ hiveId: member.hive_id, hiveName: member.hive_name })}>Logs</button><button type="button" className="secondary-button" onClick={async () => {
             setWatchError(undefined);
             try {
               const watch = await openApiaryWatch(operatorToken, member.hive_id);
@@ -202,7 +202,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
             } catch {
               setWatchError(`${member.hive_name} could not be checked for removal.`);
             }
-          }}>Remove</button></span>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+          }}>Remove</button></span></span>}</li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
           {removing ? <div className="keeper-remove-confirm" role="alertdialog" aria-label={`Remove ${removing.hiveName} from the Apiary`}>
             <p><strong>Remove {removing.hiveName} from the Apiary?</strong></p>
             {removing.blockers.length

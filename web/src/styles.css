@@ -916,10 +916,21 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .keeper-hive-list .hive-actions button { min-height: 36px; padding: 0 12px; flex: 0 0 auto; }
 /* Takeover types on somebody else's machine. It reads as the weightier action
    rather than the default one, which is what the first build got backwards. */
-.keeper-hive-list .hive-takeover-button { min-height: 36px; padding: 0 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); color: var(--warn-strong); font-size: .78rem; }
+.keeper-hive-list .hive-takeover-button { min-height: 36px; padding: 0 12px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); color: var(--warn-strong); }
+/* ⚠️ THE BUTTONS WRAP TOGETHER. They were loose items beside the version line,
+   so a long line ("No version reported · no contact recorded") pushed Remove
+   alone onto a row of its own while a short one kept all four together: rows
+   that looked different for no reason the operator could see. As one group they
+   sit beside the line when they fit and move below it together when not. */
+.keeper-hive-list .hive-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Beside the name, not floating halfway down a row with notes under the name. */
+.keeper-hive-list li > .keeper-role-badge { align-self: start; margin-top: 2px; }
 @media (max-width: 680px) {
   .keeper-hive-list .hive-actions { grid-column: 1 / -1; }
   .keeper-hive-list .hive-standing { flex: 1 0 100%; margin-right: 0; }
+  /* Four buttons do not fit a phone row, and three plus a lone Remove is the
+     ragged row the desktop fix removed. Two by two keeps every row alike. */
+  .keeper-hive-list .hive-buttons { display: grid; flex: 1 0 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .keeper-role-badge { padding: 3px 7px; border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .6rem; font-weight: 700; text-transform: uppercase; }
