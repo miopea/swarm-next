@@ -12,6 +12,20 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.3
+
+Three database updates (200, 201 and 202). Your Hive backs its database up first, by itself, and your workers are not stopped.
+
+### New features
+- A Hive's Apiary membership now renews itself. Until now, membership ran out thirty days after a Hive joined and nothing renewed it, so every member quietly dropped out of its Apiary a month in. Each Hive now renews during its normal sync, from fifteen days before it would run out. A Hive whose membership has already run out reconnects by itself once it installs this release, for up to sixty days after it ran out, unless its Keeper removed it.
+- The Keeper's list of Hives says when a Hive's membership has run out, or is about to, instead of "This Hive hasn't reported to the Keeper yet".
+- Check gate, in Settings > Workers: a Hive can hold work open until its GitHub CI passes. It reads CI through the machine's own gh login. It starts off, so nothing changes until you choose a level. A Keeper can set it for every Hive.
+- Worker model, in Settings > Workers: one Claude model (Opus, Sonnet or Haiku) for all of a Hive's repository workers, or Claude's own default. Queen keeps Sonnet. Each worker switches when it next starts; nothing is restarted for it. A Keeper can set it for every Hive, and its list of Hives shows workers that haven't switched yet.
+
+### Fixes
+- On the Keeper's list of Hives, each Hive's Logs, Watch, Take over and Remove buttons stay together. Remove no longer drops onto a line by itself, and Take over is the same size as the others.
+- Updated rustls, the library Swarm uses for secure connections, to fix four security advisories published on October 14.
+
 ## 1.17.2
 
 No schema migration, and your workers are not stopped.
