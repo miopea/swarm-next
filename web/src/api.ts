@@ -1729,6 +1729,7 @@ export type HiveCondition =
   | { kind: "low_disk"; lowest_available_bytes: number | null; critical: boolean }
   | { kind: "short_of_memory" }
   | { kind: "workers_stuck"; count: number }
+  | { kind: "ci_unreadable"; why: string }
   | { kind: "engine_update_pending" };
 
 /** A member Hive with something wrong, worst first. A healthy Hive is absent. */
@@ -2662,6 +2663,38 @@ export async function setPresentationPreferences(
     },
   );
   return response.json() as Promise<PresentationPreferences>;
+}
+
+/** How strictly this Hive holds work to its CI (ADR 0115). */
+export type CheckGateLevel = "off" | "warn" | "require";
+/** The check gate in effect, and the level this Hive's Apiary sets, if any: that one is locked here. */
+export type CheckGate = { level: CheckGateLevel; set_by_apiary: CheckGateLevel | null };
+export type CiOutcome =
+  | { outcome: "passed" }
+  | { outcome: "failed"; failing: string[] }
+  | { outcome: "pending"; waiting: string[] }
+  | { outcome: "unreadable"; why: string };
+export type CiObservation = CiOutcome & { commits: string; judged: string[]; observed_at: number };
+/** What the check gate knows about one task. No recorded commits means the gate never holds it. */
+export type TaskCi = { level: CheckGateLevel; recorded_commits: number; observation: CiObservation | null };
+
+export async function fetchCheckGate(operatorToken: string, signal?: AbortSignal): Promise<CheckGate> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/check-gate", { signal });
+  return response.json() as Promise<CheckGate>;
+}
+
+export async function setCheckGate(operatorToken: string, level: CheckGateLevel): Promise<CheckGate> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/check-gate", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ level }),
+  });
+  return response.json() as Promise<CheckGate>;
+}
+
+export async function fetchTaskCi(operatorToken: string, taskId: string, signal?: AbortSignal): Promise<TaskCi> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/ci`, { signal });
+  return response.json() as Promise<TaskCi>;
 }
 
 export async function fetchQueenAutonomyPolicy(operatorToken: string, signal?: AbortSignal): Promise<QueenAutonomyPolicy> {

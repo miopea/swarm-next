@@ -236,9 +236,23 @@ presence tier. The member's conductor and deployment grants read the required
 level, its Settings show that tier locked, and leaving the Apiary lifts every
 requirement. Night Watch hours are the fourth: each member runs the Keeper's
 hours in its own time zone, and a member with no time zone is shown as waiting
-on its operator rather than told to update. Engine updates already apply when
-idle on every packaged Hive. Three more settings ruled on 2026-10-12 await
-enforcement; check strictness needs a check gate that no Hive has yet.
+on its operator rather than told to update. Check strictness is the fifth, as
+the check gate (ADR 0115). Engine updates already apply when idle on every
+packaged Hive. Two more settings ruled on 2026-10-12 await enforcement: worker
+model and terminal history retention.
+
+Check gate (ADR 0115, 2026-10-13): a Hive can hold work to its CI. The levels
+are off, warn and require.
+- Under require, a task that recorded commits cannot close while GitHub CI on
+  them fails or is still running. This covers the board, Queen, both
+  coordinator sweeps and the release settle.
+- CI that cannot be read lets the task close, and its history says why.
+- CI is read through the machine's own gh login, by a bounded background pass,
+  and judged on each line of work's tip or the first pushed commit after it
+  that CI ran on.
+- Each task in review shows its CI.
+- A Keeper can require the level, and sees on its roster a member that cannot
+  read CI at all.
 
 Fleet health (ADR 0114, 2026-10-12): each member sends its Keeper a bounded,
 content-free health report on its own channel, before the sync gates. It covers

@@ -191,6 +191,9 @@ pub enum RequiredSetting {
     /// Hive is. The time zone stays the member's, because its operator's night
     /// is local to them.
     NightWatchHours,
+    /// How strictly each member holds work to its CI (ADR 0115): off, warn or
+    /// require. The GitHub access it reads CI with stays the member's own.
+    CheckGate,
 }
 
 /// What kind of value a required setting takes.
@@ -216,13 +219,14 @@ pub enum PolicyEnforcer {
 }
 
 impl RequiredSetting {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ReleaseAutoInstall,
         Self::SharedWorkMinimumVersion,
         Self::QueenAutonomyAtHive,
         Self::QueenAutonomyAway,
         Self::QueenAutonomyNightWatch,
         Self::NightWatchHours,
+        Self::CheckGate,
     ];
 
     #[must_use]
@@ -234,6 +238,7 @@ impl RequiredSetting {
             Self::QueenAutonomyAway => "queen.autonomy.away",
             Self::QueenAutonomyNightWatch => "queen.autonomy.night_watch",
             Self::NightWatchHours => "night_watch.hours",
+            Self::CheckGate => "checks.gate",
         }
     }
 
@@ -252,6 +257,7 @@ impl RequiredSetting {
                 RequiredValue::Choice(&["advisory", "coordinate", "local_execution"])
             }
             Self::NightWatchHours => RequiredValue::DailyHours,
+            Self::CheckGate => RequiredValue::Choice(&["off", "warn", "require"]),
         }
     }
 
@@ -286,7 +292,8 @@ impl RequiredSetting {
             | Self::SharedWorkMinimumVersion
             | Self::QueenAutonomyAtHive
             | Self::QueenAutonomyAway
-            | Self::QueenAutonomyNightWatch => None,
+            | Self::QueenAutonomyNightWatch
+            | Self::CheckGate => None,
         }
     }
 
@@ -297,7 +304,8 @@ impl RequiredSetting {
             | Self::QueenAutonomyAtHive
             | Self::QueenAutonomyAway
             | Self::QueenAutonomyNightWatch
-            | Self::NightWatchHours => PolicyEnforcer::Member,
+            | Self::NightWatchHours
+            | Self::CheckGate => PolicyEnforcer::Member,
             Self::SharedWorkMinimumVersion => PolicyEnforcer::Keeper,
         }
     }

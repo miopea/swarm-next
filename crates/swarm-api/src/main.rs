@@ -468,6 +468,16 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
             let _ = tokio::task::spawn_blocking(move || state.record_released_tasks()).await;
         }
     });
+    // THE CHECK GATE READS CI WHILE WORK WAITS ON IT (ADR 0115). GitHub cannot
+    // tell this Hive when a run finishes, so it is asked: a bounded batch a
+    // minute, only for gated work in review, and never again after a pass.
+    let ci_observer = state.clone();
+    services.periodic(std::time::Duration::from_secs(60), true, move || {
+        let state = ci_observer.clone();
+        async move {
+            let _ = tokio::task::spawn_blocking(move || state.observe_task_ci()).await;
+        }
+    });
     let jira_reconciler = state.clone();
     services.periodic(std::time::Duration::from_secs(60), false, move || {
         let state = jira_reconciler.clone();

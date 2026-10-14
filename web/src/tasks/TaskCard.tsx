@@ -136,7 +136,7 @@ export default function TaskCard({ task, heldBriefing, jiraLink, emailSources, o
       onDoubleClick={(event) => openDetailsFromEvent(event.target)}
       onKeyDown={(event) => { if (event.key === "Escape") setMenuPoint(undefined); if (event.key === "Enter") openDetailsFromEvent(event.target); }}
     >
-      <TaskMetadata task={task} jiraLink={jiraLink} busy={busy} onRetryJira={onRetryJira} />
+      <TaskMetadata task={task} jiraLink={jiraLink} busy={busy} onRetryJira={onRetryJira} operatorToken={operatorToken} />
       <h4><button type="button" className="task-title-button" onClick={() => setDetailsOpen(true)}>{task.title}</button></h4>
       {task.description && <p className="task-description">{task.description}</p>}
       {task.state !== "completed" && (

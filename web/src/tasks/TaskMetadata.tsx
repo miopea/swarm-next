@@ -1,4 +1,5 @@
 import type { JiraTaskLink, Task, TaskPriority, TaskState } from "../api";
+import TaskCiStatus from "./TaskCiStatus";
 import { taskAgeTitle, taskCreatedOn } from "./taskAge";
 
 const stateLabels: Record<TaskState, string> = {
@@ -45,11 +46,13 @@ export function taskStateLabel(task: Task): string {
   return stateLabels[task.state];
 }
 
-export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
+export default function TaskMetadata({ task, jiraLink, busy, onRetryJira, operatorToken }: {
   task: Task;
   jiraLink?: JiraTaskLink;
   busy: boolean;
   onRetryJira: (task: Task) => Promise<void>;
+  /** Reads CI for work waiting on review or release; without it, no CI row. */
+  operatorToken?: string;
 }) {
   return (
     <div className="task-metadata-panel">
@@ -61,6 +64,7 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
         <dl>
           <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && task.closed_unverifiable ? " unverifiable" : task.state === "completed" && !task.closed_on_evidence ? " unverified" : ""}`} title={task.state === "completed" && task.closed_unverifiable ? "Finished, and recorded as impossible to verify now. Nobody established where this went; this is a record of that, not evidence that it shipped." : task.state === "completed" && !task.closed_on_evidence ? "The work is finished. Nothing has recorded where it is running, and no nothing-to-deploy claim has been approved, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
           <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
+          {operatorToken && (task.state === "review" || task.state === "awaiting_release") && <TaskCiStatus task={task} operatorToken={operatorToken} />}
           {/* The date, with the elapsed time in the tooltip. It was the other
               way round until the operator asked for the date: an age answers
               "which of these has gone wrong" but never answers "when was this

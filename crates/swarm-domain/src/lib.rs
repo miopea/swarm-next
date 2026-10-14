@@ -9,6 +9,7 @@ mod apiary_directory;
 mod apiary_policy;
 mod apiary_prerequisite;
 mod apiary_watch;
+mod check_gate;
 mod claude_transcripts;
 mod control_room;
 mod conversation_recovery;
@@ -49,6 +50,7 @@ pub use apiary_directory::*;
 pub use apiary_policy::*;
 pub use apiary_prerequisite::*;
 pub use apiary_watch::*;
+pub use check_gate::*;
 pub use claude_transcripts::{
     claude_conversations_newest_first, claude_project_directory, claude_project_slugs,
 };

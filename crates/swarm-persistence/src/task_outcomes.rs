@@ -2625,7 +2625,8 @@ impl TaskStore {
                     | TaskStoreError::InvalidTransition { .. }
                     | TaskStoreError::TaskPrerequisite(
                         swarm_domain::TaskPrerequisiteError::Unresolved,
-                    ),
+                    )
+                    | TaskStoreError::ChecksNotPassed(_),
                 ) => {}
                 Err(error) => return Err(error),
             }
@@ -3726,7 +3727,8 @@ impl TaskStore {
                     | TaskStoreError::InvalidTransition { .. }
                     | TaskStoreError::TaskPrerequisite(
                         swarm_domain::TaskPrerequisiteError::Unresolved,
-                    ),
+                    )
+                    | TaskStoreError::ChecksNotPassed(_),
                 ) => {}
                 Err(error) => return Err(error),
             }

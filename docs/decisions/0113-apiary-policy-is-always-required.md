@@ -68,7 +68,7 @@ These stay refused in code, as before, and requiring is no exception:
   who set it.
 - The remaining settings the operator chose on 2026-10-12 each need their own
   member-side enforcement before they can be required:
-  - check strictness;
+  - check strictness (built as the check gate, ADR 0115);
   - Queen autonomy (built, see the 2026-10-13 addendum);
   - Night Watch schedule (built, see the 2026-10-13 Night Watch addendum);
   - terminal history retention;
@@ -191,4 +191,12 @@ underneath and come back when the requirement is lifted. A request that turns
 the schedule off or moves the hours is refused with 409 `set_by_apiary`. A new
 time zone is accepted. Returning to Swarm on the desktop still ends tonight's
 watch, as before: that is the operator being present, not a schedule change.
+
+## Addendum 2026-10-13: check strictness, as `checks.gate`
+
+Check strictness had nothing to lock until ADR 0115 built the check gate. The
+Keeper now requires its level as `checks.gate`: `off`, `warn` or `require`. The
+member applies it where the level is read and refuses a local change with 409
+`set_by_apiary`. The GitHub login it reads CI with stays its own. A member that
+cannot read CI at all says so in its health report, and the roster shows it.
 

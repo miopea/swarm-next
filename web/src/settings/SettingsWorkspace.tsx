@@ -10,6 +10,7 @@ import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
 import NightWatchSettings from "./NightWatchSettings";
+import CheckGateSettings from "./CheckGateSettings";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -449,6 +450,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           <small className="privacy-note">A deployment rule grants only its recorded repository, environment, action, and limits. Anything outside that scope returns to Needs you. Scout and repository workers still perform implementation.</small>
         </section>
       )}
+      {shows("settings-check-gate") && operatorToken && <CheckGateSettings operatorToken={operatorToken} />}
       {shows("settings-notifications") && (
     <section id="settings-notifications" className="settings-card notification-settings" aria-labelledby="notification-heading">
           <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>

@@ -17,6 +17,10 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
     name: "Minimum version for shared work",
     values: {},
   },
+  "checks.gate": {
+    name: "Check gate",
+    values: { off: "Off", warn: "Show CI", require: "Require passing CI" },
+  },
   "night_watch.hours": {
     name: "Night Watch hours",
     values: {},

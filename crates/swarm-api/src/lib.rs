@@ -34,6 +34,8 @@ mod watch_producer;
 mod watch_relay;
 pub use diagnostic_log::{DiagnosticLog, diagnostic_layer};
 pub use federation_events::poll_member_events;
+mod check_gate_routes;
+mod ci_checks;
 pub mod federation_http;
 mod feedback;
 mod github_device;
@@ -4812,6 +4814,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/runtime/release",
             get(release::status).put(release::set_mode),
         )
+        .route(
+            "/api/v1/runtime/check-gate",
+            get(check_gate_routes::check_gate).put(check_gate_routes::set_check_gate),
+        )
         .route("/api/v1/runtime/release/check", post(release::check_now))
         .route("/api/v1/runtime/release/notes", get(release::notes))
         .route("/api/v1/runtime/tunnel", get(tunnel::status))
@@ -4977,6 +4983,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/tasks/{task_id}/activity",
             get(tasks::task_activity),
+        )
+        .route(
+            "/api/v1/tasks/{task_id}/ci",
+            get(check_gate_routes::task_ci),
         )
         .route("/api/v1/tasks/{task_id}/restore", post(tasks::restore_task))
         .route(
@@ -10749,6 +10759,9 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::SetByApiary(_) => {
             ApiError::new(StatusCode::CONFLICT, "set_by_apiary", error.to_string())
         }
+        TaskStoreError::ChecksNotPassed(_) => {
+            ApiError::new(StatusCode::CONFLICT, "checks_not_passed", error.to_string())
+        }
         TaskStoreError::ApiaryProjectPromotionNotReady => ApiError::new(
             StatusCode::CONFLICT,
             "apiary_project_promotion_not_ready",
@@ -14930,6 +14943,159 @@ mod tests {
             "lifted: the operator's own hours are back, in the time zone they chose since"
         );
         assert!(hive.member.local_policy_settings().unwrap().is_empty());
+    }
+
+    async fn send_json(app: Router, method: &str, uri: &str, body: Value) -> Response {
+        app.oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("authorization", "Bearer secret")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// ⚠️ THE CHECK GATE AT THE OPERATOR'S OWN CLOSE (ADR 0115, decision
+    /// 01a1378c): with require on, work whose CI failed or has not been read
+    /// cannot be closed from the board, even with a deployment on record, and
+    /// the refusal says why; once CI passes the same close goes through.
+    #[tokio::test]
+    async fn require_refuses_closing_work_until_its_ci_passes() {
+        use swarm_domain::{
+            CiObservation, CiOutcome, CommitRepositoryState, CommitVerdict, TaskCommit, TaskState,
+        };
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let gate = send_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/runtime/check-gate",
+            serde_json::json!({ "level": "require" }),
+        )
+        .await;
+        assert_eq!(
+            response_json(gate).await,
+            serde_json::json!({ "level": "require", "set_by_apiary": null })
+        );
+
+        let task = store.create_task("Gated", "/workspace/petal").unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        let sha = "1111aaaa2222bbbb".to_owned();
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[TaskCommit {
+                    sha: sha.clone(),
+                    verdict: CommitVerdict::Present,
+                    subject: "fix: gated".to_owned(),
+                    changed_paths: vec!["src/lib.rs".to_owned()],
+                    found_in: None,
+                }],
+                1_000,
+            )
+            .unwrap();
+        store
+            .record_task_deployment(task.id, "production", "petal 1111aaaa", 1_100)
+            .unwrap();
+        let state_uri = format!("/api/v1/tasks/{}/state", task.id);
+        let close = |app: Router| {
+            send_json(
+                app,
+                "PATCH",
+                &state_uri,
+                serde_json::json!({ "state": "completed", "note": "Shipped and checked." }),
+            )
+        };
+
+        let unread = close(app.clone()).await;
+        assert_eq!(unread.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(unread).await["code"], "checks_not_passed");
+
+        let observe = |outcome| {
+            store
+                .record_ci_observation(
+                    task.id,
+                    &CiObservation {
+                        commits: swarm_domain::commits_digest(std::slice::from_ref(&sha)),
+                        judged: vec![sha.clone()],
+                        outcome,
+                        observed_at: 2_000,
+                    },
+                )
+                .unwrap();
+        };
+        observe(CiOutcome::Failed {
+            failing: vec!["rust".to_owned()],
+        });
+        let shown = response_json(
+            authorized_get(app.clone(), &format!("/api/v1/tasks/{}/ci", task.id)).await,
+        )
+        .await;
+        assert_eq!(shown["level"], "require");
+        assert_eq!(shown["recorded_commits"], 1);
+        assert_eq!(shown["observation"]["outcome"], "failed");
+        let failed = close(app.clone()).await;
+        assert_eq!(failed.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_json(failed).await["message"],
+            "this task can't close yet: CI failed on 1111aaaa: rust"
+        );
+
+        observe(CiOutcome::Passed);
+        assert_eq!(close(app).await.status(), StatusCode::OK);
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+    }
+
+    /// The Keeper sets a member's check gate like any other required setting:
+    /// in effect, locked, and reported as applied.
+    #[tokio::test]
+    async fn a_required_check_gate_is_locked_on_the_member() {
+        let now = unix_timestamp();
+        let hive = NightWatchMember::joined(now);
+        let required = swarm_domain::ApiaryPolicySetting {
+            key: "checks.gate".to_owned(),
+            value: "require".to_owned(),
+        };
+        hive.require(std::slice::from_ref(&required), now);
+
+        let shown =
+            response_json(authorized_get(hive.app.clone(), "/api/v1/runtime/check-gate").await)
+                .await;
+        assert_eq!(
+            shown,
+            serde_json::json!({ "level": "require", "set_by_apiary": "require" })
+        );
+        let refused = send_json(
+            hive.app.clone(),
+            "PUT",
+            "/api/v1/runtime/check-gate",
+            serde_json::json!({ "level": "off" }),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(refused).await["code"], "set_by_apiary");
+        assert_eq!(hive.member.local_policy_settings().unwrap(), vec![required]);
+
+        hive.require(&[], now + 1);
+        let lifted =
+            response_json(authorized_get(hive.app.clone(), "/api/v1/runtime/check-gate").await)
+                .await;
+        assert_eq!(
+            lifted,
+            serde_json::json!({ "level": "off", "set_by_apiary": null })
+        );
     }
 
     /// ⚠️ ADR 0114 USAGE: a member's figures reach its Keeper only on its own

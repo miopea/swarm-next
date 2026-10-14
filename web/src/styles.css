@@ -1276,6 +1276,9 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .priority-normal { color: var(--good); }
 .priority-high { color: var(--warn); background: var(--warn-soft); }
 .priority-urgent { color: var(--bad); background: var(--bad-soft); }
+.task-ci { color: var(--muted); }
+.task-ci.is-bad { color: var(--bad-strong); font-weight: 650; }
+.task-ci.is-waiting { color: var(--warn-strong); }
 .task-description { grid-area: description; display: -webkit-box; align-self: start; margin: 0; overflow: hidden; color: var(--muted); font-size: .75rem; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .task-assignment-cell { grid-area: assignment; display: grid; align-content: center; gap: 7px; min-width: 0; }
@@ -2993,6 +2996,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-policy-settings label { display: grid; grid-template-columns: 94px minmax(0, 1fr); min-width: 0; align-items: center; gap: .65rem; color: var(--text-muted); font-size: .78rem; font-weight: 700; }
 .queen-policy-settings select { width: 100%; min-width: 0; }
 .queen-policy-tier { display: grid; gap: 3px; min-width: 0; }
+.check-gate-settings { display: grid; gap: 10px; }
+.check-gate-settings label { display: grid; grid-template-columns: 94px minmax(0, 1fr); align-items: center; gap: .65rem; min-width: 0; font-weight: 700; }
+.check-gate-settings select { width: 100%; min-width: 0; }
+.check-gate-settings .check-gate-set-by-apiary { color: var(--warn-strong); font-size: .73rem; font-weight: 650; }
+.check-gate-settings .check-gate-detail { color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .queen-policy-set-by-apiary { margin-left: calc(94px + .65rem); color: var(--warn-strong); font-size: .73rem; font-weight: 650; }
 .queen-policy-explainer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .queen-policy-explainer > div { display: grid; align-content: start; gap: 3px; padding: 10px 11px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }

@@ -29,6 +29,7 @@ export function conditionText(condition: HiveCondition, nowSeconds: number): { s
       status: `${condition.count} ${condition.count === 1 ? "worker" : "workers"} stuck`,
       next: "Watch it to see where they stopped",
     };
+    case "ci_unreadable": return { status: `Can't read CI: ${condition.why}`, next: "Work it closes goes unchecked; ask its operator to log gh in" };
     case "engine_update_pending": return { status: "Engine update pending", next: "It swaps by itself once its workers are idle" };
   }
 }

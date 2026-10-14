@@ -150,6 +150,7 @@ async fn derive_health_report(state: &AppState, store: &TaskStore, now: i64) -> 
         },
         memory: crate::runtime::memory_pressure_now(),
         stuck_workers: stuck_workers(store, now),
+        ci_unreadable: store.hive_wide_ci_problem().ok().flatten(),
     }
 }
 

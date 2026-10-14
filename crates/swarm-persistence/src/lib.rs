@@ -39,6 +39,8 @@ mod hive_health;
 pub use hive_health::StoredHiveHealth;
 mod hive_usage;
 pub use hive_usage::StoredHiveUsage;
+mod check_gate;
+pub use check_gate::{CheckGateSetting, CiCandidate};
 mod provider_usage;
 mod queen_recovery;
 mod queen_review;
@@ -376,7 +378,9 @@ const MEMBER_LAST_CONTACT_SCHEMA_MARKER: i64 = 197;
 const HIVE_HEALTH_SCHEMA_MARKER: i64 = 198;
 /// Each Hive keeps its workers' busy time, and a Keeper each member's usage.
 const HIVE_USAGE_SCHEMA_MARKER: i64 = 199;
-const CURRENT_SCHEMA_VERSION: i64 = HIVE_USAGE_SCHEMA_MARKER;
+/// A Hive's check gate level, and CI as last read for each task (ADR 0115).
+const CHECK_GATE_SCHEMA_MARKER: i64 = 200;
+const CURRENT_SCHEMA_VERSION: i64 = CHECK_GATE_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -494,6 +498,9 @@ pub enum TaskStoreError {
     /// A setting this Hive's Apiary requires (ADR 0113), with who can change it.
     #[error("{0}")]
     SetByApiary(String),
+    /// The check gate holds this work open until its CI passes (ADR 0115).
+    #[error("this task can't close yet: {0}")]
+    ChecksNotPassed(String),
     #[error("Jira project is not ready for Apiary promotion")]
     ApiaryProjectPromotionNotReady,
     #[error("Hive connection card is invalid or expired")]
@@ -3195,6 +3202,20 @@ impl TaskStore {
         ) {
             task_prerequisites::ensure_satisfied(&transaction, id)?;
         }
+        // ⚠️ THE CHECK GATE, WHERE EVERY CLOSE BUT THE RELEASE SETTLE PASSES
+        // (ADR 0115): the operator's screen, Queen and both coordinator sweeps.
+        // The release settle in `record_deployment_delivering` asks the same.
+        let unchecked = if target == TaskState::Completed {
+            match check_gate::verdict(&transaction, id)? {
+                swarm_domain::GateVerdict::Allow => None,
+                swarm_domain::GateVerdict::AllowUnchecked { why } => Some(why),
+                swarm_domain::GateVerdict::Hold { why } => {
+                    return Err(TaskStoreError::ChecksNotPassed(why));
+                }
+            }
+        } else {
+            None
+        };
         jira::queue_jira_transition(&transaction, id, target)?;
         if current == TaskState::Review && target != TaskState::Review {
             review_answers::invalidate_pending_request(&transaction, id, None)?;
@@ -3276,6 +3297,9 @@ impl TaskStore {
             ],
         )?;
         let activity_sequence = transaction.last_insert_rowid();
+        if let Some(why) = unchecked {
+            check_gate::note_unchecked_close(&transaction, id, &why)?;
+        }
         if let Some(session_id) = reporting_session_id
             && matches!(target, TaskState::Blocked | TaskState::Review)
         {
@@ -4727,6 +4751,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < HIVE_USAGE_SCHEMA_MARKER {
         crate::hive_usage::migrate_hive_usage(transaction)?;
+    }
+    if schema_version < CHECK_GATE_SCHEMA_MARKER {
+        crate::check_gate::migrate_check_gate(transaction)?;
     }
     Ok(())
 }
@@ -10696,6 +10723,15 @@ mod tests {
                        DROP TABLE apiary_hive_usage;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN
                         ('worker_active_daily', 'apiary_hive_usage')",
+        },
+        // The check gate (ADR 0115): a Hive's level, and CI as last read.
+        SchemaStep {
+            table: "check_gate_settings",
+            artifact: "",
+            undo_sql: "DROP TABLE check_gate_settings;
+                       DROP TABLE task_ci_observations;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN
+                        ('check_gate_settings', 'task_ci_observations')",
         },
     ];
 

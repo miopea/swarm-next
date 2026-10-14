@@ -72,8 +72,13 @@ impl BackgroundServices {
         // same terms: owned here, a bounded window per pass, and the lease
         // re-read every poll, so "Take back control" on this machine stops it
         // relaying and writing without waiting for Keeper.
+        //
+        // 11 since 2026-10-13, for the check gate's CI reads (ADR 0115), on the
+        // same terms: owned here, and each pass is bounded — at most ten tasks,
+        // each gh call capped at twenty seconds, and no task started once the
+        // pass has run a minute, so shutdown never waits long on it.
         assert!(
-            self.tasks.len() < 10,
+            self.tasks.len() < 11,
             "all background services need a bounded owner"
         );
         let mut stop = self.stop.subscribe();

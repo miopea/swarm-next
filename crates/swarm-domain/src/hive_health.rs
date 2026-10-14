@@ -41,6 +41,12 @@ pub struct HiveHealthReport {
     /// Workers holding work they have not moved in half an hour, or were never
     /// briefed on (ADR 0039).
     pub stuck_workers: u32,
+    /// Why this Hive cannot read CI at all while its check gate is on: gh is
+    /// missing or signed out (ADR 0115). A reason in fixed words, never a path
+    /// or a repository. Absent from releases before the gate, which is not a
+    /// fault, so an older member and an older Keeper both read on unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_unreadable: Option<String>,
 }
 
 /// The member's Apiary sync, as it last recorded it.
@@ -95,6 +101,13 @@ impl HiveHealthReport {
         {
             return Err("the failed step is empty or too long");
         }
+        if self
+            .ci_unreadable
+            .as_ref()
+            .is_some_and(|why| why.is_empty() || why.len() > MAX_HEALTH_STEP_BYTES)
+        {
+            return Err("the CI reason is empty or too long");
+        }
         Ok(())
     }
 }
@@ -134,6 +147,11 @@ pub enum HiveCondition {
     WorkersStuck {
         count: u32,
     },
+    /// Its check gate is on but it cannot read CI at all, so the work it
+    /// closes goes unchecked (ADR 0115).
+    CiUnreadable {
+        why: String,
+    },
     /// A newer engine is waiting; it swaps by itself once workers are idle.
     EngineUpdatePending,
 }
@@ -167,6 +185,7 @@ impl HiveCondition {
             Self::LowDisk { .. } => "low_disk",
             Self::ShortOfMemory => "short_of_memory",
             Self::WorkersStuck { .. } => "workers_stuck",
+            Self::CiUnreadable { .. } => "ci_unreadable",
             Self::EngineUpdatePending => "engine_update_pending",
         }
     }
@@ -252,6 +271,9 @@ pub fn hive_conditions(evidence: &HiveHealthEvidence<'_>, now: i64) -> Vec<HiveC
             count: health.stuck_workers,
         });
     }
+    if let Some(why) = &health.ci_unreadable {
+        found.push(HiveCondition::CiUnreadable { why: why.clone() });
+    }
     if health.engine.update_pending && !engine_failing {
         found.push(HiveCondition::EngineUpdatePending);
     }
@@ -290,6 +312,7 @@ mod tests {
             },
             memory: ResourcePressure::Normal,
             stuck_workers: 0,
+            ci_unreadable: None,
         }
     }
 
@@ -446,5 +469,36 @@ mod tests {
         assert_eq!(contact_slot(NOW), NOW);
         assert_eq!(contact_slot(NOW + 299), NOW);
         assert_eq!(contact_slot(NOW + 300), NOW + 300);
+    }
+
+    /// ⚠️ A HIVE WHOSE GATE CANNOT READ CI CLOSES WORK UNCHECKED, so its Keeper
+    /// sees why (ADR 0115) — and the field travels both ways between releases.
+    #[test]
+    fn a_hive_that_cannot_read_ci_says_so_and_older_reports_still_read() {
+        let report = HiveHealthReport {
+            ci_unreadable: Some(crate::CI_GH_SIGNED_OUT.to_owned()),
+            ..healthy()
+        };
+        assert_eq!(
+            hive_conditions(&evidence(&report), NOW),
+            vec![HiveCondition::CiUnreadable {
+                why: "gh is not logged in on this machine".to_owned()
+            }]
+        );
+        assert!(!HiveCondition::CiUnreadable { why: String::new() }.pushes());
+
+        let mut older = serde_json::to_value(healthy()).unwrap();
+        assert!(older.get("ci_unreadable").is_none(), "absent, not null");
+        older.as_object_mut().unwrap().remove("ci_unreadable");
+        let read: HiveHealthReport = serde_json::from_value(older).unwrap();
+        assert_eq!(read.ci_unreadable, None);
+        assert_eq!(
+            HiveHealthReport {
+                ci_unreadable: Some(String::new()),
+                ..healthy()
+            }
+            .validate(),
+            Err("the CI reason is empty or too long")
+        );
     }
 }

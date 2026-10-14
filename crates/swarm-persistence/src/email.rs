@@ -756,24 +756,7 @@ impl TaskStore {
             && delivers_whole_task
             && prerequisites_satisfied
         {
-            transaction.execute(
-                "UPDATE tasks SET state = ?2, updated_at = ?3 WHERE id = ?1",
-                params![
-                    task_id.to_string(),
-                    TaskState::Completed.to_string(),
-                    deployed_at
-                ],
-            )?;
-            transaction.execute(
-                "INSERT INTO task_activity (task_id, kind, from_state, to_state, note, actor_kind)
-                 VALUES (?1, 'state_changed', ?2, ?3, ?4, 'system')",
-                params![
-                    task_id.to_string(),
-                    TaskState::AwaitingRelease.to_string(),
-                    TaskState::Completed.to_string(),
-                    format!("Released to {environment} at {reference}."),
-                ],
-            )?;
+            settle_released_work(&transaction, task_id, environment, reference, deployed_at)?;
         }
         // A DEPLOYMENT CONTRADICTS AN UNAPPROVED CLAIM THAT NOTHING SHIPPED,
         // and the contradiction is knowable here rather than by someone
@@ -2213,6 +2196,48 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         delivery_failure,
         no_reply_reason,
     })
+}
+
+/// Closes parked work a whole-task deployment has just shipped.
+///
+/// ⚠️ THE CHECK GATE STILL HAS ITS SAY (ADR 0115). This writes the state with
+/// its own SQL rather than through the shared transition, so it asks the gate
+/// itself: work whose CI fails or is still running stays in Awaiting Release
+/// for a later deployment or sweep, and work whose CI could not be read closes
+/// with that written beside it.
+fn settle_released_work(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    environment: &str,
+    reference: &str,
+    deployed_at: i64,
+) -> Result<(), TaskStoreError> {
+    let gate = crate::check_gate::verdict(transaction, task_id)?;
+    if matches!(gate, swarm_domain::GateVerdict::Hold { .. }) {
+        return Ok(());
+    }
+    transaction.execute(
+        "UPDATE tasks SET state = ?2, updated_at = ?3 WHERE id = ?1",
+        params![
+            task_id.to_string(),
+            TaskState::Completed.to_string(),
+            deployed_at
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO task_activity (task_id, kind, from_state, to_state, note, actor_kind)
+         VALUES (?1, 'state_changed', ?2, ?3, ?4, 'system')",
+        params![
+            task_id.to_string(),
+            TaskState::AwaitingRelease.to_string(),
+            TaskState::Completed.to_string(),
+            format!("Released to {environment} at {reference}."),
+        ],
+    )?;
+    if let swarm_domain::GateVerdict::AllowUnchecked { why } = &gate {
+        crate::check_gate::note_unchecked_close(transaction, task_id, why)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

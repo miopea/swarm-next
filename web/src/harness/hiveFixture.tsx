@@ -84,6 +84,22 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       terminal_grant: empty, terminal_socket: empty, terminal_restore: empty,
     }));
   }
+  // ?checkGate=locked is a member whose Apiary sets the check gate (ADR 0115).
+  if (path === "/api/v1/runtime/check-gate") {
+    const locked = new URLSearchParams(window.location.search).get("checkGate") === "locked";
+    return { level: "require", set_by_apiary: locked ? "require" : null };
+  }
+  // The board's review task failed CI; anything else waiting on review passed.
+  if (path.startsWith("/api/v1/tasks/") && path.endsWith("/ci")) {
+    const failed = path.includes("0199bbbb-0000-7000-8000-000000000004");
+    return {
+      level: "require",
+      recorded_commits: 2,
+      observation: failed
+        ? { commits: "4f2a9c1e,8b7d6e5f", judged: ["8b7d6e5f3a2c1b0e"], outcome: "failed", failing: ["rust", "web"], observed_at: now - 120 }
+        : { commits: "1a2b3c4d", judged: ["1a2b3c4d5e6f7a8b"], outcome: "passed", observed_at: now - 600 },
+    };
+  }
   if (path === "/api/v1/presence/night-watch") {
     // ?apiaryHours=1 is a member whose Apiary sets its hours; =nozone is one
     // that has never chosen a time zone to run them in (ADR 0113).
