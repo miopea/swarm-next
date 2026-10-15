@@ -461,6 +461,17 @@ describe("QueuesView", () => {
     rerender(<QueuesView {...props} heldDeliveries={[]} recovery={{ items: [], truncated: false }} />);
     expect(screen.queryByText("Queen: reconcile message delivery")).not.toBeInTheDocument();
   });
+  test("files a message held behind the recipient's Active task under that worker, not as a failed delivery", () => {
+    render(<QueuesView tasks={[]} workers={[]} onOpenTask={vi.fn()} heldDeliveries={[{
+      kind: "task_message_held_behind_active_task", subject: "message-2", worker_name: "RCG Networks",
+      reason: "Queen's message on \"Phase E\" is waiting for RCG Networks to finish \"Phase A2b\", its Active task.",
+      first_observed_at: 1, last_observed_at: 1, observations: 1,
+    }]} />);
+    expect(screen.getByRole("heading", { name: "RCG Networks" })).toBeInTheDocument();
+    expect(screen.getByText("Waiting for its Active task to finish")).toBeInTheDocument();
+    expect(screen.queryByText("Queen: reconcile message delivery")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last observed hold: prompt not ready")).not.toBeInTheDocument();
+  });
   test("retains delivery evidence without claiming the Queen has stopped, then clears it", () => {
     const props = { tasks: [], workers: [], onOpenTask: vi.fn(), recovery: { items: [], truncated: false } };
     const { rerender } = render(<QueuesView {...props} heldDeliveries={[{
