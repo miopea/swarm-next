@@ -827,6 +827,12 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .keeper-dashboard-grid { display: grid; max-width: 1500px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 auto; gap: 16px; }
 .keeper-panel { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .keeper-shared-work-panel { grid-column: 1 / -1; }
+/* ⚠️ THE ROSTER TAKES THE WHOLE ROW. It sat in the left column with nothing
+   beside it, because the panel after it spans both, so half the page under the
+   overview was empty: the operator's "why does the apiary hives only take up
+   half the UI?". Its Hives flow into as many columns as fit instead. */
+.keeper-roster-panel { grid-column: 1 / -1; }
+.keeper-hive-list.keeper-roster { grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); align-items: start; column-gap: 28px; }
 .keeper-panel > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .keeper-panel h4 { margin: 0; font-size: 1rem; }
 .keeper-panel > header > small { max-width: 190px; color: var(--quiet); font-size: .67rem; line-height: 1.4; text-align: right; }
