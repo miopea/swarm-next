@@ -33,7 +33,7 @@ mod takeover_relay;
 mod watch_producer;
 mod watch_relay;
 pub use diagnostic_log::{DiagnosticLog, diagnostic_layer};
-pub use federation_events::poll_member_events;
+pub use federation_events::{MemberEventBackoff, poll_member_events};
 mod check_gate_routes;
 mod ci_checks;
 pub mod federation_http;
@@ -16473,9 +16473,9 @@ mod tests {
         );
         let loop_state = Arc::clone(&member_state);
         let socket = tokio::spawn(async move {
-            let mut backoff = std::time::Duration::from_secs(2);
+            let backoff = federation_events::MemberEventBackoff::default();
             loop {
-                federation_events::poll_member_events(&loop_state, &mut backoff).await;
+                federation_events::poll_member_events(&loop_state, &backoff).await;
             }
         });
 

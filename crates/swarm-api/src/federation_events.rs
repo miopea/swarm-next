@@ -12,6 +12,7 @@
 //! pipe means state stops.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -170,6 +171,36 @@ const RECONNECT_CEILING: Duration = Duration::from_secs(120);
 /// remote failure into a predictable local one.
 const LISTEN_WINDOW: Duration = Duration::from_secs(60);
 
+/// How long the member waits before its next dial, one wait shared by every
+/// pass.
+///
+/// ⚠️ SHARED, NOT COPIED. This was a `Duration` the service closure captured,
+/// and each pass's `async move` took a COPY of it: the pass doubled its copy
+/// and dropped it, so the next pass started at the floor again and never
+/// waited. A member whose credential Keeper refused dialled once a second.
+/// Paul's Hive logged 300 refusals in five minutes on 2026-10-15 while its
+/// lapsed membership waited to renew. This handle is not `Copy`, so that
+/// capture no longer compiles: a pass has to be given a clone, and clones
+/// share the one wait.
+#[derive(Clone, Debug)]
+pub struct MemberEventBackoff(Arc<AtomicU64>);
+
+impl Default for MemberEventBackoff {
+    fn default() -> Self {
+        Self(Arc::new(AtomicU64::new(RECONNECT_FLOOR.as_secs())))
+    }
+}
+
+impl MemberEventBackoff {
+    fn current(&self) -> Duration {
+        Duration::from_secs(self.0.load(Ordering::Relaxed))
+    }
+
+    fn set(&self, wait: Duration) {
+        self.0.store(wait.as_secs(), Ordering::Relaxed);
+    }
+}
+
 /// One bounded pass of the member's outbound event connection.
 ///
 /// Connect, reconcile, listen for a while, return. Every disconnect is
@@ -177,20 +208,21 @@ const LISTEN_WINDOW: Duration = Duration::from_secs(60);
 /// RECONCILES ON EVERY CONNECT, which is what makes a missed notice harmless —
 /// anything that changed while the socket was down is picked up the moment it
 /// comes back, with no need to know what was missed.
-pub async fn poll_member_events(state: &AppState, backoff: &mut Duration) {
+pub async fn poll_member_events(state: &AppState, backoff: &MemberEventBackoff) {
     // A failed dial must not become a tight redial loop against a Keeper that
     // is down; the caller's period plus this backoff is the total wait.
-    if *backoff > RECONNECT_FLOOR {
-        tokio::time::sleep(*backoff).await;
+    let wait = backoff.current();
+    if wait > RECONNECT_FLOOR {
+        tokio::time::sleep(wait).await;
     }
     match tokio::time::timeout(LISTEN_WINDOW, connect_and_listen(state)).await {
         // Two ways to end well, sharing one body: the listen window elapsed with
         // the socket healthy, or Keeper closed it cleanly. Neither is a failure,
         // so neither backs off.
-        Err(_) | Ok(Ok(())) => *backoff = RECONNECT_FLOOR,
+        Err(_) | Ok(Ok(())) => backoff.set(RECONNECT_FLOOR),
         Ok(Err(error)) => {
             tracing::debug!(%error, "federation event socket dropped; will redial");
-            *backoff = (*backoff * 2).min(RECONNECT_CEILING);
+            backoff.set((wait * 2).min(RECONNECT_CEILING));
         }
     }
 }
@@ -295,6 +327,20 @@ mod tests {
         assert!(seen.iter().all(|value| *value <= RECONNECT_CEILING));
         assert_eq!(*seen.last().unwrap(), RECONNECT_CEILING);
         assert!(seen[0] > RECONNECT_FLOOR, "it must actually back off");
+    }
+
+    /// ⚠️ A REFUSED PASS SLOWS THE NEXT ONE, which is given only a clone. The
+    /// service hands each pass its own handle, exactly as `main` does, so a
+    /// wait kept per handle is the once-a-second redial this replaced.
+    #[tokio::test]
+    async fn a_failed_pass_backs_off_the_next_pass_through_a_clone() {
+        let state = AppState::default();
+        let backoff = MemberEventBackoff::default();
+        assert_eq!(backoff.current(), RECONNECT_FLOOR);
+
+        let pass = backoff.clone();
+        poll_member_events(&state, &pass).await;
+        assert_eq!(backoff.current(), RECONNECT_FLOOR * 2);
     }
 
     /// A notice carries no state, so a member cannot act on its contents even by

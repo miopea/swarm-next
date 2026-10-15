@@ -523,11 +523,12 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
         }
     });
     let federation_events = state.clone();
-    let mut event_backoff = std::time::Duration::from_secs(2);
+    let event_backoff = swarm_api::MemberEventBackoff::default();
     services.periodic(std::time::Duration::from_secs(1), true, move || {
         let state = federation_events.clone();
+        let backoff = event_backoff.clone();
         async move {
-            swarm_api::poll_member_events(&state, &mut event_backoff).await;
+            swarm_api::poll_member_events(&state, &backoff).await;
         }
     });
     let email_delivery = state.clone();
