@@ -42,6 +42,12 @@ pub struct TaskMessageAttention {
     /// on a Platform that is asleep" need different actions, and the second was
     /// indistinguishable from the first for 141 hours.
     pub recipient_running: bool,
+    /// The worker it is addressed to, by name; `None` for Queen's office.
+    pub recipient_name: Option<String>,
+    /// The recipient's other Active task this waits behind (ADR 0067). A held
+    /// message is not a failed one: it arrives once that task leaves Active,
+    /// and retrying it changes nothing.
+    pub held_behind: Option<crate::HeldBehindTask>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -151,10 +157,15 @@ impl TaskStore {
                     WHERE s.ended_at IS NULL
                       AND ((m.recipient = 'worker' AND s.worker_id = m.recipient_worker_id)
                         OR (m.recipient = 'queen' AND s.worker_id IN
-                            (SELECT id FROM worker_profiles WHERE role = 'queen'))))
+                            (SELECT id FROM worker_profiles WHERE role = 'queen')))),
+                (SELECT name FROM worker_profiles WHERE m.recipient = 'worker'
+                    AND id = m.recipient_worker_id),
+                {held_id}, {held_title}
              FROM task_message_deliveries d
              JOIN task_messages m ON m.id = d.message_id JOIN tasks t ON t.id = m.task_id
-             WHERE {filter} ORDER BY waiting DESC, d.message_id LIMIT 64"
+             WHERE {filter} ORDER BY waiting DESC, d.message_id LIMIT 64",
+            held_id = crate::messages::held_behind_active_task!("id"),
+            held_title = crate::messages::held_behind_active_task!("title"),
         ))?;
         let items = statement
             .query_map(params![now, waited_seconds], |row| {
@@ -170,6 +181,13 @@ impl TaskStore {
                     waiting_seconds: row.get(8)?,
                     attempts: row.get(9)?,
                     recipient_running: row.get(10)?,
+                    recipient_name: row.get(11)?,
+                    held_behind: match (row.get(12)?, row.get(13)?) {
+                        (Some(task_id), Some(title)) => {
+                            Some(crate::HeldBehindTask { task_id, title })
+                        }
+                        _ => None,
+                    },
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -443,6 +461,80 @@ mod tests {
             )
             .unwrap()
             .id
+    }
+
+    /// ⚠️ A HELD MESSAGE SAYS WHAT HOLDS IT, AND ONLY A HELD ONE DOES. Queen's
+    /// messages to RCG Networks on its blocked Phase E and its review task
+    /// waited a day behind its Active Phase A2b (ADR 0067), and nothing said
+    /// why. `held_behind` names that task on exactly the messages the
+    /// dispatcher will not claim, so the two cannot disagree.
+    #[test]
+    fn a_queued_message_names_the_active_task_it_waits_behind() {
+        let (store, review, worker) = fixture();
+        let blocked = store.create_task("Phase E", "/workspace").unwrap();
+        store.transition_task(blocked.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(blocked.id, worker).unwrap();
+        store
+            .transition_task(blocked.id, TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(blocked.id, TaskState::Blocked)
+            .unwrap();
+        let current = store.create_task("Phase A2b", "/workspace").unwrap();
+        store.transition_task(current.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(current.id, worker).unwrap();
+        store
+            .transition_task(current.id, TaskState::Active)
+            .unwrap();
+
+        let on_review = send(&store, review, worker);
+        let on_blocked = send(&store, blocked.id, worker);
+        let on_current = send(&store, current.id, worker);
+        let holder = crate::HeldBehindTask {
+            task_id: current.id.to_string(),
+            title: "Phase A2b".to_owned(),
+        };
+        // Read BEFORE the claim: a claimed message is no longer queued, so
+        // afterwards nothing would be named whatever the rule said.
+        let named: Vec<_> = [review, blocked.id, current.id]
+            .into_iter()
+            .map(|task| store.task_messages(task).unwrap()[0].held_behind.clone())
+            .collect();
+        assert_eq!(named, [Some(holder.clone()), Some(holder.clone()), None]);
+        let claims = store.claim_task_messages(11).unwrap();
+        let claimed: Vec<_> = claims
+            .iter()
+            .map(|c| c.message.message_id.clone())
+            .collect();
+        assert_eq!(claimed, [on_current], "exactly the message nothing names");
+        store
+            .finish_task_message(&claims[0], TaskMessageResult::Delivered, 12)
+            .unwrap();
+
+        let attention = store.task_message_attention(100, 0).unwrap();
+        assert_eq!(attention.items.len(), 2, "{attention:?}");
+        for item in &attention.items {
+            assert_eq!(item.held_behind, Some(holder.clone()));
+            assert_eq!(item.recipient_name.as_deref(), Some("Petal"));
+        }
+
+        store
+            .transition_task(current.id, TaskState::Review)
+            .unwrap();
+        assert_eq!(
+            store.task_messages(blocked.id).unwrap()[0].held_behind,
+            None
+        );
+        let mut released: Vec<_> = store
+            .claim_task_messages(13)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.message.message_id)
+            .collect();
+        released.sort();
+        let mut expected = vec![on_review, on_blocked];
+        expected.sort();
+        assert_eq!(released, expected, "both go once A2b leaves Active");
     }
 
     /// ⚠️ A MESSAGE TO A SLEEPING WORKER HAS NOWHERE TO GO, and nothing used to

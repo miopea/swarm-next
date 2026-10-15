@@ -146,7 +146,7 @@ mod operator_statements;
 mod operator_submissions;
 mod review_answers;
 pub use message_delivery::{
-    ClaimedTaskMessage, TASK_MESSAGE_BATCH_LIMIT, TASK_MESSAGE_QUEUE_LIMIT,
+    ClaimedTaskMessage, TASK_MESSAGE_BATCH_LIMIT, TASK_MESSAGE_QUEUE_LIMIT, TaskMessageAttention,
     TaskMessageAttentionPage, TaskMessageResult,
 };
 pub use native_operator_interviews::{NativeInterviewStoreError, StoredNativeInterview};
@@ -188,8 +188,8 @@ mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure, TaskRuling};
 mod messages;
 pub use messages::{
-    MAX_TASK_MESSAGE_BYTES, MessageEnd, MessageParty, OperatorBroadcastDispatch, TaskMessage,
-    TaskMessageDispatch,
+    HeldBehindTask, MAX_TASK_MESSAGE_BYTES, MessageEnd, MessageParty, OperatorBroadcastDispatch,
+    TaskMessage, TaskMessageDispatch,
 };
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};

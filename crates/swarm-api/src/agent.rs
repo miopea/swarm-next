@@ -2210,16 +2210,28 @@ impl AgentMcp {
         // So the response says what it actually knows — that the message is
         // queued — and names the one place the answer is live.
         let reachable = self.tasks.store().recipient_has_open_session(recipient)?;
+        let next = match (&message.held_behind, reachable) {
+            (_, false) => "Recorded, and NOTHING CAN DELIVER IT. That worker has no open session, so it is excluded from delivery outright rather than waiting in a queue — it will not arrive late, it will not arrive at all until a session starts. Start that worker, or reach them another way.".to_owned(),
+            // ⚠️ SAID AT SEND TIME, because a day of silence is what this
+            // replaced: four messages waited behind another Active task and
+            // nothing anywhere named it (ADR 0067).
+            (Some(holder), true) => format!(
+                "Queued and HELD: that worker is Active on another task, \"{}\" ({}), and gets messages about its other tasks only between tasks. It arrives once that task leaves Active. Nothing failed, and resending will not speed it up. If it cannot wait, ask on that Active task instead, or ask the operator.",
+                holder.title, holder.task_id
+            ),
+            (None, true) => "Queued, NOT delivered — this returns before delivery, so it is never delivered at this point. It reaches that worker when its terminal is next resting, rather than interrupting a turn. To find out whether it landed, read swarm_read_task_history: the message carries a delivered_at once it arrives, and that is the only live answer.".to_owned(),
+        };
         structured(json!({
             "message_id": message.id,
             "task_id": input.task_id,
             "purpose": purpose,
-            "status": if reachable { "queued" } else { "queued_but_unreachable" },
-            "next": if reachable {
-                "Queued, NOT delivered — this returns before delivery, so it is never delivered at this point. It reaches that worker when its terminal is next resting, rather than interrupting a turn. To find out whether it landed, read swarm_read_task_history: the message carries a delivered_at once it arrives, and that is the only live answer."
-            } else {
-                "Recorded, and NOTHING CAN DELIVER IT. That worker has no open session, so it is excluded from delivery outright rather than waiting in a queue — it will not arrive late, it will not arrive at all until a session starts. Start that worker, or reach them another way."
+            "status": match (&message.held_behind, reachable) {
+                (_, false) => "queued_but_unreachable",
+                (Some(_), true) => "queued_behind_active_task",
+                (None, true) => "queued",
             },
+            "held_behind": message.held_behind,
+            "next": next,
         }))
     }
 
@@ -2366,7 +2378,7 @@ impl AgentMcp {
             "evidence": evidence,
             "messages": messages,
             "review_request": review_request,
-            "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
+            "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
             "evidence_note": "Evidence does not appear in `events` and never has: \
         a claim, its approval and a deployment write their own records, not activity rows. \
         An empty `evidence` here means none was recorded, NOT that the log is silent about it.",
@@ -8312,6 +8324,53 @@ mod tests {
             1,
             "the rejected public call does not manufacture task history"
         );
+    }
+
+    /// ⚠️ QUEEN LEARNS AT SEND TIME THAT A MESSAGE IS HELD, AND BY WHAT. She
+    /// once waited a day on four of these and wrote "I do not know why the
+    /// guarded delivery has not landed" (ADR 0067).
+    #[tokio::test]
+    async fn a_message_to_a_worker_busy_on_another_task_says_what_holds_it() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let waiting = store.create_task("Phase E", "/workspace/petal").unwrap();
+        store.transition_task(waiting.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(waiting.id, worker_id).unwrap();
+        store
+            .transition_task(waiting.id, TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(waiting.id, TaskState::Blocked)
+            .unwrap();
+        let current = store.create_task("Phase A2b", "/workspace/petal").unwrap();
+        store.transition_task(current.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(current.id, worker_id).unwrap();
+        store
+            .transition_task(current.id, TaskState::Active)
+            .unwrap();
+
+        let send = |task: TaskId| {
+            call_review_test_tool(
+                bridge.clone(),
+                &queen_token,
+                "swarm_message_worker",
+                json!({"task_id": task, "worker_id": worker_id, "body": "Go ahead."}),
+            )
+        };
+        let held = send(waiting.id).await["result"]["structuredContent"].clone();
+        assert_eq!(held["status"], "queued_behind_active_task", "{held}");
+        assert_eq!(held["held_behind"]["task_id"], current.id.to_string());
+        assert!(
+            held["next"].as_str().unwrap().contains("Phase A2b"),
+            "{held}"
+        );
+
+        let same = send(current.id).await["result"]["structuredContent"].clone();
+        assert_eq!(same["status"], "queued", "{same}");
+        assert!(same["held_behind"].is_null());
     }
 
     #[tokio::test]

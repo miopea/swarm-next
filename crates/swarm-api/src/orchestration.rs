@@ -316,18 +316,56 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
             crate::MESSAGE_WAITING_ATTENTION_SECONDS,
         )
         .map_err(|error| task_store_error(&error))?;
-    held.extend(messages.items.into_iter().map(|message| HeldDeliveryResponse {
+    held.extend(messages.items.into_iter().map(held_message));
+    Ok(held)
+}
+
+/// One waiting message, said as what it is.
+///
+/// ⚠️ A HOLD IS NOT A FAILURE, AND THIS USED TO SAY IT WAS ONE. A message to a
+/// worker about one of its other tasks waits until its Active task leaves
+/// Active (ADR 0067). Every waiting message read "Queen must inspect … before
+/// resolving or explicitly retrying", which sent Queen to reconcile a delivery
+/// that had not failed and never named the task it was waiting for.
+fn held_message(message: swarm_persistence::TaskMessageAttention) -> HeldDeliveryResponse {
+    if let Some(holder) = message.held_behind {
+        let worker = message.recipient_name.as_deref().unwrap_or("The worker");
+        return HeldDeliveryResponse {
+            kind: "task_message_held_behind_active_task".into(),
+            subject: message.message_id,
+            worker_name: message.recipient_name.clone(),
+            reason: format!(
+                "Queen's message on \"{}\" is waiting for {worker} to finish \"{}\", its Active \
+                 task. A worker gets messages about its other tasks only between tasks, so it \
+                 arrives once that task leaves Active. Nothing failed, and resending will not \
+                 speed it up.",
+                message.task_title, holder.title
+            ),
+            first_observed_at: message.updated_at,
+            last_observed_at: message.updated_at,
+            observations: 1,
+        };
+    }
+    HeldDeliveryResponse {
         kind: "task_message_reconciliation".into(),
         subject: message.message_id.clone(),
         worker_name: Some("Queen".into()),
-        reason: format!("{}: {} delivery. Queen must inspect task {} and message {} before resolving or explicitly retrying. No automatic replay.{}",
-            message.task_title, message.state, message.task_id, message.message_id,
-            if message.superseded { " This review request is superseded and cannot be retried." } else { "" }),
+        reason: format!(
+            "{}: {} delivery. Queen must inspect task {} and message {} before resolving or explicitly retrying. No automatic replay.{}",
+            message.task_title,
+            message.state,
+            message.task_id,
+            message.message_id,
+            if message.superseded {
+                " This review request is superseded and cannot be retried."
+            } else {
+                ""
+            }
+        ),
         first_observed_at: message.updated_at,
         last_observed_at: message.updated_at,
         observations: 1,
-    }));
-    Ok(held)
+    }
 }
 
 /// The Queen autonomy policy in effect, and which tiers this Hive's Apiary
@@ -527,4 +565,55 @@ pub(super) async fn run_queen_automation(
         .queen_automation_status(unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn waiting(held_behind: Option<swarm_persistence::HeldBehindTask>) -> HeldDeliveryResponse {
+        held_message(swarm_persistence::TaskMessageAttention {
+            message_id: "message".into(),
+            task_id: "task".into(),
+            task_title: "Phase E".into(),
+            state: "queued".into(),
+            claim_id: None,
+            session_id: None,
+            updated_at: 1,
+            superseded: false,
+            waiting_seconds: 86_400,
+            attempts: 73,
+            recipient_running: true,
+            recipient_name: Some("RCG Networks".into()),
+            held_behind,
+        })
+    }
+
+    /// ⚠️ THE OPERATOR'S CARD NAMES THE TASK A HELD MESSAGE WAITS FOR, and does
+    /// not send Queen to reconcile a delivery that never failed.
+    #[test]
+    fn a_held_message_says_which_active_task_it_waits_for() {
+        let held = waiting(Some(swarm_persistence::HeldBehindTask {
+            task_id: "a2b".into(),
+            title: "Phase A2b".into(),
+        }));
+        assert_eq!(held.kind, "task_message_held_behind_active_task");
+        assert_eq!(held.worker_name.as_deref(), Some("RCG Networks"));
+        assert!(held.reason.contains("\"Phase E\""), "{}", held.reason);
+        assert!(
+            held.reason
+                .contains("waiting for RCG Networks to finish \"Phase A2b\""),
+            "{}",
+            held.reason
+        );
+        assert!(!held.reason.contains("retrying"), "{}", held.reason);
+
+        let stuck = waiting(None);
+        assert_eq!(stuck.kind, "task_message_reconciliation");
+        assert!(
+            stuck.reason.contains("Queen must inspect"),
+            "{}",
+            stuck.reason
+        );
+    }
 }

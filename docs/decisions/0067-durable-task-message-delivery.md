@@ -171,6 +171,24 @@ writing, preserving the selected group's order. A failed evidence read rejects
 the delivery for Queen reconciliation, not optimistic submission. These normal
 holds do not create operator attention or a timer-based escalation.
 
+**Addendum, 2026-10-15: a hold says what holds it.** The hold stays as decided.
+What changed is that it now says why. Queen's four messages to RCG Networks, on
+a blocked task and a review task, waited a day behind its Active SOA Phase A2b.
+The surfaces that showed them then told Queen to reconcile a failed delivery,
+and she wrote that she did not know why it had not landed.
+
+- Every read of a message carries `held_behind`, which names the recipient's
+  other Active task while that task holds a queued message.
+- Queen's attention rows carry `held_behind` and the recipient's name.
+- `swarm_message_worker` answers `queued_behind_active_task` at send time.
+- The operator's Delivery paused card says which task the message is waiting
+  for, and says that resending will not speed it up.
+
+One SQL fragment states the hold for display. A test pins it to the
+dispatcher's own selection: a message it names is exactly one the dispatcher
+will not claim. Delivering through the hold, for example to a worker idle at
+its prompt, would be a product change this addendum does not make.
+
 This durable preflight is not a reservation held across asynchronous terminal
 observation and input. The engine still owns live input/engagement protection.
 An atomic task-admission fence across that interval remains open; passing these

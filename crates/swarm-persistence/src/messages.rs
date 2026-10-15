@@ -134,6 +134,23 @@ pub struct TaskMessage {
     /// Identity needed for fenced reconciliation of an uncertain attempt.
     pub delivery_claim_id: Option<String>,
     pub delivery_resolution_reason: Option<String>,
+    /// The recipient's other Active task this queued message is waiting for.
+    ///
+    /// ⚠️ A HOLD THAT DID NOT SAY SO. A worker gets messages about its other
+    /// tasks only between tasks (ADR 0067), and nothing said that this was why
+    /// a message was waiting. Queen's four messages to RCG Networks waited a
+    /// day behind its Active SOA Phase A2b in October 2026, and she wrote "I do
+    /// not know why the guarded delivery has not landed". `None` means nothing
+    /// holds it this way. It does not mean it will arrive soon.
+    #[serde(default)]
+    pub held_behind: Option<HeldBehindTask>,
+}
+
+/// The Active task a message waits behind: it arrives once this leaves Active.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HeldBehindTask {
+    pub task_id: String,
+    pub title: String,
 }
 
 /// The largest message the channel accepts.
@@ -162,6 +179,33 @@ pub const MAX_TASK_MESSAGE_BYTES: usize = 4_000;
 const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
        ON session.worker_id = {recipient} AND session.ended_at IS NULL";
 
+/// One column of the recipient's other Active task that holds a queued message
+/// to a worker (ADR 0067), or NULL. The message is aliased `m`.
+///
+/// It states the same rule as the dispatch selection, which is what keeps a
+/// message out of a worker's terminal while it works on something else. Queen's
+/// office is exempt there and here. The test
+/// `a_queued_message_names_the_active_task_it_waits_behind` keeps the two in
+/// step: a message this names is one the dispatcher will not claim.
+macro_rules! held_behind_active_task {
+    ($column:literal) => {
+        concat!(
+            "(SELECT ongoing.",
+            $column,
+            " FROM tasks ongoing
+               JOIN worker_profiles holder ON holder.id = ongoing.assigned_worker_id
+               WHERE m.recipient = 'worker' AND m.delivered_at IS NULL
+                 AND (SELECT state FROM task_message_deliveries WHERE message_id = m.id) = 'queued'
+                 AND ongoing.assigned_worker_id = m.recipient_worker_id
+                 AND holder.role != 'queen'
+                 AND ongoing.state = 'active' AND ongoing.removed_at IS NULL
+                 AND ongoing.id != m.task_id
+               ORDER BY ongoing.id LIMIT 1)"
+        )
+    };
+}
+pub(crate) use held_behind_active_task;
+
 /// The columns every read of a message must carry, so no reader can be handed
 /// a delivery record that says when without saying where.
 ///
@@ -169,7 +213,7 @@ const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
 /// there are three queries reading this table and they had already drifted
 /// once. `message_from_row` reads these by position, so a query that selects a
 /// different list fails loudly rather than quietly returning the wrong column.
-pub(super) const MESSAGE_COLUMNS: &str =
+pub(super) const MESSAGE_COLUMNS: &str = concat!(
     "m.id, m.task_id, m.sender, m.recipient, m.sender_worker_id,
             m.recipient_worker_id, m.body, m.created_at, m.delivered_at,
             m.delivered_session_id,
@@ -178,7 +222,11 @@ pub(super) const MESSAGE_COLUMNS: &str =
                      AND live.ended_at IS NULL),
             (SELECT state FROM task_message_deliveries WHERE message_id = m.id),
             (SELECT claim_id FROM task_message_deliveries WHERE message_id = m.id),
-            (SELECT resolution_reason FROM task_message_deliveries WHERE message_id = m.id)";
+            (SELECT resolution_reason FROM task_message_deliveries WHERE message_id = m.id), ",
+    held_behind_active_task!("id"),
+    ", ",
+    held_behind_active_task!("title")
+);
 
 impl TaskStore {
     /// Records Queen's task-scoped question after atomically enforcing who may
@@ -365,22 +413,13 @@ impl TaskStore {
             "INSERT INTO task_message_deliveries(message_id, state, updated_at) VALUES (?1, 'queued', ?2)",
             params![id, now],
         )?;
-        Ok(TaskMessage {
-            id,
-            task_id,
-            sender,
-            recipient,
-            sender_worker_id: sender_worker_id.map(|id| id.to_string()),
-            recipient_worker_id: recipient_worker_id.map(|id| id.to_string()),
-            body: body.to_owned(),
-            created_at: now,
-            delivered_at: None,
-            delivered_session_id: None,
-            reached_the_current_session: false,
-            delivery_state: "queued".into(),
-            delivery_claim_id: None,
-            delivery_resolution_reason: None,
-        })
+        // Read back rather than built here, so the sender learns at once what
+        // holds it, through the same columns every later read uses.
+        Ok(connection.query_row(
+            &format!("SELECT {MESSAGE_COLUMNS} FROM task_messages m WHERE m.id = ?1"),
+            [id],
+            message_from_row,
+        )?)
     }
 
     /// Reads a task's exchange, oldest first.
@@ -665,6 +704,10 @@ pub(super) fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task
         delivery_state: row.get(11)?,
         delivery_claim_id: row.get(12)?,
         delivery_resolution_reason: row.get(13)?,
+        held_behind: match (row.get(14)?, row.get(15)?) {
+            (Some(task_id), Some(title)) => Some(HeldBehindTask { task_id, title }),
+            _ => None,
+        },
     })
 }
 
