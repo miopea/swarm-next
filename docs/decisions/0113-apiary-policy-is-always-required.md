@@ -71,7 +71,7 @@ These stay refused in code, as before, and requiring is no exception:
   - check strictness (built as the check gate, ADR 0115);
   - Queen autonomy (built, see the 2026-10-13 addendum);
   - Night Watch schedule (built, see the 2026-10-13 Night Watch addendum);
-  - terminal history retention;
+  - terminal history retention (built, ADR 0118);
   - worker model (built, ADR 0116).
 
   Until then they are absent from `RequiredSetting`, so they cannot be required
@@ -208,3 +208,13 @@ Claude repository workers. The Keeper now requires it as `worker.model`:
 next start and refuses a local change with 409 `set_by_apiary`. Queen keeps her
 own default. Nothing is restarted for it. A member that still has workers on
 another model says how many in its health report, and the roster shows it.
+
+## Addendum 2026-10-15: terminal history retention, as `terminal.history_days`
+
+Retention had nothing to lock until ADR 0118 let a terminal host change it
+while it runs. The Keeper now requires the days as `terminal.history_days`:
+`1`, `3`, `7`, `14` or `30`. The member asks its host for them through a file,
+and counts them as in effect only when the host says it keeps them. A local
+change is refused with 409 `set_by_apiary`. A member whose release carries this
+but whose host has not taken it yet shows the new `engine_update_pending` gap,
+because its fix is the worker engine update, not a release.

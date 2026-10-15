@@ -237,9 +237,19 @@ level, its Settings show that tier locked, and leaving the Apiary lifts every
 requirement. Night Watch hours are the fourth: each member runs the Keeper's
 hours in its own time zone, and a member with no time zone is shown as waiting
 on its operator rather than told to update. Check strictness is the fifth, as
-the check gate (ADR 0115). Worker model is the sixth (ADR 0116). Engine updates
-already apply when idle on every packaged Hive. One more setting ruled on
-2026-10-12 awaits enforcement: terminal history retention.
+the check gate (ADR 0115). Worker model is the sixth (ADR 0116), and terminal
+history retention the seventh (ADR 0118). Engine updates already apply when idle
+on every packaged Hive. Every setting ruled on 2026-10-12 can now be required.
+
+Terminal history retention (ADR 0118, 2026-10-15): a Hive keeps 1, 3, 7, 14 or
+30 days of terminal history.
+- The terminal host takes a change while it runs, through a file beside its
+  history, with no protocol change and no restart. Shortening deletes older
+  history at once.
+- The setting counts as in effect only when the host says it keeps exactly those
+  days. Until then the card says it waits for the worker engine update.
+- A Keeper can require the days. Its roster shows a member waiting for its
+  engine update as such.
 
 Worker model (ADR 0116, 2026-10-14): a Hive names one Claude model for its
 repository workers: Claude's default, Opus, Sonnet or Haiku.

@@ -73,6 +73,7 @@ mod tasks;
 mod terminal_attach;
 mod terminal_control;
 mod terminal_control_socket;
+mod terminal_history_routes;
 mod terminal_host;
 mod terminal_socket;
 mod tunnel;
@@ -508,6 +509,9 @@ pub struct AppState {
     tunnel: Arc<tunnel::TunnelSupervisor>,
     release_manifest_url: Option<Arc<String>>,
     release_state_root: Option<Arc<PathBuf>>,
+    /// The terminal host's history directory, beside which this API asks for a
+    /// retention and reads the one the host is using (ADR 0118).
+    terminal_history_dir: Option<Arc<PathBuf>>,
     release_apply_request_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
@@ -639,6 +643,7 @@ impl AppState {
             passkey_challenges: Arc::default(),
             release_manifest_url: None,
             release_state_root: None,
+            terminal_history_dir: None,
             release_apply_request_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
@@ -931,6 +936,13 @@ impl AppState {
     pub fn with_release_paths(mut self, state_root: PathBuf, apply_request: PathBuf) -> Self {
         self.release_state_root = Some(Arc::new(state_root));
         self.release_apply_request_path = Some(Arc::new(apply_request));
+        self
+    }
+
+    /// Where the terminal host keeps history (ADR 0118).
+    #[must_use]
+    pub fn with_terminal_history_dir(mut self, dir: PathBuf) -> Self {
+        self.terminal_history_dir = Some(Arc::new(dir));
         self
     }
 
@@ -1425,6 +1437,9 @@ impl AppState {
         {
             tracing::warn!(%error, "Apiary policy could not refresh; shared-work sync continues");
         }
+        // Whatever the policy now requires reaches the terminal host, and what
+        // the host says it keeps decides whether that is in effect (ADR 0118).
+        self.sync_terminal_history();
         if let Some(store) = self.task_store.as_ref()
             && let Err(error) =
                 reconcile_apiary_watches(store, &client, &connection.node_credential, now).await
@@ -4840,6 +4855,11 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/runtime/worker-model",
             get(worker_model_routes::worker_model).put(worker_model_routes::set_worker_model),
+        )
+        .route(
+            "/api/v1/runtime/terminal-history",
+            get(terminal_history_routes::terminal_history)
+                .put(terminal_history_routes::set_terminal_history),
         )
         .route("/api/v1/runtime/release/check", post(release::check_now))
         .route("/api/v1/runtime/release/notes", get(release::notes))
@@ -15237,6 +15257,107 @@ mod tests {
         observe(CiOutcome::Passed);
         assert_eq!(close(app).await.status(), StatusCode::OK);
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+    }
+
+    /// ⚠️ ADR 0118 END TO END ON ONE MEMBER, with the real host function: the
+    /// Keeper's days reach the terminal host through the request file, and
+    /// count as in effect only once the host says it keeps them.
+    #[tokio::test]
+    async fn required_retention_counts_only_once_the_terminal_host_keeps_it() {
+        let now = unix_timestamp();
+        let hive = NightWatchMember::joined(now);
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("terminal-history");
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_terminal_history_dir(dir.clone())
+                .with_task_store(hive.member.clone()),
+        );
+        let required = swarm_domain::ApiaryPolicySetting {
+            key: "terminal.history_days".to_owned(),
+            value: "1".to_owned(),
+        };
+        hive.require(std::slice::from_ref(&required), now);
+
+        // An old host has said nothing: asked for, not in effect.
+        let shown =
+            response_json(authorized_get(app.clone(), "/api/v1/runtime/terminal-history").await)
+                .await;
+        assert_eq!(
+            shown,
+            serde_json::json!({ "days": 1, "set_by_apiary": 1, "host": "awaiting_engine_update", "host_max_age_seconds": null })
+        );
+        assert_eq!(
+            swarm_terminal::read_history_retention(
+                &swarm_terminal::history_retention_request_path(&dir)
+            ),
+            Some(86_400)
+        );
+        assert!(
+            hive.member.local_policy_settings().unwrap().is_empty(),
+            "not reported as applied while the host has not taken it"
+        );
+
+        // A host on this release takes it and says so.
+        let history =
+            swarm_terminal::HistoryStore::open(&dir, swarm_terminal::HistoryLimits::default())
+                .unwrap();
+        swarm_terminal_host::history_retention::apply_requested_history_retention(&history, &dir);
+        assert_eq!(history.max_age_seconds(), 86_400);
+        let shown =
+            response_json(authorized_get(app.clone(), "/api/v1/runtime/terminal-history").await)
+                .await;
+        assert_eq!(shown["host"], "in_effect");
+        assert_eq!(hive.member.local_policy_settings().unwrap(), vec![required]);
+
+        // Locked on the member.
+        let refused = send_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/runtime/terminal-history",
+            serde_json::json!({ "days": 30 }),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(refused).await["code"], "set_by_apiary");
+    }
+
+    /// A Hive's own choice reaches its host the same way, and an unoffered
+    /// number of days is refused before anything is written.
+    #[tokio::test]
+    async fn a_hives_own_retention_reaches_its_host() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("terminal-history");
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_terminal_history_dir(dir.clone())
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let chosen = send_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/runtime/terminal-history",
+            serde_json::json!({ "days": 14 }),
+        )
+        .await;
+        assert_eq!(chosen.status(), StatusCode::OK);
+        assert_eq!(response_json(chosen).await["days"], 14);
+        assert_eq!(
+            swarm_terminal::read_history_retention(
+                &swarm_terminal::history_retention_request_path(&dir)
+            ),
+            Some(14 * 86_400)
+        );
+        let refused = send_json(
+            app.clone(),
+            "PUT",
+            "/api/v1/runtime/terminal-history",
+            serde_json::json!({ "days": 2 }),
+        )
+        .await;
+        assert!(refused.status().is_client_error());
     }
 
     /// ⚠️ ADR 0113 for the worker model (ADR 0116): a model the Keeper sets is

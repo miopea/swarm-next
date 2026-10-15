@@ -4,7 +4,10 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -215,6 +218,10 @@ struct StoreState {
 pub struct HistoryStore {
     root: PathBuf,
     limits: HistoryLimits,
+    /// How long history is kept. Separate from `limits` because it is the one
+    /// bound that changes while the host runs (ADR 0118); the others are fixed
+    /// when the store opens.
+    max_age_seconds: AtomicU64,
     state: Mutex<StoreState>,
 }
 
@@ -238,6 +245,7 @@ impl HistoryStore {
         Ok(Self {
             root,
             limits,
+            max_age_seconds: AtomicU64::new(limits.max_age_seconds),
             state: Mutex::new(state),
         })
     }
@@ -293,9 +301,9 @@ impl HistoryStore {
         bytes: &[u8],
         now: SystemTime,
     ) -> Result<HistoryAppendOutcome, HistoryError> {
-        if bytes.len() as u64 > self.limits.max_record_bytes {
+        if bytes.len() as u64 > self.limits().max_record_bytes {
             return Err(HistoryError::RecordTooLarge {
-                limit: self.limits.max_record_bytes,
+                limit: self.limits().max_record_bytes,
             });
         }
         if bytes.is_empty() {
@@ -316,14 +324,14 @@ impl HistoryStore {
             .iter()
             .find(|segment| segment.index == current.index)
             .map_or(0, |segment| segment.bytes);
-        if current_bytes.saturating_add(record_bytes) > self.limits.max_segment_bytes {
+        if current_bytes.saturating_add(record_bytes) > self.limits().max_segment_bytes {
             return Ok(HistoryAppendOutcome::CheckpointRequired);
         }
         append_record_locked(
             &mut state,
             &self.root,
             id,
-            self.limits,
+            self.limits(),
             &record,
             bytes.len() as u64,
             now,
@@ -352,9 +360,9 @@ impl HistoryStore {
         now: SystemTime,
     ) -> Result<HistoryAppendOutcome, HistoryError> {
         let payload = encode_checkpoint(snapshot);
-        if payload.len() as u64 > self.limits.max_record_bytes {
+        if payload.len() as u64 > self.limits().max_record_bytes {
             return Err(HistoryError::RecordTooLarge {
-                limit: self.limits.max_record_bytes,
+                limit: self.limits().max_record_bytes,
             });
         }
         let record = encode_record(CHECKPOINT_RECORD, snapshot.sequence, now, &payload);
@@ -367,7 +375,7 @@ impl HistoryStore {
             &mut state,
             &self.root,
             id,
-            self.limits,
+            self.limits(),
             &record,
             snapshot.bytes.len() as u64,
             now,
@@ -414,7 +422,7 @@ impl HistoryStore {
         };
         let mut records = Vec::new();
         for file in &mut files {
-            records.extend(read_records(file, self.limits.max_record_bytes)?);
+            records.extend(read_records(file, self.limits().max_record_bytes)?);
         }
         Ok(records)
     }
@@ -494,7 +502,7 @@ impl HistoryStore {
         let mut has_more = false;
         while segment < segments.len() {
             let (segment_index, file) = &mut segments[segment];
-            let records = read_records(file, self.limits.max_record_bytes)?;
+            let records = read_records(file, self.limits().max_record_bytes)?;
             if record > records.len() {
                 reset = true;
                 segment = 0;
@@ -580,7 +588,7 @@ impl HistoryStore {
     pub fn diagnostics(&self) -> Result<HistoryDiagnostics, HistoryError> {
         let state = self.lock()?;
         Ok(HistoryDiagnostics {
-            limits: self.limits,
+            limits: self.limits(),
             retained_bytes: state.retained_bytes,
             session_count: state.sessions.len(),
             segment_count: state
@@ -595,6 +603,42 @@ impl HistoryStore {
         })
     }
 
+    /// The limits in effect now, with the current retention.
+    fn limits(&self) -> HistoryLimits {
+        HistoryLimits {
+            max_age_seconds: self.max_age_seconds.load(Ordering::SeqCst),
+            ..self.limits
+        }
+    }
+
+    /// How long history is kept, in seconds.
+    #[must_use]
+    pub fn max_age_seconds(&self) -> u64 {
+        self.max_age_seconds.load(Ordering::SeqCst)
+    }
+
+    /// Changes how long history is kept while the host runs (ADR 0118), and
+    /// removes at once what the new age no longer covers. Shortening deletes
+    /// older history now rather than at the next output; lengthening keeps
+    /// only what is still there.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero age, I/O, or a poisoned store lock.
+    pub fn set_max_age(&self, seconds: u64) -> Result<(), HistoryError> {
+        self.set_max_age_at(seconds, SystemTime::now())
+    }
+
+    fn set_max_age_at(&self, seconds: u64, now: SystemTime) -> Result<(), HistoryError> {
+        if seconds == 0 {
+            return Err(HistoryError::InvalidLimits);
+        }
+        let mut state = self.lock()?;
+        self.max_age_seconds.store(seconds, Ordering::SeqCst);
+        prune_expired(&mut state, self.limits(), now)?;
+        cleanup_empty_sessions(&mut state, &self.root)
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, StoreState>, HistoryError> {
         self.state.lock().map_err(|_| HistoryError::LockPoisoned)
     }
@@ -606,8 +650,8 @@ impl HistoryStore {
     #[cfg(test)]
     fn prune_at(&self, now: SystemTime) -> Result<(), HistoryError> {
         let mut state = self.lock()?;
-        prune_expired(&mut state, self.limits, now)?;
-        prune_total(&mut state, self.limits, 0)?;
+        prune_expired(&mut state, self.limits(), now)?;
+        prune_total(&mut state, self.limits(), 0)?;
         cleanup_empty_sessions(&mut state, &self.root)
     }
 }
@@ -1612,6 +1656,41 @@ mod tests {
             .prune_at(written + Duration::from_secs(limits().max_age_seconds + 1))
             .unwrap();
         assert_eq!(store.diagnostics().unwrap().retained_bytes, 0);
+    }
+
+    /// ⚠️ ADR 0118: retention changes while the host runs. Shortening it removes
+    /// what is now too old at once; lengthening it keeps what is still there.
+    #[test]
+    fn retention_changes_without_reopening_the_store() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+        let id = WorkerSessionId::new();
+        let written = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        store.start_session(id).unwrap();
+        store
+            .append_checkpoint_at(id, &checkpoint(0, b"two days old"), written)
+            .unwrap();
+        store.finish_session(id).unwrap();
+        let later = written + Duration::from_secs(2 * 86_400);
+
+        store.set_max_age_at(3 * 86_400, later).unwrap();
+        assert_eq!(store.max_age_seconds(), 3 * 86_400);
+        assert!(store.diagnostics().unwrap().retained_bytes > 0);
+        assert_eq!(
+            store.diagnostics().unwrap().limits.max_age_seconds,
+            3 * 86_400
+        );
+
+        store.set_max_age_at(86_400, later).unwrap();
+        assert_eq!(
+            store.diagnostics().unwrap().retained_bytes,
+            0,
+            "shortening retention removes older history at once"
+        );
+        assert!(matches!(
+            store.set_max_age(0),
+            Err(HistoryError::InvalidLimits)
+        ));
     }
 
     #[cfg(unix)]

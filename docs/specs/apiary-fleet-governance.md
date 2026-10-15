@@ -55,11 +55,12 @@ not in effect, with the reason.
 - `checks.gate`, check strictness: whether CI must pass on a task's commits
   before the work counts as done (ADR 0115);
 - `worker.model`, the Claude model every member's repository workers start with
-  (ADR 0116).
+  (ADR 0116);
+- `terminal.history_days`, how many days of terminal history each member keeps,
+  applied by its terminal host while it runs (ADR 0118).
 
 Engine updates already apply when idle on every packaged Hive, so there is
-nothing to require. Terminal history retention needs a Hive setting built before
-it can be required.
+nothing to require.
 
 ## Fleet health
 

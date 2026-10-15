@@ -232,7 +232,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             release_apply_request_path(&database_path),
         )
         .with_workspace_roots(workspace_roots)
+        .with_terminal_history_dir(terminal_history_dir_from_env(&database_path))
         .with_task_store(store);
+    // The Hive's retention reaches the terminal host before anything is served.
+    state.sync_terminal_history();
     state = note_missing_operator_token(state, operator_token.as_ref());
     // WEB PUSH IS NOT LOAD-BEARING. A bad VAPID subject used to abort startup,
     // which trades "the operator gets no push notifications" for "the operator
@@ -663,6 +666,21 @@ fn scout_workspace_from_roots(roots: &[PathBuf]) -> PathBuf {
                 .ancestors()
                 .find(|candidate| roots.iter().all(|root| root.starts_with(candidate)))
                 .map_or_else(|| first.clone(), PathBuf::from)
+        },
+        PathBuf::from,
+    )
+}
+
+/// The terminal host's history directory: its own environment variable when
+/// set, else beside the database, which is where a packaged Hive's host keeps
+/// it (`@STATE_ROOT@/terminal-history`).
+fn terminal_history_dir_from_env(database_path: &Path) -> PathBuf {
+    env::var_os("SWARM_TERMINAL_HISTORY_DIR").map_or_else(
+        || {
+            database_path
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+                .join("terminal-history")
         },
         PathBuf::from,
     )

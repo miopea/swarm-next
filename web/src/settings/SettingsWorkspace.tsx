@@ -12,6 +12,7 @@ import type { LockDetectionState } from "../presence/PresenceController";
 import NightWatchSettings from "./NightWatchSettings";
 import CheckGateSettings from "./CheckGateSettings";
 import WorkerModelSettings from "./WorkerModelSettings";
+import TerminalHistorySettings from "./TerminalHistorySettings";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -281,6 +282,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       {shows("settings-usage") && operatorToken ? (
         <UsageSettings operatorToken={operatorToken} visible={shows("settings-usage")} />
       ) : null}
+      {shows("settings-terminal-history") && operatorToken && <TerminalHistorySettings operatorToken={operatorToken} />}
       {shows("settings-presence") && (
     <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
           <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>

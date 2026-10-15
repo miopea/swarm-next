@@ -32,6 +32,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             { key: "night_watch.hours", kind: "hours", values: [] },
             { key: "checks.gate", kind: "choice", values: ["off", "warn", "require"] },
             { key: "worker.model", kind: "choice", values: ["default", "opus", "sonnet", "haiku"] },
+            { key: "terminal.history_days", kind: "choice", values: ["1", "3", "7", "14", "30"] },
           ],
         }
         // Thistle's release is too old for either; the others comply and say nothing.
@@ -79,6 +80,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
           { key: "night_watch.hours", expected: "22:00-07:00", reason: "release_cannot_apply" },
         ] }, { hive_id: "clover", gaps: [
           { key: "night_watch.hours", expected: "22:00-07:00", reason: "needs_local_choice" },
+          { key: "terminal.history_days", expected: "3", reason: "engine_update_pending" },
         ] }, { hive_id: "bramble", gaps: [
           // Hidden behind its expired membership, which is the cause (ADR 0117).
           { key: "release.auto_install", expected: "on", reason: "not_reported" },

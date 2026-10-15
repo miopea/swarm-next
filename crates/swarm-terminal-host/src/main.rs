@@ -4,7 +4,10 @@ use swarm_terminal::{
     HistoryLimits, HistoryStore, JournalLimits, SessionRegistry, default_terminal_history_path,
     default_terminal_socket_path,
 };
-use swarm_terminal_host::HostServer;
+use swarm_terminal_host::{
+    HostServer,
+    history_retention::{RETENTION_CHECK_SECONDS, apply_requested_history_retention},
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -55,7 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let history_path = env::var_os("SWARM_TERMINAL_HISTORY_DIR")
         .map_or_else(default_terminal_history_path, PathBuf::from);
     let history_limits = history_limits_from_env()?;
-    let history = Arc::new(HistoryStore::open(history_path, history_limits)?);
+    let history = Arc::new(HistoryStore::open(&history_path, history_limits)?);
+    // The Hive's retention, applied before anything is served (ADR 0118).
+    apply_requested_history_retention(&history, &history_path);
+    let retention_history = Arc::clone(&history);
     let history_diagnostics = history.diagnostics()?;
     info!(
         retained_bytes = history_diagnostics.retained_bytes,
@@ -73,8 +79,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(history),
     )?);
     let server = HostServer::bind(socket_path, registry)?;
+    // ⚠️ OWNED BY THIS SELECT, so it ends with the host. One bounded check a
+    // minute: the retention the Hive asks for, applied while the host runs,
+    // because a remote restart is exactly what ADR 0113 rules out.
+    let retention_watch = async move {
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(RETENTION_CHECK_SECONDS));
+        loop {
+            tick.tick().await;
+            let history = Arc::clone(&retention_history);
+            let dir = history_path.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                apply_requested_history_retention(&history, &dir)
+            })
+            .await;
+        }
+    };
     tokio::select! {
         result = server.run() => result?,
+        () = retention_watch => {}
         result = shutdown_signal() => {
             result?;
             info!("terminal host received graceful shutdown signal");

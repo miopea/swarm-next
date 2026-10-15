@@ -89,6 +89,14 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
     const locked = new URLSearchParams(window.location.search).get("checkGate") === "locked";
     return { level: "require", set_by_apiary: locked ? "require" : null };
   }
+  // ?terminalHistory=locked is a member whose Apiary sets retention, and whose
+  // host has not taken it yet (ADR 0118).
+  if (path === "/api/v1/runtime/terminal-history") {
+    const locked = new URLSearchParams(window.location.search).get("terminalHistory") === "locked";
+    return locked
+      ? { days: 3, set_by_apiary: 3, host: "awaiting_engine_update", host_max_age_seconds: null }
+      : { days: 14, set_by_apiary: null, host: "in_effect", host_max_age_seconds: 14 * 86_400 };
+  }
   // ?workerModel=locked is a member whose Apiary sets the worker model (ADR 0116).
   if (path === "/api/v1/runtime/worker-model") {
     const locked = new URLSearchParams(window.location.search).get("workerModel") === "locked";

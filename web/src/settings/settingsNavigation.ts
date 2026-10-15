@@ -89,6 +89,8 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["usage", "tokens", "token", "spend", "spending", "burn", "cost", "cache", "cached", "context", "budget", "quota", "provider usage"] },
   { id: "settings-runtime", section: "settings-updates", title: "App and API",
     keywords: ["update", "release", "version", "upgrade", "install", "worker engine", "development", "reload", "build", "provider", "restart", "system"] },
+  { id: "settings-terminal-history", section: "settings-maintenance", title: "Terminal history",
+    keywords: ["terminal history", "retention", "keep", "days", "scrollback", "disk", "storage", "delete"] },
   { id: "settings-backup", section: "settings-maintenance", title: "Backup",
     keywords: ["backup", "export", "restore", "snapshot", "copy", "carry"] },
   { id: "settings-migration", section: "settings-maintenance", title: "Migration",

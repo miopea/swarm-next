@@ -43,6 +43,8 @@ mod check_gate;
 pub use check_gate::{CheckGateSetting, CiCandidate};
 mod worker_model;
 pub use worker_model::WorkerModelSetting;
+mod terminal_history;
+pub use terminal_history::TerminalHistorySetting;
 mod provider_usage;
 mod queen_recovery;
 mod queen_review;
@@ -389,7 +391,10 @@ const WORKER_MODEL_SCHEMA_MARKER: i64 = 201;
 /// A member's credential renews before it lapses: the Keeper keeps the one it
 /// replaced, and both sides let the credential and receipt change (ADR 0117).
 const MEMBERSHIP_RENEWAL_SCHEMA_MARKER: i64 = 202;
-const CURRENT_SCHEMA_VERSION: i64 = MEMBERSHIP_RENEWAL_SCHEMA_MARKER;
+/// How long a Hive keeps terminal history, and what its host says it keeps
+/// (ADR 0118).
+const TERMINAL_HISTORY_SCHEMA_MARKER: i64 = 203;
+const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_HISTORY_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4770,6 +4775,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < MEMBERSHIP_RENEWAL_SCHEMA_MARKER {
         crate::federation_renewal::migrate_membership_renewal(transaction)?;
+    }
+    if schema_version < TERMINAL_HISTORY_SCHEMA_MARKER {
+        crate::terminal_history::migrate_terminal_history(transaction)?;
     }
     Ok(())
 }
@@ -10762,6 +10770,13 @@ mod tests {
         SchemaStep {
             table: "apiary_federation_memberships",
             artifact: "previous_credential_digest",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        // Terminal history retention (ADR 0118).
+        SchemaStep {
+            table: "terminal_history_settings",
+            artifact: "",
             undo_sql: "",
             probe_sql: "",
         },

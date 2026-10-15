@@ -198,6 +198,10 @@ pub enum RequiredSetting {
     /// 0116). Queen keeps her own default, and a running worker keeps its
     /// model until it next starts: never a remote restart.
     WorkerModel,
+    /// How many days of terminal history each member keeps (ADR 0118). Its
+    /// terminal host applies it while it runs, from the release that carries
+    /// it; an older host waits for its worker engine update.
+    TerminalHistoryDays,
 }
 
 /// What kind of value a required setting takes.
@@ -223,7 +227,7 @@ pub enum PolicyEnforcer {
 }
 
 impl RequiredSetting {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::ReleaseAutoInstall,
         Self::SharedWorkMinimumVersion,
         Self::QueenAutonomyAtHive,
@@ -232,6 +236,7 @@ impl RequiredSetting {
         Self::NightWatchHours,
         Self::CheckGate,
         Self::WorkerModel,
+        Self::TerminalHistoryDays,
     ];
 
     #[must_use]
@@ -245,6 +250,7 @@ impl RequiredSetting {
             Self::NightWatchHours => "night_watch.hours",
             Self::CheckGate => "checks.gate",
             Self::WorkerModel => "worker.model",
+            Self::TerminalHistoryDays => "terminal.history_days",
         }
     }
 
@@ -265,6 +271,7 @@ impl RequiredSetting {
             Self::NightWatchHours => RequiredValue::DailyHours,
             Self::CheckGate => RequiredValue::Choice(&["off", "warn", "require"]),
             Self::WorkerModel => RequiredValue::Choice(&["default", "opus", "sonnet", "haiku"]),
+            Self::TerminalHistoryDays => RequiredValue::Choice(&["1", "3", "7", "14", "30"]),
         }
     }
 
@@ -301,6 +308,27 @@ impl RequiredSetting {
             | Self::QueenAutonomyAway
             | Self::QueenAutonomyNightWatch
             | Self::CheckGate
+            | Self::WorkerModel
+            | Self::TerminalHistoryDays => None,
+        }
+    }
+
+    /// The release from which a member applies this setting through its worker
+    /// engine, or `None` when the API applies it. A member on that release that
+    /// has not applied it is waiting for its worker engine update, not for an
+    /// update of its own (ADR 0118). Keep in step with the release that first
+    /// carries the setting, as with `local_choice_since`.
+    #[must_use]
+    pub const fn engine_applies_since(self) -> Option<&'static str> {
+        match self {
+            Self::TerminalHistoryDays => Some("1.17.4"),
+            Self::ReleaseAutoInstall
+            | Self::SharedWorkMinimumVersion
+            | Self::QueenAutonomyAtHive
+            | Self::QueenAutonomyAway
+            | Self::QueenAutonomyNightWatch
+            | Self::NightWatchHours
+            | Self::CheckGate
             | Self::WorkerModel => None,
         }
     }
@@ -314,7 +342,8 @@ impl RequiredSetting {
             | Self::QueenAutonomyNightWatch
             | Self::NightWatchHours
             | Self::CheckGate
-            | Self::WorkerModel => PolicyEnforcer::Member,
+            | Self::WorkerModel
+            | Self::TerminalHistoryDays => PolicyEnforcer::Member,
             Self::SharedWorkMinimumVersion => PolicyEnforcer::Keeper,
         }
     }
@@ -502,6 +531,10 @@ pub enum PolicyGapReason {
     /// Its release applies this setting, but its own operator has to choose
     /// something first — for Night Watch hours, the Hive's time zone.
     NeedsLocalChoice,
+    /// Its release applies this setting, but through a worker engine it has not
+    /// swapped to yet (ADR 0118). It applies by itself once its workers are
+    /// idle, or its operator applies the engine update.
+    EngineUpdatePending,
     /// It applied a different value.
     Different { local: String },
     /// Its release is older than the Apiary's minimum, so the Keeper refuses it
@@ -578,18 +611,23 @@ pub fn policy_gaps(
                 .iter()
                 .find(|applied| applied.key == setting.key)
             {
-                None => match RequiredSetting::from_key(&setting.key)
-                    .and_then(RequiredSetting::local_choice_since)
-                    .and_then(SwarmVersion::parse)
-                {
-                    Some(since)
-                        if SwarmVersion::parse(report.version)
-                            .is_some_and(|running| running.at_least(&since)) =>
-                    {
+                None => {
+                    let known = RequiredSetting::from_key(&setting.key);
+                    let running = SwarmVersion::parse(report.version);
+                    let reached = |since: Option<&str>| {
+                        since
+                            .and_then(SwarmVersion::parse)
+                            .zip(running.as_ref())
+                            .is_some_and(|(since, running)| running.at_least(&since))
+                    };
+                    if reached(known.and_then(RequiredSetting::engine_applies_since)) {
+                        PolicyGapReason::EngineUpdatePending
+                    } else if reached(known.and_then(RequiredSetting::local_choice_since)) {
                         PolicyGapReason::NeedsLocalChoice
+                    } else {
+                        PolicyGapReason::ReleaseCannotApply
                     }
-                    _ => PolicyGapReason::ReleaseCannotApply,
-                },
+                }
                 Some(applied) if applied.value == setting.value => continue,
                 Some(applied) => PolicyGapReason::Different {
                     local: applied.value.clone(),
@@ -1034,5 +1072,30 @@ mod tests {
                 "{knows} applies it once its operator chooses a time zone"
             );
         }
+    }
+
+    /// ⚠️ ADR 0118: a member whose release knows terminal history retention
+    /// but whose terminal host has not taken it is waiting for its worker
+    /// engine update, which is a different fix from updating the release.
+    #[test]
+    fn retention_not_yet_in_the_engine_says_so() {
+        let required = [setting("terminal.history_days", "3")];
+        let gap = |version: &str| {
+            policy_gaps(
+                &required,
+                1,
+                Some(ReportedPolicy {
+                    revision: Some(1),
+                    applied: &[],
+                    version,
+                }),
+            )[0]
+            .reason
+            .clone()
+        };
+        assert_eq!(gap("1.17.4"), PolicyGapReason::EngineUpdatePending);
+        assert_eq!(gap("1.17.3"), PolicyGapReason::ReleaseCannotApply);
+        assert!(validate_required_settings(&[setting("terminal.history_days", "2")]).is_err());
+        assert!(validate_required_settings(&required).is_ok());
     }
 }

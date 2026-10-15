@@ -1,6 +1,7 @@
 mod control_gate;
 mod control_protocol;
 mod history;
+mod history_retention;
 mod ipc;
 mod journal;
 mod maintenance;
@@ -20,6 +21,10 @@ pub use history::{
     HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError, HistoryLimits,
     HistoryPage, HistoryRecord, HistorySessionSummary, HistoryStore, MAX_HISTORY_PAGE_BYTES,
     MAX_HISTORY_PAGE_RECORDS, MAX_HISTORY_RECORD_BYTES, default_terminal_history_path,
+};
+pub use history_retention::{
+    history_retention_applied_path, history_retention_request_path, read_history_retention,
+    write_history_retention,
 };
 #[cfg(unix)]
 pub use ipc::HostClient;

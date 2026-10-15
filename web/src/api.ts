@@ -1696,6 +1696,7 @@ export type PolicyGapReason =
   | { reason: "not_received" }
   | { reason: "release_cannot_apply" }
   | { reason: "needs_local_choice" }
+  | { reason: "engine_update_pending" }
   | { reason: "different"; local: string }
   | { reason: "below_minimum"; running: string };
 export type PolicyGap = { key: string; expected: string } & PolicyGapReason;
@@ -2715,6 +2716,31 @@ export async function setWorkerModel(operatorToken: string, model: WorkerModel):
     body: JSON.stringify({ model }),
   });
   return response.json() as Promise<WorkerModelSetting>;
+}
+
+/** Days of terminal history a Hive keeps (ADR 0118). */
+export type HistoryRetentionDays = 1 | 3 | 7 | 14 | 30;
+/** What the terminal host is doing about it: only "in_effect" means it keeps exactly these days. */
+export type HostRetentionState = "in_effect" | "applying" | "awaiting_engine_update" | "unknown";
+export type TerminalHistory = {
+  days: HistoryRetentionDays;
+  set_by_apiary: HistoryRetentionDays | null;
+  host: HostRetentionState;
+  host_max_age_seconds: number | null;
+};
+
+export async function fetchTerminalHistory(operatorToken: string, signal?: AbortSignal): Promise<TerminalHistory> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-history", { signal });
+  return response.json() as Promise<TerminalHistory>;
+}
+
+export async function setTerminalHistory(operatorToken: string, days: HistoryRetentionDays): Promise<TerminalHistory> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-history", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ days }),
+  });
+  return response.json() as Promise<TerminalHistory>;
 }
 
 export async function fetchTaskCi(operatorToken: string, taskId: string, signal?: AbortSignal): Promise<TaskCi> {

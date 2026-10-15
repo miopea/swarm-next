@@ -25,6 +25,7 @@ use tokio::{
     sync::Semaphore,
 };
 use tracing::{info, warn};
+pub mod history_retention;
 mod provider_settings;
 
 /// How long Claude gets to answer whether it holds a conversation.

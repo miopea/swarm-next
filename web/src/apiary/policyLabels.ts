@@ -26,6 +26,10 @@ const LABELS: Record<string, { name: string; values: Record<string, string> }> =
     name: "Worker model",
     values: WORKER_MODEL_LABELS,
   },
+  "terminal.history_days": {
+    name: "Terminal history kept",
+    values: { "1": "1 day", "3": "3 days", "7": "7 days", "14": "14 days", "30": "30 days" },
+  },
   "night_watch.hours": {
     name: "Night Watch hours",
     values: {},
@@ -65,6 +69,7 @@ export function gapReason(gap: PolicyGap): string {
     case "needs_local_choice": return gap.key === "night_watch.hours"
       ? "This Hive's operator hasn't chosen its time zone for Night Watch yet"
       : "This Hive's operator has a choice to make before it applies";
+    case "engine_update_pending": return "This Hive applies it after its worker engine update, which runs by itself once its workers are idle";
     case "different": return `This Hive runs "${gap.local}" instead`;
     case "below_minimum": return `This Hive runs ${gap.running}, so it can't take Apiary tasks until it updates`;
   }

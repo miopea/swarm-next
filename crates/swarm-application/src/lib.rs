@@ -710,6 +710,15 @@ impl ApiaryService {
                 {
                     self.store.clear_local_policy_setting(setting.key())?;
                 }
+                // Terminal history is kept by the terminal host, which says what
+                // it is using; until it says the required days, they are not in
+                // effect, whatever this API has asked for (ADR 0118).
+                Some(_)
+                    if setting == swarm_domain::RequiredSetting::TerminalHistoryDays
+                        && !self.store.terminal_history()?.in_effect =>
+                {
+                    self.store.clear_local_policy_setting(setting.key())?;
+                }
                 Some(required) => self.store.record_local_policy_setting(required, now)?,
                 None => self.store.clear_local_policy_setting(setting.key())?,
             }
