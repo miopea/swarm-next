@@ -12,6 +12,18 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.4
+
+One database update (203). Your Hive backs its database up first, by itself, and your workers are not stopped.
+
+### New features
+- Terminal history, in Settings > Maintenance: choose how long your workers' terminal history is kept, from 1 to 30 days. Seven stays the default, and the 512 MB limit still applies. Shortening it removes older history straight away. A Keeper can set it for every Hive. (after the worker engine update)
+
+### Fixes
+- When Queen messages a worker that is busy on a different task, Swarm now says why the message is waiting. A worker only gets messages about its other tasks between tasks. Until now these messages waited silently and looked like failed deliveries. Queen is told which task the message is waiting behind, and Queues shows it as "Waiting for its Active task to finish".
+- A Hive whose Apiary membership has run out no longer retries its Keeper every second. It now waits longer after each refusal, up to two minutes. Until now, it logged a "401 Unauthorized" line every second until its membership renewed.
+- On the Keeper, the list of Hives uses the full width of the page instead of half of it.
+
 ## 1.17.3
 
 Three database updates (200, 201 and 202). Your Hive backs its database up first, by itself, and your workers are not stopped.
