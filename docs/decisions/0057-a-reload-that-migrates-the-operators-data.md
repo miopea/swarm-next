@@ -114,3 +114,11 @@ for integrity — because writing bytes is not the same as having a backup.
 
 The reasoning that produced it is worth keeping even after the guard lands: the
 question was not "may I", it was "what makes it safe to say yes".
+
+**Addendum, 2026-10-18: the copies are bounded.** Nothing pruned these copies,
+and by 2026-10-18 the Keeper held 34 of them, 2.5 GB, on a system disk with
+8 GB free. Each reload now keeps the newest three `pre-v…-reload-…` copies and
+removes the rest, with their `-shm` and `-wal` files. A reload that takes a
+copy counts it as one of the three. Daily, pre-update and hand-taken copies are
+not touched. A copy that cannot be removed is logged, and the reload is never
+refused over cleanup.

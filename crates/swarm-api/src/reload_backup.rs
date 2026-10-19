@@ -9,6 +9,13 @@ use swarm_persistence::TaskStore;
 /// inventing a second place to look on the day someone needs one.
 const BACKUP_DIRECTORY: &str = "backups";
 
+/// How many pre-migration reload copies are kept, newest first.
+///
+/// The installer keeps three pre-update copies, and this matches it. Nothing
+/// pruned these before: by 2026-10-18 the Keeper held 34, 2.5 GB, on a system
+/// disk with 8 GB free, and every migrating reload added about 90 MB more.
+const KEPT_RELOAD_BACKUPS: usize = 3;
+
 /// Why a reload was refused, in words that name the step that failed.
 ///
 /// "Could not reload" is what this must never say. A refusal the operator
@@ -119,14 +126,14 @@ pub(crate) fn back_up_before_migrating_reload(
     let live = store
         .schema_version()
         .map_err(|error| BackupError::Unreadable(error.to_string()))?;
+    let backups = database_directory.join(BACKUP_DIRECTORY);
     if !would_migrate(checkout, live) {
+        prune_reload_backups(&backups, None);
         return Ok(None);
     }
     // Named for what it is FROM, because that is what someone restoring needs:
     // the version it holds, and the build that was about to change it.
-    let destination = database_directory
-        .join(BACKUP_DIRECTORY)
-        .join(format!("pre-v{live}-reload-{revision}-{timestamp}.sqlite3"));
+    let destination = backups.join(format!("pre-v{live}-reload-{revision}-{timestamp}.sqlite3"));
     // SQLite's own backup API rather than a file copy. The database runs in WAL
     // mode, so copying the file alone takes it WITHOUT the committed pages
     // still in the -wal — a backup that opens cleanly and is quietly missing
@@ -137,7 +144,49 @@ pub(crate) fn back_up_before_migrating_reload(
         .map_err(|error| BackupError::NotWritten(error.to_string()))?;
     swarm_persistence::verify_backup_at(&destination, live)
         .map_err(|error| BackupError::Unverifiable(error.to_string()))?;
+    prune_reload_backups(&backups, Some(&destination));
     Ok(Some(destination))
+}
+
+/// Keeps the newest `KEPT_RELOAD_BACKUPS` pre-migration reload copies and
+/// removes the rest, each with any `-shm` and `-wal` file beside it.
+///
+/// Only files named `pre-v…-reload-….sqlite3` are touched. The daily and
+/// pre-update copies are the installer's to prune, and hand-taken copies are
+/// the operator's. `kept` is the copy this reload just verified: it always
+/// counts as one of the three, even if a clock moved and another file looks
+/// newer. A copy that cannot be removed is left and logged, because cleanup
+/// must never refuse a reload whose backup succeeded.
+fn prune_reload_backups(backups: &Path, kept: Option<&Path>) {
+    let Ok(entries) = std::fs::read_dir(backups) else {
+        return;
+    };
+    let mut copies: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| {
+            entry.file_name().to_str().is_some_and(|name| {
+                name.starts_with("pre-v") && name.contains("-reload-") && name.ends_with(".sqlite3")
+            })
+        })
+        .filter(|entry| kept != Some(entry.path().as_path()))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .collect();
+    copies.sort_by_key(|copy| std::cmp::Reverse(copy.0));
+    let others_kept = KEPT_RELOAD_BACKUPS - usize::from(kept.is_some());
+    for (_, path) in copies.into_iter().skip(others_kept) {
+        for doomed in [
+            path.clone(),
+            PathBuf::from(format!("{}-shm", path.display())),
+            PathBuf::from(format!("{}-wal", path.display())),
+        ] {
+            if let Err(error) = std::fs::remove_file(&doomed)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %doomed.display(), %error, "an old reload backup could not be removed");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +284,105 @@ mod tests {
         );
         // And it verifies as that version, rather than merely existing.
         swarm_persistence::verify_backup_at(&backup, live).unwrap();
+    }
+
+    /// Writes an old reload copy, with the given age in seconds, plus its
+    /// `-shm` and `-wal` files.
+    fn old_reload_copy(backups: &Path, version: i64, age_seconds: u64) -> PathBuf {
+        let path = backups.join(format!(
+            "pre-v{version}-reload-0ld0ld0ld0ld-2026090{version}.sqlite3"
+        ));
+        for file in [
+            path.clone(),
+            PathBuf::from(format!("{}-shm", path.display())),
+            PathBuf::from(format!("{}-wal", path.display())),
+        ] {
+            std::fs::write(&file, b"old").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds),
+                )
+                .unwrap();
+        }
+        path
+    }
+
+    /// The Keeper held 34 of these, 2.5 GB, because nothing removed them. A
+    /// migrating reload keeps its own copy and the two newest older ones, and
+    /// leaves every other kind of backup alone.
+    #[test]
+    fn a_migrating_reload_keeps_three_reload_copies_and_nothing_else_moves() {
+        let (home, store, live) = live_store();
+        let backups = home.path().join(BACKUP_DIRECTORY);
+        std::fs::create_dir_all(&backups).unwrap();
+        let oldest = old_reload_copy(&backups, 1, 4_000);
+        let older = old_reload_copy(&backups, 2, 3_000);
+        let newer = old_reload_copy(&backups, 3, 2_000);
+        let newest = old_reload_copy(&backups, 4, 1_000);
+        let daily = backups.join("daily-20261017.sqlite3");
+        let update = backups.join("pre-update-1.17.4.sqlite3");
+        let by_hand = backups.join("before-a-risky-change.sqlite3");
+        for other in [&daily, &update, &by_hand] {
+            std::fs::write(other, b"keep").unwrap();
+        }
+        let checkout = checkout_declaring(&format!(
+            "const CURRENT_SCHEMA_VERSION: i64 = {};\n",
+            live + 1
+        ));
+
+        let written = back_up_before_migrating_reload(
+            &store,
+            home.path(),
+            checkout.path(),
+            "89d04f485bd7",
+            "20261018T200000Z",
+        )
+        .unwrap()
+        .expect("a migrating reload takes a copy");
+
+        assert!(written.exists());
+        assert!(newest.exists() && newer.exists());
+        for gone in [&oldest, &older] {
+            assert!(!gone.exists(), "{} should be pruned", gone.display());
+            assert!(!PathBuf::from(format!("{}-shm", gone.display())).exists());
+            assert!(!PathBuf::from(format!("{}-wal", gone.display())).exists());
+        }
+        for other in [&daily, &update, &by_hand] {
+            assert!(other.exists(), "{} is not a reload copy", other.display());
+        }
+    }
+
+    /// A reload with no migration takes no copy, but still trims the pile to
+    /// the newest three, so the copies already there do not wait for the next
+    /// schema change to go.
+    #[test]
+    fn a_reload_without_a_migration_trims_to_the_newest_three() {
+        let (home, store, live) = live_store();
+        let backups = home.path().join(BACKUP_DIRECTORY);
+        std::fs::create_dir_all(&backups).unwrap();
+        let copies: Vec<_> = (1..=5)
+            .map(|version| {
+                old_reload_copy(
+                    &backups,
+                    version,
+                    10_000 - u64::try_from(version).unwrap() * 1_000,
+                )
+            })
+            .collect();
+        let checkout =
+            checkout_declaring(&format!("const CURRENT_SCHEMA_VERSION: i64 = {live};\n"));
+
+        assert!(
+            back_up_before_migrating_reload(&store, home.path(), checkout.path(), "r", "t")
+                .unwrap()
+                .is_none()
+        );
+
+        let survivors: Vec<bool> = copies.iter().map(|copy| copy.exists()).collect();
+        assert_eq!(survivors, [false, false, true, true, true]);
     }
 
     /// The other half of the ablation: no migration, no backup, nothing touched.
