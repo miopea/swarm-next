@@ -189,6 +189,16 @@ dispatcher's own selection: a message it names is exactly one the dispatcher
 will not claim. Delivering through the hold, for example to a worker idle at
 its prompt, would be a product change this addendum does not make.
 
+**Addendum, 2026-10-18: a message that can never arrive is cancelled.** Four
+messages to the removed My RCG worker, on tasks closed in September, sat queued
+for six weeks and showed in Queues as live work. A message on a closed task to a
+live worker would have been claimed and delivered. Each claim pass now first
+cancels queued messages to a worker whose recipient was removed, or whose task
+was completed, abandoned or removed, and records the reason. Claims already in
+flight keep their own outcome, and the message stays in history. Messages to
+Queen are not cancelled, because a worker's late report on finished work is
+something she must still see.
+
 This durable preflight is not a reservation held across asynchronous terminal
 observation and input. The engine still owns live input/engagement protection.
 An atomic task-admission fence across that interval remains open; passing these

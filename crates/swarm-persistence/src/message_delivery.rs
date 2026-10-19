@@ -116,6 +116,41 @@ pub(super) fn cancel_queued_review(
     Ok(())
 }
 
+/// Cancels queued messages to a worker that can never usefully arrive: the
+/// recipient was removed, or the task they are about was completed, abandoned
+/// or removed.
+///
+/// ⚠️ FOUR MESSAGES TO THE REMOVED "MY RCG" WORKER, ON TASKS CLOSED IN
+/// SEPTEMBER, WERE STILL QUEUED ON 2026-10-18, and Queues showed them as work to
+/// reconcile for six weeks. Only queued rows are cancelled; a claim already in
+/// flight keeps its own outcome. The message itself stays in history. Messages
+/// TO QUEEN are left alone on purpose: a worker's late report on finished work,
+/// such as a regression found after review, is exactly what she must still see.
+fn cancel_undeliverable_worker_messages(
+    tx: &rusqlite::Transaction<'_>,
+    now: i64,
+) -> rusqlite::Result<usize> {
+    tx.execute(
+        "UPDATE task_message_deliveries SET state = 'cancelled', updated_at = ?1,
+             resolution_reason = CASE
+                 WHEN EXISTS(SELECT 1 FROM task_messages m
+                     LEFT JOIN worker_profiles w ON w.id = m.recipient_worker_id
+                     WHERE m.id = task_message_deliveries.message_id
+                       AND (w.id IS NULL OR w.archived_at IS NOT NULL))
+                 THEN 'its recipient was removed'
+                 ELSE 'its task closed before it arrived' END
+         WHERE state = 'queued' AND message_id IN (
+             SELECT m.id FROM task_messages m
+             LEFT JOIN worker_profiles w ON w.id = m.recipient_worker_id
+             LEFT JOIN tasks t ON t.id = m.task_id
+             WHERE m.recipient = 'worker' AND m.delivered_at IS NULL
+               AND (w.id IS NULL OR w.archived_at IS NOT NULL
+                 OR t.id IS NULL OR t.removed_at IS NOT NULL
+                 OR t.state IN ('completed','abandoned')))",
+        [now],
+    )
+}
+
 impl TaskStore {
     /// Bounded metadata for Queen's reconciliation queue; message text stays in history.
     ///
@@ -255,6 +290,7 @@ impl TaskStore {
     pub fn claim_task_messages(&self, now: i64) -> Result<Vec<ClaimedTaskMessage>, TaskStoreError> {
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
+        cancel_undeliverable_worker_messages(&tx, now)?;
         let messages = Self::read_pending_task_message_dispatches(&tx)?;
         let mut claims = Vec::with_capacity(messages.len());
         for message in messages {
@@ -461,6 +497,82 @@ mod tests {
             )
             .unwrap()
             .id
+    }
+
+    /// Four messages to the removed My RCG worker, on tasks closed in
+    /// September, sat queued for six weeks and showed in Queues as live work.
+    #[test]
+    fn a_message_that_can_never_arrive_is_cancelled_and_kept_in_history() {
+        let (store, review, worker) = fixture();
+        let to_worker = send(&store, review, worker);
+        let to_queen = store
+            .send_task_message(
+                review,
+                MessageEnd::worker(worker),
+                MessageEnd::queen(),
+                "Found a regression after review",
+                10,
+            )
+            .unwrap()
+            .id;
+        let leaver = store
+            .create_worker("Fern", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+        let handed_on = store.create_task("Handed on", "/workspace").unwrap();
+        store
+            .transition_task(handed_on.id, TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker(handed_on.id, leaver.id)
+            .unwrap();
+        let to_leaver = send(&store, handed_on.id, leaver.id);
+
+        store.transition_task(review, TaskState::Completed).unwrap();
+        store.assign_task_to_worker(handed_on.id, worker).unwrap();
+        store.archive_worker_profile(leaver.id).unwrap();
+        assert!(store.claim_task_messages(20).unwrap().is_empty());
+
+        let delivery = |id: &str| {
+            store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT state, resolution_reason FROM task_message_deliveries
+                     WHERE message_id = ?1",
+                    [id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            delivery(&to_worker),
+            (
+                "cancelled".into(),
+                Some("its task closed before it arrived".into())
+            )
+        );
+        assert_eq!(
+            delivery(&to_leaver),
+            ("cancelled".into(), Some("its recipient was removed".into()))
+        );
+        assert_eq!(
+            delivery(&to_queen).0,
+            "queued",
+            "a late report to Queen on finished work still reaches her"
+        );
+        assert_eq!(
+            store.task_messages(review).unwrap().len(),
+            2,
+            "history stays"
+        );
+        let waiting: Vec<_> = store
+            .task_message_attention(10_000, 0)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.message_id)
+            .collect();
+        assert_eq!(waiting, [to_queen]);
     }
 
     /// ⚠️ A HELD MESSAGE SAYS WHAT HOLDS IT, AND ONLY A HELD ONE DOES. Queen's
