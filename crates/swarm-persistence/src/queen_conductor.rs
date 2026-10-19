@@ -217,7 +217,7 @@ impl TaskStore {
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         abandon_unsettled_uncertain_run(&transaction, now)?;
-        let (_, actionable_count) = actionable_fingerprint(&transaction)?;
+        let (_, actionable_count) = actionable_fingerprint(&transaction, now)?;
         let row = transaction.query_row(
             "SELECT enabled, state, run_id, trigger, attempts, requested_at,
                     delivered_at, finished_at, outcome
@@ -339,7 +339,7 @@ impl TaskStore {
             drop(connection);
             return self.queen_automation_status(now);
         }
-        let (fingerprint, _) = actionable_fingerprint(&transaction)?;
+        let (fingerprint, _) = actionable_fingerprint(&transaction, now)?;
         queue_run(
             &transaction,
             &fingerprint,
@@ -361,7 +361,7 @@ impl TaskStore {
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         abandon_unsettled_uncertain_run(&transaction, now)?;
-        let (fingerprint, count) = actionable_fingerprint(&transaction)?;
+        let (fingerprint, count) = actionable_fingerprint(&transaction, now)?;
         let (enabled, state, delivered, finished_at): (bool, String, String, Option<i64>) =
             transaction.query_row(
                 "SELECT enabled, state, delivered_fingerprint, finished_at
@@ -443,8 +443,8 @@ impl TaskStore {
         // records when one had been completed hours earlier and another was an
         // attention false positive that had since been fixed. She was sent to
         // look at yesterday's queue.
-        let count = actionable_count(&transaction)?;
-        let (fingerprint, _) = actionable_fingerprint(&transaction)?;
+        let count = actionable_count(&transaction, now)?;
+        let (fingerprint, _) = actionable_fingerprint(&transaction, now)?;
         // A manual run is the operator asking, and an empty board is not a
         // reason to refuse them: they may want her to look at something Swarm
         // does not count as actionable. Only a run this Hive queued by itself
@@ -845,7 +845,7 @@ fn queue_run(
     trigger: QueenAutomationTrigger,
     now: i64,
 ) -> Result<(), TaskStoreError> {
-    let count = actionable_count(transaction)?;
+    let count = actionable_count(transaction, now)?;
     transaction.execute(
         "UPDATE queen_automation SET state = 'queued', run_id = ?1, trigger = ?2,
              pending_fingerprint = ?3, actionable_count = ?4, attempts = 0,
@@ -879,9 +879,29 @@ fn queue_run(
 /// as empty: on 2026-08-23 the Hive sat idle for eight hours holding 22 drafts,
 /// the oldest five days old, because the only three actionable records had been
 /// reviewed once and nothing had changed since.
+///
+/// ⚠️ A BLOCKED TASK THAT CANNOT MOVE IS NOT ACTIONABLE, or the count never
+/// reaches zero and the unchanged-board recheck wakes her every fifteen minutes
+/// for ever. In the week of 2026-10-05 she ran 653 times, every run ending
+/// "needs operator", while seven of nine blocked tasks were waiting on a date
+/// hold or an open prerequisite. These are the holds reassessment already skips
+/// (`blocked_review_candidates`). The date passing, the prerequisite finishing
+/// or the decision being answered changes this set, and that wakes her. One
+/// difference is deliberate: a prerequisite that was abandoned or removed does
+/// not hold the task, because it will never finish, and Queen must re-route it.
 const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
              AND (
-                 task.state IN ('draft','blocked','review')
+                 task.state IN ('draft','review')
+                 OR (task.state = 'blocked'
+                     AND (task.blocked_until IS NULL OR task.blocked_until <= :now)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM task_prerequisites p JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                         WHERE p.task_id = task.id AND upstream.removed_at IS NULL
+                           AND upstream.state NOT IN ('completed','abandoned'))
+                     AND NOT EXISTS (
+                         SELECT 1 FROM task_decision_membership membership
+                         JOIN decision_requests decision ON decision.id = membership.decision_id
+                         WHERE membership.task_id = task.id AND decision.state = 'pending'))
                  OR (task.state = 'active' AND EXISTS (
                      SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                      WHERE p.task_id = task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
@@ -896,10 +916,10 @@ const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
                      ))
              )";
 
-fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
+fn actionable_count(connection: &rusqlite::Connection, now: i64) -> Result<i64, rusqlite::Error> {
     let task_count: i64 = connection.query_row(
         &format!("SELECT COUNT(*) FROM tasks task WHERE {ACTIONABLE_TASKS}"),
-        [],
+        rusqlite::named_params! {":now": now},
         |row| row.get(0),
     )?;
     let coordination_attention_count: i64 = connection.query_row(
@@ -920,23 +940,36 @@ fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::
 
 fn actionable_fingerprint(
     connection: &rusqlite::Connection,
+    now: i64,
 ) -> Result<(String, usize), TaskStoreError> {
-    let count = actionable_count(connection)?;
+    let count = actionable_count(connection, now)?;
+    // ⚠️ QUEEN'S OWN ROWS ARE LEFT OUT, OR HER NOTES WAKE HER. A run's baseline
+    // is taken when it is claimed, before she writes anything, so a note she
+    // adds to a task that stays blocked or in review differed from it on the
+    // next tick. On 2026-10-18 that woke her 237 times and she wrote the same
+    // review note about 440 times on two RCG Networks tasks. Her state changes
+    // still count, through the task's state and the actionable set, and so does
+    // anyone else's writing, including writing that lands during her run.
     let mut statement = connection.prepare(&format!(
         "SELECT task.id, task.state, COALESCE(MAX(activity.sequence), 0)
          FROM tasks task LEFT JOIN task_activity activity ON activity.task_id = task.id
+             AND NOT EXISTS (SELECT 1 FROM worker_profiles queen
+                 WHERE queen.id = activity.actor_id AND queen.role = 'queen')
          WHERE {ACTIONABLE_TASKS}
-         GROUP BY task.id, task.state ORDER BY task.id LIMIT ?1"
+         GROUP BY task.id, task.state ORDER BY task.id LIMIT :limit"
     ))?;
     let mut rows = statement
-        .query_map([MAX_FINGERPRINT_TASKS], |row| {
-            Ok(format!(
-                "{}:{}:{}",
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?
-            ))
-        })?
+        .query_map(
+            rusqlite::named_params! {":now": now, ":limit": MAX_FINGERPRINT_TASKS},
+            |row| {
+                Ok(format!(
+                    "{}:{}:{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?
+                ))
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     let mut attention_statement = connection.prepare(&format!(
         "SELECT action.kind, action.id, task.id, action.evidence_revision
@@ -1793,7 +1826,7 @@ mod tests {
         store
             .finish_task_message(&claim, crate::TaskMessageResult::Rejected, 100)
             .unwrap();
-        let first = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        let first = actionable_fingerprint(&store.connection().unwrap(), 0).unwrap();
         assert!(!first.0.contains("private message content"));
         store
             .reconcile_task_message(&message.id, &claim.claim_id, true, "Retry explicitly", 100)
@@ -1802,7 +1835,7 @@ mod tests {
         store
             .finish_task_message(&retry, crate::TaskMessageResult::Rejected, 100)
             .unwrap();
-        let next = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        let next = actionable_fingerprint(&store.connection().unwrap(), 0).unwrap();
         assert_eq!(first.1, next.1);
         assert_ne!(
             first.0, next.0,
@@ -1828,16 +1861,18 @@ mod tests {
                 10,
             )
             .unwrap();
-        let before = actionable_fingerprint(&store.connection().unwrap()).unwrap();
+        let before = actionable_fingerprint(&store.connection().unwrap(), 0).unwrap();
         assert_eq!(
             before,
-            actionable_fingerprint(&store.connection().unwrap()).unwrap()
+            actionable_fingerprint(&store.connection().unwrap(), 0).unwrap()
         );
         assert!(!before.0.contains("Private contract reason"));
         store.transition_task(b.id, TaskState::Review).unwrap();
         store.transition_task(b.id, TaskState::Completed).unwrap();
-        let after = actionable_fingerprint(&store.connection().unwrap()).unwrap();
-        assert_eq!(before.1, after.1);
+        let after = actionable_fingerprint(&store.connection().unwrap(), 0).unwrap();
+        // Waiting on an open prerequisite, the consumer cannot move and is not
+        // counted. Its prerequisite finishing is what makes it actionable.
+        assert_eq!((before.1, after.1), (0, 1));
         assert_ne!(before.0, after.0);
         assert_eq!(store.get_task(a.id).unwrap().updated_at, 10);
         assert_eq!(store.get_task(a.id).unwrap().state, TaskState::Blocked);
@@ -2006,6 +2041,206 @@ mod tests {
                 .observe_queen_automation(110 + RECHECK_UNCHANGED_BOARD_SECONDS + 1)
                 .unwrap(),
             "an unchanged board is worth another look once the verdict is stale"
+        );
+    }
+
+    /// On 2026-10-18 Queen ran 237 times, about 22 hours of runs, and wrote
+    /// "Queen review (`external_condition`)" about 440 times on two blocked
+    /// RCG Networks tasks. Her note moved the task's newest activity, the
+    /// finished run kept the fingerprint from before she wrote it, and the next
+    /// tick read her own note as a changed board. The unchanged-board recheck
+    /// never applied.
+    #[test]
+    fn her_own_notes_do_not_wake_her_but_anyone_elses_do() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let task = store
+            .create_task_with_details(
+                "Waiting on Spectrum",
+                "",
+                TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        store.set_queen_automation_enabled(true, 100).unwrap();
+
+        // She reviews it, writes down what it waits on, and finishes.
+        let run = store.claim_queen_automation(101).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&run.run_id, 102)
+            .unwrap();
+        store
+            .append_task_correction(
+                task.id,
+                "Queen review (external_condition): waits on Spectrum",
+                &TaskActivityActor::worker(queen.id),
+            )
+            .unwrap();
+        store
+            .finish_queen_automation_run(&run.run_id, QueenAutomationOutcome::NoAction, 110)
+            .unwrap();
+
+        assert!(
+            !store.observe_queen_automation(111).unwrap(),
+            "her own note is not a change to the board she just reviewed"
+        );
+
+        // Somebody else writing on the task is.
+        store
+            .append_task_correction(
+                task.id,
+                "Spectrum is back on X4",
+                &TaskActivityActor::worker(worker.id),
+            )
+            .unwrap();
+        assert!(
+            store.observe_queen_automation(112).unwrap(),
+            "another worker's note is new evidence and wakes her"
+        );
+    }
+
+    /// In the week of 2026-10-05 Queen ran 653 times, every run ending "needs
+    /// operator". Seven of the nine blocked tasks were waiting on a date hold or
+    /// an open prerequisite, so her count never reached zero and the
+    /// unchanged-board recheck woke her every fifteen minutes.
+    #[test]
+    fn blocked_work_that_cannot_move_wakes_her_only_when_it_can() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let blocked = |title: &str| {
+            let task = store.create_task(title, "/workspace").unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store.transition_task(task.id, TaskState::Blocked).unwrap();
+            task.id
+        };
+        let held = blocked("Check the certificate renewals fired");
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET blocked_until = 50000 WHERE id = ?1",
+                [held.to_string()],
+            )
+            .unwrap();
+        let phase_f = blocked("SOA Phase F");
+        let phase_e = store.create_task("SOA Phase E", "/workspace").unwrap();
+        store.transition_task(phase_e.id, TaskState::Ready).unwrap();
+        store
+            .transition_task(phase_e.id, TaskState::Active)
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                phase_f,
+                phase_e.id,
+                "F follows E",
+                &TaskActivityActor::operator(),
+                100,
+            )
+            .unwrap();
+        store.set_queen_automation_enabled(true, 100).unwrap();
+        let counted = |now| {
+            actionable_fingerprint(&store.connection().unwrap(), now)
+                .unwrap()
+                .1
+        };
+
+        assert_eq!(counted(200), 0, "nothing on this board can move");
+        assert!(!store.observe_queen_automation(200).unwrap());
+        assert!(
+            !store
+                .observe_queen_automation(200 + RECHECK_UNCHANGED_BOARD_SECONDS * 4)
+                .unwrap(),
+            "and the unchanged-board recheck has nothing to look at"
+        );
+
+        // Phase E finishing is what lets Phase F move, and that wakes her.
+        store
+            .transition_task(phase_e.id, TaskState::Review)
+            .unwrap();
+        store
+            .transition_task(phase_e.id, TaskState::Completed)
+            .unwrap();
+        assert!(
+            store.observe_queen_automation(4_000).unwrap(),
+            "the prerequisite finishing is a change"
+        );
+        let run = store.claim_queen_automation(4_000).unwrap().unwrap();
+        assert_eq!(run.actionable_count, 1, "Phase F, not the date-held task");
+        store
+            .complete_queen_automation_delivery(&run.run_id, 4_001)
+            .unwrap();
+        store
+            .transition_task(phase_f, TaskState::Abandoned)
+            .unwrap();
+        store
+            .finish_queen_automation_run(&run.run_id, QueenAutomationOutcome::NoAction, 4_010)
+            .unwrap();
+        assert_eq!(counted(49_999), 0);
+        assert!(!store.observe_queen_automation(49_999).unwrap());
+
+        // So does the date passing.
+        assert_eq!(counted(50_000), 1);
+        assert!(
+            store.observe_queen_automation(50_000).unwrap(),
+            "the date hold expiring is a change"
+        );
+    }
+
+    /// The one place this differs from reassessment, on purpose: a prerequisite
+    /// that was abandoned will never finish, so the work waiting on it needs
+    /// Queen to re-route it rather than wait.
+    #[test]
+    fn a_prerequisite_that_was_abandoned_does_not_hold_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let consumer = store.create_task("Consumer", "/workspace").unwrap();
+        store
+            .transition_task(consumer.id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(consumer.id, TaskState::Blocked)
+            .unwrap();
+        let upstream = store.create_task("Upstream", "/workspace").unwrap();
+        store
+            .transition_task(upstream.id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(upstream.id, TaskState::Active)
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                consumer.id,
+                upstream.id,
+                "Consumer follows upstream",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        assert_eq!(
+            actionable_fingerprint(&store.connection().unwrap(), 20)
+                .unwrap()
+                .1,
+            0
+        );
+
+        store
+            .transition_task(upstream.id, TaskState::Abandoned)
+            .unwrap();
+
+        assert_eq!(
+            actionable_fingerprint(&store.connection().unwrap(), 20)
+                .unwrap()
+                .1,
+            1,
+            "work behind an abandoned prerequisite is Queen's to re-route"
         );
     }
 

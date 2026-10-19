@@ -98,3 +98,26 @@ not yet schedule work by time, wake a sleeping Queen, or define the durable
 external-effect grants described above. Each grant requires its own bounded
 product decision, explicit scope, expiry/revocation behavior, and audit trail
 before Queen may consume it.
+
+**Addendum, 2026-10-18: Queen's own writing is not a change, and work that cannot move is not actionable.**
+On 2026-10-18 Queen ran 237 times, about 22 hours in total, and every run ended
+"incomplete". In the week of 2026-10-05 she ran 653 times, every run ending
+"needs operator". There were two causes.
+
+- **Her own notes re-woke her.** The baseline fingerprint is taken when a run
+  is claimed, so a note she wrote on a task that stayed blocked or in review
+  differed from it on the next tick. The unchanged-board recheck never applied.
+  The fingerprint now leaves out activity written by the Queen profile. Her
+  state changes still count, through the task's state and the actionable set.
+  So does anyone else's writing, including writing that lands during her run.
+- **Blocked work that could not move kept her count above zero.** A blocked
+  task is now actionable only when it has no future date hold, no live
+  prerequisite that is still open, and no pending operator decision. These are
+  the holds reassessment already skips. The date passing, the prerequisite
+  finishing or the decision being answered changes the set, and that wakes her.
+  A prerequisite that was abandoned or removed does not hold the task, because
+  it will never finish and the task needs re-routing.
+
+A blocked task whose wait is recorded only in prose stays actionable, and the
+fifteen-minute recheck still applies to it. That is a known limit of this
+change, not a decision about how such waits should be recorded.
