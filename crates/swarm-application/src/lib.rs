@@ -129,6 +129,64 @@ fn fleet_raise_key(expected: &str, raised: &[&swarm_persistence::HiveVersionStan
     format!("Raised for {expected}: {}", behind.join(", "))
 }
 
+/// The Hives a "Hives are behind" raise named, read from its key line: for
+/// `release` only, when one is given.
+fn fleet_raised_hives(evidence: &str, release: Option<&str>) -> Vec<String> {
+    evidence
+        .lines()
+        .filter_map(|line| line.strip_prefix("Raised for "))
+        .filter_map(|rest| rest.split_once(": "))
+        .filter(|(raised_for, _)| release.is_none_or(|release| *raised_for == release))
+        .flat_map(|(_, hives)| hives.split(", ").map(str::to_owned))
+        .collect()
+}
+
+/// The most Hives one "Hives are behind" card names. Each costs its card up to
+/// about 440 bytes of evidence, which is capped at ten thousand.
+const MAX_HIVES_PER_FLEET_RAISE: usize = 16;
+
+/// The Hives one "Hives are behind" card asks about: raised, and not already
+/// answered about for this release.
+///
+/// ⚠️ AT MOST SIXTEEN. A card's evidence is capped and one too big is refused,
+/// so an Apiary with every Hive behind at once would raise nothing. The rest
+/// are not answered about, so each is asked about once this card is.
+fn fleet_card_hives<'a>(
+    raised: Vec<&'a swarm_persistence::HiveVersionStanding>,
+    answered: &std::collections::HashSet<String>,
+) -> Vec<&'a swarm_persistence::HiveVersionStanding> {
+    raised
+        .into_iter()
+        .filter(|hive| !answered.contains(&hive.identity.hive_id.to_string()))
+        .take(MAX_HIVES_PER_FLEET_RAISE)
+        .collect()
+}
+
+/// What a "Hives are behind" card says first: how many, which, and who can act.
+///
+/// ⚠️ THE SUMMARY IS CAPPED, AND AN OVERSIZED ONE IS NOT A LONG CARD: IT IS NO
+/// CARD. The raise is refused and only a log line says so; one line per Hive
+/// went over at four Hives. So it names Hives, as many as fit, and the
+/// evidence carries each in full.
+fn fleet_raise_summary(expected: &str, names: &[String]) -> String {
+    let said = |list: &str| {
+        format!(
+            "{} Hive(s) in touch are still behind {expected} after the grace window: \
+             {list}. The Keeper cannot install on a member; its operator can, from its \
+             Updates card.",
+            names.len()
+        )
+    };
+    (1..=names.len())
+        .rev()
+        .map(|shown| match names.len() - shown {
+            0 => said(&names.join(", ")),
+            rest => said(&format!("{} and {rest} more", names[..shown].join(", "))),
+        })
+        .find(|summary| summary.len() <= swarm_domain::MAX_DECISION_SUMMARY_BYTES)
+        .unwrap_or_else(|| said(&format!("{} Hives", names.len())))
+}
+
 /// The line a Hive-fault raise carries in its evidence: which Hive, which
 /// fault, and since when. It is the dedup key: one raise per fault episode.
 fn hive_fault_key(hive: swarm_domain::HiveId, fault: &str, since: i64) -> String {
@@ -374,39 +432,15 @@ impl ApiaryService {
     ) -> Result<swarm_persistence::FleetVersionReport, ApplicationError> {
         let report = self.store.fleet_version_report(now, keeper_build)?;
         let raised = report.raised();
-        // ⚠️ THE CARD MUST GO AWAY BY ITSELF. The operator's standing complaint
-        // about this machinery is a card that keeps coming back after being
-        // dealt with. A Hive that upgraded has answered the question, and
-        // leaving the card up would make catching up look like nothing
-        // happened.
         let asked = self
             .store
             .list_decision_requests()?
             .into_iter()
             .filter(|request| request.title == FLEET_BEHIND_QUESTION_TITLE)
             .collect::<Vec<_>>();
-        let open = asked
-            .iter()
-            .filter(|request| request.state == swarm_domain::DecisionRequestState::Pending)
-            .collect::<Vec<_>>();
-        if raised.is_empty() {
-            for request in open {
-                if let Err(error) = self.store.withdraw_decision_request(
-                    request.id,
-                    request.requesting_worker_id,
-                    "Every Hive has caught up.",
-                ) {
-                    tracing::warn!(
-                        message = %error,
-                        decision = %request.id,
-                        "the fleet caught up and its raise could not be withdrawn"
-                    );
-                }
-            }
-            return Ok(report);
-        }
+        let open = self.withdraw_settled_fleet_raises(&asked, &report);
         // Already asked, and still true. Asking again would be the loop.
-        if !open.is_empty() {
+        if open > 0 {
             return Ok(report);
         }
         let expected = report
@@ -417,41 +451,42 @@ impl ApiaryService {
         // used to hold the next one back, so answering it — even "Leave them
         // behind for now" — let the next check ask the same thing again: eleven
         // times for one Hive in four days, and the operator's "the needs you
-        // keeps asking me about updating hives". A newer release or a different
-        // set of Hives behind is a new question; the same one is not (ADR 0110).
-        let raised_for = fleet_raise_key(expected, &raised);
-        if asked.iter().any(|request| {
-            request.state == swarm_domain::DecisionRequestState::Resolved
-                && request.evidence.lines().any(|line| line == raised_for)
-        }) {
+        // keeps asking me about updating hives". A newer release is a new
+        // question; the same one is not (ADR 0110).
+        //
+        // ⚠️ AND IT HOLDS FOR EVERY HIVE IT NAMED. Keyed on the exact set, one
+        // Hive catching up made the rest a new set: Simply Bee-rilliant was asked
+        // about twice for 1.17.4, answered both times, with a third due once
+        // Honeysuckle caught up. A Hive answered about for this release is not
+        // asked about again; only one that was not is.
+        let answered = asked
+            .iter()
+            .filter(|request| request.state == swarm_domain::DecisionRequestState::Resolved)
+            .flat_map(|request| fleet_raised_hives(&request.evidence, Some(expected)))
+            .collect::<std::collections::HashSet<_>>();
+        let unasked = fleet_card_hives(raised, &answered);
+        if unasked.is_empty() {
             return Ok(report);
         }
+        let raised_for = fleet_raise_key(expected, &unasked);
         let Ok(Some(queen)) = self.store.queen_worker_id() else {
             tracing::warn!(
-                behind = raised.len(),
+                behind = unasked.len(),
                 "Hives are behind and there is no Queen to raise it to"
             );
             return Ok(report);
         };
-        let listed = raised
-            .iter()
-            .map(|hive| {
-                format!(
-                    "- {} runs {} (schema {}), last reported {}: {:?}",
-                    hive.identity.hive_id,
-                    hive.swarm_version,
-                    hive.database_schema_version,
-                    hive.observed_at,
-                    hive.standing
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let summary = format!(
-            "{} Hive(s) in the Apiary are not on {expected}, and the grace window \
-             has passed.\n{listed}",
-            raised.len()
-        );
+        let (names, listed) = self.fleet_card_words(&unasked, now);
+        let summary = fleet_raise_summary(expected, &names);
+        // ⚠️ ONLY ANSWERS SWARM CAN CARRY OUT. "Update them" was answered eleven
+        // times and nothing could act on it: Queen made it a worker task whose
+        // only possible outcome was reading state. Telling the operator is the
+        // operator's to do, so it is marked as theirs, as a Hive fault's is.
+        let (tell, leave) = if unasked.len() == 1 {
+            ("Tell its operator", "Leave it for now")
+        } else {
+            ("Tell their operators", "Leave them for now")
+        };
         if let Err(error) = self.store.create_decision_request(&NewDecisionRequest {
             requesting_worker_id: queen,
             task_id: None,
@@ -464,24 +499,115 @@ impl ApiaryService {
             risk: "This Hive sat wedged on a stale build for roughly a day in \
                    September and every screen that could have said so showed a \
                    version and nothing else.",
-            evidence: &format!("{summary}\n\n{raised_for}"),
-            suggested_action: "Update them",
-            allowed_actions: &[
-                "Update them".to_owned(),
-                "Leave them behind for now".to_owned(),
-            ],
-            operator_actions: &[],
+            evidence: &format!("{summary}\n{listed}\n\n{raised_for}"),
+            suggested_action: tell,
+            allowed_actions: &[tell.to_owned(), leave.to_owned()],
+            operator_actions: &[tell.to_owned()],
             questions: &[],
             deadline: None,
             requested_command: None,
         }) {
             tracing::warn!(
                 message = %error,
-                behind = raised.len(),
+                behind = unasked.len(),
                 "Hives are behind and the raise could not be recorded"
             );
         }
         Ok(report)
+    }
+
+    /// Withdraws each open "Hives are behind" card that no Hive it names is
+    /// still raised for, and returns how many stay open.
+    fn withdraw_settled_fleet_raises(
+        &self,
+        asked: &[DecisionRequest],
+        report: &swarm_persistence::FleetVersionReport,
+    ) -> usize {
+        // ⚠️ THE CARD MUST GO AWAY BY ITSELF. The operator's standing complaint
+        // about this machinery is a card that keeps coming back after being
+        // dealt with. A Hive that upgraded has answered the question, and
+        // leaving the card up would make catching up look like nothing
+        // happened. So does one that went quiet: the roster says Quiet, and a
+        // card about a switched-off machine is not a question (ADR 0110 §5).
+        let raised = report.raised();
+        let mut open = 0;
+        for request in asked
+            .iter()
+            .filter(|request| request.state == swarm_domain::DecisionRequestState::Pending)
+        {
+            let named = fleet_raised_hives(&request.evidence, None);
+            if raised
+                .iter()
+                .any(|hive| named.contains(&hive.identity.hive_id.to_string()))
+            {
+                open += 1;
+                continue;
+            }
+            let caught_up = named.iter().all(|named| {
+                report.hives.iter().any(|hive| {
+                    hive.identity.hive_id.to_string() == *named && !hive.standing.raises()
+                })
+            });
+            if let Err(error) = self.store.withdraw_decision_request(
+                request.id,
+                request.requesting_worker_id,
+                if caught_up {
+                    "Every Hive it named has caught up."
+                } else {
+                    "No Hive it named is still behind and in touch. Each caught up or \
+                     went quiet, and the roster shows a quiet Hive."
+                },
+            ) {
+                tracing::warn!(
+                    message = %error,
+                    decision = %request.id,
+                    "a fleet raise with nothing left to ask could not be withdrawn"
+                );
+            }
+        }
+        open
+    }
+
+    /// Each Hive one card names, by name, and its full line for the evidence.
+    fn fleet_card_words(
+        &self,
+        unasked: &[&swarm_persistence::HiveVersionStanding],
+        now: i64,
+    ) -> (Vec<String>, String) {
+        // Names only, so a lookup that fails costs the card its names and not
+        // the card.
+        let members = self.members().unwrap_or_default();
+        let member = |hive: &swarm_persistence::HiveVersionStanding| {
+            members
+                .iter()
+                .find(|member| member.hive_id == hive.identity.hive_id)
+        };
+        let listed = unasked
+            .iter()
+            .map(|hive| {
+                format!(
+                    "- {} ({}), operator {}: runs {} (schema {}), in touch for {}: {:?}",
+                    member(hive).map_or("A Hive", |member| member.hive_name.as_str()),
+                    hive.identity.hive_id,
+                    member(hive).map_or("unknown", |member| member.operator_display_name.as_str()),
+                    hive.swarm_version,
+                    hive.database_schema_version,
+                    span(now.saturating_sub(hive.in_touch_since.unwrap_or(now))),
+                    hive.standing
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let names = unasked
+            .iter()
+            .map(|hive| {
+                member(hive).map_or_else(
+                    || hive.identity.hive_id.to_string(),
+                    |member| member.hive_name.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        (names, listed)
     }
 
     /// Exchanges an authenticated member's signed public profile for a signed
@@ -4753,6 +4879,76 @@ pub enum ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠️ AN OVERSIZED SUMMARY IS NO CARD AT ALL: the raise is refused.
+    #[test]
+    fn a_fleet_raise_summary_names_as_many_hives_as_fit_its_cap() {
+        let one = fleet_raise_summary("1.17.4", &["Simply Bee-rilliant Hive".to_owned()]);
+        assert!(
+            one.contains(": Simply Bee-rilliant Hive. The Keeper cannot install"),
+            "{one}"
+        );
+
+        let long = "A Hive With A Name Near The Public Profile Cap ".repeat(2);
+        let many = (0..MAX_HIVES_PER_FLEET_RAISE)
+            .map(|hive| format!("{long}{hive}"))
+            .collect::<Vec<_>>();
+        let summary = fleet_raise_summary("1.17.4", &many);
+        assert!(
+            summary.len() <= swarm_domain::MAX_DECISION_SUMMARY_BYTES,
+            "{summary}"
+        );
+        assert!(summary.starts_with("16 Hive(s)"), "{summary}");
+        assert!(
+            summary.contains(" more. The Keeper"),
+            "it says how many it left out"
+        );
+    }
+
+    #[test]
+    fn a_fleet_card_asks_only_about_hives_not_answered_for_and_at_most_sixteen() {
+        let hives = (0..20)
+            .map(|_| swarm_persistence::HiveVersionStanding {
+                identity: swarm_domain::PublicHiveIdentity {
+                    node_id: swarm_domain::FederationNodeId::new(),
+                    hive_id: swarm_domain::HiveId::new(),
+                    operator_id: swarm_domain::OperatorId::new(),
+                },
+                swarm_version: "1.17.3".to_owned(),
+                database_schema_version: 202,
+                observed_at: 0,
+                standing: swarm_domain::VersionStanding::Behind,
+                in_touch_since: Some(0),
+            })
+            .collect::<Vec<_>>();
+        let answered = hives[..2]
+            .iter()
+            .map(|hive| hive.identity.hive_id.to_string())
+            .collect();
+        let card = fleet_card_hives(hives.iter().collect(), &answered);
+        assert_eq!(
+            card.len(),
+            MAX_HIVES_PER_FLEET_RAISE,
+            "the rest wait for the next card"
+        );
+        assert!(
+            card.iter()
+                .all(|hive| !answered.contains(&hive.identity.hive_id.to_string())),
+            "a Hive answered about is not asked about again"
+        );
+        assert!(fleet_card_hives(hives[..2].iter().collect(), &answered).is_empty());
+    }
+
+    #[test]
+    fn a_fleet_raise_names_the_hives_it_asked_about_for_its_release_only() {
+        let evidence = "1 Hive(s)...\n- A Hive\n\nRaised for 1.17.4: hive-a, hive-b";
+        assert_eq!(
+            fleet_raised_hives(evidence, Some("1.17.4")),
+            ["hive-a", "hive-b"]
+        );
+        assert!(fleet_raised_hives(evidence, Some("1.17.5")).is_empty());
+        assert_eq!(fleet_raised_hives(evidence, None), ["hive-a", "hive-b"]);
+    }
     use swarm_domain::{CommitRepositoryState, JiraProjectScope, JiraStatusMapping, ProviderKind};
     use swarm_persistence::JiraProjectBindingInput;
 

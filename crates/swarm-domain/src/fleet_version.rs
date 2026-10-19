@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::SwarmVersion;
+use crate::{MEMBER_QUIET_SECONDS, SwarmVersion};
 
 /// How long after a release is cut before a Hive still on the old one is
 /// raised.
@@ -133,6 +133,46 @@ pub fn version_standing(
     } else {
         VersionStanding::Current
     }
+}
+
+/// When a Hive's current spell in touch with its Keeper began, from the starts
+/// of the five-minute slots it reached the Keeper in (oldest first) and the
+/// last time it did. `None` while it is quiet.
+///
+/// ⚠️ A QUIET HIVE IS NEVER PUSHED ABOUT, BEHIND OR NOT. The 2026-09-30 ruling
+/// is to warn about silence where the operator goes to use the Hive, and the
+/// roster already says Quiet. Every "Hives are behind" raise for 1.17.4 named
+/// only Hives that had been silent for days, and none of them could have done
+/// anything until it came back (ADR 0110 §5).
+///
+/// A spell breaks where two slots are further apart than a Hive may go unheard
+/// before it reads as quiet, so one missed slot is not a return. A spell older
+/// than the slots kept reaches back to the oldest of them, which is a day.
+#[must_use]
+pub fn in_touch_since(slots: &[i64], last_contact_at: Option<i64>, now: i64) -> Option<i64> {
+    let last = last_contact_at.filter(|at| now.saturating_sub(*at) < MEMBER_QUIET_SECONDS)?;
+    let mut since = slots.last().map_or(last, |slot| (*slot).min(last));
+    for pair in slots.windows(2).rev() {
+        if pair[1].saturating_sub(pair[0]) > MEMBER_QUIET_SECONDS {
+            break;
+        }
+        since = pair[0];
+    }
+    Some(since)
+}
+
+/// When a Hive's grace for a release starts: when the release appeared, or
+/// when the Hive came back into touch after that, whichever is later.
+///
+/// ⚠️ A HIVE CANNOT INSTALL WHAT IT HAS NOT SEEN. One that was switched off
+/// when the release appeared was past the window the moment it came back, and
+/// was raised before it had checked once. Honeysuckle came back at 14:05 on
+/// 2026-10-19 and was on 1.17.4 ten minutes later, by itself. A Hive that stays
+/// in touch keeps the spell it started with, so phoning home does not restart
+/// the clock.
+#[must_use]
+pub fn grace_starts_at(release_cut_at: i64, in_touch_since: Option<i64>) -> i64 {
+    in_touch_since.map_or(release_cut_at, |since| since.max(release_cut_at))
 }
 
 #[cfg(test)]
@@ -312,5 +352,65 @@ mod tests {
         );
         assert_eq!(standing, VersionStanding::Unreadable);
         assert!(standing.raises());
+    }
+
+    /// ⚠️ THE 1.17.4 RAISES. Every one named only Hives silent for days.
+    #[test]
+    fn a_quiet_hive_is_not_in_touch_whatever_its_history() {
+        let now = 1_000_000;
+        let slots = (0..12)
+            .map(|slot| now - 7_200 + slot * 300)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            in_touch_since(&slots, Some(now - MEMBER_QUIET_SECONDS), now),
+            None,
+            "ten minutes unheard is quiet, as the roster says"
+        );
+        assert_eq!(in_touch_since(&[], None, now), None, "never heard from");
+        assert_eq!(
+            in_touch_since(&slots, Some(now - MEMBER_QUIET_SECONDS + 1), now),
+            Some(now - 7_200)
+        );
+    }
+
+    #[test]
+    fn a_spell_in_touch_starts_after_the_last_quiet_gap_and_survives_one_missed_slot() {
+        let now = 1_000_000;
+        let back = now - 3_000;
+        // Two hours online, an hour away, then back: the spell is the return.
+        let mut slots = (0..24)
+            .map(|slot| now - 12_000 + slot * 300)
+            .collect::<Vec<_>>();
+        slots.extend((0..=10).map(|slot| back + slot * 300));
+        assert_eq!(in_touch_since(&slots, Some(now - 5), now), Some(back));
+
+        // One missed five-minute slot is not a return.
+        let steady = [now - 1_500, now - 1_200, now - 600, now - 300];
+        assert_eq!(
+            in_touch_since(&steady, Some(now - 5), now),
+            Some(now - 1_500)
+        );
+        // Two are: that is longer than a Hive may go unheard.
+        let away = [now - 1_500, now - 1_200, now - 300];
+        assert_eq!(in_touch_since(&away, Some(now - 5), now), Some(now - 300));
+    }
+
+    #[test]
+    fn grace_runs_from_the_release_or_the_hives_return_whichever_is_later() {
+        assert_eq!(
+            grace_starts_at(1_000, None),
+            1_000,
+            "a quiet Hive keeps the release's clock"
+        );
+        assert_eq!(
+            grace_starts_at(1_000, Some(500)),
+            1_000,
+            "in touch since before the release: phoning home does not restart it"
+        );
+        assert_eq!(
+            grace_starts_at(1_000, Some(9_000)),
+            9_000,
+            "back after it: from the return"
+        );
     }
 }

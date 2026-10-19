@@ -6,7 +6,8 @@
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    PublicHiveIdentity, ReleaseOffer, SwarmVersion, VersionStanding, version_standing,
+    PublicHiveIdentity, ReleaseOffer, SwarmVersion, VersionStanding, grace_starts_at,
+    in_touch_since, version_standing,
 };
 
 use crate::{CURRENT_SCHEMA_VERSION, TaskStore, TaskStoreError};
@@ -33,6 +34,9 @@ pub struct HiveVersionStanding {
     /// the surface needs to be able to say which it has.
     pub observed_at: i64,
     pub standing: VersionStanding,
+    /// When its current spell in touch with this Keeper began; `None` while it
+    /// is quiet. Its grace runs from here when it came back after the release.
+    pub in_touch_since: Option<i64>,
 }
 
 /// The whole fleet's standing, plus what it was judged against.
@@ -59,12 +63,14 @@ pub struct FleetVersionReport {
 }
 
 impl FleetVersionReport {
-    /// The Hives this report RAISES, as opposed to merely lists.
+    /// The Hives this report RAISES, as opposed to merely lists: a standing
+    /// that raises, on a Hive in touch. A quiet Hive is listed as it stands
+    /// and pushed about by nobody (ADR 0110 §5).
     #[must_use]
     pub fn raised(&self) -> Vec<&HiveVersionStanding> {
         self.hives
             .iter()
-            .filter(|hive| hive.standing.raises())
+            .filter(|hive| hive.standing.raises() && hive.in_touch_since.is_some())
             .collect()
     }
 }
@@ -153,29 +159,51 @@ impl TaskStore {
         let cut_at = expected_release
             .as_ref()
             .map_or(0, |(_, first_seen_at)| *first_seen_at);
-        let hives = self
-            .federation_hive_capabilities()?
-            .into_iter()
-            .map(|report| HiveVersionStanding {
+        let last_contact = self.member_last_contact()?;
+        let mut hives = Vec::new();
+        for report in self.federation_hive_capabilities()? {
+            let hive = report.payload.identity.hive_id;
+            let in_touch_since = in_touch_since(
+                &self.member_contact_history(hive, now)?,
+                last_contact.get(&hive.to_string()).copied().flatten(),
+                now,
+            );
+            hives.push(HiveVersionStanding {
                 standing: version_standing(
                     &report.payload.swarm_version,
                     report.payload.database_schema_version,
                     expected.as_ref(),
                     judged_schema,
-                    cut_at,
+                    grace_starts_at(cut_at, in_touch_since),
                     now,
                 ),
                 identity: report.payload.identity,
                 swarm_version: report.payload.swarm_version,
                 database_schema_version: report.payload.database_schema_version,
                 observed_at: report.observed_at,
-            })
-            .collect();
+                in_touch_since,
+            });
+        }
         Ok(FleetVersionReport {
             expected_release,
             expected_schema_version: CURRENT_SCHEMA_VERSION,
             hives,
         })
+    }
+
+    /// When each current member last reached this Keeper, by Hive.
+    fn member_last_contact(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Option<i64>>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT member_hive_id, last_contact_at FROM apiary_federation_memberships
+             WHERE state = 'active'",
+        )?;
+        let contact = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(contact)
     }
 }
 
@@ -229,6 +257,12 @@ mod tests {
             "a release cut moments ago must not fire across the fleet"
         );
 
+        stay_in_touch(
+            &keeper,
+            &credential,
+            now + 10,
+            now + 20 + VERSION_GRACE_SECONDS,
+        );
         let settled = keeper
             .fleet_version_report(now + 20 + VERSION_GRACE_SECONDS, "1.12.0")
             .unwrap();
@@ -238,6 +272,104 @@ mod tests {
         assert_eq!(
             settled.expected_release.as_ref().map(|(v, _)| v.as_str()),
             Some("1.12.0")
+        );
+    }
+
+    /// Reaches the Keeper every five minutes from `from` to `to`, as a member
+    /// that stays switched on does.
+    fn stay_in_touch(keeper: &TaskStore, credential: &str, from: i64, to: i64) {
+        for at in (from..=to).step_by(300) {
+            keeper.authenticated_member_hive(credential, at).unwrap();
+        }
+        keeper.authenticated_member_hive(credential, to).unwrap();
+    }
+
+    /// A member left on a release with its own capability report, and the
+    /// release expected from `cut_at`.
+    fn behind_member(now: i64, cut_at: i64) -> (TaskStore, String) {
+        let (keeper, member) = crate::federation::tests::joined_member(now);
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+        let report = member
+            .seal_local_hive_capability(
+                &[worker()],
+                false,
+                "1.11.0",
+                CURRENT_SCHEMA_VERSION,
+                now + 9,
+            )
+            .unwrap();
+        keeper
+            .accept_hive_capability(&credential, &report, now + 10)
+            .unwrap();
+        keeper.note_expected_release("1.12.0", cut_at).unwrap();
+        (keeper, credential)
+    }
+
+    /// ⚠️ THE 1.17.4 RAISES. Both Hives named on 2026-10-19 had been silent
+    /// for days, and the operator was asked to update machines that were off.
+    #[test]
+    fn a_quiet_member_behind_is_listed_as_behind_and_raised_to_nobody() {
+        let now = 120_000;
+        let (keeper, _credential) = behind_member(now, now + 20);
+
+        let later = now + 20 + 3 * VERSION_GRACE_SECONDS;
+        let fleet = keeper.fleet_version_report(later, "1.12.0").unwrap();
+        assert_eq!(
+            fleet.hives[0].standing,
+            VersionStanding::Behind,
+            "the fleet panel still says what it runs"
+        );
+        assert_eq!(fleet.hives[0].in_touch_since, None);
+        assert!(
+            fleet.raised().is_empty(),
+            "a switched-off Hive is not a question"
+        );
+    }
+
+    /// ⚠️ A HIVE CANNOT INSTALL WHAT IT HAS NOT SEEN. Coming back after the
+    /// window used to raise it at once, before it had checked for a release.
+    #[test]
+    fn a_member_back_after_the_release_gets_its_grace_from_the_return() {
+        let now = 120_000;
+        let (keeper, credential) = behind_member(now, now + 20);
+        let back = now + 2 * VERSION_GRACE_SECONDS;
+
+        stay_in_touch(
+            &keeper,
+            &credential,
+            back,
+            back + VERSION_GRACE_SECONDS - 300,
+        );
+        let returned = keeper
+            .fleet_version_report(back + VERSION_GRACE_SECONDS - 300, "1.12.0")
+            .unwrap();
+        assert_eq!(returned.hives[0].in_touch_since, Some(back - back % 300));
+        assert_eq!(
+            returned.hives[0].standing,
+            VersionStanding::BehindWithinGrace
+        );
+        assert!(
+            returned.raised().is_empty(),
+            "six hours in touch to catch up by itself"
+        );
+
+        stay_in_touch(
+            &keeper,
+            &credential,
+            back + VERSION_GRACE_SECONDS - 300,
+            back + VERSION_GRACE_SECONDS + 300,
+        );
+        let stuck = keeper
+            .fleet_version_report(back + VERSION_GRACE_SECONDS + 300, "1.12.0")
+            .unwrap();
+        assert_eq!(stuck.hives[0].standing, VersionStanding::Behind);
+        assert_eq!(
+            stuck.raised().len(),
+            1,
+            "then it has had its chance, and it is said"
         );
     }
 

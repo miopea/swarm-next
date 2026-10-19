@@ -16335,7 +16335,16 @@ mod tests {
         keeper.ensure_queen("/tmp/keeper").unwrap();
 
         let service = swarm_application::ApiaryService::new(keeper.clone());
+        // A member that stays switched on reaches its Keeper every few minutes.
+        // A quiet one is never raised (ADR 0110 §5).
+        let stay_in_touch = |from: i64, to: i64| {
+            for at in (from..=to).step_by(300) {
+                keeper.authenticated_member_hive(&credential, at).unwrap();
+            }
+            keeper.authenticated_member_hive(&credential, to).unwrap();
+        };
         let raised_at = now + swarm_domain::VERSION_GRACE_SECONDS;
+        stay_in_touch(now, raised_at);
         let report = service
             .raise_hives_left_behind(raised_at, "1.13.0")
             .unwrap();
@@ -16356,6 +16365,18 @@ mod tests {
             1,
             "the operator is told, rather than left to notice a column"
         );
+        let card = keeper
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .find(|request| request.title == "Hives are behind the current release")
+            .unwrap();
+        assert_eq!(
+            card.allowed_actions,
+            ["Tell its operator", "Leave it for now"],
+            "only answers Swarm carries out: it cannot install on a member"
+        );
+        assert_eq!(card.suggested_action, "Tell its operator");
 
         // Asking again while it is still true must not add a second card.
         service
@@ -16380,7 +16401,7 @@ mod tests {
             })
             .unwrap();
         keeper
-            .resolve_decision_request(pending.id, "Leave them behind for now", "", "control_room")
+            .resolve_decision_request(pending.id, "Leave it for now", "", "control_room")
             .unwrap();
         service
             .raise_hives_left_behind(raised_at + 1, "1.13.0")
@@ -16418,6 +16439,10 @@ mod tests {
         keeper
             .note_expected_release("1.13.0", raised_at + 5)
             .unwrap();
+        stay_in_touch(
+            raised_at + 5,
+            raised_at + 5 + swarm_domain::VERSION_GRACE_SECONDS,
+        );
         service
             .raise_hives_left_behind(
                 raised_at + 5 + swarm_domain::VERSION_GRACE_SECONDS,
@@ -16429,6 +16454,209 @@ mod tests {
             1,
             "falling behind a newer release is asked about again"
         );
+    }
+
+    /// One member Hive of a Keeper's Apiary, reporting a release and staying in
+    /// touch the way a switched-on machine does.
+    struct FleetMember {
+        store: TaskStore,
+        credential: String,
+        hive: swarm_domain::HiveId,
+    }
+
+    impl FleetMember {
+        fn joined(keeper: &TaskStore, version: &str, now: i64) -> Self {
+            let store = TaskStore::in_memory().unwrap();
+            let card = store.issue_hive_connection_card(now, 3_600).unwrap();
+            keeper.pin_hive_candidate(&card, now).unwrap();
+            let credential = complete_join(keeper, &store, &card, "https://keeper.invalid", now);
+            let member = Self {
+                hive: card.payload.hive_id,
+                store,
+                credential,
+            };
+            member.reports(keeper, version, now);
+            member
+        }
+
+        fn reports(&self, keeper: &TaskStore, version: &str, at: i64) {
+            let worker = swarm_domain::HiveCapabilityWorker {
+                name: "Platform".to_owned(),
+                provider: swarm_domain::ProviderKind::ClaudeCode,
+                repository: Some("git@github.com:rcg/platform.git".to_owned()),
+                awake: false,
+            };
+            let report = self
+                .store
+                .seal_local_hive_capability(
+                    std::slice::from_ref(&worker),
+                    false,
+                    version,
+                    keeper.schema_version().unwrap(),
+                    at,
+                )
+                .unwrap();
+            keeper
+                .accept_hive_capability(&self.credential, &report, at)
+                .unwrap();
+        }
+
+        fn stays_in_touch(&self, keeper: &TaskStore, from: i64, to: i64) {
+            for at in (from..=to).step_by(300) {
+                keeper
+                    .authenticated_member_hive(&self.credential, at)
+                    .unwrap();
+            }
+            keeper
+                .authenticated_member_hive(&self.credential, to)
+                .unwrap();
+        }
+    }
+
+    fn fleet_cards(keeper: &TaskStore) -> Vec<swarm_domain::DecisionRequest> {
+        keeper
+            .list_decision_requests()
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.title == "Hives are behind the current release")
+            .collect()
+    }
+
+    /// ⚠️ THE 1.17.4 REPEAT. Two Hives behind were asked about and answered;
+    /// when one caught up the other was a new set, and the operator was asked
+    /// about the same Hive for the same release again (ADR 0110 §5).
+    #[test]
+    fn an_answered_hive_is_not_asked_about_again_when_another_catches_up() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        keeper.ensure_queen("/tmp/keeper").unwrap();
+        let first = FleetMember::joined(&keeper, "1.11.0", now);
+        let second = FleetMember::joined(&keeper, "1.11.0", now);
+        keeper.note_expected_release("1.12.0", now).unwrap();
+        let service = swarm_application::ApiaryService::new(keeper.clone());
+
+        let past = now + swarm_domain::VERSION_GRACE_SECONDS;
+        first.stays_in_touch(&keeper, now, past);
+        second.stays_in_touch(&keeper, now, past);
+        service.raise_hives_left_behind(past, "1.13.0").unwrap();
+        let cards = fleet_cards(&keeper);
+        assert_eq!(cards.len(), 1, "one card names both");
+        assert!(cards[0].evidence.contains(&first.hive.to_string()));
+        assert!(cards[0].evidence.contains(&second.hive.to_string()));
+        assert_eq!(
+            cards[0].allowed_actions,
+            ["Tell their operators", "Leave them for now"]
+        );
+        keeper
+            .resolve_decision_request(cards[0].id, "Tell their operators", "", "control_room")
+            .unwrap();
+
+        // The second catches up; the first, still behind, was answered for.
+        second.reports(&keeper, "1.12.0", past + 60);
+        first.stays_in_touch(&keeper, past, past + 600);
+        second.stays_in_touch(&keeper, past, past + 600);
+        let report = service
+            .raise_hives_left_behind(past + 600, "1.13.0")
+            .unwrap();
+        assert_eq!(
+            report.raised().len(),
+            1,
+            "the first is still behind and in touch"
+        );
+        assert_eq!(
+            fleet_cards(&keeper).len(),
+            1,
+            "a Hive answered about for this release is not asked about again"
+        );
+
+        // A Hive nobody was asked about is still a question, and only it.
+        let third = FleetMember::joined(&keeper, "1.11.0", past + 600);
+        let later = past + 600 + swarm_domain::VERSION_GRACE_SECONDS;
+        first.stays_in_touch(&keeper, past + 600, later);
+        third.stays_in_touch(&keeper, past + 600, later);
+        service.raise_hives_left_behind(later, "1.13.0").unwrap();
+        let pending = fleet_cards(&keeper)
+            .into_iter()
+            .filter(|card| card.state == swarm_domain::DecisionRequestState::Pending)
+            .collect::<Vec<_>>();
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].evidence.contains(&third.hive.to_string()));
+        assert!(
+            !pending[0].evidence.contains(&first.hive.to_string()),
+            "and the one already answered for is not on it"
+        );
+        assert_eq!(
+            pending[0].allowed_actions,
+            ["Tell its operator", "Leave it for now"]
+        );
+    }
+
+    /// ⚠️ A SWITCHED-OFF MACHINE IS NOT A QUESTION. Every 1.17.4 raise named
+    /// only Hives silent for days. A quiet Hive is left to the roster, its
+    /// card goes away, and coming back gives it six hours to catch up by
+    /// itself before anyone is asked.
+    #[test]
+    fn a_behind_hive_that_goes_quiet_loses_its_card_and_gets_time_when_it_returns() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        keeper.ensure_queen("/tmp/keeper").unwrap();
+        let hive = FleetMember::joined(&keeper, "1.11.0", now);
+        keeper.note_expected_release("1.12.0", now).unwrap();
+        let service = swarm_application::ApiaryService::new(keeper.clone());
+
+        let past = now + swarm_domain::VERSION_GRACE_SECONDS;
+        hive.stays_in_touch(&keeper, now, past);
+        service.raise_hives_left_behind(past, "1.13.0").unwrap();
+        assert_eq!(
+            fleet_cards(&keeper)[0].state,
+            swarm_domain::DecisionRequestState::Pending
+        );
+
+        // Switched off for a day.
+        let away = past + 86_400;
+        let report = service.raise_hives_left_behind(away, "1.13.0").unwrap();
+        assert!(report.raised().is_empty());
+        let cards = fleet_cards(&keeper);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(
+            cards[0].state,
+            swarm_domain::DecisionRequestState::Withdrawn
+        );
+        assert!(
+            cards[0]
+                .withdrawal_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("went quiet")),
+            "{:?}",
+            cards[0].withdrawal_reason
+        );
+
+        // Back, and given the window to install by itself.
+        let back = away + 3_600;
+        hive.stays_in_touch(&keeper, back, back + 3_600);
+        service
+            .raise_hives_left_behind(back + 3_600, "1.13.0")
+            .unwrap();
+        assert_eq!(
+            fleet_cards(&keeper).len(),
+            1,
+            "an hour back is not a question"
+        );
+
+        let stuck = back + swarm_domain::VERSION_GRACE_SECONDS + 300;
+        hive.stays_in_touch(&keeper, back + 3_600, stuck);
+        service.raise_hives_left_behind(stuck, "1.13.0").unwrap();
+        let pending = fleet_cards(&keeper)
+            .into_iter()
+            .filter(|card| card.state == swarm_domain::DecisionRequestState::Pending)
+            .count();
+        assert_eq!(pending, 1, "six hours back and still behind is said, once");
     }
 
     /// ⚠️ THE ROUND TRIP QUEEN ASKED FOR, AND THE ONE THING THE UNIT TESTS COULD

@@ -358,7 +358,10 @@ member behind the expected release gets the same grace whether or not its schema
 is behind too, so a member installing itself has time to; a member ON the
 expected release with an older schema is raised at once, as a migration that did
 not run. An answered raise is not asked again until a newer release or a
-different set of Hives is behind. Development builds are exempt from the version
+Hive not yet asked about is behind. Only Hives in touch are asked about: a quiet
+Hive is left to the roster, and a Hive back after the release gets six hours in
+touch to install by itself. The card offers "Tell its operator" or "Leave it for
+now", because the Keeper cannot install on a member (ADR 0110 §5). Development builds are exempt from the version
 raise because their own reload card reports drift locally; they are NOT exempt
 from schema drift. With no
 release check ever having returned an offer, every Hive reads "not compared" and
