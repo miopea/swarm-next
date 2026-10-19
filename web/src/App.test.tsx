@@ -2036,7 +2036,11 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   // exactly this. Deleting it would trade one defect for a blind spot: nothing
   // else under web/src reads held briefings.
   // The nav button, not its pop-out sibling, which shares the word.
-  expect(fetch.mock.calls.some(([url]) => String(url) === "/api/v1/orchestration/coordinator?include_review=false")).toBe(true);
+  // ⚠️ AWAITED, NOT READ AT ONCE. The poll starts when the session token
+  // arrives, and the Needs you button does not wait for it, so on a slow
+  // runner the button can be there before the request is. Read at once, this
+  // failed CI on 2026-10-19 (run 39308736690) and 4 of 12 runs on one core.
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url) === "/api/v1/orchestration/coordinator?include_review=false")).toBe(true));
   fireEvent.click(screen.getAllByRole("button", { name: /Queues/ })[0]);
   expect(await screen.findByText("One briefing is queued")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Queues", level: 2 })).toBeVisible();
@@ -2066,7 +2070,12 @@ test("a queued briefing is shown but does not inflate the Needs you count", asyn
   const requestsBeforeRetry = fetch.mock.calls.length;
   fireEvent.click(await screen.findByRole("button", { name: "Retry queue details" }));
   expect(await screen.findByText("Nothing is waiting on anyone.")).toBeInTheDocument();
-  const retryRequests = fetch.mock.calls.slice(requestsBeforeRetry);
+  // Only the coordinator's: other surfaces keep polling, and on a slow runner
+  // /api/v1/apiary/takeovers landed in this window in 4 of 7 runs on one core.
+  // The claim is that Retry asks once, not that nothing else does.
+  const retryRequests = fetch.mock.calls
+    .slice(requestsBeforeRetry)
+    .filter(([url]) => String(url).includes("/api/v1/orchestration/coordinator"));
   expect(retryRequests).toHaveLength(1);
   expect(String(retryRequests[0][0])).toContain("/api/v1/orchestration/coordinator");
   expect(retryRequests[0][1]?.method ?? "GET").toBe("GET");
