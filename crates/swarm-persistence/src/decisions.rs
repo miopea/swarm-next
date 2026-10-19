@@ -2494,6 +2494,51 @@ mod tests {
         );
     }
 
+    /// ADR 0119. A block on a decision comes back to its worker by itself
+    /// once the operator answers, rather than waiting for Queen to judge it.
+    #[test]
+    fn a_block_on_a_decision_comes_back_when_the_operator_answers() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, task_id) = parked_fixture(&store);
+        let actions = vec!["Go".to_owned(), "Stop".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                ..request(worker, &actions)
+            })
+            .unwrap();
+        let blocked = store
+            .transition_task_with_note(
+                task_id,
+                swarm_domain::TaskState::Blocked,
+                "Waiting for the answer.",
+            )
+            .unwrap();
+        assert_eq!(
+            blocked.wait.map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::Decision)
+        );
+        assert!(
+            store
+                .resume_cleared_waits(i64::MAX / 2)
+                .unwrap()
+                .resumed
+                .is_empty()
+        );
+
+        store
+            .resolve_decision_request(created.id, "Go", "", "control_room")
+            .unwrap();
+
+        assert_eq!(
+            store.resume_cleared_waits(i64::MAX / 2).unwrap().resumed,
+            [task_id]
+        );
+        let back = store.get_task(task_id).unwrap();
+        assert_eq!(back.state, swarm_domain::TaskState::Ready);
+        assert_eq!(back.assigned_worker_id, Some(worker));
+    }
+
     /// A park is an operator action the task waits on (ADR 0119), so it is in
     /// Needs you, and Done is what returns it.
     ///

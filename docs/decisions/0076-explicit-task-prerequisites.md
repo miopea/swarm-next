@@ -110,3 +110,11 @@ Blocked until an authorized transition. This changes the owner of verification,
 not task readiness, operator authorization or permission to discard existing notes.
 Board, single-task and agent reads share the rule. No new timer or background
 transition is introduced; a deadline's effect is evaluated on the next read.
+
+**Addendum, 2026-10-19: an Active task given an open prerequisite is blocked
+(ADR 0119).** The sentence "It does not rewind Active or Review work" changes for
+Active work. When Queen or the operator links an open prerequisite to an Active
+task, that task moves to Blocked on it, with a task wait. It comes back to its
+worker by itself when the prerequisite completes. Active work that cannot finish
+only holds its worker's slot. A worker naming a prerequisite while it blocks its
+own task is unchanged. Review work is unchanged.

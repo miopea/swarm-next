@@ -589,7 +589,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 33;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 34;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -608,7 +608,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 33;
 /// no fingerprint change means the wording moved; a fingerprint change always
 /// means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "0724788b060da7e05fa4391e75846841978a5d7388a69d9c7fef2483eaaf8532";
+    "a7f8c94d5199cef4b750501be425672cee27dca28eb5afd728b627a58007c5b3";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1489,6 +1489,7 @@ impl ServerHandler for AgentMcp {
                                 questions: input.questions,
                                 requested_command: input.command,
                                 deadline: input.deadline,
+                                keep_working: input.keep_working,
                             },
                         )
                         .and_then(|decision| {
@@ -1513,7 +1514,19 @@ impl ServerHandler for AgentMcp {
                             //
                             // The exact payload is right here in the reply. Saying
                             // so is what stops the next worker retyping it.
-                            if decision.questions.is_empty() {
+                            //
+                            // A worker's own Active task is now Blocked on this
+                            // decision (ADR 0119), and a session holding the older
+                            // schema did not ask for that, so the reply says so.
+                            let blocked_here = decision.task_id.is_some_and(|task_id| {
+                                self.tasks.store().get_task(task_id).is_ok_and(|task| {
+                                    task.state == TaskState::Blocked
+                                        && task.wait.as_ref().is_some_and(|wait| {
+                                            wait.kind == swarm_domain::TaskWaitKind::Decision
+                                        })
+                                })
+                            }) && self.principal.role != WorkerRole::Queen;
+                            if decision.questions.is_empty() && !blocked_here {
                                 return structured(decision);
                             }
                             // ADDED BESIDE the record, never wrapped around it.
@@ -1527,10 +1540,18 @@ impl ServerHandler for AgentMcp {
                                 ))
                             })?;
                             if let Some(object) = value.as_object_mut() {
-                                object.insert(
-                                    "next".into(),
-                                    json!("This decision can be answered in your terminal. Ask these EXACT questions with your provider's interview tool — copy `questions` from this reply rather than retyping them. The bridge matches question text, headers and option labels exactly, so rewording even the prompt breaks the link: the answer is captured, matches nothing, and the item stays pending with nothing explaining why."),
-                                );
+                                if blocked_here {
+                                    object.insert(
+                                        "task_blocked_on_this_decision".into(),
+                                        json!("Your task is now Blocked on this decision. Your next task and its messages can reach you meanwhile, and this task comes back to you by itself when the operator answers. If you are still working on it, move it back to Active, and pass keep_working: true next time."),
+                                    );
+                                }
+                                if !decision.questions.is_empty() {
+                                    object.insert(
+                                        "next".into(),
+                                        json!("This decision can be answered in your terminal. Ask these EXACT questions with your provider's interview tool — copy `questions` from this reply rather than retyping them. The bridge matches question text, headers and option labels exactly, so rewording even the prompt breaks the link: the answer is captured, matches nothing, and the item stays pending with nothing explaining why."),
+                                    );
+                                }
                             }
                             structured(value)
                         })
@@ -3649,6 +3670,15 @@ struct DraftEmailReplyInput {
 #[derive(Deserialize)]
 struct RequestDecisionInput {
     task_id: Option<String>,
+    /// Asking about your own Active task blocks it on the answer, so your next
+    /// task and its messages can reach you meanwhile, and it comes back by
+    /// itself when the operator answers (ADR 0119). `true` keeps it Active,
+    /// for a worker that can carry on while it waits.
+    ///
+    /// Defaulted, so a session holding the older schema gets the new default:
+    /// its question blocks the task, and the reply says so.
+    #[serde(default)]
+    keep_working: bool,
     /// The subset of `allowed_actions` the OPERATOR performs themselves.
     ///
     /// Defaulted so a client holding the older schema keeps filing ordinary
@@ -3786,6 +3816,7 @@ fn request_decision_tool() -> Tool {
             "type": "object",
             "properties": {
                 "task_id": { "type": ["string", "null"], "format": "uuid", "description": "Required during Queen automation so the approval opens the exact task." },
+                "keep_working": { "type": "boolean", "description": "A worker asking about its OWN Active task blocks that task on the answer: your next task and its messages reach you meanwhile, and the task comes back to you by itself when the operator answers. Pass true only when you can carry on working on it while you wait, and it stays Active." },
                 "kind": { "type": "string", "enum": ["input", "approval", "credentials", "conflict", "help"] },
                 "urgency": { "type": "string", "enum": ["normal", "time_sensitive"], "default": "normal" },
                 "title": { "type": "string", "minLength": 1, "maxLength": 240 },

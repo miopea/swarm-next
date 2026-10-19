@@ -3361,6 +3361,10 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error for unknown workers, completed work, queue capacity, or persistence.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Release, the one-Active guard, rebinding and briefing share one transaction"
+    )]
     pub fn assign_task_to_worker_as(
         &self,
         id: TaskId,
@@ -3392,6 +3396,13 @@ impl TaskStore {
             )
             .optional()?;
         let session_id = worker.ok_or(TaskStoreError::WorkerNotFound)?;
+        // ⚠️ ASSIGNING ACTIVE WORK MADE TWO. Starting a task checked the
+        // one-Active rule and assigning one did not, so moving an Active task
+        // to a worker already Active on another gave that worker two, and
+        // everything that keys on "the" Active task picked one of them.
+        if state == TaskState::Active.to_string() {
+            ensure_worker_holds_no_other_active_task(&transaction, &worker_id.to_string(), id)?;
+        }
         let worker_is_sleeping = session_id.is_none();
         transaction.execute(
             "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
@@ -6890,6 +6901,16 @@ fn ensure_worker_has_no_other_active_task(
     let Some(worker_id) = assigned_worker_id else {
         return Ok(());
     };
+    ensure_worker_holds_no_other_active_task(transaction, &worker_id, task_id)
+}
+
+/// The one-Active-task rule for a named worker (ADR 0047), so assigning Active
+/// work to a worker is held to it as well as starting it is.
+fn ensure_worker_holds_no_other_active_task(
+    transaction: &rusqlite::Transaction<'_>,
+    worker_id: &str,
+    task_id: TaskId,
+) -> Result<(), TaskStoreError> {
     let holder = transaction
         .query_row(
             "SELECT id, title FROM tasks

@@ -219,3 +219,12 @@ workspace lint failed. The correction passes full-workspace/all-targets/
 all-features strict Clippy, formatting and all four domain link tests on Linux.
 It is main commit `9227d2c4`; its CI result must be checked separately. The
 earlier API-only Clippy check was insufficient to cover dependency test lints.
+
+**Addendum, 2026-10-19: a worker's own question blocks its Active task
+(ADR 0119).** "Active execution is not interrupted or relabeled" still holds for
+anything Queen or the operator does. But a worker that asks the operator about
+its OWN Active task is waiting on the answer, so `swarm_request_decision` blocks
+that task on the decision, unless the worker passes `keep_working: true`. Its
+next briefing and its held messages can then reach it, and the task comes back
+by itself when the operator answers. The reply says so, because a session
+holding the older schema did not ask for it.

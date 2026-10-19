@@ -3173,7 +3173,9 @@ impl TaskService {
         now: i64,
     ) -> Result<Task, ApplicationError> {
         require_queen(principal)?;
-        self.apply_prerequisite_change(&TaskActivityActor::worker(principal.worker_id), change, now)
+        let actor = TaskActivityActor::worker(principal.worker_id);
+        self.apply_prerequisite_change(&actor, change, now)?;
+        self.block_active_work_on_its_new_prerequisite(change, &actor)
     }
 
     /// Apply an authenticated operator's explicit prerequisite change.
@@ -3185,7 +3187,50 @@ impl TaskService {
         change: &swarm_domain::TaskPrerequisiteChange,
         now: i64,
     ) -> Result<Task, ApplicationError> {
-        self.apply_prerequisite_change(&TaskActivityActor::operator(), change, now)
+        let actor = TaskActivityActor::operator();
+        self.apply_prerequisite_change(&actor, change, now)?;
+        self.block_active_work_on_its_new_prerequisite(change, &actor)
+    }
+
+    /// An Active task that gains a prerequisite still open is blocked on it
+    /// (ADR 0119 Decision 5, changing ADR 0076's "does not rewind Active").
+    /// Work that cannot finish only holds its worker's slot, and blocked on
+    /// the prerequisite it comes back by itself when that task completes.
+    ///
+    /// Only these two entry points. A worker naming a prerequisite while it
+    /// blocks its own task goes through `record_named_blocker`, which blocks
+    /// in the same call, so blocking here too would be a second transition.
+    fn block_active_work_on_its_new_prerequisite(
+        &self,
+        change: &swarm_domain::TaskPrerequisiteChange,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, ApplicationError> {
+        let task = self.store.get_task(change.task_id)?;
+        let added_and_open = matches!(change.operation, swarm_domain::PrerequisiteOperation::Add)
+            .then(|| {
+                task.prerequisites.iter().find(|item| {
+                    item.prerequisite_id == change.prerequisite_id
+                        && !item.removed
+                        && !matches!(item.state, TaskState::Completed | TaskState::Abandoned)
+                })
+            })
+            .flatten();
+        let Some(waits_on) = added_and_open.filter(|_| task.state == TaskState::Active) else {
+            return Ok(task);
+        };
+        let waits_on = format!("\"{}\"", waits_on.title);
+        self.store
+            .transition_task_with_note_as(
+                change.task_id,
+                TaskState::Blocked,
+                &format!(
+                    "Blocked on its new prerequisite {waits_on}: Active work that cannot finish only \
+                     holds its worker's slot. It comes back to its worker by itself when that task \
+                     completes."
+                ),
+                actor,
+            )
+            .map_err(Into::into)
     }
 
     fn apply_prerequisite_change(
@@ -4280,6 +4325,7 @@ impl TaskService {
         principal: AgentPrincipal,
         input: &DecisionRequestInput,
     ) -> Result<DecisionRequest, ApplicationError> {
+        let mut block_own_active_task = None;
         if principal.role != WorkerRole::Queen
             && let Some(task_id) = input.task_id
         {
@@ -4292,26 +4338,46 @@ impl TaskService {
             {
                 return Err(ApplicationError::NotAuthorized);
             }
+            if task.state == TaskState::Active && !input.keep_working {
+                block_own_active_task = Some((task_id, session_id));
+            }
         }
-        self.store
-            .create_decision_request(&NewDecisionRequest {
-                requesting_worker_id: principal.worker_id,
-                task_id: input.task_id,
-                kind: input.kind,
-                urgency: input.urgency,
-                title: &input.title,
-                summary: &input.summary,
-                reason: &input.reason,
-                risk: &input.risk,
-                evidence: &input.evidence,
-                suggested_action: &input.suggested_action,
-                allowed_actions: &input.allowed_actions,
-                operator_actions: &input.operator_actions,
-                questions: &input.questions,
-                deadline: input.deadline,
-                requested_command: input.requested_command.as_deref(),
-            })
-            .map_err(Into::into)
+        let decision = self.store.create_decision_request(&NewDecisionRequest {
+            requesting_worker_id: principal.worker_id,
+            task_id: input.task_id,
+            kind: input.kind,
+            urgency: input.urgency,
+            title: &input.title,
+            summary: &input.summary,
+            reason: &input.reason,
+            risk: &input.risk,
+            evidence: &input.evidence,
+            suggested_action: &input.suggested_action,
+            allowed_actions: &input.allowed_actions,
+            operator_actions: &input.operator_actions,
+            questions: &input.questions,
+            deadline: input.deadline,
+            requested_command: input.requested_command.as_deref(),
+        })?;
+        // ADR 0119 Decision 5. A worker that asks about its own Active task is
+        // waiting on the answer, and Active work that is waiting holds its
+        // slot: its next briefing and every message about its other tasks
+        // queue behind it. Blocked on the decision, it frees the slot and
+        // comes back by itself when the operator answers.
+        if let Some((task_id, session_id)) = block_own_active_task {
+            self.store.transition_worker_task(
+                task_id,
+                TaskState::Blocked,
+                &format!(
+                    "Waiting on the operator's answer to \"{}\". It comes back to this worker by \
+                     itself when they answer. Asked with swarm_request_decision; keep_working: true \
+                     would have kept it Active.",
+                    decision.title
+                ),
+                session_id,
+            )?;
+        }
+        Ok(decision)
     }
 
     /// Answers a pending interview as the authenticated local operator.
@@ -4583,6 +4649,10 @@ pub struct DecisionRequestInput {
     /// `GRANT_COMMAND_ACTION` for why a worker choosing that label would be
     /// checking a string it chose.
     pub requested_command: Option<String>,
+    /// A worker asking about its own Active task blocks that task on the
+    /// answer unless this is set (ADR 0119). Ignored for Queen and for work
+    /// that is not Active.
+    pub keep_working: bool,
 }
 
 fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {
@@ -6203,6 +6273,148 @@ mod tests {
         }
     }
 
+    /// A worker with an Active task, for the part-2 tests (ADR 0119).
+    fn worker_active_on(
+        service: &TaskService,
+        queen: &WorkerProfile,
+        worker: &WorkerProfile,
+        title: &str,
+    ) -> (TaskId, AgentPrincipal) {
+        let queen_principal = AgentPrincipal::from(queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                title,
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        service
+            .transition_task(principal, task.id, TaskState::Active, "")
+            .unwrap();
+        (task.id, principal)
+    }
+
+    /// ADR 0119 Decision 5. RCG Networks held Phase E Active while it waited
+    /// on the operator, so its next task and every message about its other
+    /// work queued behind it. Asking is waiting: the task blocks on the answer.
+    #[test]
+    fn a_worker_asking_about_its_own_active_task_blocks_it_on_the_answer() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "SOA Phase E");
+
+        let decision = service
+            .create_decision(
+                principal,
+                &decision_input(
+                    Some(task),
+                    DecisionRequestKind::Input,
+                    "Approve M2?",
+                    &["Yes", "No"],
+                ),
+            )
+            .unwrap();
+
+        let blocked = service.store.get_task(task).unwrap();
+        assert_eq!(blocked.state, TaskState::Blocked);
+        assert_eq!(
+            blocked.wait.map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::Decision)
+        );
+        assert_eq!(
+            blocked.next_move_owner,
+            swarm_domain::NextMoveOwner::Operator
+        );
+        assert_eq!(decision.state, swarm_domain::DecisionRequestState::Pending);
+    }
+
+    #[test]
+    fn keep_working_keeps_the_task_active_and_queen_is_never_blocked() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Carry on meanwhile");
+        let mut input = decision_input(
+            Some(task),
+            DecisionRequestKind::Input,
+            "Which colour?",
+            &["Amber", "Blue"],
+        );
+        input.keep_working = true;
+        service.create_decision(principal, &input).unwrap();
+        assert_eq!(
+            service.store.get_task(task).unwrap().state,
+            TaskState::Active
+        );
+
+        // Queen asking about a worker's task does not move the worker's work.
+        let queen_input = decision_input(
+            Some(task),
+            DecisionRequestKind::Approval,
+            "Queen asks",
+            &["Go", "Stop"],
+        );
+        service
+            .create_decision(AgentPrincipal::from(&queen), &queen_input)
+            .unwrap();
+        assert_eq!(
+            service.store.get_task(task).unwrap().state,
+            TaskState::Active
+        );
+    }
+
+    /// ADR 0119 Decision 5, changing ADR 0076's "does not rewind Active": an
+    /// Active task that cannot finish only holds its worker's slot.
+    #[test]
+    fn active_work_given_an_open_prerequisite_is_blocked_on_it() {
+        let (service, queen, worker) = setup();
+        let (task, _) = worker_active_on(&service, &queen, &worker, "SOA Phase F");
+        let queen_principal = AgentPrincipal::from(&queen);
+        let upstream = service
+            .create_task(
+                queen_principal,
+                "SOA Phase E",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+
+        let blocked = service
+            .change_task_prerequisite(
+                queen_principal,
+                &swarm_domain::TaskPrerequisiteChange {
+                    task_id: task,
+                    prerequisite_id: upstream.id,
+                    operation: swarm_domain::PrerequisiteOperation::Add,
+                    reason: "F follows E".into(),
+                },
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(blocked.state, TaskState::Blocked);
+        assert_eq!(
+            blocked.wait.map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::Task)
+        );
+    }
+
     /// ADR 0119. "Waiting on the operator to sign in" used to be refused, so
     /// workers left waiting work Active. Named as a wait, it is a block that
     /// says who must act, and a wait named wrongly is refused with the format.
@@ -6544,6 +6756,7 @@ mod tests {
             questions: Vec::new(),
             deadline: None,
             requested_command: None,
+            keep_working: false,
         }
     }
 
@@ -6810,6 +7023,7 @@ mod tests {
                     questions: Vec::new(),
                     deadline: None,
                     requested_command: None,
+                    keep_working: false,
                 },
             ),
             Err(ApplicationError::NotAuthorized)

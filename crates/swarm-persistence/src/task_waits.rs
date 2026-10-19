@@ -385,6 +385,17 @@ impl TaskStore {
             if changed == 0 {
                 return Err(TaskStoreError::NotFound);
             }
+            // The operator is who acted, so the history says so in its own
+            // line, not only in the system's note when the task comes back.
+            transaction.execute(
+                &format!(
+                    "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
+                     SELECT ?1, 'noted', 'Done: ' || w.needs, 'operator', NULL
+                     FROM task_waits w JOIN tasks t ON t.id = w.task_id
+                     WHERE w.task_id = ?1 AND w.block_sequence = {BLOCK_ENTRY}"
+                ),
+                [task_id.to_string()],
+            )?;
             transaction.execute(
                 "DELETE FROM queen_task_review_receipts
                  WHERE task_id = ?1 AND kind = 'operator_deferral'",
@@ -623,6 +634,24 @@ mod tests {
 
         store.complete_operator_wait(task, now(&store)).unwrap();
 
+        let done_by: (String, String) = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT actor_kind, note FROM task_activity
+                 WHERE task_id = ?1 AND kind = 'noted' ORDER BY sequence DESC LIMIT 1",
+                [task.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            done_by,
+            (
+                "operator".to_owned(),
+                "Done: Sign in to the Entra portal and approve M2".to_owned()
+            ),
+            "the history names the operator as who acted"
+        );
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Ready);
         assert!(store.operator_waits().unwrap().is_empty());
         assert!(matches!(
@@ -742,6 +771,38 @@ mod tests {
             .unwrap();
         assert_eq!(again.wait, None);
         assert!(store.operator_waits().unwrap().is_empty());
+    }
+
+    /// Assigning Active work used to skip the one-Active rule that starting
+    /// it obeys, so a worker could end up holding two (ADR 0119 Decision 5).
+    #[test]
+    fn active_work_cannot_be_assigned_to_a_worker_already_active_elsewhere() {
+        let (store, held) = active_task("Already active here");
+        let busy = store.get_task(held).unwrap().assigned_worker_id.unwrap();
+        let other = store
+            .create_worker("Fern", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+        store
+            .bind_worker_session(other.id, WorkerSessionId::new())
+            .unwrap();
+        let moving = store.create_task("Active elsewhere", "/workspace").unwrap();
+        store.transition_task(moving.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(moving.id, other.id).unwrap();
+        store.transition_task(moving.id, TaskState::Active).unwrap();
+
+        let refused = store.assign_task_to_worker(moving.id, busy);
+
+        assert!(
+            matches!(
+                refused,
+                Err(TaskStoreError::WorkerAlreadyHasActiveTask { .. })
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(
+            store.get_task(moving.id).unwrap().assigned_worker_id,
+            Some(other.id)
+        );
     }
 
     /// Decision 7: the open board is typed from what its record can support.

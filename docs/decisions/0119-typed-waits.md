@@ -206,6 +206,20 @@ the wording above, each for a reason found while building it.
 ADR 0106's park lift is removed. A park now records an operator-action wait,
 and Done replaces "I've done this".
 
+## Implementation notes, part 2 (2026-10-19)
+
+Decision 5 as written:
+- `swarm_request_decision` blocks the asker's own Active task on the decision,
+  unless `keep_working` is true. Queen's questions never move a worker's task.
+- Queen's and the operator's prerequisite commands block an Active task on an
+  open prerequisite they add. A worker naming a prerequisite while it blocks its
+  own task already blocks in that call.
+- Assigning Active work to a worker that holds another Active task is refused,
+  with the same error as starting it.
+
+Done also writes its own history line, with the operator as the actor. Until
+then the record named them only in the system's note when the task came back.
+
 ## Alternatives considered
 
 - **An "Active but waiting" state, or a slot rule that ignores waiting Active
