@@ -58,6 +58,7 @@ pub use worker_engine_returns::WorkerEngineReturnSession;
 mod task_block;
 mod task_decision_links;
 mod task_prerequisites;
+mod task_waits;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
     CoordinatorAttention, CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake,
@@ -70,6 +71,7 @@ pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
 pub use task_outcomes::{
     CompletionEvidence, CompletionExemptionRecord, ReviewedSettlementPage, TaskEvidenceRecord,
 };
+pub use task_waits::{OperatorWait, ResumedWaits};
 mod apiary_enrollment;
 mod decisions;
 mod email;
@@ -394,7 +396,10 @@ const MEMBERSHIP_RENEWAL_SCHEMA_MARKER: i64 = 202;
 /// How long a Hive keeps terminal history, and what its host says it keeps
 /// (ADR 0118).
 const TERMINAL_HISTORY_SCHEMA_MARKER: i64 = 203;
-const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_HISTORY_SCHEMA_MARKER;
+/// What a blocked task waits for and who must act, anchored to its block entry
+/// (ADR 0119).
+const TASK_WAITS_SCHEMA_MARKER: i64 = 204;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_WAITS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -646,6 +651,9 @@ pub enum TaskStoreError {
     InvalidOperatorInstruction,
     #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
     InvalidTaskActivityNote,
+    /// A Blocked note that starts to name a wait and gets it wrong (ADR 0119).
+    #[error("{0}")]
+    InvalidTaskWait(String),
     #[error(transparent)]
     TaskPrerequisite(#[from] swarm_domain::TaskPrerequisiteError),
     #[error(transparent)]
@@ -1013,46 +1021,7 @@ fn block_deadline_for(target: TaskState, note: &str) -> Option<i64> {
 fn parse_block_deadline(note: &str) -> Option<i64> {
     note.lines()
         .filter_map(|line| line.trim().strip_prefix("Blocked until:"))
-        .find_map(|value| parse_rfc3339_seconds(value.trim()))
-}
-
-/// Seconds since the epoch for an RFC3339 instant, without pulling in a clock
-/// crate for one field.
-///
-/// Deliberately strict: it accepts what a worker is told to write and refuses
-/// the rest, because a half-understood timestamp is worse than none. Only the
-/// `Z` form, because an offset that is silently ignored would shift a deadline
-/// by hours in whichever direction nobody checked.
-fn parse_rfc3339_seconds(value: &str) -> Option<i64> {
-    let value = value.strip_suffix('Z')?;
-    let (date, time) = value.split_once('T')?;
-    let mut date = date.split('-');
-    let (year, month, day) = (
-        date.next()?.parse::<i64>().ok()?,
-        date.next()?.parse::<i64>().ok()?,
-        date.next()?.parse::<i64>().ok()?,
-    );
-    if date.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    let mut time = time.split(':');
-    let (hour, minute, second) = (
-        time.next()?.parse::<i64>().ok()?,
-        time.next()?.parse::<i64>().ok()?,
-        time.next()?.split('.').next()?.parse::<i64>().ok()?,
-    );
-    if time.next().is_some() || hour > 23 || minute > 59 || second > 60 {
-        return None;
-    }
-    // Days from the civil calendar, Howard Hinnant's algorithm. Exact for every
-    // date this will ever see and it needs no dependency.
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = era * 146_097 + day_of_era - 719_468;
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+        .find_map(|value| swarm_domain::parse_rfc3339_seconds(value.trim()))
 }
 
 /// A fully migrated database, built once per process and copied per store.
@@ -2308,7 +2277,7 @@ impl TaskStore {
     /// Returns an error when persistence cannot be read safely.
     /// The task projection, shared so the board list and the settled list cannot
     /// drift apart in what they return.
-    const TASK_PROJECTION: &'static str = "
+    const TASK_PROJECTION: &'static str = concat!("
             SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
                    t.assigned_worker_id, a.worker_session_id,
                    (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
@@ -2380,7 +2349,10 @@ impl TaskStore {
                    -- moment its task moves.
                    (SELECT r.kind FROM queen_task_review_receipts r
                     WHERE r.task_id = t.id AND t.state = 'blocked'
-                      AND r.kind IN ('operator_deferral','external_condition'))
+                      AND r.kind IN ('operator_deferral','external_condition')),
+                   -- What a blocked task waits for and who must act (ADR 0119).
+                   -- Index 30, appended last for the same reason as the park.
+                   ", crate::task_waits::current_wait_json!(), "
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -2390,7 +2362,7 @@ impl TaskStore {
               AND review_request.request_worker_id = t.assigned_worker_id
             LEFT JOIN task_messages review_message
               ON review_message.id = review_request.request_message_id
-";
+");
 
     /// Work that is finished and needs nobody: abandoned, or completed with
     /// evidence recorded, or completed and recorded unverifiable.
@@ -3181,6 +3153,15 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        let now: i64 = transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
+        // The wait a block names in its note (ADR 0119), read before anything is
+        // written so a wait named wrongly refuses the whole transition.
+        let wait = if target == TaskState::Blocked {
+            swarm_domain::parse_block_wait(note, now)
+                .map_err(|error| TaskStoreError::InvalidTaskWait(error.to_string()))?
+        } else {
+            None
+        };
         let current = reportable_task_state(&transaction, id, reporting_session_id)?;
         if require_review_answer {
             review_answers::ensure_no_pending_request(&transaction, id)?;
@@ -3312,6 +3293,15 @@ impl TaskStore {
             ],
         )?;
         let activity_sequence = transaction.last_insert_rowid();
+        if target == TaskState::Blocked {
+            task_waits::record_block_wait(
+                &transaction,
+                id,
+                activity_sequence,
+                wait.as_ref(),
+                actor,
+            )?;
+        }
         if let Some(why) = unchecked {
             check_gate::note_unchecked_close(&transaction, id, &why)?;
         }
@@ -4778,6 +4768,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < TERMINAL_HISTORY_SCHEMA_MARKER {
         crate::terminal_history::migrate_terminal_history(transaction)?;
+    }
+    if schema_version < TASK_WAITS_SCHEMA_MARKER {
+        crate::task_waits::migrate_task_waits(transaction)?;
     }
     Ok(())
 }
@@ -6993,6 +6986,18 @@ fn validate_description(description: &str) -> Result<(), TaskStoreError> {
 )]
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let prerequisites = task_prerequisites::from_projection(row, 24)?;
+    // Index 30, the last column: the current wait, as JSON (ADR 0119).
+    let wait: Option<swarm_domain::TaskWaitView> = row
+        .get::<_, Option<String>>(30)?
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                30,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
     let mut clarification_waits: Vec<swarm_domain::TaskClarificationWait> =
         serde_json::from_str(&row.get::<_, String>(27)?).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -7101,7 +7106,13 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                 TaskState::from_str(&state).unwrap_or(TaskState::Draft),
                 &prerequisites,
             )
-            .after_blocker_evidence(row.get(20)?, &prerequisites, row.get(26)?),
+            .after_blocker_evidence(row.get(20)?, &prerequisites, row.get(26)?)
+            .after_wait(
+                TaskState::from_str(&state).unwrap_or(TaskState::Draft),
+                wait.as_ref(),
+                has_assignee,
+                &prerequisites,
+            ),
             row.get(28)?,
             &clarification_waits,
         ),
@@ -7114,6 +7125,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             Some("external_condition") => Some(swarm_domain::TaskPark::ExternalCondition),
             _ => None,
         },
+        wait,
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()
@@ -10778,6 +10790,13 @@ mod tests {
             table: "terminal_history_settings",
             artifact: "",
             undo_sql: "",
+            probe_sql: "",
+        },
+        // Typed waits (ADR 0119).
+        SchemaStep {
+            table: "task_waits",
+            artifact: "",
+            undo_sql: "DROP TABLE task_waits;",
             probe_sql: "",
         },
     ];

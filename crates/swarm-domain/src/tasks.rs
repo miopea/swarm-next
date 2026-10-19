@@ -681,6 +681,11 @@ pub struct Task {
     /// MOVES stops being parked without anything having to clear a flag.
     #[serde(default)]
     pub park: Option<TaskPark>,
+    /// What this blocked task waits for and who must act (ADR 0119). Read from
+    /// the wait recorded with the block entry, so it ends when the task leaves
+    /// Blocked, with nothing to clear.
+    #[serde(default)]
+    pub wait: Option<crate::TaskWaitView>,
 }
 
 /// Why a blocked task is waiting, as Queen's review recorded it.

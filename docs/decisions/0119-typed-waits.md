@@ -177,6 +177,35 @@ A one-time migration types every open block it can:
 
 Anything left is untyped, and listed for Queen to type with the worker.
 
+## Implementation notes, part 1 (2026-10-19)
+
+The behaviour is as decided. Three details of how it is recorded differ from
+the wording above, each for a reason found while building it.
+
+- **A wait is named in the Blocked note, not by a `wait` argument.** An MCP
+  client fetches its tool list once when it connects. A new argument would be
+  invisible to every worker already running, and those are the workers holding
+  today's waiting work. The `Blocked until:` date hold was built the same way
+  for the same reason. The markers are `Waiting on:`, `Needs:` and `Recheck:`.
+  The tool description teaches them to new sessions. The refusal of a block
+  that names nothing teaches them to every session, because a refusal is a tool
+  result rather than a schema.
+- **A block waiting on a task or a decision records a row too.** Links outlive
+  the block they were made for. A decision answered in September is still linked
+  when the task is blocked again in October for a reason nobody recorded, and
+  bringing that task back because the old decision is answered would be wrong.
+  So the block records a `task` or `decision` wait when it is made with a live
+  gate, or when a gate is linked to a block that has no wait. Only a wait
+  recorded with the current block can bring a task back.
+- **Clearing is evaluated by the coordination pass**, not inside the
+  transaction of the event that clears it. The pass runs every 30 seconds, and
+  straight after a decision is answered or Done is pressed. Done also brings
+  the task back at once. Persistence does no logging, and the pass reports a
+  task that cleared but could not move.
+
+ADR 0106's park lift is removed. A park now records an operator-action wait,
+and Done replaces "I've done this".
+
 ## Alternatives considered
 
 - **An "Active but waiting" state, or a slot rule that ignores waiting Active

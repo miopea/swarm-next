@@ -63,7 +63,7 @@ import {
   removeWorker,
   removeTask,
   restoreTask,
-  liftTaskPark,
+  completeTaskWait,
   reorderTasks,
   reorderWorkers,
   reconcileJira,
@@ -97,6 +97,7 @@ import {
   type PresentationDeviceClass,
   type QueenAutonomyPolicy,
   type HeldBriefing,
+  type OperatorWait,
   type HeldDelivery,
   type QueenAutomationStatus,
   type Task,
@@ -120,6 +121,7 @@ import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
+import OperatorWaitCard from "./decisions/OperatorWaitCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import WorkerCannotRunCard from "./workers/WorkerCannotRunCard";
 import WorkerReturnAttentionCard from "./workers/WorkerReturnAttentionCard";
@@ -574,6 +576,7 @@ export function App() {
   // NOT fed into attentionCount, on purpose. See HeldBriefingList for why a
   // self-resolving state must not badge.
   const [heldBriefings, setHeldBriefings] = useState<HeldBriefing[]>([]);
+  const [operatorWaits, setOperatorWaits] = useState<OperatorWait[]>([]);
   const [recoveryQueue, setRecoveryQueue] = useState<RecoveryQueueSnapshot>();
   const [reviewQueue, setReviewQueue] = useState<QueenReviewQueueSnapshot>();
   /** Bumped to re-read held work immediately rather than waiting for the tick. */
@@ -696,6 +699,7 @@ export function App() {
       setBlockedEscalations(status.blocked_escalations ?? []);
       setUnsettledReview(status.unsettled_review ?? []);
       setHeldBriefings(status.held_briefings ?? []);
+      setOperatorWaits(status.operator_waits ?? []);
       setRecoveryQueue(status.recovery);
       setReviewQueue(status.review_queue ?? undefined);
       setCoordinatorUnavailable(false);
@@ -1145,21 +1149,21 @@ export function App() {
   }
 
   /**
-   * The operator reporting that the action a park was held for is done.
-   *
-   * The server returns the task to Ready with its assignment intact AND deletes
-   * the operator_deferral receipt, so the park cannot resurface on an unrelated
-   * later block.
+   * The operator pressing Done on something a blocked task was waiting on them
+   * for (ADR 0119). The task goes back to its worker if nothing else holds it,
+   * and the coordinator status is read again so the item leaves Needs you.
    */
-  async function liftParkedTask(taskId: string) {
+  async function completeOperatorWait(taskId: string) {
     if (!operatorToken) return;
     setBusy(true);
     setOperationError(undefined);
     try {
-      const released = await liftTaskPark(operatorToken, taskId);
-      setTasks((current) => current.map((candidate) => (candidate.id === released.id ? released : candidate)));
+      const returned = await completeTaskWait(operatorToken, taskId);
+      setTasks((current) => current.map((candidate) => (candidate.id === returned.id ? returned : candidate)));
+      setOperatorWaits((current) => current.filter((wait) => wait.task_id !== taskId));
+      setHeldDeliveryRefresh((count) => count + 1);
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "The park could not be lifted");
+      setOperationError(error instanceof Error ? error.message : "Done could not be recorded");
     } finally {
       setBusy(false);
     }
@@ -1663,6 +1667,8 @@ export function App() {
   const actionableHeldDeliveries = heldDeliveries.filter((held) => !isQueuedDeliveryObservation(held) && !isRuntimeStartHold(held));
   const queuedDeliveryObservations = heldDeliveries.filter(isQueuedDeliveryObservation);
   const heldDeliveryAttentionCount = actionableHeldDeliveries.length > 0 ? 1 : 0;
+  // One per task, because each is a separate thing only the operator can do.
+  const operatorWaitAttentionCount = operatorWaits.length;
   const workerReturnAttentionCount = workers.some((worker) => worker.return_attention) ? 1 : 0;
   // A worker whose automatic recovery gave up is stopped until a person acts,
   // and used to say so only on a roster chip and in the journal. Queen was down
@@ -1715,6 +1721,7 @@ export function App() {
   const databaseRecoveryRequired = loadState.kind === "ready" && loadState.health.database_recovery_required === true;
   const attentionCount = Number(databaseRecoveryRequired) + pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
     + heldDeliveryAttentionCount
+    + operatorWaitAttentionCount
     + workerReturnAttentionCount
     + workerCannotRunCount
     + conversationDriftAttentionCount + awaitingReply.length;
@@ -2583,14 +2590,14 @@ export function App() {
               tasks={tasks}
               workers={workers}
               busy={busy || databaseRecoveryRequired}
-              onLiftPark={(taskId) => void liftParkedTask(taskId)}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length}
               attentionCards={<>
                 {databaseRecoveryRequired && <DatabaseRecoveryCard />}
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
                 <WorkerReturnAttentionCard workers={workers} onReview={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
+                <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />

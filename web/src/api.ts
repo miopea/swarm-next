@@ -59,7 +59,7 @@ export {
   reorderTasks,
   removeTask,
   restoreTask,
-  liftTaskPark,
+  completeTaskWait,
   transitionTask,
   updateTask,
 } from "./api/tasks";
@@ -171,6 +171,7 @@ export type {
   TaskPriority,
   TaskState,
   TaskUpdateInput,
+  TaskWait,
 } from "./api/tasks";
 export type {
   CreateWorkerInput,
@@ -371,6 +372,19 @@ export type CoordinatorStatus = {
    * is a stall wearing a healthy label.
    */
   held_briefings?: HeldBriefing[];
+  /**
+   * What blocked work is waiting for the operator to DO (ADR 0119). Each is a
+   * Needs you item with Done, because nothing moves until they act.
+   */
+  operator_waits?: OperatorWait[];
+};
+/** A blocked task waiting on the operator to do something (ADR 0119). */
+export type OperatorWait = {
+  task_id: string;
+  task_title: string;
+  worker_name: string | null;
+  needs: string;
+  waiting_since: number;
 };
 export type UnsettledReview = {
   task_id: string;

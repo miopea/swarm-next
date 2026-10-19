@@ -889,7 +889,9 @@ fn queue_run(
 /// or the decision being answered changes this set, and that wakes her. One
 /// difference is deliberate: a prerequisite that was abandoned or removed does
 /// not hold the task, because it will never finish, and Queen must re-route it.
-const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
+/// An operator action not yet done, or an outside or date wait before its time,
+/// holds the task too, because each names who must act (ADR 0119).
+const ACTIONABLE_TASKS: &str = concat!("task.removed_at IS NULL
              AND (
                  task.state IN ('draft','review')
                  OR (task.state = 'blocked'
@@ -901,7 +903,10 @@ const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
                      AND NOT EXISTS (
                          SELECT 1 FROM task_decision_membership membership
                          JOIN decision_requests decision ON decision.id = membership.decision_id
-                         WHERE membership.task_id = task.id AND decision.state = 'pending'))
+                         WHERE membership.task_id = task.id AND decision.state = 'pending')
+                     -- A typed wait names who must act, and it is not Queen
+                     -- until it clears (ADR 0119).
+                     AND NOT ", crate::task_waits::typed_wait_holds!("task", ":now"), ")
                  OR (task.state = 'active' AND EXISTS (
                      SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                      WHERE p.task_id = task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
@@ -914,7 +919,7 @@ const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
                          WHERE live.worker_id = task.assigned_worker_id
                            AND live.ended_at IS NULL
                      ))
-             )";
+             )");
 
 fn actionable_count(connection: &rusqlite::Connection, now: i64) -> Result<i64, rusqlite::Error> {
     let task_count: i64 = connection.query_row(
@@ -2192,6 +2197,79 @@ mod tests {
         assert!(
             store.observe_queen_automation(50_000).unwrap(),
             "the date hold expiring is a change"
+        );
+    }
+
+    /// ADR 0119. A typed wait names who must act, so it is not Queen's until
+    /// it clears: an operator action until Done, an outside or date wait until
+    /// its time. The Spectrum outage task was re-read every 15 minutes because
+    /// nothing said this.
+    #[test]
+    fn a_typed_wait_that_has_not_cleared_does_not_wake_her() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "RCG Networks",
+                ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        let block = |title: &str, note: &str| {
+            let task = store.create_task(title, "/workspace").unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store.assign_task_to_worker(task.id, worker.id).unwrap();
+            store.transition_task(task.id, TaskState::Active).unwrap();
+            store
+                .transition_task_with_note(task.id, TaskState::Blocked, note)
+                .unwrap();
+            task.id
+        };
+        let now: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .unwrap();
+        let operator = block(
+            "SOA Phase E",
+            "Waiting on: operator\nNeeds: Sign in to the Entra portal",
+        );
+        let recheck = now + 2 * 86_400;
+        block(
+            "Spectrum outage",
+            &format!(
+                "Waiting on: Spectrum\nNeeds: X4 back\nRecheck: {}",
+                swarm_domain::format_rfc3339_seconds(recheck)
+            ),
+        );
+        block(
+            "Check the renewals",
+            &format!(
+                "Blocked until: {}",
+                swarm_domain::format_rfc3339_seconds(now + 10 * 86_400)
+            ),
+        );
+        let counted = |at| {
+            actionable_fingerprint(&store.connection().unwrap(), at)
+                .unwrap()
+                .1
+        };
+        assert_eq!(counted(now), 0, "none of the three is Queen's yet");
+        assert_eq!(
+            counted(recheck),
+            1,
+            "the outside wait's recheck time arriving makes it a move to make"
+        );
+
+        store.complete_operator_wait(operator, now).unwrap();
+        assert_ne!(
+            store.get_task(operator).unwrap().state,
+            TaskState::Blocked,
+            "Done brought it back"
         );
     }
 

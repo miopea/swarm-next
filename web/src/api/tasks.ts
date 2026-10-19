@@ -71,6 +71,20 @@ export type TaskClarificationWait = {
   delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
 };
 
+/** What a blocked task waits for (ADR 0119). */
+export type TaskWait = {
+  kind: "task" | "decision" | "operator_action" | "outside" | "date";
+  /** What must happen, in words. */
+  needs: string;
+  /** Who must act, for an outside wait. */
+  party: string | null;
+  /** When it comes back by itself, Unix seconds, for an outside or date wait. */
+  resume_at: number | null;
+  /** When the operator pressed Done, for an operator action. */
+  done_at: number | null;
+  cleared: boolean;
+};
+
 export type Task = {
   id: string;
   hive_id: string;
@@ -115,6 +129,12 @@ export type Task = {
    * waiting on a prerequisite task, which is neither a park nor a wait.
    */
   park?: "operator_deferral" | "external_condition" | null;
+  /**
+   * What this blocked task waits for and who must act (ADR 0119). Read from
+   * the wait recorded with the current block, so it is absent once the task
+   * moves. `cleared` is as of when it was read.
+   */
+  wait?: TaskWait | null;
   prerequisites?: TaskPrerequisite[];
   assigned_worker_id: string | null;
   assigned_session_id: string | null;
@@ -254,14 +274,14 @@ export async function restoreTask(operatorToken: string, taskId: string): Promis
 }
 
 /**
- * The operator saying the action they parked a task for is done.
+ * The operator pressing Done on what a blocked task was waiting on them for
+ * (ADR 0119). The task goes back to its worker if nothing else holds it.
  *
- * Not a plain transition: the server also DELETES the operator_deferral receipt,
- * because leaving `blocked` only hides the park by derivation and a surviving
- * row would make the next unrelated block read as a park and stay covered.
+ * Not a plain transition: the server also deletes an operator-owed park's
+ * receipt, so the next unrelated block is not read as a park.
  */
-export async function liftTaskPark(operatorToken: string, taskId: string): Promise<Task> {
-  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/lift-park`, {
+export async function completeTaskWait(operatorToken: string, taskId: string): Promise<Task> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/wait-done`, {
     method: "POST",
   });
   return response.json() as Promise<Task>;

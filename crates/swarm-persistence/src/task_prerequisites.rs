@@ -310,6 +310,7 @@ impl TaskStore {
             params![task.to_string(), prerequisite.to_string(), reason, actor.kind.to_string(), actor.id, now],
         )?;
         audit(&tx, task, prerequisite, reason, "added", actor, now)?;
+        crate::task_waits::type_untyped_block(&tx, task, actor)?;
         tx.commit()?;
         Ok(())
     }

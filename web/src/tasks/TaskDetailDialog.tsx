@@ -10,6 +10,7 @@ import {
   type Task,
   type TaskPriority,
   type TaskUpdateInput,
+  type TaskWait,
 } from "../api";
 import { useModalFocus } from "../shared/useModalFocus";
 import ModalPortal from "../shared/ModalPortal";
@@ -24,6 +25,24 @@ const nextMoveLabels = {
   operator: "You", queen: "Queen", worker: "Assigned worker", blocked: "Dependency or hold",
   release: "Shipping", nobody: "No next move",
 };
+
+/** What a blocked task waits for, in one line (ADR 0119). */
+function waitLabel(wait: TaskWait) {
+  const back = wait.resume_at
+    ? `, back ${new Date(wait.resume_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
+    : "";
+  switch (wait.kind) {
+    case "operator_action":
+      return wait.done_at ? "You: done" : `You: ${wait.needs}`;
+    case "outside":
+      return `${wait.party ?? "An outside party"}: ${wait.needs}${back}`;
+    case "date":
+      return `A date${back}`;
+    case "task":
+    case "decision":
+      return wait.needs;
+  }
+}
 
 export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmailSources, operatorToken, busy, onClose, onSave, onRemove }: {
   task: Task;
@@ -172,6 +191,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           <span><small>Swarm status</small><strong>{taskStateLabel(task)}</strong></span>
           <span><small>Priority</small><strong>{priorityLabels[task.priority]}</strong></span>
           <span><small>Next move</small><strong>{task.next_move_owner ? nextMoveLabels[task.next_move_owner] : "Not recorded"}</strong></span>
+          {task.wait && <span><small>Waiting for</small><strong>{waitLabel(task.wait)}</strong></span>}
           {jiraLink && <span><small>Jira issue</small><strong>{jiraLink.issue_key}</strong></span>}
           {jiraLink && <span><small>Jira status</small><strong>{jiraLink.jira_status_name}</strong></span>}
           {jiraLink && <span><small>Project</small><strong>{jiraLink.project_name}</strong></span>}

@@ -1761,17 +1761,46 @@ mod tests {
         }
         drop(store);
         let store = TaskStore::open(&path).unwrap();
-        assert_eq!(
-            store
-                .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 102)
-                .unwrap(),
-            saved
-        );
+        // The receipt survives the upgrade.
         assert_eq!(
             store.queen_review_check_times().unwrap()[&input.task_id],
             101
         );
-        input.expected_revision = saved.evidence_revision;
+        // Schema 204 types this park as an outside wait (ADR 0119). That is new
+        // evidence about the block, so the disposition saved before it is no
+        // longer current, and the next one is recorded against what is.
+        assert_eq!(
+            store
+                .get_task(input.task_id)
+                .unwrap()
+                .wait
+                .map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::Outside)
+        );
+        assert_ne!(
+            saved.evidence_revision,
+            store
+                .queen_task_review_evidence(input.task_id)
+                .unwrap()
+                .evidence_revision
+        );
+        // A typed wait names its owner, so it is not Queen's to dispose of. Put
+        // the block back in prose, Queen's again, to check the kind this test
+        // is about.
+        store
+            .transition_task(input.task_id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task_with_note(
+                input.task_id,
+                TaskState::Blocked,
+                "External condition requires verification",
+            )
+            .unwrap();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
         input.kind = QueenReviewDispositionKind::InsufficientEvidence;
         store
             .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 103)

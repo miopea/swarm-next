@@ -1363,59 +1363,6 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     Ok(())
 }
 
-impl TaskStore {
-    /// The operator saying they have done the thing they parked this for.
-    ///
-    /// ⚠️ THE RECEIPT IS DELETED, NOT JUST OUTRUN. Leaving `blocked` already
-    /// HIDES the park, because the projection derives it only while blocked —
-    /// but the row would survive, and the next unrelated block on this task
-    /// would read as an operator park again and stay covered in Queen's review.
-    /// A stale deferral quietly covering a real blocker is worse than the stall
-    /// this whole feature removes, so discharging the park deletes its evidence.
-    ///
-    /// Returns the task to `ready` KEEPING its assignment: it was resting, not
-    /// reassigned, so it goes back to the worker that already holds it.
-    ///
-    /// # Errors
-    /// Refuses a task that is not parked, and returns database failures.
-    pub fn lift_operator_park(&self, task_id: TaskId) -> Result<(), TaskStoreError> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        let parked: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM tasks t
-                JOIN queen_task_review_receipts r ON r.task_id = t.id
-                WHERE t.id = ?1 AND t.removed_at IS NULL
-                  AND t.state = 'blocked' AND r.kind = 'operator_deferral')",
-            [task_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if !parked {
-            return Err(TaskStoreError::NotFound);
-        }
-        transaction.execute(
-            "UPDATE tasks SET state = 'ready', blocked_until = NULL, updated_at = unixepoch()
-             WHERE id = ?1",
-            [task_id.to_string()],
-        )?;
-        transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind, actor_id)
-             VALUES (?1, 'state_changed', 'ready', ?2, 'operator', NULL)",
-            params![
-                task_id.to_string(),
-                "Park lifted by the operator: the action they were holding this for is done.                  Returned to Ready with its assignment intact."
-            ],
-        )?;
-        transaction.execute(
-            "DELETE FROM queen_task_review_receipts
-             WHERE task_id = ?1 AND kind = 'operator_deferral'",
-            [task_id.to_string()],
-        )?;
-        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
-        transaction.commit()?;
-        Ok(())
-    }
-}
-
 /// Park the linked task when the operator's chosen action is one they marked as
 /// theirs to perform.
 ///
@@ -1483,6 +1430,20 @@ fn park_when_operator_owes_the_action(
     )?;
     let recorded_sequence = transaction.last_insert_rowid();
     let parsed: TaskId = crate::parse_domain_id(&task_id)?;
+    // The park is an operator action the task waits on (ADR 0119), so it is a
+    // Needs you item with Done rather than a separate Parked list.
+    crate::task_waits::record_block_wait(
+        transaction,
+        parsed,
+        recorded_sequence,
+        Some(&swarm_domain::TaskWait {
+            kind: swarm_domain::TaskWaitKind::OperatorAction,
+            needs: bounded(&format!("You took on \"{action}\" yourself."), 500),
+            party: None,
+            resume_at: None,
+        }),
+        &swarm_domain::TaskActivityActor::operator(),
+    )?;
     let evidence = crate::queen_review::task_review_evidence(transaction, parsed)?;
     // ⚠️ WRITTEN IN THE TABLE'S OWN TYPE, AND BUILT THROUGH IT. This used to be
     // an ad-hoc `{"action":…,"decision_id":…}` object, which the Queen review
@@ -2533,12 +2494,15 @@ mod tests {
         );
     }
 
+    /// A park is an operator action the task waits on (ADR 0119), so it is in
+    /// Needs you, and Done is what returns it.
+    ///
     /// ⚠️ THE RECEIPT MUST GO, not merely stop being read. Leaving `blocked`
     /// hides the park by derivation, but a surviving row would make the NEXT
     /// unrelated block read as an operator park and stay covered in review —
     /// a stale deferral quietly covering a real blocker.
     #[test]
-    fn lifting_a_park_returns_the_work_and_discharges_its_receipt() {
+    fn pressing_done_on_a_park_returns_the_work_and_discharges_its_receipt() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace").unwrap();
         let (worker, task_id) = parked_fixture(&store);
@@ -2554,7 +2518,10 @@ mod tests {
         store
             .resolve_decision_request(created.id, "I will do it", "", "control_room")
             .unwrap();
-        store.lift_operator_park(task_id).unwrap();
+        let owed = store.operator_waits().unwrap();
+        assert_eq!(owed.len(), 1, "the park is owed in Needs you");
+        assert_eq!(owed[0].needs, "You took on \"I will do it\" yourself.");
+        store.complete_operator_wait(task_id, i64::MAX / 2).unwrap();
 
         let task = store.get_task(task_id).unwrap();
         assert_eq!(task.state, swarm_domain::TaskState::Ready);
@@ -2574,8 +2541,8 @@ mod tests {
             "the discharged park must leave no receipt behind"
         );
         assert!(
-            store.lift_operator_park(task_id).is_err(),
-            "lifting work that is not parked must refuse"
+            store.complete_operator_wait(task_id, i64::MAX / 2).is_err(),
+            "Done on work that owes the operator nothing must refuse"
         );
     }
 

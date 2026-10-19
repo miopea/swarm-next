@@ -62,6 +62,10 @@ pub(super) struct CoordinatorStatusResponse {
     /// six hours with attempts at zero while the board showed work assigned and
     /// apparently ignored.
     held_briefings: Vec<swarm_persistence::HeldTaskDispatch>,
+    /// What blocked work is waiting for the operator to DO, as Needs you items
+    /// with Done (ADR 0119). On the payload the page already polls, beside the
+    /// other attention, for the same reason as `blocked_escalations`.
+    operator_waits: Vec<swarm_persistence::OperatorWait>,
     recovery: swarm_domain::RecoveryQueueSnapshot,
     review_queue: Option<swarm_domain::QueenReviewQueueSnapshot>,
 }
@@ -517,6 +521,9 @@ pub(super) async fn coordinator_status(
             automatic_start_batch_limit: usize::from(AUTOMATIC_WAKE_BATCH_LIMIT),
             held: held_deliveries(&state)?,
             held_briefings: held_briefings(&state)?,
+            operator_waits: task_store(&state)?
+                .operator_waits()
+                .map_err(|error| task_store_error(&error))?,
             blocked_escalations: blocked_escalations(&state)?,
             unsettled_review: unsettled_review(&state)?,
             recovery,

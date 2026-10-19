@@ -9,7 +9,7 @@ import { needsOperatorDecision, waitingForClarification } from "./decisionAttent
 import BeeMascot from "../brand/BeeMascot";
 import DecisionInterview from "./DecisionInterview";
 import LongText from "./LongText";
-import ParkedWork from "./ParkedWork";
+import ParkedWork, { isWaitingOnTheWorld } from "./ParkedWork";
 import WorkActivity from "./WorkActivity";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
@@ -47,8 +47,6 @@ type Props = {
    */
   trailingCards?: ReactNode;
   onOpenTask?: (taskId: string) => void;
-  /** The operator reporting they have done the action a park was held for. */
-  onLiftPark?: (taskId: string) => void;
   onFetchActivity?: (signal: AbortSignal) => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
   onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
@@ -57,7 +55,7 @@ type Props = {
   onAskClarification?: (decision: DecisionRequest, id: string, question: string) => Promise<DecisionClarification>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onLiftPark, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification }: Props) {
   const [view, setView] = useState<"attention" | "activity" | "parked">("attention");
   const clarifications = useDecisionClarifications(decisions, view === "attention" ? onFetchClarifications : undefined);
   const tabId = useId();
@@ -232,7 +230,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   // own decision to wait; an external wait is the world's. Both are invisible
   // on this page otherwise, and since 07c24d3d both are silent too.
   const parkedTotal = useMemo(
-    () => tasks.filter((task) => task.park === "operator_deferral" || task.park === "external_condition").length,
+    () => tasks.filter(isWaitingOnTheWorld).length,
     [tasks],
   );
 
@@ -245,7 +243,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         <button ref={activityTab} id={`${tabId}-activity`} role="tab" aria-controls={`${tabId}-panel`} tabIndex={view === "activity" ? 0 : -1} aria-selected={view === "activity"} onKeyDown={moveTabFocus} onClick={() => { pendingNavigation.current = false; if (view === "activity") void loadActivity(); else setView("activity"); }}>Activity</button>
       </div>
       <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${view}`}>
-      {view === "parked" && <ParkedWork tasks={tasks} onOpenTask={onOpenTask} onLiftPark={onLiftPark} />}
+      {view === "parked" && <ParkedWork tasks={tasks} onOpenTask={onOpenTask} />}
       {view === "activity" && <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} />}
       {/* Keep pending forms owned by the inbox across tab switches. Hidden
           controls leave the accessibility tree; clarification reads remain

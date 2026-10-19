@@ -247,21 +247,20 @@ pub(super) async fn restore_task(
     Ok(Json(task).into_response())
 }
 
-/// The operator saying the action they parked this task for is done.
-///
-/// Only reachable for work parked by their OWN answer. An external-condition
-/// wait is the world's rather than theirs, and is deliberately not liftable
-/// here — unparking one would be taking back a decision they never made.
-pub(super) async fn lift_task_park(
+/// The operator pressing Done on what a blocked task was waiting on them for
+/// (ADR 0119). It comes back to its worker now, if nothing else holds it, and
+/// the coordination pass that follows delivers its briefing.
+pub(super) async fn complete_task_wait(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(task_id): Path<String>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let task = task_service(&state)?
-        .lift_operator_park(parse_task_id(&task_id)?)
+        .complete_operator_wait(parse_task_id(&task_id)?, crate::unix_timestamp())
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
+    state.deliver_coordination().await;
     Ok(Json(task).into_response())
 }
 

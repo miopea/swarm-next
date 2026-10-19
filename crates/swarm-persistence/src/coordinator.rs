@@ -202,7 +202,7 @@ const UNSTARTED_WORK_CANDIDATES_SQL: &str = concat!(
 ///
 /// Every branch re-verifies against live state, so a record whose reason has
 /// passed stops counting without anything having to delete it.
-pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
+pub(super) const LIVE_ATTENTION_SOURCE: &str = concat!("FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
@@ -249,6 +249,12 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                    -- refuses. The detector now draws it in the same place.
                    OR (action.kind = 'reviewed_work_without_evidence_attention'
                        AND task.state = 'review'
+                       -- Only the one raised for the task's current
+                       -- assignment. 34 were raised for SOA Phase E, one per
+                       -- session it was ever assigned under, and all counted.
+                       AND action.session_id = (
+                           SELECT current.worker_session_id FROM task_assignments current
+                           WHERE current.task_id = task.id AND current.released_at IS NULL)
                        AND NOT EXISTS (
                            SELECT 1 FROM task_deployments deployment
                            WHERE deployment.task_id = task.id
@@ -318,7 +324,9 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                    -- row -- and Queen moving it is the entire point.
                    OR (action.kind = 'blocked_work_unattended_attention'
                        AND task.assigned_worker_id = action.worker_id
-                       AND task.state = 'blocked')
+                       AND task.state = 'blocked'
+                       -- Nor once its wait names who must act (ADR 0119).
+                       AND NOT ", crate::task_waits::typed_wait_holds!("task", "unixepoch()"), ")
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL
@@ -366,7 +374,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                              AND assignment.worker_session_id = action.session_id
                              AND assignment.released_at IS NULL
                        ))
-               )";
+               )");
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorWorkerWake {
@@ -872,6 +880,9 @@ impl TaskStore {
              WHERE task.state = 'blocked' AND task.removed_at IS NULL
                AND blocked.blocked_at + ?2 <= ?1
                AND (task.blocked_until IS NULL OR task.blocked_until <= ?1)
+               AND NOT ",
+            crate::task_waits::typed_wait_holds!("task", "?1"),
+            "
              ORDER BY blocked.blocked_at, task.id LIMIT ?3"
         ))?;
         let candidates = statement
@@ -1030,6 +1041,9 @@ impl TaskStore {
                ON session.worker_id = worker.id AND session.recency = 1
              WHERE task.state = 'blocked' AND task.removed_at IS NULL
                AND blocked.blocked_at + ?2 <= ?1
+               AND NOT ",
+            crate::task_waits::typed_wait_holds!("task", "?1"),
+            "
                AND NOT EXISTS (
                    SELECT 1 FROM coordinator_actions action
                    WHERE action.kind = 'blocked_work_unattended_attention'
@@ -1327,8 +1341,12 @@ impl TaskStore {
              FROM tasks task
              JOIN worker_profiles worker
                ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             -- The CURRENT assignment only, as every other detector here has
+             -- it. Without this the join reached every session the task was
+             -- ever assigned under, and each pass alarmed one more: 34 for SOA
+             -- Phase E on 2026-10-19, all live.
              JOIN task_assignments assignment
-               ON assignment.task_id = task.id
+               ON assignment.task_id = task.id AND assignment.released_at IS NULL
              JOIN worker_sessions session
                ON session.session_id = assignment.worker_session_id
                   AND session.worker_id = worker.id
@@ -3239,6 +3257,98 @@ mod reviewed_work_tests {
     ///
     /// A green test asserting the wrong behaviour is why this survived. So the
     /// assertion is inverted rather than deleted.
+    /// On 2026-10-19 SOA Phase E sat in Review without evidence and this
+    /// raised 34 attentions in twelve minutes, one for each session RCG
+    /// Networks had ever been bound to it under, back to 16 September. Every
+    /// one counted as live, so Queen's actionable count read 49 with six tasks
+    /// on the board. The candidates joined every assignment the task had ever
+    /// had, released ones included, and each pass picked a session not yet
+    /// alarmed.
+    #[test]
+    fn finished_work_is_raised_once_for_its_current_session_not_once_per_past_one() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "RCG Networks",
+                ProviderKind::ClaudeCode,
+                "/workspace/rcg",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store.create_task("SOA Phase E", "/workspace/rcg").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let mut session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let first_session = session;
+        // The worker restarts twice while the work is Active, and the task is
+        // assigned to it again on each new session, releasing the old row.
+        for _ in 0..2 {
+            store.release_worker_session(session).unwrap();
+            session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            store.assign_task(task.id, session).unwrap();
+        }
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let assignments: i64 = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM task_assignments WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(assignments >= 3, "the history this needs: {assignments}");
+
+        let now = i64::MAX / 4;
+        let grace = 15 * 60;
+        for _ in 0..5 {
+            for candidate in store
+                .reviewed_work_without_evidence_candidates(now, grace)
+                .unwrap()
+            {
+                store
+                    .record_reviewed_work_without_evidence_attention(&candidate, now, grace)
+                    .unwrap();
+            }
+        }
+
+        let raised = store
+            .current_coordinator_attention(now)
+            .unwrap()
+            .into_iter()
+            .filter(|attention| attention.kind == "reviewed_work_without_evidence_attention")
+            .count();
+        assert_eq!(raised, 1, "one finished task, one attention");
+
+        // An attention already raised for a past session, as the 34 were,
+        // does not count either.
+        store
+            .record_reviewed_work_without_evidence_attention(
+                &super::ReviewedWorkWithoutEvidenceCandidate {
+                    worker_id: worker.id,
+                    session_id: first_session,
+                    task_id: task.id,
+                    task_revision: store.get_task(task.id).unwrap().updated_at,
+                    age_seconds: grace,
+                },
+                now,
+                grace,
+            )
+            .unwrap();
+        let raised = store
+            .current_coordinator_attention(now)
+            .unwrap()
+            .into_iter()
+            .filter(|attention| attention.kind == "reviewed_work_without_evidence_attention")
+            .count();
+        assert_eq!(raised, 1, "a past session's attention is not live");
+    }
+
     #[test]
     fn finished_work_with_no_evidence_is_surfaced_and_an_unapproved_claim_does_not_clear_it() {
         let store = TaskStore::in_memory().unwrap();

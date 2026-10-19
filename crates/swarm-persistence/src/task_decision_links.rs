@@ -173,6 +173,7 @@ impl TaskStore {
             params![task.to_string(), decision.to_string(), reason, actor.kind.to_string(), actor.id, now],
         )?;
         audit(&tx, task, decision, reason, actor, now, "added")?;
+        crate::task_waits::type_untyped_block(&tx, task, actor)?;
         tx.commit()?;
         Ok(())
     }

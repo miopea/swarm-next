@@ -2148,6 +2148,22 @@ impl AppState {
                 return;
             }
         }
+        // Work whose wait has cleared comes back to its worker before the
+        // briefings below are delivered, so its briefing can go in this same
+        // pass (ADR 0119).
+        match store.resume_cleared_waits(unix_timestamp()) {
+            Ok(outcome) => {
+                for (task, why) in &outcome.held {
+                    tracing::warn!(task = %task, why = %why, "a task whose wait cleared could not come back yet");
+                }
+                if !outcome.resumed.is_empty() {
+                    self.control_room_notify.notify_waiters();
+                }
+            }
+            Err(error) => {
+                tracing::warn!(message = %error, "cleared waits could not be read");
+            }
+        }
         self.run_deterministic_coordinator(store).await;
         // A review may yield once to notifications, but a continuing stream
         // must not renew Queen's cooldown ahead of it forever. The common
@@ -5033,8 +5049,8 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/tasks/{task_id}/restore", post(tasks::restore_task))
         .route(
-            "/api/v1/tasks/{task_id}/lift-park",
-            post(tasks::lift_task_park),
+            "/api/v1/tasks/{task_id}/wait-done",
+            post(tasks::complete_task_wait),
         )
         .route(
             "/api/v1/tasks/{task_id}/prerequisites",
@@ -11051,6 +11067,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
+        TaskStoreError::InvalidTaskWait(_) => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_task_wait",
+            error.to_string(),
+        ),
         // ITS OWN CODE for the same reason as the refusal below: the approver
         // did nothing wrong, and the remedy is not in their hands. Reported as
         // invalid_task it reads as a malformed approval, which is how four

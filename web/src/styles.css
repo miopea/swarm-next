@@ -1454,6 +1454,14 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    content, actions — and this one carries no bee, so its text was laid into the
    44px icon track and wrapped one word per line. */
 .held-delivery-card { grid-template-columns: minmax(0, 1fr) auto; }
+/* One column: the card is a list, and the shared grid's 44px first column is
+   for an icon this card does not have. */
+.operator-wait-card { grid-template-columns: minmax(0, 1fr); }
+.operator-wait-list { display: grid; gap: 12px; margin: 10px 0 0; padding: 0; list-style: none; }
+.operator-wait-list li { display: grid; gap: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.operator-wait-list li:first-child { padding-top: 0; border-top: 0; }
+.queen-attention-card .operator-wait-list p:not(.muted) { color: var(--ink); font-size: .86rem; }
+.operator-wait-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .attention-tabs { display: flex; max-width: 1180px; margin: 0 auto 22px; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
 .attention-tabs button { min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; }
 .attention-tabs button[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent); }
@@ -2865,6 +2873,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-attention-card button { width: 100%; min-height: 44px; }
   .queen-attention-card { display: grid; grid-template-columns: 38px minmax(0, 1fr); }
   .held-delivery-card { grid-template-columns: minmax(0, 1fr); }
+  .operator-wait-card { grid-template-columns: minmax(0, 1fr); }
   .queen-attention-bee { width: 36px; height: 36px; }
   .queen-attention-bee svg { width: 34px; height: 34px; }
   .queen-attention-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; }

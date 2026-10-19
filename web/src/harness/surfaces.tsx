@@ -49,6 +49,7 @@ import StaleBundleNotice from "../StaleBundleNotice";
 import WorkerContextBar from "../workers/WorkerContextBar";
 import WhatsNewModal from "../runtime/WhatsNewModal";
 import UnsettledReviewCard from "../decisions/UnsettledReviewCard";
+import OperatorWaitCard from "../decisions/OperatorWaitCard";
 import { machinePressureNotice, type MachineResourceState } from "../runtime/machinePressure";
 
 /**
@@ -605,6 +606,40 @@ export const SURFACES: Surface[] = [
           tasks={demoTasks}
           workers={demoWorkers}
           busy={false}
+          onResolve={async () => undefined}
+        />
+      </div>
+    ),
+  },
+  {
+    id: "typed-waits",
+    title: "Typed waits (ADR 0119)",
+    why: "Invented operator actions in Needs you, and an outside wait in Parked, to check the Done card and the comes-back line",
+    render: () => (
+      <div className="attention-workspace">
+        <DecisionInbox
+          decisions={[]}
+          tasks={[
+            ...demoTasks,
+            {
+              ...demoTasks[0],
+              id: "typed-wait-outside",
+              title: "Carrier outage on the backup circuit",
+              state: "blocked",
+              wait: { kind: "outside", needs: "The carrier restores the backup circuit to Available", party: "the carrier", resume_at: Math.floor(Date.now() / 1000) + 2 * 86_400, done_at: null, cleared: false },
+            },
+          ]}
+          workers={demoWorkers}
+          busy={false}
+          additionalPendingCount={2}
+          attentionCards={<OperatorWaitCard
+            waits={[
+              { task_id: "typed-wait-1", task_title: "Phase E: build the sync configuration", worker_name: "Network", needs: "Sign in to the identity portal and approve the second step", waiting_since: 1 },
+              { task_id: "typed-wait-2", task_title: "Publish the privacy policy", worker_name: "Watch faces", needs: "Test the build on a second person's watch and say whether it binds", waiting_since: 1 },
+            ]}
+            onDone={() => undefined}
+            onOpenTask={() => undefined}
+          />}
           onResolve={async () => undefined}
         />
       </div>

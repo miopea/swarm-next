@@ -3456,12 +3456,18 @@ impl TaskService {
             .restore_task_as(task_id, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
-    /// The operator releasing work they had parked on their own action.
+
+    /// The operator has done what a blocked task was waiting on them for
+    /// (ADR 0119). The task comes back to its worker if nothing else holds it.
     ///
     /// # Errors
-    /// Refuses a task that is not parked; propagates persistence failures.
-    pub fn lift_operator_park(&self, task_id: TaskId) -> Result<Task, ApplicationError> {
-        self.store.lift_operator_park(task_id)?;
+    /// Refuses a task that owes the operator nothing, and propagates persistence failures.
+    pub fn complete_operator_wait(
+        &self,
+        task_id: TaskId,
+        now: i64,
+    ) -> Result<Task, ApplicationError> {
+        self.store.complete_operator_wait(task_id, now)?;
         self.store.get_task(task_id).map_err(Into::into)
     }
 
@@ -4097,7 +4103,12 @@ impl TaskService {
     ///
     /// # Errors
     /// Refuses with the missing half named, and how to supply it.
-    fn refuse_a_block_nobody_owns(&self, task_id: TaskId) -> Result<(), ApplicationError> {
+    fn refuse_a_block_nobody_owns(
+        &self,
+        task_id: TaskId,
+        note: &str,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
         let task = self.store.get_task(task_id)?;
         if task.assigned_worker_id.is_none() {
             return Err(ApplicationError::TransitionNotPermitted(
@@ -4109,17 +4120,24 @@ impl TaskService {
                     .into(),
             ));
         }
+        // A wait named in the note says who must act and when the work comes
+        // back, which is what this guard exists to demand (ADR 0119). A wait
+        // named wrongly is refused with the format, which every running
+        // session sees, because it is a tool result and not a schema.
+        match swarm_domain::parse_block_wait(note, now) {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(error) => return Err(ApplicationError::TransitionNotPermitted(error.to_string())),
+        }
         if !self.store.task_has_structured_blocker(task_id)? {
-            return Err(ApplicationError::TransitionNotPermitted(
-                "Blocked work has to name what it waits for, as a link rather than a \
-                 sentence. Name it on this same call: pass prerequisite_id for the task \
-                 it waits on, or decision_id for the operator decision it needs. A link \
-                 lets the board notice when the blocker resolves; prose does not, and \
-                 prose is how work comes to rest here forever. If you have no id to \
-                 name, the work is under-specified rather than waiting on something — \
-                 say so in Review instead of parking it."
-                    .into(),
-            ));
+            return Err(ApplicationError::TransitionNotPermitted(format!(
+                "Blocked work has to name what it waits for, not only describe it. Pass \
+                 prerequisite_id for the task it waits on, or decision_id for the operator \
+                 decision it needs, on this same call. Or name the wait in the note, and the \
+                 task comes back to you by itself when it clears. Prose alone is how work \
+                 comes to rest here forever.\n\n{}",
+                swarm_domain::TASK_WAIT_FORMAT
+            )));
         }
         Ok(())
     }
@@ -4138,7 +4156,10 @@ impl TaskService {
         target: TaskState,
         note: &str,
     ) -> Result<Task, ApplicationError> {
-        self.transition_task_naming_blocker(principal, task_id, target, note, None, 0)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0));
+        self.transition_task_naming_blocker(principal, task_id, target, note, None, now)
     }
 
     /// A transition that may NAME what it waits on, in the same call that blocks.
@@ -4146,7 +4167,8 @@ impl TaskService {
     /// One call on purpose. A block and its reason recorded separately can drift
     /// apart — the block lands, the link fails, and the task rests with a
     /// blocker nobody can act on, which is the state this whole control exists
-    /// to prevent. `now` is only read when a link is supplied.
+    /// to prevent. `now` dates a supplied link and bounds a wait named in the
+    /// note (ADR 0119).
     ///
     /// # Errors
     /// Refuses a caller that does not own the task, a move outside a worker's
@@ -4187,7 +4209,7 @@ impl TaskService {
                 if let Some(blocker) = blocker {
                     self.record_named_blocker(principal, task_id, blocker, now)?;
                 }
-                self.refuse_a_block_nobody_owns(task_id)?;
+                self.refuse_a_block_nobody_owns(task_id, note, now)?;
             }
             return self
                 .store
@@ -4198,7 +4220,7 @@ impl TaskService {
             if let Some(blocker) = blocker {
                 self.record_named_blocker(principal, task_id, blocker, now)?;
             }
-            self.refuse_a_block_nobody_owns(task_id)?;
+            self.refuse_a_block_nobody_owns(task_id, note, now)?;
         }
         require_completion_evidence(&self.store, target, task_id, note)?;
         if target == TaskState::Active {
@@ -5653,7 +5675,7 @@ mod tests {
 
         match refused {
             Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
-                reason.contains("link rather than a sentence"),
+                reason.contains("name what it waits for"),
                 "an owner alone is not enough: {reason}"
             ),
             other => panic!("a block naming nothing must be refused, got {other:?}"),
@@ -6173,11 +6195,80 @@ mod tests {
             1,
         ) {
             Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
-                reason.contains("link rather than a sentence"),
-                "the guard must still bite: {reason}"
+                reason.contains("name what it waits for")
+                    && reason.contains("Waiting on: operator"),
+                "the guard must still bite, and teach the wait format: {reason}"
             ),
             other => panic!("a block naming nothing must still be refused, got {other:?}"),
         }
+    }
+
+    /// ADR 0119. "Waiting on the operator to sign in" used to be refused, so
+    /// workers left waiting work Active. Named as a wait, it is a block that
+    /// says who must act, and a wait named wrongly is refused with the format.
+    #[test]
+    fn a_worker_can_block_on_a_named_wait_and_a_wrong_one_is_taught() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "SOA Phase E",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        let worker_principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        service
+            .transition_task(worker_principal, task.id, TaskState::Active, "")
+            .unwrap();
+
+        match service.transition_task_naming_blocker(
+            worker_principal,
+            task.id,
+            TaskState::Blocked,
+            "Waiting on: operator",
+            None,
+            1,
+        ) {
+            Err(ApplicationError::TransitionNotPermitted(reason)) => {
+                assert!(reason.contains("Needs:"), "{reason}");
+            }
+            other => panic!("a wait with no Needs line must be refused, got {other:?}"),
+        }
+
+        let blocked = service
+            .transition_task_naming_blocker(
+                worker_principal,
+                task.id,
+                TaskState::Blocked,
+                "Waiting on: operator\nNeeds: Sign in to the Entra portal and approve M2",
+                None,
+                1,
+            )
+            .unwrap();
+        assert_eq!(blocked.state, TaskState::Blocked);
+        assert_eq!(
+            blocked.next_move_owner,
+            swarm_domain::NextMoveOwner::Operator
+        );
+        assert_eq!(service.store.operator_waits().unwrap().len(), 1);
     }
 
     /// ⚠️ NAMING A BLOCKER IS SAFE; UNNAMING ONE IS NOT.

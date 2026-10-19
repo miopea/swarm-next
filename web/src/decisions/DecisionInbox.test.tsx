@@ -1011,39 +1011,39 @@ const waitingTask = {
   park: "external_condition",
 } as Task;
 
-test("parked work is reachable from the tab bar and counts both kinds", () => {
+test("waiting on the world is reachable from the tab bar and counts only that", () => {
   render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask, waitingTask]} busy={false} onResolve={vi.fn()} />);
   const parked = screen.getByRole("tab", { name: /^Parked/ });
-  expect(parked).toHaveTextContent("2");
+  expect(parked).toHaveTextContent("1");
   fireEvent.click(parked);
-  // Kept apart on purpose: a park is the operator's decision, an external wait
-  // is the world's, and one list would invite unmaking a decision never made.
-  expect(screen.getByText("Parked by you")).toBeInTheDocument();
   expect(screen.getByText("Waiting on the world")).toBeInTheDocument();
-  expect(screen.getByText("Deferred until the migration lands")).toBeInTheDocument();
   expect(screen.getByText("Blocked on the vendor answer")).toBeInTheDocument();
   // Each row offers an action rather than only reading as a list.
-  expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(1);
 });
 
-test("only work the operator parked themselves offers to be released", () => {
-  // ⚠️ THE ASYMMETRY IS THE POINT. A park is the operator's own decision and
-  // theirs to unmake. An external wait belongs to the world, so offering to
-  // clear one would invite taking back a decision they never made.
-  const onLiftPark = vi.fn();
-  render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask, waitingTask]} busy={false} onResolve={vi.fn()} onLiftPark={onLiftPark} />);
-  fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
-  const release = screen.getAllByRole("button", { name: "I've done this" });
-  expect(release).toHaveLength(1);
-  fireEvent.click(release[0]);
-  expect(onLiftPark).toHaveBeenCalledWith("task-parked");
-});
-
-test("without a release handler the parked list still renders", () => {
+test("an operator-owed park is not in Parked: it is a Needs you item with Done", () => {
+  // ADR 0119. A park the operator owes is something only they can do, so it
+  // belongs where they act, not in a list of things nobody can move.
   render(<DecisionInbox decisions={[]} workers={[]} tasks={[parkedTask]} busy={false} onResolve={vi.fn()} />);
   fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
-  expect(screen.getByText("Deferred until the migration lands")).toBeInTheDocument();
+  expect(screen.queryByText("Deferred until the migration lands")).not.toBeInTheDocument();
+  expect(screen.queryByText("Parked by you")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "I've done this" })).not.toBeInTheDocument();
+});
+
+test("an outside wait says who it waits on and when it comes back", () => {
+  const outside = {
+    id: "task-outside",
+    title: "Spectrum outage",
+    workspace: "/w/rcg-network",
+    updated_at: Math.floor(Date.now() / 1000) - 60,
+    wait: { kind: "outside", needs: "X4 back to Available", party: "Spectrum", resume_at: 1_792_500_000, done_at: null, cleared: false },
+  } as Task;
+  render(<DecisionInbox decisions={[]} workers={[]} tasks={[outside]} busy={false} onResolve={vi.fn()} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
+  expect(screen.getByText("X4 back to Available")).toBeInTheDocument();
+  expect(screen.getByText(/on Spectrum · comes back/)).toBeInTheDocument();
 });
 
 test("a block with no recorded park reason is not listed as parked", () => {
@@ -1051,7 +1051,7 @@ test("a block with no recorded park reason is not listed as parked", () => {
   render(<DecisionInbox decisions={[]} workers={[]} tasks={[prerequisiteBlock]} busy={false} onResolve={vi.fn()} />);
   expect(screen.getByRole("tab", { name: /^Parked/ })).toHaveTextContent("0");
   fireEvent.click(screen.getByRole("tab", { name: /^Parked/ }));
-  expect(screen.getByText(/Nothing is parked/)).toBeInTheDocument();
+  expect(screen.getByText(/Nothing is waiting on the world/)).toBeInTheDocument();
 });
 
 test("arrow keys reach every tab, including the third one", () => {
@@ -1087,7 +1087,7 @@ test("a long handoff note is summarised to one sentence, not dumped whole", () =
     title: "Parked with a long note",
     workspace: "/w/x",
     updated_at: Math.floor(Date.now() / 1000) - 3600,
-    park: "operator_deferral",
+    park: "external_condition",
     blocked_note: "**BLOCKED ON THE OPERATOR'S DEFERRAL**, recorded on another ticket. " + "Then a great deal more detail follows that nobody wants on this screen. ".repeat(20),
   } as Task;
   render(<DecisionInbox decisions={[]} workers={[]} tasks={[wordy]} busy={false} onResolve={vi.fn()} />);
