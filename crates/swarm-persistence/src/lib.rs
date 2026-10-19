@@ -399,7 +399,10 @@ const TERMINAL_HISTORY_SCHEMA_MARKER: i64 = 203;
 /// What a blocked task waits for and who must act, anchored to its block entry
 /// (ADR 0119).
 const TASK_WAITS_SCHEMA_MARKER: i64 = 204;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_WAITS_SCHEMA_MARKER;
+/// Shared work carries its wait, and a member knows whether its Keeper takes a
+/// changed one (ADR 0119).
+const APIARY_TASK_WAITS_SCHEMA_MARKER: i64 = 205;
+const CURRENT_SCHEMA_VERSION: i64 = APIARY_TASK_WAITS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4782,6 +4785,12 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < TASK_WAITS_SCHEMA_MARKER {
         crate::task_waits::migrate_task_waits(transaction)?;
+    }
+    if schema_version < APIARY_TASK_WAITS_SCHEMA_MARKER {
+        crate::federation_tasks::migrate_apiary_task_waits(
+            transaction,
+            APIARY_TASK_WAITS_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -10819,6 +10828,17 @@ mod tests {
             artifact: "",
             undo_sql: "DROP TABLE task_waits;",
             probe_sql: "",
+        },
+        // Shared work carries its wait (ADR 0119, part 3).
+        SchemaStep {
+            table: "apiary_tasks",
+            artifact: "wait_json",
+            undo_sql: "ALTER TABLE apiary_tasks DROP COLUMN wait_json;
+                       ALTER TABLE local_apiary_task_sync DROP COLUMN keeper_accepts_wait_updates;",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('apiary_tasks')
+                                WHERE name = 'wait_json')
+                             + (SELECT COUNT(*) FROM pragma_table_info('local_apiary_task_sync')
+                                WHERE name = 'keeper_accepts_wait_updates') = 2",
         },
     ];
 

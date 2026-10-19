@@ -7,6 +7,7 @@ import {
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
+import SharedTaskWait from "./SharedTaskWait";
 import SharedProfileHint from "./SharedProfileHint";
 import FleetVersions from "./FleetVersions";
 import WatchWindow from "./WatchWindow";
@@ -296,7 +297,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage, o
           <header className="keeper-task-header"><div><p className="eyebrow">Shared work</p><h4>Keeper-canonical Swarm tasks</h4><small>Members retrieve these by polling Keeper</small></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Open Tasks</button></header>
           <p className="keeper-work-boundary">Create, route, and manage all work from Tasks. Apiary keeps this supervisory rollup focused on ownership across Hives.</p>
           {section("tasks", "Swarm tasks", <>
-          <SharedTaskGroups tasks={snapshot.tasks} emptyMessage="No Swarm-generated Apiary tasks are waiting." renderTasks={(tasks) => <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{tasks.map((task) => { const stewardAction = stewardAuditByTask.get(task.id); const steward = stewardAction ? memberByOperator.get(stewardAction.member_operator_id) : undefined; return <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small></span><span><strong>{task.home_hive_id ? memberByHive.get(task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Unassigned"}</strong><small>{steward ? `Routed by Steward ${steward.operator_display_name}` : task.home_hive_id ? "Routed by Keeper" : "Available to claim"} · revision {task.revision}</small></span></li>; })}</ul>} />
+          <SharedTaskGroups tasks={snapshot.tasks} emptyMessage="No Swarm-generated Apiary tasks are waiting." renderTasks={(tasks) => <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{tasks.map((task) => { const stewardAction = stewardAuditByTask.get(task.id); const steward = stewardAction ? memberByOperator.get(stewardAction.member_operator_id) : undefined; const homeVersion = snapshot.fleet?.hives.find((hive) => hive.hive_id === task.home_hive_id); return <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small><SharedTaskWait task={task} localHiveId={identity.hive.id} hiveName={(hiveId) => memberByHive.get(hiveId)?.hive_name} silentRelease={homeVersion && !homeVersion.reports_task_waits ? { hive: memberByHive.get(homeVersion.hive_id)?.hive_name ?? "Its Hive", version: homeVersion.swarm_version } : undefined} /></span><span><strong>{task.home_hive_id ? memberByHive.get(task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Unassigned"}</strong><small>{steward ? `Routed by Steward ${steward.operator_display_name}` : task.home_hive_id ? "Routed by Keeper" : "Available to claim"} · revision {task.revision}</small></span></li>; })}</ul>} />
           </>)}
           <header><div><p className="eyebrow">Jira ownership</p><h4>Current claims</h4></div><small>Issue data stays in Jira</small></header>
           {section("sharedWork", "Jira claims", <>

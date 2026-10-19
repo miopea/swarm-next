@@ -6,7 +6,7 @@ import FleetVersions from "./FleetVersions";
 
 const hive = (over: Partial<Fleet["hives"][number]>) => ({
   hive_id: "hive-1", node_id: "node-1", swarm_version: "1.12.0",
-  database_schema_version: 187, observed_at: 1_000, standing: "current" as const, raises: false, ...over,
+  database_schema_version: 187, observed_at: 1_000, standing: "current" as const, raises: false, reports_task_waits: false, ...over,
 });
 
 test("a Hive left behind is announced, not merely listed in a column", () => {

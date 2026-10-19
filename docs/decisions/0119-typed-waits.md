@@ -220,6 +220,37 @@ Decision 5 as written:
 Done also writes its own history line, with the operator as the actor. Until
 then the record named them only in the system's note when the task came back.
 
+## Implementation notes, part 3 (2026-10-19)
+
+Decision 6 as written, with one addition the build found.
+
+- **A member sends a changed wait only to a Keeper that says it takes one.**
+  An older Keeper refuses Blocked to Blocked with a clean receipt, as decided.
+  But a member treats a refused command as unsettled and stages nothing more
+  for that task, so one wait update would freeze the shared task's state at the
+  Keeper. The Keeper's task page now carries `accepts_wait_updates`, which an
+  older Keeper omits. A member stores it from every page, events or not, and
+  sends a changed wait only while it is true. The wait sent with a block goes
+  to any Keeper, and an older one stores the state without it.
+- **A changed wait is found by comparison, not by an event.** After the
+  lifecycle step, a member compares each Blocked shared task's wait at the
+  Keeper with its local task's and sends Blocked to Blocked where they differ.
+  This covers a wait typed after the block, a block that came back and was
+  blocked again before the Keeper heard, and work blocked before this release.
+- **A member cuts its words to what a Keeper stores.** A local wait is bounded
+  in characters and a Keeper's in bytes. A Keeper refusing a malformed command
+  stops the member's sync on a retry loop, so the member never sends one.
+- **The Keeper says which members are too old to send a wait.** The fleet
+  versions view carries `reports_task_waits`, from the release each member
+  reports and `APIARY_TASK_WAITS_SINCE` (1.17.5, kept in step with the release
+  that carries it). A Blocked shared task with no wait on such a Hive says so.
+- The Keeper sets an operator wait's Hive from the member that sent it.
+- `insert_apiary_task_for_hive` writes the task's state and wait to the row.
+  The live Keeper had no relocated tasks, so no row needed repair.
+
+Schema 205 adds `apiary_tasks.wait_json` and
+`local_apiary_task_sync.keeper_accepts_wait_updates`.
+
 ## Alternatives considered
 
 - **An "Active but waiting" state, or a slot rule that ignores waiting Active

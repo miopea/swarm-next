@@ -318,8 +318,120 @@ pub struct ApiaryTask {
     /// still reads the rest of the task rather than failing the whole feed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closure_evidence: Option<ApiaryClosureEvidence>,
+    /// What Blocked shared work waits for, and who must act (ADR 0119).
+    ///
+    /// `None` unless the task is Blocked and its home Hive said why. Defaulted
+    /// for the reason `closure_evidence` is: a Hive on an older build reads the
+    /// rest of the task and shows Blocked without the detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<ApiaryTaskWait>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// The first release whose member Hives send a wait with Blocked shared work.
+/// Keep in step with the release that first carries it, as with
+/// `local_choice_since`.
+pub const APIARY_TASK_WAITS_SINCE: &str = "1.17.5";
+
+/// Whether a Hive running `version` says why its shared work is blocked. The
+/// Keeper reads this from the release a member reports, so a Blocked task with
+/// no wait can say which of the two it is: a Hive that sends none, or a block
+/// nobody typed.
+#[must_use]
+pub fn reports_task_waits(version: &str) -> bool {
+    crate::SwarmVersion::parse(version)
+        .zip(crate::SwarmVersion::parse(APIARY_TASK_WAITS_SINCE))
+        .is_some_and(|(running, since)| running.at_least(&since))
+}
+
+/// The longest wait kind a Keeper stores.
+const MAX_APIARY_WAIT_KIND_BYTES: usize = 32;
+
+/// What Blocked shared work waits for, as every Hive in the Apiary reads it.
+///
+/// The home Hive's local task holds the wait itself (`TaskWait`). This is its
+/// copy for the other Hives, so they can see why shared work is blocked
+/// without asking.
+///
+/// ⚠️ THE KIND IS A STRING, NOT `TaskWaitKind`. A Hive on a later release may
+/// send a kind this one has never heard of, and a closed enum would fail the
+/// whole feed page over one task. An unknown kind is shown by its words.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryTaskWait {
+    /// `task`, `decision`, `operator_action`, `outside` or `date` today.
+    pub kind: String,
+    /// What must happen, in words.
+    pub needs: String,
+    /// Who must act, for an outside wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<String>,
+    /// When the work comes back to its worker, for an outside or date wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_at: Option<i64>,
+    /// The Hive whose operator must act, for an operator wait.
+    ///
+    /// The Keeper sets it from the member that sent the wait, so a member
+    /// cannot name another Hive's operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hive_id: Option<HiveId>,
+}
+
+impl ApiaryTaskWait {
+    /// The copy of a local wait that the Apiary carries, from `hive`.
+    ///
+    /// ⚠️ CUT TO WHAT A KEEPER STORES. A local wait's words are bounded in
+    /// characters and a Keeper's in bytes, and a Keeper refusing a command
+    /// stops the member's whole task sync on a retry loop.
+    #[must_use]
+    pub fn from_local(wait: &crate::TaskWaitView, hive: HiveId) -> Self {
+        Self {
+            kind: wait.kind.as_str().to_owned(),
+            needs: within_bytes(&wait.needs, crate::MAX_WAIT_NEEDS_BYTES),
+            party: wait
+                .party
+                .as_deref()
+                .map(|party| within_bytes(party, crate::MAX_WAIT_PARTY_BYTES)),
+            resume_at: wait.resume_at,
+            hive_id: None,
+        }
+        .sent_by(hive)
+    }
+
+    /// This wait as recorded from `hive`: an operator wait names that Hive's
+    /// operator, and no other kind names a Hive.
+    #[must_use]
+    pub fn sent_by(mut self, hive: HiveId) -> Self {
+        self.hive_id = (self.kind == crate::TaskWaitKind::OperatorAction.as_str()).then_some(hive);
+        self
+    }
+
+    /// Whether a Keeper can store this. The kind is checked for shape only, so
+    /// a kind added later is stored rather than refused.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        !self.kind.is_empty()
+            && self.kind.len() <= MAX_APIARY_WAIT_KIND_BYTES
+            && self
+                .kind
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+            && self.needs.len() <= crate::MAX_WAIT_NEEDS_BYTES
+            && self
+                .party
+                .as_ref()
+                .is_none_or(|party| party.len() <= crate::MAX_WAIT_PARTY_BYTES)
+            && self.resume_at.is_none_or(|resume| resume >= 0)
+    }
+}
+
+/// `text` cut on a character boundary to at most `limit` bytes.
+fn within_bytes(text: &str, limit: usize) -> String {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
 }
 
 /// The private execution bridge for one Keeper-canonical task in its home
@@ -355,6 +467,15 @@ pub struct FederationTaskPage {
     pub next_cursor: i64,
     pub has_more: bool,
     pub generated_at: i64,
+    /// Whether this Keeper takes a changed wait on Blocked work as a Blocked
+    /// to Blocked transition (ADR 0119).
+    ///
+    /// ⚠️ A MEMBER SENDS ONE ONLY WHEN THIS IS TRUE. An older Keeper omits it
+    /// and refuses that move, and a refused command stops the member staging
+    /// anything more for that task, so one wait update would freeze the shared
+    /// task's state at the Keeper for good.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accepts_wait_updates: bool,
 }
 
 /// Durable member-local evidence for the Keeper task projection. This is safe
@@ -460,6 +581,13 @@ pub struct FederationTaskCommand {
     /// behind it, and that window is exactly when it resumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closure: Option<ApiaryClosureEvidence>,
+    /// What the work waits for, sent with a Blocked target (ADR 0119).
+    ///
+    /// ⚠️ ON THE TRANSITION, NOT A NEW KIND, for the reason `closure` is here.
+    /// An older Keeper refuses an unknown kind outright, but parses this as a
+    /// Blocked transition and stores the state without the wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<ApiaryTaskWait>,
     pub created_at: i64,
 }
 
@@ -1360,6 +1488,8 @@ impl FederationCatalogReadiness {
 
 #[cfg(test)]
 mod catalog_readiness_tests;
+#[cfg(test)]
+mod task_wait_tests;
 
 /// A one-time handoff bundle. The secret is shown only in this response and is
 /// never recoverable from Keeper storage. The Keeper card lets the invited

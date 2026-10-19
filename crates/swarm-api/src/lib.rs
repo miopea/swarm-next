@@ -5842,6 +5842,9 @@ struct HiveVersionView {
     /// Whether this Hive is raised rather than merely listed. Carried so the
     /// surface does not have to re-derive which standings are faults.
     raises: bool,
+    /// Whether its release says why its shared work is blocked (ADR 0119), so
+    /// a Blocked task with no wait can say which Hive is too old to tell.
+    reports_task_waits: bool,
 }
 
 async fn apiary_fleet_versions(
@@ -5873,6 +5876,7 @@ async fn apiary_fleet_versions(
                 observed_at: hive.observed_at,
                 standing: hive.standing,
                 raises: hive.standing.raises(),
+                reports_task_waits: swarm_domain::reports_task_waits(&hive.swarm_version),
             })
             .collect(),
     };
@@ -14799,6 +14803,7 @@ mod tests {
             target_state: None,
             filing: None,
             closure: None,
+            wait: None,
             created_at: now,
         };
 

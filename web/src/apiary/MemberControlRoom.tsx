@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import SharedTaskGroups, { isClosedSharedTask } from "./SharedTaskGroups";
+import SharedTaskWait from "./SharedTaskWait";
 import SharedProfileHint from "./SharedProfileHint";
 
 import {
@@ -430,7 +431,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
           {section("tasks", "Swarm tasks", <SharedTaskGroups tasks={snapshot.tasks} emptyMessage="No open Swarm-generated Apiary tasks are waiting." renderTasks={(tasks) => <ul className="keeper-work-list member-task-list" aria-label="Member Keeper tasks">{tasks.map((task) => {
             const mine = task.home_hive_id === identity.hive.id;
             return <li key={task.id}>
-              <span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span>
+              <span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small><SharedTaskWait task={task} localHiveId={identity.hive.id} hiveName={(hiveId) => snapshot.members.find((member) => member.hive_id === hiveId)?.hive_name} /></span>
               <span className="member-task-owner">
                 <strong>{mine ? "This Hive" : task.home_hive_id ? "Another Hive" : "Unassigned"}</strong>
                 <small>{mine ? "Worker assignment stays private to this Hive" : "View only from Apiary"}</small>

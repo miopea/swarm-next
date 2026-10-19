@@ -3,13 +3,14 @@ use std::str::FromStr;
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ApiaryPrerequisiteStatus, ApiaryTask, ApiaryTaskEvent, ApiaryTaskId,
-    ApiaryTaskSource, FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION,
-    FederationNodeId, FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandKind,
-    FederationTaskCommandOutcome, FederationTaskCommandReceipt, FederationTaskOutboxEntry,
-    FederationTaskOutboxState, FederationTaskOutboxStatus, FederationTaskPage,
-    FederationTaskSyncStatus, HiveId, LocalApiaryContext, LocalApiaryRole,
-    LocalApiaryTaskExecution, OrphanCause, PrerequisiteStanding, TaskActivityActorKind, TaskId,
-    TaskPriority, TaskState, WorkerId, blocked_by,
+    ApiaryTaskSource, ApiaryTaskWait, FEDERATION_PROTOCOL_VERSION,
+    FEDERATION_TASK_FEED_SCHEMA_VERSION, FederationNodeId, FederationTaskCommand,
+    FederationTaskCommandId, FederationTaskCommandKind, FederationTaskCommandOutcome,
+    FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxState,
+    FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveId,
+    LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution, OrphanCause,
+    PrerequisiteStanding, TaskActivityActorKind, TaskId, TaskPriority, TaskState, WorkerId,
+    blocked_by,
 };
 
 use crate::{
@@ -84,6 +85,7 @@ impl TaskStore {
                 description,
                 priority,
                 state: TaskState::Ready,
+                wait: None,
             },
             home_hive_id,
             now,
@@ -136,6 +138,7 @@ impl TaskStore {
             next_cursor,
             has_more,
             generated_at: now,
+            accepts_wait_updates: true,
         })
     }
 
@@ -190,6 +193,9 @@ impl TaskStore {
             )
             .optional()?
             .unwrap_or(0);
+        // Every page says it, events or not, so a Keeper that updates is heard
+        // on the next poll rather than at its next change.
+        record_keeper_accepts_wait_updates(&transaction, prior_cursor, page.accepts_wait_updates)?;
         if page.next_cursor <= prior_cursor {
             transaction.commit()?;
             drop(connection);
@@ -316,7 +322,7 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT id, apiary_id, source, title, description, priority, state,
                     home_node_id, home_hive_id, revision, created_at, updated_at,
-                    closure_evidence
+                    closure_evidence, wait_json
              FROM apiary_tasks WHERE apiary_id = ?1
              ORDER BY CASE state WHEN 'completed' THEN 1 ELSE 0 END, updated_at DESC, id",
         )?;
@@ -576,7 +582,7 @@ impl TaskStore {
             .query_row(
                 "SELECT id, apiary_id, source, title, description, priority, state,
                         home_node_id, home_hive_id, revision, created_at, updated_at,
-                        closure_evidence
+                        closure_evidence, wait_json
                  FROM apiary_tasks WHERE apiary_id = ?1 AND id = ?2",
                 params![member.apiary.to_string(), command.task_id.to_string()],
                 apiary_task_from_row,
@@ -626,14 +632,24 @@ impl TaskStore {
                     let Some(target) = command.target_state else {
                         return Err(TaskStoreError::InvalidFederationTask);
                     };
+                    // A changed wait on work that is already Blocked is
+                    // Blocked to Blocked. No other move is to the same state.
+                    let wait_update =
+                        task.state == TaskState::Blocked && target == TaskState::Blocked;
                     if task.home_node_id != Some(member.node)
                         || task.home_hive_id != Some(member.hive)
                     {
                         FederationTaskCommandOutcome::Conflict
-                    } else if !task.state.can_transition_to(target) {
+                    } else if !task.state.can_transition_to(target) && !wait_update {
                         FederationTaskCommandOutcome::Rejected
                     } else {
                         task.state = target;
+                        // Leaving Blocked ends the wait, as it does at the Hive.
+                        task.wait = command
+                            .wait
+                            .clone()
+                            .filter(|_| target == TaskState::Blocked)
+                            .map(|wait| wait.sent_by(member.hive));
                         FederationTaskCommandOutcome::Applied
                     }
                 }
@@ -665,7 +681,7 @@ impl TaskStore {
             }
             let changed = transaction.execute(
                 "UPDATE apiary_tasks SET state = ?1, home_node_id = ?2,
-                        home_hive_id = ?3, revision = ?4, updated_at = ?5
+                        home_hive_id = ?3, revision = ?4, updated_at = ?5, wait_json = ?9
                  WHERE id = ?6 AND apiary_id = ?7 AND revision = ?8",
                 params![
                     task.state.to_string(),
@@ -676,6 +692,7 @@ impl TaskStore {
                     task.id.to_string(),
                     task.apiary_id.to_string(),
                     command.expected_revision,
+                    wait_json(task.wait.as_ref())?,
                 ],
             )?;
             if changed != 1 {
@@ -760,7 +777,7 @@ impl TaskStore {
             .prepare(
                 "SELECT id, apiary_id, source, title, description, priority, state,
                         home_node_id, home_hive_id, revision, created_at, updated_at,
-                        closure_evidence
+                        closure_evidence, wait_json
                  FROM apiary_tasks
                  WHERE apiary_id = ?1 AND home_node_id IS NOT NULL
                    AND state IN ('draft','ready') AND updated_at <= ?2",
@@ -856,6 +873,7 @@ impl TaskStore {
             kind: FederationTaskCommandKind::File,
             target_state: None,
             closure: None,
+            wait: None,
             filing: Some(swarm_domain::FederationTaskFiling {
                 title: title.to_owned(),
                 description: description.to_owned(),
@@ -982,33 +1000,25 @@ impl TaskStore {
                 )?;
                 continue;
             }
-            let blocked = transaction.query_row(
-                "SELECT EXISTS(
-                     SELECT 1 FROM local_apiary_task_commands
-                     WHERE task_id = ?1 AND (
-                         state IN ('queued','conflict','rejected') OR
-                         (state = 'applied' AND expected_revision >= ?2)
-                     )
-                 )",
-                params![task_id.to_string(), task.revision],
-                |row| row.get::<_, bool>(0),
-            )?;
-            if blocked {
+            if command_outstanding(&transaction, task_id, task.revision)? {
                 continue;
             }
             let Some(target_state) = next_lifecycle_transition(task.state, desired_state) else {
                 continue;
             };
+            let wait = local_wait(&transaction, task_id, identity.hive.id)?;
             insert_local_lifecycle_command(
                 &transaction,
                 apiary.id,
                 task_id,
                 task.revision,
                 target_state,
+                wait,
                 now,
             )?;
             staged += 1;
         }
+        staged += stage_wait_updates(&transaction, apiary.id, identity.hive.id, now)?;
         if staged > 0 {
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         }
@@ -1121,6 +1131,9 @@ impl TaskStore {
             target_state,
             filing: None,
             closure: closure_evidence_for(&transaction, task_id, target_state)?,
+            // Only work running in this Hive has a local wait, and this path
+            // is for work that is not.
+            wait: None,
             created_at: now,
         };
         let command_json =
@@ -1331,13 +1344,16 @@ impl TaskStore {
 /// the caller's transaction. Authorization remains the caller's responsibility.
 /// The content of a shared task, bundled so this stops growing an argument per
 /// field. `state` joined it when relocation needed a task's real state carried
-/// across instead of the hardcoded `Ready` every earlier caller wanted.
-#[derive(Clone, Copy)]
+/// across instead of the hardcoded `Ready` every earlier caller wanted, and
+/// `wait` so a relocated Blocked task keeps saying why (ADR 0119).
+#[derive(Clone)]
 pub(crate) struct NewApiaryTask<'a> {
     pub(crate) title: &'a str,
     pub(crate) description: &'a str,
     pub(crate) priority: TaskPriority,
     pub(crate) state: TaskState,
+    /// What it waits for, when it starts Blocked.
+    pub(crate) wait: Option<ApiaryTaskWait>,
 }
 
 pub(crate) fn insert_apiary_task_for_hive(
@@ -1352,7 +1368,9 @@ pub(crate) fn insert_apiary_task_for_hive(
         description,
         priority,
         state,
+        wait,
     } = content;
+    let wait = wait.filter(|_| state == TaskState::Blocked);
     let home_node_id = home_hive_id
         .map(|hive_id| {
             let raw_node_id = transaction
@@ -1380,6 +1398,7 @@ pub(crate) fn insert_apiary_task_for_hive(
         revision: 1,
         // Nothing is closed at creation, so there is nothing to stand on yet.
         closure_evidence: None,
+        wait,
         created_at: now,
         updated_at: now,
     };
@@ -1391,20 +1410,26 @@ pub(crate) fn insert_apiary_task_for_hive(
     if count >= MAX_APIARY_TASKS {
         return Err(TaskStoreError::InvalidFederationTask);
     }
+    // ⚠️ THE ROW TAKES THE STATE THE EVENT CARRIES. It said 'ready' whatever
+    // the caller asked for, so a relocated task was right in the feed and wrong
+    // on the Keeper's own board, and a test reading the returned value could
+    // not see it.
     transaction.execute(
         "INSERT INTO apiary_tasks
             (id, apiary_id, source, title, description, priority, state,
-             home_node_id, home_hive_id, revision, created_at, updated_at)
-         VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, 'ready', ?6, ?7, 1, ?8, ?8)",
+             home_node_id, home_hive_id, revision, created_at, updated_at, wait_json)
+         VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9, ?10)",
         params![
             task.id.to_string(),
             task.apiary_id.to_string(),
             task.title,
             task.description,
             task.priority.to_string(),
+            task.state.to_string(),
             task.home_node_id.map(|id| id.to_string()),
             task.home_hive_id.map(|id| id.to_string()),
             now,
+            wait_json(task.wait.as_ref())?,
         ],
     )?;
     insert_task_event(transaction, &task, now)?;
@@ -1447,10 +1472,22 @@ fn validate_federation_task_command(
         || matches!(command.kind, FederationTaskCommandKind::Transition)
             && command.target_state.is_none()
         || filing && command.target_state.is_some()
+        || command.wait.as_ref().is_some_and(|wait| {
+            command.kind != FederationTaskCommandKind::Transition
+                || command.target_state != Some(TaskState::Blocked)
+                || !wait.is_well_formed()
+        })
     {
         return Err(TaskStoreError::InvalidFederationTask);
     }
     Ok(())
+}
+
+/// A wait as the `wait_json` column holds it.
+fn wait_json(wait: Option<&ApiaryTaskWait>) -> Result<Option<String>, TaskStoreError> {
+    wait.map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| TaskStoreError::InvalidFederationTask)
 }
 
 fn insert_task_event(
@@ -1597,6 +1634,155 @@ pub(super) fn migrate_abandoned_apiary_task_state(
     )
 }
 
+/// Records whether this member's Keeper takes a changed wait (ADR 0119),
+/// creating the sync row at `cursor` if there is none yet.
+fn record_keeper_accepts_wait_updates(
+    transaction: &rusqlite::Transaction<'_>,
+    cursor: i64,
+    accepts: bool,
+) -> Result<(), TaskStoreError> {
+    transaction.execute(
+        "INSERT INTO local_apiary_task_sync (singleton, cursor, keeper_accepts_wait_updates)
+         VALUES (1, ?1, ?2)
+         ON CONFLICT(singleton) DO UPDATE SET
+            keeper_accepts_wait_updates = excluded.keeper_accepts_wait_updates",
+        params![cursor, accepts],
+    )?;
+    Ok(())
+}
+
+/// Whether shared task `task_id` has a command this Hive is still waiting on:
+/// one not yet sent, one the Keeper refused, or one applied that the Member
+/// projection, still at `revision`, has not caught up with.
+fn command_outstanding(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: ApiaryTaskId,
+    revision: u64,
+) -> Result<bool, TaskStoreError> {
+    Ok(transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM local_apiary_task_commands
+             WHERE task_id = ?1 AND (
+                 state IN ('queued','conflict','rejected') OR
+                 (state = 'applied' AND expected_revision >= ?2)
+             )
+         )",
+        params![task_id.to_string(), revision],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// The wait on the local task running shared task `task_id`, as the Apiary
+/// carries it from `hive`. `None` unless that task is Blocked with a wait.
+fn local_wait(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: ApiaryTaskId,
+    hive: HiveId,
+) -> Result<Option<ApiaryTaskWait>, TaskStoreError> {
+    let json: Option<String> = transaction
+        .query_row(
+            concat!(
+                "SELECT ",
+                crate::task_waits::current_wait_json!(),
+                " FROM local_apiary_task_executions execution
+                  JOIN tasks t ON t.id = execution.local_task_id
+                  WHERE execution.apiary_task_id = ?1"
+            ),
+            [task_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    shared_wait(json.as_deref(), hive)
+}
+
+/// A local wait read as `current_wait_json!` writes it, as the Apiary carries
+/// it from `hive`.
+fn shared_wait(json: Option<&str>, hive: HiveId) -> Result<Option<ApiaryTaskWait>, TaskStoreError> {
+    json.map(serde_json::from_str::<swarm_domain::TaskWaitView>)
+        .transpose()
+        .map(|view| view.map(|view| ApiaryTaskWait::from_local(&view, hive)))
+        .map_err(|_| TaskStoreError::InvalidFederationTask)
+}
+
+/// Stages Blocked to Blocked for each Blocked shared task whose wait at the
+/// Keeper is not its local task's wait. This is how a wait typed after the
+/// block, a block that came back and was blocked again before the Keeper
+/// heard, and work blocked before this release reach the other Hives.
+///
+/// ⚠️ ONLY WHEN THE KEEPER SAID IT TAKES THEM. An older Keeper refuses the
+/// move, and a refused command stops this Hive staging anything more for that
+/// task, so its state would freeze at the Keeper. Without the flag, the wait
+/// still travels with the next block.
+fn stage_wait_updates(
+    transaction: &rusqlite::Transaction<'_>,
+    apiary_id: ApiaryId,
+    hive: HiveId,
+    now: i64,
+) -> Result<usize, TaskStoreError> {
+    let accepts = transaction
+        .query_row(
+            "SELECT keeper_accepts_wait_updates FROM local_apiary_task_sync WHERE singleton = 1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !accepts {
+        return Ok(0);
+    }
+    let candidates = {
+        let mut statement = transaction.prepare(concat!(
+            "SELECT execution.apiary_task_id, shared.snapshot_json, ",
+            crate::task_waits::current_wait_json!(),
+            " FROM local_apiary_task_executions execution
+              JOIN local_apiary_tasks shared ON shared.task_id = execution.apiary_task_id
+              JOIN tasks t ON t.id = execution.local_task_id
+              WHERE t.state = 'blocked'
+                AND json_extract(shared.snapshot_json, '$.state') = 'blocked'
+                AND NOT EXISTS (
+                    SELECT 1 FROM local_apiary_task_lifecycle_intents intent
+                    WHERE intent.apiary_task_id = execution.apiary_task_id
+                )
+              ORDER BY execution.apiary_task_id LIMIT 100"
+        ))?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let mut staged = 0;
+    for (task_id, snapshot, local) in candidates {
+        let task_id =
+            ApiaryTaskId::from_str(&task_id).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        let task: ApiaryTask =
+            serde_json::from_str(&snapshot).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        let wait = shared_wait(local.as_deref(), hive)?;
+        if task.home_hive_id != Some(hive)
+            || task.wait == wait
+            || command_outstanding(transaction, task_id, task.revision)?
+        {
+            continue;
+        }
+        insert_local_lifecycle_command(
+            transaction,
+            apiary_id,
+            task_id,
+            task.revision,
+            TaskState::Blocked,
+            wait,
+            now,
+        )?;
+        staged += 1;
+    }
+    Ok(staged)
+}
+
 fn next_lifecycle_transition(current: TaskState, desired: TaskState) -> Option<TaskState> {
     if current == desired {
         return None;
@@ -1642,6 +1828,7 @@ fn insert_local_lifecycle_command(
     task_id: ApiaryTaskId,
     expected_revision: u64,
     target_state: TaskState,
+    wait: Option<ApiaryTaskWait>,
     now: i64,
 ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
     let queued_count = transaction.query_row(
@@ -1665,6 +1852,7 @@ fn insert_local_lifecycle_command(
         // closure carrying nothing, and the test caught it — a mechanism that
         // exists on the path nobody takes is worth exactly nothing.
         closure: closure_evidence_for(transaction, task_id, Some(target_state))?,
+        wait: wait.filter(|_| target_state == TaskState::Blocked),
         created_at: now,
     };
     let command_json =
@@ -1757,6 +1945,11 @@ fn apiary_task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryTask>
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         closure_evidence: row
             .get::<_, Option<String>>(12)
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok()),
+        wait: row
+            .get::<_, Option<String>>(13)
             .ok()
             .flatten()
             .and_then(|json| serde_json::from_str(&json).ok()),
@@ -2440,6 +2633,22 @@ fn closure_evidence_for(
 /// One nullable column rather than a side table: the evidence belongs to the
 /// task, every member already projects the whole task through the ordered feed,
 /// and a join would have meant teaching that feed a second thing to carry.
+/// What Blocked shared work waits for (ADR 0119): the Keeper's copy, and
+/// whether a member's Keeper takes a changed one.
+pub(super) fn migrate_apiary_task_waits(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    crate::add_column_once(transaction, "apiary_tasks", "wait_json", "TEXT", version)?;
+    crate::add_column_once(
+        transaction,
+        "local_apiary_task_sync",
+        "keeper_accepts_wait_updates",
+        "INTEGER NOT NULL DEFAULT 0 CHECK (keeper_accepts_wait_updates IN (0, 1))",
+        version,
+    )
+}
+
 pub(super) fn migrate_closure_evidence(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -2597,7 +2806,7 @@ fn apply_member_filing(
     let task = transaction.query_row(
         "SELECT id, apiary_id, source, title, description, priority, state,
                 home_node_id, home_hive_id, revision, created_at, updated_at,
-                closure_evidence
+                closure_evidence, wait_json
          FROM apiary_tasks WHERE id = ?1",
         params![command.task_id.to_string()],
         apiary_task_from_row,
@@ -2660,12 +2869,30 @@ fn relocate_one(
     if let Some(existing) = relocated_apiary_task(transaction, local_task_id)? {
         return Ok(existing);
     }
-    let (title, description, priority, state): (String, String, String, String) = transaction
+    let (title, description, priority, state, wait): (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = transaction
         .query_row(
-            "SELECT title, description, priority, state FROM tasks
-             WHERE id = ?1 AND hive_id = ?2 AND removed_at IS NULL",
+            concat!(
+                "SELECT t.title, t.description, t.priority, t.state, ",
+                crate::task_waits::current_wait_json!(),
+                " FROM tasks t
+                  WHERE t.id = ?1 AND t.hive_id = ?2 AND t.removed_at IS NULL"
+            ),
             params![local_task_id.to_string(), hive_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?
         .ok_or(TaskStoreError::NotFound)?;
@@ -2685,6 +2912,8 @@ fn relocate_one(
             description: &description,
             priority,
             state,
+            // A Blocked task keeps saying why after it moves.
+            wait: shared_wait(wait.as_deref(), hive_id)?,
         },
         None,
         now,
@@ -2813,6 +3042,8 @@ mod tests {
         FederationJoinAcceptance, FederationJoinReadiness, JiraConnectionState, ProviderKind,
         SharedWorkBackend, TaskActivityActor,
     };
+
+    mod waits;
 
     /// A second Hive joining a Keeper that already has one, so cross-Hive
     /// routing has somewhere to route TO.
@@ -3654,6 +3885,16 @@ mod tests {
             "a finished task must not be republished as available work"
         );
         assert_eq!(shared.title, "An rcg task that is already done");
+        // ⚠️ AND ON THE KEEPER'S OWN BOARD, which reads the row. The returned
+        // task and the feed were right while the row said 'ready', and this
+        // test read only the returned task.
+        let listed = keeper
+            .list_visible_apiary_tasks()
+            .expect("list")
+            .into_iter()
+            .find(|task| task.id == shared.id)
+            .expect("listed");
+        assert_eq!(listed.state, TaskState::Completed);
     }
 
     /// The ticket forbids recreate-and-retire because it orphans the record.
@@ -3879,6 +4120,7 @@ mod tests {
             target_state: Some(TaskState::Active),
             filing: None,
             closure: None,
+            wait: None,
             created_at: now + 112,
         };
         assert_eq!(
@@ -3921,6 +4163,7 @@ mod tests {
             target_state: Some(TaskState::Active),
             filing: None,
             closure: None,
+            wait: None,
             created_at: now + 116,
         };
         assert_eq!(

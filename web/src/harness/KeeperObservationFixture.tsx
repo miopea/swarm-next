@@ -132,13 +132,24 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
         ? {
             expected_release: "1.13.1", expected_release_first_seen_at: 100, expected_schema_version: 192,
             hives: [
-              { hive_id: "fictional", node_id: "node-1", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false },
-              { hive_id: "clover", node_id: "node-2", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false },
-              { hive_id: "thistle", node_id: "node-3", swarm_version: "1.11.0", database_schema_version: 188, observed_at: 100, standing: "schema_behind", raises: true },
+              { hive_id: "fictional", node_id: "node-1", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false, reports_task_waits: true },
+              { hive_id: "clover", node_id: "node-2", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false, reports_task_waits: true },
+              { hive_id: "thistle", node_id: "node-3", swarm_version: "1.11.0", database_schema_version: 188, observed_at: 100, standing: "schema_behind", raises: true, reports_task_waits: false },
               // Heather reports no version at all, which is the case that has to
               // read as "unknown" rather than as an empty gap in the row.
             ],
           }
+        // Shared work waiting three ways (ADR 0119): on an outside party, on a
+        // member's operator, and on a Hive too old to say why.
+        : url.endsWith("/apiary/tasks") ? (() => {
+          const shared = (id: string, title: string, home: string, state: string, wait?: object) => ({ id, apiary_id: "garden", source: "swarm", title, description: "", priority: "normal", state, home_node_id: `node-${home}`, home_hive_id: home, revision: 4, created_at: now - 86_400, updated_at: now - 600, ...(wait ? { wait } : {}) });
+          return [
+            shared("shared-outside", "Move the office onto the backup circuit", "clover", "blocked", { kind: "outside", needs: "The carrier restores the backup circuit to Available", party: "the carrier", resume_at: now + 2 * 86_400 }),
+            shared("shared-operator", "Turn on second-step sign-in for the shared mailbox", "clover", "blocked", { kind: "operator_action", needs: "Sign in to the identity portal and approve the second step", hive_id: "clover" }),
+            shared("shared-silent", "Publish the watch face privacy policy", "thistle", "blocked"),
+            shared("shared-active", "Rotate the shared signing key", "clover", "active"),
+          ];
+        })()
         : [];
       return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
     };

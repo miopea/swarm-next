@@ -1095,6 +1095,11 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .apiary-task-section .section-heading small { display: block; margin-top: 3px; color: var(--muted); font-size: .7rem; }
 .apiary-task-board-list { display: grid; gap: 8px; }
 .shared-task-history { margin-block-start: 12px; }
+/* Why Blocked shared work waits (ADR 0119): read as the task's own line, so
+   in the body colour, with only its label muted. It wraps where the list's
+   other lines are cut, because the reason is the point of it. */
+.shared-task-wait, .keeper-work-list .shared-task-wait, .apiary-task-board-card .shared-task-wait { overflow: visible; color: var(--text); overflow-wrap: anywhere; white-space: normal; }
+.shared-task-wait > span { color: var(--muted); }
 .shared-task-history > section { margin-block-start: 12px; }
 .apiary-task-board-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, auto); align-items: center; gap: 20px; padding: 13px 15px; border: 1px solid var(--accent-line); border-left: 3px solid var(--honey); border-radius: var(--radius-md); background: var(--panel); }
 .apiary-task-board-card > span { display: grid; min-width: 0; gap: 4px; }

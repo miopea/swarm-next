@@ -116,6 +116,7 @@ impl TaskStore {
                     description: command.description.trim(),
                     priority: command.priority,
                     state: TaskState::Ready,
+                    wait: None,
                 },
                 Some(command.target_hive_id),
                 now,

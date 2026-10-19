@@ -902,6 +902,16 @@ export type FederationSyncHealth = {
   /** Which part of synchronization last failed, e.g. "project catalog". */
   failed_step?: string | null;
 };
+/** What Blocked shared work waits for (ADR 0119). The kind is open: a Hive
+ *  on a later release may send one this page does not know. */
+export type ApiaryTaskWait = {
+  kind: string;
+  needs: string;
+  party?: string | null;
+  resume_at?: number | null;
+  /** The Hive whose operator must act, for an operator wait. */
+  hive_id?: string | null;
+};
 export type ApiaryTask = {
   id: string;
   apiary_id: string;
@@ -913,6 +923,8 @@ export type ApiaryTask = {
   home_node_id: string | null;
   home_hive_id: string | null;
   revision: number;
+  /** Absent unless Blocked and its home Hive said why. */
+  wait?: ApiaryTaskWait | null;
   created_at: number;
   updated_at: number;
 };
@@ -1686,6 +1698,8 @@ export type FleetHiveVersion = {
   standing: FleetVersionStanding;
   /** Whether this Hive is raised rather than merely listed. */
   raises: boolean;
+  /** Whether its release says why its shared work is blocked (ADR 0119). */
+  reports_task_waits: boolean;
 };
 
 export type FleetVersions = {

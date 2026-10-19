@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import SharedTaskGroups, { isClosedSharedTask } from "../apiary/SharedTaskGroups";
+import SharedTaskWait from "../apiary/SharedTaskWait";
 
 import {
   claimApiaryTask,
@@ -650,7 +651,7 @@ export default function TaskBoard({
             const queued = apiaryOutbox.some((entry) => entry.state === "queued" && entry.command.task_id === task.id);
             const execution = apiaryExecutions.find((candidate) => candidate.apiary_task_id === task.id);
             return <article key={task.id} className="apiary-task-board-card">
-              <span><small>{priorityLabels[task.priority]} · {stateLabels[task.state]}</small><strong>{task.title}</strong>{task.description ? <p>{task.description}</p> : null}</span>
+              <span><small>{priorityLabels[task.priority]} · {stateLabels[task.state]}</small><strong>{task.title}</strong>{task.description ? <p>{task.description}</p> : null}<SharedTaskWait task={task} localHiveId={localHiveId} hiveName={(hiveId) => apiaryMembers.find((member) => member.hive_id === hiveId)?.hive_name} /></span>
               <span className="apiary-task-board-owner"><strong>{home}</strong><small>{mine ? "Owned by this Hive" : "Apiary task"}</small>
                 {queued ? <small>Change queued for Keeper</small> : !closed && inApiary && apiaryContext.local_role === "member" && !task.home_hive_id ? <button className="secondary-button" type="button" disabled={actingApiaryTask === task.id} onClick={() => void claimSharedTask(task)}>{actingApiaryTask === task.id ? "Claiming…" : "Claim for this Hive"}</button> : null}
                 {mine && execution ? <button className="secondary-button" type="button" onClick={() => onOpenTask?.(execution.local_task_id)}>Open local task</button>
