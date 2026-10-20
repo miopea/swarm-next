@@ -1383,17 +1383,17 @@ fn park_when_operator_owes_the_action(
     id: DecisionRequestId,
     action: &str,
 ) -> Result<(), TaskStoreError> {
-    let row: Option<(Option<String>, String, String)> = transaction
+    let row: Option<(Option<String>, String, String, String)> = transaction
         .query_row(
-            "SELECT d.task_id, d.operator_action_labels, coalesce(t.state,'')
+            "SELECT d.task_id, d.operator_action_labels, coalesce(t.state,''), d.title
              FROM decision_requests d LEFT JOIN tasks t
                ON t.id = d.task_id AND t.removed_at IS NULL
              WHERE d.id = ?1",
             [id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()?;
-    let Some((task_id, marked, state)) = row else {
+    let Some((task_id, marked, state, title)) = row else {
         return Ok(());
     };
     // A decision with no live task parks nothing, and that is not a failure:
@@ -1438,7 +1438,7 @@ fn park_when_operator_owes_the_action(
         recorded_sequence,
         Some(&swarm_domain::TaskWait {
             kind: swarm_domain::TaskWaitKind::OperatorAction,
-            needs: bounded(&format!("You took on \"{action}\" yourself."), 500),
+            needs: park_needs(&title, action),
             party: None,
             resume_at: None,
         }),
@@ -1540,6 +1540,38 @@ pub(super) fn migrate_typed_operator_park(
         "user_version",
         crate::TYPED_OPERATOR_PARK_SCHEMA_MARKER,
     )
+}
+
+/// What a park asks of the operator, as Needs you shows it: the decision's own
+/// words, then the answer that made it theirs.
+///
+/// ⚠️ THE ANSWER ALONE SAYS NOTHING. This was `You took on "{action}"
+/// yourself.`, so the Phase E card read `You took on "I will arrange it and tell
+/// the worker" yourself.` with nothing saying what "it" was (operator,
+/// 2026-10-20). The title names the thing.
+fn park_needs(title: &str, action: &str) -> String {
+    bounded(&format!("{title} (you answered \"{action}\")"), 500)
+}
+
+/// Rewrites parks already recorded with the old wording, so a card already in
+/// Needs you says what it is for. The decision is read from the park's own
+/// activity row, which names it at a fixed place after the quoted answer.
+pub(super) fn migrate_park_needs(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    // 'You took on "' is 13 characters and '" yourself.' is 11, so the answer
+    // is the 24 characters fewer. The note opens 'Parked by the operator''s own
+    // answer "' (37) and the answer is followed by '" on decision ' (14), so the
+    // decision id starts at 52 plus the answer's length.
+    transaction.execute_batch(
+        "UPDATE task_waits AS w
+         SET needs = substr(d.title || ' (you answered \"'
+                 || substr(w.needs, 14, length(w.needs) - 24) || '\")', 1, 1000)
+         FROM task_activity a, decision_requests d
+         WHERE w.kind = 'operator_action'
+           AND w.needs LIKE 'You took on \"%\" yourself.'
+           AND a.sequence = w.block_sequence AND a.task_id = w.task_id
+           AND d.id = substr(a.note, 52 + length(w.needs) - 24, 36);",
+    )?;
+    transaction.pragma_update(None, "user_version", crate::PARK_NEEDS_SCHEMA_MARKER)
 }
 
 /// At most `limit` bytes of `text`, cut on a character boundary.
@@ -2565,7 +2597,10 @@ mod tests {
             .unwrap();
         let owed = store.operator_waits().unwrap();
         assert_eq!(owed.len(), 1, "the park is owed in Needs you");
-        assert_eq!(owed[0].needs, "You took on \"I will do it\" yourself.");
+        assert_eq!(
+            owed[0].needs, "Choose the rollout window (you answered \"I will do it\")",
+            "the card names what the answer was about, not only the answer"
+        );
         store.complete_operator_wait(task_id, i64::MAX / 2).unwrap();
 
         let task = store.get_task(task_id).unwrap();
@@ -2589,6 +2624,73 @@ mod tests {
             store.complete_operator_wait(task_id, i64::MAX / 2).is_err(),
             "Done on work that owes the operator nothing must refuse"
         );
+    }
+
+    /// A card already in Needs you carries the old wording until it is
+    /// rewritten, so the migration must find each park's decision and leave
+    /// every other wait alone.
+    #[test]
+    fn a_park_recorded_with_the_old_wording_is_rewritten_to_name_its_decision() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let (_, task_id) = parked_fixture(&store);
+        let actions = vec!["I will do it".to_owned(), "You do it".to_owned()];
+        let mine = vec!["I will do it".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                operator_actions: &mine,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(created.id, "I will do it", "", "control_room")
+            .unwrap();
+        let other = store
+            .create_task("A worker's own wait", "/workspace/park")
+            .unwrap()
+            .id;
+        {
+            let connection = store.connection().unwrap();
+            connection
+                .execute(
+                    "UPDATE task_waits SET needs = 'You took on \"I will do it\" yourself.'
+                     WHERE task_id = ?1",
+                    [task_id.to_string()],
+                )
+                .unwrap();
+            // A worker's own wait in the same words has no park note to name a
+            // decision, so it must be left as written.
+            connection
+                .execute(
+                    "INSERT INTO task_waits
+                         (task_id, block_sequence, kind, needs, created_at, actor_kind)
+                     VALUES (?1, 1, 'operator_action', 'You took on \"x\" yourself.', 1, 'worker')",
+                    [other.to_string()],
+                )
+                .unwrap();
+        }
+
+        let mut connection = store.connection().unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_park_needs(&transaction).unwrap();
+        transaction.commit().unwrap();
+        let untouched: String = connection
+            .query_row(
+                "SELECT needs FROM task_waits WHERE task_id = ?1",
+                [other.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
+        let owed = store.operator_waits().unwrap();
+        assert_eq!(owed.len(), 1);
+        assert_eq!(
+            owed[0].needs,
+            "Choose the rollout window (you answered \"I will do it\")"
+        );
+        assert_eq!(untouched, "You took on \"x\" yourself.");
     }
 
     #[test]

@@ -402,7 +402,9 @@ const TASK_WAITS_SCHEMA_MARKER: i64 = 204;
 /// Shared work carries its wait, and a member knows whether its Keeper takes a
 /// changed one (ADR 0119).
 const APIARY_TASK_WAITS_SCHEMA_MARKER: i64 = 205;
-const CURRENT_SCHEMA_VERSION: i64 = APIARY_TASK_WAITS_SCHEMA_MARKER;
+/// A park's Needs you line names the decision, not only the answer.
+const PARK_NEEDS_SCHEMA_MARKER: i64 = 206;
+const CURRENT_SCHEMA_VERSION: i64 = PARK_NEEDS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4791,6 +4793,9 @@ fn migrate_fleet_health_schema_steps(
             transaction,
             APIARY_TASK_WAITS_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < PARK_NEEDS_SCHEMA_MARKER {
+        crate::decisions::migrate_park_needs(transaction)?;
     }
     Ok(())
 }
@@ -10839,6 +10844,15 @@ mod tests {
                                 WHERE name = 'wait_json')
                              + (SELECT COUNT(*) FROM pragma_table_info('local_apiary_task_sync')
                                 WHERE name = 'keeper_accepts_wait_updates') = 2",
+        },
+        // A park's Needs you line names its decision. Data only, so the undo
+        // plants a park in the old words and the probe says none is left.
+        SchemaStep {
+            table: "task_waits",
+            artifact: "park_needs",
+            undo_sql: include_str!("fixtures/undo-park-needs.sql"),
+            probe_sql: "SELECT NOT EXISTS(SELECT 1 FROM task_waits
+                        WHERE needs LIKE 'You took on \"%\" yourself.')",
         },
     ];
 
