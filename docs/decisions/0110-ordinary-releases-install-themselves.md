@@ -75,7 +75,8 @@ Hive that does not check has nothing to install.
 ### 5. Ask only about Hives that can be helped, and offer only what Swarm does
 
 Amended 2026-10-19, on the operator's answers to two questions: "Only online
-Hives" and "Tell its operator / Leave it".
+Hives" and "Tell its operator / Leave it". They were given in a worker's
+terminal and confirmed in decision 01a1558f-8bea-71f0-ad11-e157b96f970e.
 
 What was measured. Simply Bee-rilliant was asked about twice for 1.17.4, and
 the operator answered both times. Then Honeysuckle caught up, which made the
