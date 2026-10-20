@@ -15,6 +15,11 @@ type Props = {
  * prose, so the work sat Active or Blocked and nothing reached this page. Each
  * item here is one thing the operator alone can do, and Done sends the task
  * straight back to its worker.
+ *
+ * ⚠️ THE TASK WAITS, NOT THE WORKER. A waiting task frees its worker's Active
+ * slot, so the worker carries on with other work. Each item used to open with
+ * "<worker> is waiting on you:", which read as an idle worker while RCG
+ * Networks was busy (operator, 2026-10-20).
  */
 export default function OperatorWaitCard({ waits, busy = false, onDone, onOpenTask }: Props) {
   if (waits.length === 0) return null;
@@ -25,13 +30,16 @@ export default function OperatorWaitCard({ waits, busy = false, onDone, onOpenTa
         <h3 id="operator-wait-heading">
           {waits.length === 1 ? "1 task needs you to do something" : `${waits.length} tasks need you to do something`}
         </h3>
+        <p className="muted">
+          The tasks are paused, not their workers, who carry on with other work. Done sends a task back to its worker.
+        </p>
         <ul className="operator-wait-list">
           {waits.map((wait) => (
             <li key={wait.task_id}>
               <p>
-                <strong>{wait.worker_name ?? "A worker"} is waiting on you:</strong> {wait.needs}
+                <strong>Needed from you:</strong> {wait.needs}
               </p>
-              <p className="muted">{wait.task_title}</p>
+              <p className="muted">{wait.worker_name ? `${wait.worker_name} · ${wait.task_title}` : wait.task_title}</p>
               <div className="operator-wait-actions">
                 <button type="button" className="primary-button" disabled={busy} onClick={() => onDone(wait.task_id)}>
                   Done
