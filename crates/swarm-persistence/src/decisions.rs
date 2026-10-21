@@ -2626,6 +2626,51 @@ mod tests {
         );
     }
 
+    /// Platform, 2026-10-21: blocked on "Waiting on: operator" naming its own
+    /// pending decision, it showed in Needs you twice, and stayed Blocked after
+    /// the operator answered.
+    #[test]
+    fn waiting_on_the_operator_to_answer_a_pending_decision_waits_on_the_decision() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let (worker, task_id) = parked_fixture(&store);
+        let actions = vec!["Start Hidden".to_owned(), "Keep its audience".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+
+        let blocked = store
+            .transition_task_with_note(
+                task_id,
+                swarm_domain::TaskState::Blocked,
+                "Waiting on: operator\nNeeds: choose whether a copy starts Hidden, in the decision",
+            )
+            .unwrap();
+
+        assert_eq!(
+            blocked.wait.map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::Decision)
+        );
+        assert!(
+            store.operator_waits().unwrap().is_empty(),
+            "the decision is the Needs you item, not a second card beside it"
+        );
+        store
+            .resolve_decision_request(created.id, "Start Hidden", "", "control_room")
+            .unwrap();
+        assert_eq!(
+            store.resume_cleared_waits(i64::MAX / 2).unwrap().resumed,
+            [task_id],
+            "answering the decision brings the task back"
+        );
+        let task = store.get_task(task_id).unwrap();
+        assert_eq!(task.state, swarm_domain::TaskState::Ready);
+        assert_eq!(task.assigned_worker_id, Some(worker));
+    }
+
     /// A card already in Needs you carries the old wording until it is
     /// rewritten, so the migration must find each park's decision and leave
     /// every other wait alone.

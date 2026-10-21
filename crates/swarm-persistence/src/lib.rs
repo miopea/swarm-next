@@ -3299,7 +3299,7 @@ impl TaskStore {
         )?;
         let activity_sequence = transaction.last_insert_rowid();
         if target == TaskState::Blocked {
-            task_waits::record_block_wait(
+            task_waits::record_note_wait(
                 &transaction,
                 id,
                 activity_sequence,

@@ -154,6 +154,8 @@ impl crate::NextMoveOwner {
 /// How to name a wait, said once so every refusal teaches the same format.
 pub const TASK_WAIT_FORMAT: &str = "Name the wait with marker lines in the Blocked note:\n\
      - The operator must do something:\n  Waiting on: operator\n  Needs: <what they must do>\n\
+     - The operator must answer or choose: no wait line. Ask it with swarm_request_decision \
+     on the task, which blocks the task until they answer.\n\
      - An outside party must act:\n  Waiting on: <who>\n  Needs: <what must happen>\n  \
      Recheck: <when to check again, e.g. 2026-10-20T13:00:00Z>\n\
      - Nothing can happen until a date:\n  Blocked until: <e.g. 2026-11-16T14:00:00Z>\n\

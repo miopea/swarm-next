@@ -218,6 +218,36 @@ pub(crate) fn record_block_wait(
     Ok(())
 }
 
+/// Records the wait a Blocked NOTE names.
+///
+/// ⚠️ A PENDING DECISION ON THE TASK OUTRANKS "Waiting on: operator". The
+/// operator's part is answering it, and Needs you already shows the decision
+/// with its answers. Recorded as an operator action it showed a second time, as
+/// a to-do whose Done answered nothing, and answering the decision did not
+/// bring the task back. On 2026-10-21 Platform blocked on "choose whether a
+/// duplicated product starts Hidden … in decision 01a16084"; the operator
+/// answered it twelve minutes later and the task sat Blocked behind a card for
+/// a question already answered. A worker that also owes the operator a
+/// separate action names it again when the task comes back.
+pub(crate) fn record_note_wait(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    block_sequence: i64,
+    wait: Option<&TaskWait>,
+    actor: &TaskActivityActor,
+) -> Result<(), TaskStoreError> {
+    let answers_a_decision = wait.is_some_and(|wait| wait.kind == TaskWaitKind::OperatorAction)
+        && transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_decision_membership m
+                 JOIN decision_requests d ON d.id = m.decision_id
+                 WHERE m.task_id = ?1 AND d.state = 'pending')",
+            [task_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?;
+    let wait = if answers_a_decision { None } else { wait };
+    record_block_wait(transaction, task_id, block_sequence, wait, actor)
+}
+
 /// A gate linked to a task that is ALREADY blocked, with no wait recorded for
 /// that block, becomes what the block waits on. Queen linking a decision to a
 /// block a worker made in prose is the case: from then on the board knows what

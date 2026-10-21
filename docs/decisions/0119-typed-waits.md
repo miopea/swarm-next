@@ -206,6 +206,16 @@ the wording above, each for a reason found while building it.
 ADR 0106's park lift is removed. A park now records an operator-action wait,
 and Done replaces "I've done this".
 
+**A pending decision outranks "Waiting on: operator"** (2026-10-21). A block
+whose note names an operator action, on a task with a pending decision, waits
+on the decision. The operator's part is answering it, and Needs you already
+shows the decision. Recorded as an action, it showed a second time as a card
+whose Done answered nothing, and the answer did not bring the task back.
+Platform did exactly that on 2026-10-21. Parks are unchanged, because a park is
+recorded when its decision is answered. The wait format and the tool
+description also say that a question or a choice is a decision, not an
+operator action.
+
 ## Implementation notes, part 2 (2026-10-19)
 
 Decision 5 as written:
