@@ -12,6 +12,24 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.5
+
+Three database updates (204, 205 and 206). Your Hive backs its database up first, by itself, and your workers are not stopped.
+
+### New features
+- A blocked task now says what it is waiting for and who has to act: another task, a decision, something you must do, someone outside the Hive (with a time to check back), or a date. It goes back to its worker by itself when the wait clears: the other task finishes, you answer, you press Done, the check-back time comes, or the date arrives.
+- A worker whose task is waiting on someone else is no longer stuck on it. The waiting task moves to Blocked, so the worker gets on with its other tasks and their messages meanwhile. When a worker asks you a question about its own task, the task waits on your answer and comes back to the worker when you give it.
+- In an Apiary, a blocked shared task tells every Hive what it waits for, who must act and when it comes back. The Keeper's list of Hives says which members run a release too old to send this.
+
+### Fixes
+- Needs you no longer lists a question as a to-do you can only mark Done. A worker that asks you to approve, choose or decide is told to ask it as a decision, which gives you answer buttons. A task already waiting on your answer waits on that decision instead of showing up a second time as a to-do.
+- Needs you says what each item needs from you, and that the tasks are paused, not their workers. An item from a decision you said you would carry out yourself now names the decision, not only your answer.
+- On the Keeper, "Hives are behind" asks about each Hive once per release, and only about Hives that are in touch. It offers "Tell its operator" or "Leave it for now", because the Keeper cannot install on a member.
+- Queen no longer wakes herself every few minutes over her own notes, or over blocked work that cannot move yet.
+- A message to a removed worker, or about a task that has closed, is cancelled with the reason recorded. Until now it sat in Queues indefinitely, or arrived late as if it were current.
+- A Hive that reloads from a source checkout keeps only its newest three pre-migration database copies. Until now it kept every one, 2.5 GB on the Keeper.
+- Updated the libraries Swarm uses to check certificates on secure connections, to fix three security advisories published on October 19 and 20.
+
 ## 1.17.4
 
 One database update (203). Your Hive backs its database up first, by itself, and your workers are not stopped.
