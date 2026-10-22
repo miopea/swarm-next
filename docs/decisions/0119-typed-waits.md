@@ -216,6 +216,18 @@ recorded when its decision is answered. The wait format and the tool
 description also say that a question or a choice is a decision, not an
 operator action.
 
+**An agent's operator action that asks for a decision is refused**
+(2026-10-21). By then workers had named twelve operator actions on the Keeper,
+and nine were decisions: "approve the merge of PR #112", "a go to commit and
+deploy", "the operator's calls on (a), (b), (c)". Done carries no answer, so
+each one was a to-do the operator could not answer. `asks_the_operator_to_decide`
+reads the opening word of "Needs:", past articles and a possessive, and any
+question mark. The refusal names `swarm_request_decision`. It reaches running
+sessions, because a refusal is a tool result. The rule is deliberately narrow:
+a miss records the action as before. A task whose decision is already pending
+is let through, and waits on that decision. Only agents' blocks are checked.
+Parks and the operator's own blocks are unchanged.
+
 ## Implementation notes, part 2 (2026-10-19)
 
 Decision 5 as written:

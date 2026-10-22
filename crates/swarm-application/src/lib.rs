@@ -4296,6 +4296,18 @@ impl TaskService {
         // named wrongly is refused with the format, which every running
         // session sees, because it is a tool result and not a schema.
         match swarm_domain::parse_block_wait(note, now) {
+            // A decision named as an operator action reaches Needs you as a
+            // to-do whose Done carries no answer. On a task whose decision is
+            // already pending it is let through, and waits on that decision.
+            Ok(Some(wait))
+                if wait.kind == swarm_domain::TaskWaitKind::OperatorAction
+                    && swarm_domain::asks_the_operator_to_decide(&wait.needs)
+                    && !self.store.task_has_pending_decision(task_id)? =>
+            {
+                return Err(ApplicationError::TransitionNotPermitted(
+                    swarm_domain::DECISION_NAMED_AS_AN_ACTION.into(),
+                ));
+            }
             Ok(Some(_)) => return Ok(()),
             Ok(None) => {}
             Err(error) => return Err(ApplicationError::TransitionNotPermitted(error.to_string())),
@@ -6539,6 +6551,78 @@ mod tests {
             swarm_domain::NextMoveOwner::Operator
         );
         assert_eq!(decision.state, swarm_domain::DecisionRequestState::Pending);
+    }
+
+    /// Nine of the twelve operator actions workers had named by 2026-10-21
+    /// were decisions, each a to-do in Needs you that Done could not answer.
+    #[test]
+    fn a_decision_named_as_an_operator_action_is_refused_and_an_action_is_not() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Preview mode");
+
+        match service.transition_task_naming_blocker(
+            principal,
+            task,
+            TaskState::Blocked,
+            "Waiting on: operator\nNeeds: approve the merge of PR #112",
+            None,
+            1,
+        ) {
+            Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
+                reason.contains("swarm_request_decision"),
+                "the refusal names the way to ask: {reason}"
+            ),
+            other => panic!("an approval named as an action must be refused, got {other:?}"),
+        }
+        assert_eq!(
+            service.store.get_task(task).unwrap().state,
+            TaskState::Active
+        );
+
+        let blocked = service
+            .transition_task_naming_blocker(
+                principal,
+                task,
+                TaskState::Blocked,
+                "Waiting on: operator\nNeeds: arrange Jaco's agreement and timing",
+                None,
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            blocked.wait.map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::OperatorAction)
+        );
+    }
+
+    /// Already asked, the decision is what the block waits on.
+    #[test]
+    fn a_decision_named_as_an_action_waits_on_it_when_it_is_already_asked() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Duplicated products");
+        let mut input = decision_input(
+            Some(task),
+            DecisionRequestKind::Input,
+            "Should a copy start Hidden?",
+            &["Start Hidden", "Keep its audience"],
+        );
+        input.keep_working = true;
+        service.create_decision(principal, &input).unwrap();
+
+        let blocked = service
+            .transition_task_naming_blocker(
+                principal,
+                task,
+                TaskState::Blocked,
+                "Waiting on: operator\nNeeds: choose whether a copy starts Hidden",
+                None,
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            blocked.wait.map(|wait| wait.kind),
+            Some(swarm_domain::TaskWaitKind::Decision)
+        );
     }
 
     #[test]

@@ -2971,6 +2971,21 @@ impl TaskStore {
         )?)
     }
 
+    /// Whether a decision linked to this task is still unanswered, which a
+    /// block naming an operator action then waits on instead (ADR 0119).
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn task_has_pending_decision(&self, id: TaskId) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_decision_membership m
+                 JOIN decision_requests d ON d.id = m.decision_id
+                 WHERE m.task_id = ?1 AND d.state = 'pending')",
+            [id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Blocked work this decision's answer has just left with no way back.
     ///
     /// ⚠️ NOTHING ABOUT THESE TASKS CHANGES AT THIS INSTANT, WHICH IS WHY

@@ -162,6 +162,70 @@ pub const TASK_WAIT_FORMAT: &str = "Name the wait with marker lines in the Block
      Times are UTC with a Z, between one hour and 30 days ahead. The task comes back to you \
      by itself when the time arrives or the operator presses Done.";
 
+/// Why an agent's operator action that asks for a decision is refused.
+pub const DECISION_NAMED_AS_AN_ACTION: &str = "\"Needs:\" asks the operator to decide: to \
+     approve, choose, rule or give a go. An operator action has only a Done button, which \
+     carries no answer, so it would sit in Needs you as a to-do they cannot answer. Ask it \
+     with swarm_request_decision on this task instead. The task blocks on the decision and \
+     comes back to you when they answer. \"Waiting on: operator\" is for something they do \
+     themselves, such as signing in or arranging a person.";
+
+/// Words that open a request for a decision rather than an action.
+const DECISION_OPENINGS: &[&str] = &[
+    "approve",
+    "approval",
+    "authorise",
+    "authorize",
+    "authorisation",
+    "authorization",
+    "call",
+    "calls",
+    "choice",
+    "choose",
+    "consent",
+    "decide",
+    "decision",
+    "go",
+    "go-ahead",
+    "go/no-go",
+    "ok",
+    "okay",
+    "permission",
+    "pick",
+    "ruling",
+    "select",
+    "sign-off",
+    "whether",
+];
+
+/// Whether "Needs:" asks the operator to decide rather than to do something.
+///
+/// ⚠️ DONE ANSWERS NOTHING. Of the twelve operator actions workers had named on
+/// the Keeper by 2026-10-21, nine were approvals or questions: "approve the
+/// merge of PR #112", "a go to commit … and to deploy it", "the operator's
+/// calls on (a) … (b) … (c)". Each sat in Needs you as a to-do with only Done,
+/// and a Done press came back to one worker carrying no plan.
+///
+/// Deliberately narrow: the opening word, past articles and a possessive, or a
+/// question mark. A miss records the action as before. A hit costs the worker
+/// one call to `swarm_request_decision`.
+#[must_use]
+pub fn asks_the_operator_to_decide(needs: &str) -> bool {
+    if needs.contains('?') {
+        return true;
+    }
+    let lower = needs.to_lowercase();
+    lower
+        .split_whitespace()
+        .find(|word| {
+            !matches!(*word, "the" | "a" | "an" | "your")
+                && !word.ends_with("'s")
+                && !word.ends_with('\'')
+        })
+        .map(|word| word.trim_end_matches([',', ':', ';', '.']))
+        .is_some_and(|word| DECISION_OPENINGS.contains(&word))
+}
+
 /// Why a wait in a note could not be recorded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskWaitError {
@@ -395,6 +459,33 @@ mod tests {
             parse_block_wait("Waiting for the vendor.", NOW).unwrap(),
             None
         );
+    }
+
+    /// Every operator action workers had named on the Keeper by 2026-10-21,
+    /// cut short, sorted by what the operator actually owed.
+    #[test]
+    fn a_need_that_asks_for_a_decision_is_told_apart_from_an_action() {
+        for decision in [
+            "choose how I get read-only Exchange access (decision 01a154f1-9aa3)",
+            "the operator/editors' ruling on the 1,826 old unpublished products",
+            "approve the merge of rcg-member-services PR #112 (feat/preview-mode)",
+            "the operator's calls on (a) whether the 7 jobs get a new full",
+            "choose whether a duplicated product starts Hidden (no groups)",
+            "a go to commit branch fix/hunt-activity-dedupe and to deploy it",
+            "decide whether I may deploy main 6617a891 to the STAGING slot",
+            "Which account should I use?",
+        ] {
+            assert!(asks_the_operator_to_decide(decision), "{decision}");
+        }
+        for action in [
+            "tell the RCG Networks worker in its terminal when you are ready to sign in",
+            "recover the Backup-Veeam VM, paused since 17:26:50Z",
+            "arrange Jaco's (jviljoen) agreement and timing, with him at his PC",
+            "Sign in to the Entra portal and approve M2",
+            "Jaco's PC on the VPN for an hour",
+        ] {
+            assert!(!asks_the_operator_to_decide(action), "{action}");
+        }
     }
 
     #[test]
