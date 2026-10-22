@@ -1,18 +1,18 @@
 {
   "payload": {
     "schema_version": 1,
-    "issued_at": 1792199460,
+    "issued_at": 1792705333,
     "releases": [
       {
-        "version": "1.17.4",
+        "version": "1.17.5",
         "protocol": "17",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.17.4/swarm-1.17.4-linux-x86_64.tar.gz",
-        "artifact_sha256": "afaa6dfffd4970e8152999b4454bf9cc82cc92068316fe8bd28920e3afbc837f",
-        "artifact_bytes": 22698930,
-        "worker_engine_build_id": "a51c9bd37038b8bf3654c9f34f5f6f678f1786d0477b11ad70e680911fb44b5d",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.17.5/swarm-1.17.5-linux-x86_64.tar.gz",
+        "artifact_sha256": "542df7f07ec2587dbc97e29fb2a499d3f2f94610e8f3cac5e7b96c3bf6e218a7",
+        "artifact_bytes": 22849785,
+        "worker_engine_build_id": "b4fa8db2dff03e0b8e6fece9b3910e41e172fa3ca63b811363acd3604b5c8f63",
         "notes_url": null
       }
     ]
   },
-  "signature": "41gIIZ02KVXksmNIWfhfLPCt1k6xxBWRLcBp_ef9B1qlc0vEE3Sdwr1V7U4Yx6Pxx_7zVJhU6v3Dmoh4_gLcBg"
+  "signature": "2ravIu_v54V70n4_8RxLEBP0atS4dYddUs83gb9SHf2yx11JVi_hBLV-e6ASa1cAeIEyNZps4D09jEU5e0_vDw"
 }
