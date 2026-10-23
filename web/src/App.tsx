@@ -38,6 +38,7 @@ import {
   fetchStartSurface,
   setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
+  retryEmailReply,
   reviseEmailReplyDraft,
   prepareEmailReply,
   updateEmailReplyDraft,
@@ -1347,6 +1348,15 @@ export function App() {
       else await leaveJiraTicketOpen(operatorToken, taskId);
       setHeldResolutions(await fetchHeldJiraResolutions(operatorToken));
     }, resolve ? "Resolving it in Jira…" : "Leaving it open…");
+  }
+
+  /** Retries a reply whose delivery Microsoft never confirmed, on the operator's word. */
+  async function retryAwaitingReply(replyId: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await retryEmailReply(operatorToken, replyId);
+      setAwaitingReply(await fetchEmailTasksAwaitingReply(operatorToken));
+    }, "Retrying the reply…");
   }
 
   /** Closes an email task's reply without sending one (ADR 0121). */
@@ -2668,7 +2678,7 @@ export function App() {
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
                 <WorkerReturnAttentionCard workers={workers} onReview={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onRetryReply={(replyId) => void retryAwaitingReply(replyId)} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />

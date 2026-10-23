@@ -48,12 +48,13 @@ export type OutlookDraftResult = "saved" | "reconnect" | "failed";
  * recorded on the task.
  */
 type ClosingHandlers = {
+  onRetryReply?: (replyId: string) => void;
   onDontSend?: (taskId: string) => void;
   onSaveAsDraft?: (taskId: string) => Promise<OutlookDraftResult>;
   onReconnectForDrafts?: () => void;
 };
 
-export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply, onDontSend, onSaveAsDraft, onReconnectForDrafts }: {
+export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply, onRetryReply, onDontSend, onSaveAsDraft, onReconnectForDrafts }: {
   awaiting: UnansweredEmailTask[];
   busy?: boolean;
   onOpenTask: (taskId: string) => void;
@@ -73,6 +74,7 @@ export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTas
           onSendReply={onSendReply}
           onSaveReply={onSaveReply}
           onReviseReply={onReviseReply}
+          onRetryReply={onRetryReply}
           onDontSend={onDontSend}
           onSaveAsDraft={onSaveAsDraft}
           onReconnectForDrafts={onReconnectForDrafts}
@@ -82,7 +84,7 @@ export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTas
   );
 }
 
-function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply, onDontSend, onSaveAsDraft, onReconnectForDrafts }: {
+function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply, onRetryReply, onDontSend, onSaveAsDraft, onReconnectForDrafts }: {
   item: UnansweredEmailTask;
   busy?: boolean;
   onOpenTask: (taskId: string) => void;
@@ -115,6 +117,11 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
   // worker verifies, and for work closed on an approved exemption it asked for
   // a deployment that does not exist.
   const canEditHere = Boolean(onSaveReply);
+  // ⚠️ A RESULT NOBODY KNOWS IS NOT A REPLY NOBODY WROTE. Microsoft may already
+  // have delivered it, so it is not editable, closable or draftable here: each
+  // could answer the person twice. The one action is a deliberate retry.
+  const uncertain = Boolean(item.uncertain_reply_id);
+  const settled = !item.sending && !uncertain;
 
   async function revise() {
     if (!onReviseReply || !instruction.trim()) return;
@@ -157,8 +164,14 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
               Sent Items was filling up in front of the operator. */}
           {item.sending
             ? " This reply is being sent now."
+            : uncertain ? " Swarm could not confirm whether this reply was delivered."
             : item.draft_body ? " A reply is written and waiting for you to read it." : item.drafted ? " A reply is written but was never sent." : " No reply has been written."}
         </p>
+        {uncertain ? (
+          <p className="unanswered-email-failure" role="alert">
+            <strong>Microsoft may already have delivered this reply.</strong> Check Sent Items in Outlook before you retry, or the person may get it twice.
+          </p>
+        ) : null}
         {/* WHY IT IS EMPTY, when the board knows why. The operator opened a
             completed email task, found a blank textarea, and read it as an
             instruction: "It wanted me to write it? that isn't how this should
@@ -249,17 +262,22 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             {/* Nothing to press while it is going out. Offering Edit or Write
                 here invites the operator to change or replace text that has
                 already left, or is leaving. */}
-            {item.draft_body && onSaveAsDraft && !item.sending ? (
+            {uncertain && onRetryReply ? (
+              <button className="primary-action" type="button" disabled={busy} onClick={() => onRetryReply(item.uncertain_reply_id!)}>
+                Retry the send
+              </button>
+            ) : null}
+            {item.draft_body && onSaveAsDraft && settled ? (
               <button className="secondary-button" type="button" disabled={busy} onClick={() => void saveAsDraft()}>
                 Save as draft in Outlook
               </button>
             ) : null}
-            {canEditHere && !item.sending ? (
+            {canEditHere && settled ? (
               <button className="secondary-button" type="button" disabled={busy} onClick={() => { setBody(item.draft_body ?? ""); setEditing(true); }}>
                 {item.draft_body ? "Edit here" : "Write the reply"}
               </button>
             ) : null}
-            {onDontSend && !item.sending ? (
+            {onDontSend && settled ? (
               <button className="text-button" type="button" disabled={busy} onClick={() => setConfirmingDontSend(true)}>
                 Don&rsquo;t send
               </button>
@@ -267,7 +285,7 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             {/* Still a route to the task itself, for everything a reply editor
                 is not — the original thread, its attachments, the history. It
                 is no longer the only way to change a word. */}
-            <button className={item.draft_id ? "text-button" : "primary-action"} type="button" onClick={() => onOpenTask(item.task_id)}>
+            <button className={item.draft_id || uncertain ? "text-button" : "primary-action"} type="button" onClick={() => onOpenTask(item.task_id)}>
               Open the task
             </button>
           </>

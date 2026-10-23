@@ -214,6 +214,9 @@ pub struct UnansweredEmailTask {
     /// gate refused it, and that refusal died with the worker's turn. Now it is
     /// recorded on the task, and the card says it out loud.
     pub no_reply_reason: Option<String>,
+    /// A reply Microsoft may already have delivered, by id, so the card can
+    /// offer the retry. Its text is in `draft_body`.
+    pub uncertain_reply_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -535,9 +538,12 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT t.id, t.title, link.sender_name, link.sender_address,
                     MIN(link.received_at),
+                    -- UNCERTAIN IS WRITTEN TOO. Leaving it out made a reply
+                    -- Microsoft may already have delivered read as No reply
+                    -- has been written, with nothing on the card to retry.
                     EXISTS(SELECT 1 FROM email_reply_deliveries r
                            WHERE r.task_id = t.id
-                             AND r.state IN ('draft', 'cancelled', 'queued', 'dispatching')
+                             AND r.state IN ('draft', 'cancelled', 'queued', 'dispatching', 'uncertain')
                              AND trim(r.body) <> ''),
                     EXISTS(SELECT 1 FROM email_reply_deliveries r
                            WHERE r.task_id = t.id
@@ -553,7 +559,7 @@ impl TaskStore {
                          ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
                         (SELECT r.body FROM email_reply_deliveries r
                          WHERE r.task_id = t.id
-                           AND r.state IN ('cancelled', 'queued', 'dispatching')
+                           AND r.state IN ('cancelled', 'queued', 'dispatching', 'uncertain')
                            AND trim(r.body) <> ''
                          ORDER BY r.updated_at DESC, r.id DESC LIMIT 1)
                     ),
@@ -569,7 +575,10 @@ impl TaskStore {
                     (SELECT a.note FROM task_activity a
                      WHERE a.task_id = t.id AND a.kind = 'noted'
                        AND a.note LIKE '%email reply%refused%'
-                     ORDER BY a.sequence DESC LIMIT 1)
+                     ORDER BY a.sequence DESC LIMIT 1),
+                    (SELECT r.id FROM email_reply_deliveries r
+                     WHERE r.task_id = t.id AND r.state = 'uncertain'
+                     ORDER BY r.updated_at DESC, r.id DESC LIMIT 1)
              FROM tasks t
              JOIN email_message_links link ON link.task_id = t.id
              WHERE t.state = 'completed' AND t.removed_at IS NULL
@@ -618,6 +627,7 @@ impl TaskStore {
                     row.get::<_, i64>(10)?,
                     row.get::<_, Option<String>>(11)?,
                     row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -887,14 +897,15 @@ impl TaskStore {
         if queued >= MAX_PENDING_EMAIL_REPLIES {
             return Err(TaskStoreError::EmailReplyQueueFull);
         }
-        // One reply row per task, so a cancelled one blocks every future
-        // attempt until it is cleared. It was reachable from the UI in exactly
-        // one direction: into the dead end. Clearing it lets the operator write
-        // again if the thread comes back, and costs nothing if it does not.
-        transaction.execute(
-            "DELETE FROM email_reply_deliveries WHERE task_id = ?1 AND state = 'cancelled'",
-            [task_id.to_string()],
-        )?;
+        // A cancelled reply is reopened rather than replaced; see
+        // `reopen_cancelled_reply` for why replacing it answered people twice.
+        if let Some(reply_id) = reopen_cancelled_reply(&transaction, task_id, body)? {
+            transaction.commit()?;
+            drop(connection);
+            return self.email_reply_for_task(task_id)?.ok_or_else(|| {
+                TaskStoreError::IntegrityFailure(format!("reply {reply_id} disappeared"))
+            });
+        }
         let id = Uuid::now_v7().to_string();
         let idempotency_key = format!("email-resolution:{task_id}");
         let inserted = transaction.execute(
@@ -2167,6 +2178,85 @@ pub(super) fn migrate_reply_evidence_guards_the_send(
 /// Extracted so that query stays under the line limit. An eleven-column
 /// destructure and a struct literal is most of a function on its own, and none
 /// of it is what the query is about.
+/// Puts a task's cancelled reply back to draft with new text, keeping every
+/// target a send already delivered. Returns its id, or None when there is none.
+///
+/// One reply row per task, so a cancelled one blocks every future attempt
+/// until it is cleared. It was reachable from the UI in exactly one direction:
+/// into the dead end.
+///
+/// ⚠️ IT IS REOPENED, NOT DELETED. Deleting it took its delivered targets with
+/// it, and the fresh targets a new reply builds answered everyone again: a
+/// reply cancelled after reaching two of three people sent those two a second
+/// copy. Reopening keeps who was answered, and the send touches only the
+/// targets still in draft. Anyone who wrote in since, newest message per
+/// sender as for a new reply, is added.
+fn reopen_cancelled_reply(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    body: &str,
+) -> Result<Option<String>, TaskStoreError> {
+    let Some(reply_id) = transaction
+        .query_row(
+            "SELECT id FROM email_reply_deliveries WHERE task_id = ?1 AND state = 'cancelled'",
+            [task_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let reply_id = reply_id.as_str();
+    transaction.execute(
+        "UPDATE email_reply_deliveries
+         SET body = ?2, state = 'draft', attempts = 0, available_at = unixepoch(),
+             attempted_at = NULL, last_error = NULL, updated_at = unixepoch()
+         WHERE id = ?1",
+        params![reply_id, body],
+    )?;
+    transaction.execute(
+        "UPDATE email_reply_targets
+         SET state = 'draft', attempts = 0, available_at = unixepoch(),
+             attempted_at = NULL, last_error = NULL, updated_at = unixepoch()
+         WHERE reply_id = ?1 AND state <> 'delivered'",
+        [reply_id],
+    )?;
+    let new_sources = {
+        let mut statement = transaction.prepare(
+            "SELECT id FROM email_message_links source
+             WHERE source.task_id = ?1
+               AND source.id = (
+                   SELECT newest.id FROM email_message_links newest
+                   WHERE newest.task_id = source.task_id
+                     AND newest.sender_address = source.sender_address
+                   ORDER BY newest.received_at DESC, newest.imported_at DESC, newest.id DESC
+                   LIMIT 1
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM email_reply_targets target
+                   JOIN email_message_links existing ON existing.id = target.source_id
+                   WHERE target.reply_id = ?2
+                     AND existing.sender_address = source.sender_address
+               )
+             ORDER BY source.received_at, source.imported_at, source.id",
+        )?;
+        statement
+            .query_map(params![task_id.to_string(), reply_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for source_id in new_sources {
+        transaction.execute(
+            "INSERT INTO email_reply_targets (id, reply_id, source_id, state)
+             VALUES (?1, ?2, ?3, 'draft')",
+            params![Uuid::now_v7().to_string(), reply_id, source_id],
+        )?;
+    }
+    refresh_email_reply_summary(transaction, reply_id)?;
+    Ok(Some(reply_id.to_owned()))
+}
+
 type UnansweredEmailRow = (
     String,
     String,
@@ -2179,6 +2269,7 @@ type UnansweredEmailRow = (
     Option<String>,
     Option<String>,
     i64,
+    Option<String>,
     Option<String>,
     Option<String>,
 );
@@ -2198,6 +2289,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         thread_count,
         delivery_failure,
         no_reply_reason,
+        uncertain_reply_id,
     ) = row;
     Ok(UnansweredEmailTask {
         task_id: TaskId::from_str(&id)
@@ -2214,6 +2306,7 @@ fn unanswered_email_task(row: UnansweredEmailRow) -> Result<UnansweredEmailTask,
         thread_count: usize::try_from(thread_count).unwrap_or(1).max(1),
         delivery_failure,
         no_reply_reason,
+        uncertain_reply_id,
     })
 }
 
@@ -2868,6 +2961,138 @@ mod tests {
                 .is_empty(),
             "a delivered reply is what answers the thread"
         );
+    }
+
+    /// ⚠️ A REPLY MICROSOFT MAY ALREADY HAVE DELIVERED IS NOT AN UNWRITTEN ONE.
+    /// The list left `uncertain` out of "is a reply written" and of the text it
+    /// shows, so the card said "No reply has been written" and offered no retry,
+    /// and writing one from there failed because the reply already existed.
+    #[test]
+    fn a_reply_microsoft_may_have_delivered_still_shows_its_text_and_can_be_retried() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-9", 1_786_730_200)
+            .unwrap();
+        let draft = store
+            .prepare_email_reply(imported.task.id, "Thank you, this is fixed.")
+            .unwrap();
+        store.queue_email_reply(&draft.id).unwrap();
+        let target = store.claim_email_reply().unwrap().unwrap();
+        store
+            .fail_email_reply(
+                &target.target_id,
+                &EmailReplyFailure::Uncertain("Microsoft did not answer".into()),
+            )
+            .unwrap();
+
+        let awaiting = store.completed_email_tasks_awaiting_a_reply().unwrap();
+        assert_eq!(awaiting.len(), 1);
+        assert!(awaiting[0].drafted, "a reply was written");
+        assert_eq!(
+            awaiting[0].draft_body.as_deref(),
+            Some("Thank you, this is fixed.")
+        );
+        assert!(
+            !awaiting[0].sending,
+            "it is not on its way; its result is unknown"
+        );
+        assert_eq!(
+            awaiting[0].uncertain_reply_id.as_deref(),
+            Some(draft.id.as_str())
+        );
+    }
+
+    /// ⚠️ REWRITING A REPLY THAT REACHED SOME PEOPLE MUST NOT ANSWER THEM AGAIN.
+    /// Rewriting a cancelled reply deleted it, delivered targets and all, and
+    /// built fresh targets for every sender, so the people already answered got
+    /// a second copy.
+    #[test]
+    fn rewriting_a_reply_cancelled_part_way_does_not_answer_anyone_twice() {
+        let store = TaskStore::in_memory().unwrap();
+        let other = EmailMessageSnapshot {
+            integration_id: "operator-outlook",
+            message_id: "AAMk-message-2",
+            conversation_id: "AAQk-conversation-2",
+            internet_message_id: Some("<issue-2@example.test>"),
+            subject: "Same problem here",
+            sender_name: "Another Member",
+            sender_address: "another@example.test",
+            received_at: 1_786_730_100,
+            web_url: "https://outlook.office.com/mail/inbox/id/AAMk-message-2",
+            body_text: "My form does the same.",
+            attachments: &[],
+        };
+        let imported = store
+            .import_email_messages(
+                &[message(&[]), other],
+                &EmailTaskDraft {
+                    title: "Fix the member form",
+                    description: "Two people reported it.",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Ready,
+                },
+            )
+            .unwrap();
+        for state in [TaskState::Active, TaskState::Review, TaskState::Completed] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-9", 1_786_730_200)
+            .unwrap();
+        let first = store
+            .prepare_email_reply(imported.task.id, "Thank you, this is fixed.")
+            .unwrap();
+        store.queue_email_reply(&first.id).unwrap();
+        // One person is answered; the other's send fails for good.
+        let answered = store.claim_email_reply().unwrap().unwrap();
+        store
+            .complete_email_reply(&answered.target_id, "provider-reply-1")
+            .unwrap();
+        let failed = store.claim_email_reply().unwrap().unwrap();
+        store
+            .fail_email_reply(
+                &failed.target_id,
+                &EmailReplyFailure::Permanent("message not found".into()),
+            )
+            .unwrap();
+
+        let rewritten = store
+            .prepare_email_reply(imported.task.id, "Thank you, this is fixed now.")
+            .unwrap();
+        store.queue_email_reply(&rewritten.id).unwrap();
+
+        let resent = store.claim_email_reply().unwrap().unwrap();
+        assert_eq!(
+            resent.target_id, failed.target_id,
+            "only the person not yet answered"
+        );
+        assert_eq!(resent.body, "Thank you, this is fixed now.");
+        assert!(
+            store.claim_email_reply().unwrap().is_none(),
+            "nobody is answered twice"
+        );
+        let reply = store
+            .email_reply_for_task(imported.task.id)
+            .unwrap()
+            .unwrap();
+        let kept = reply
+            .targets
+            .iter()
+            .find(|target| target.id == answered.target_id)
+            .expect("the delivered target is kept");
+        assert_eq!(kept.state, EmailReplyState::Delivered);
     }
 
     #[test]

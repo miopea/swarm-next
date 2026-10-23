@@ -395,3 +395,33 @@ test("a reply on its way offers neither Don't send nor a draft", () => {
   expect(screen.queryByRole("button", { name: "Don’t send" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Save as draft in Outlook" })).not.toBeInTheDocument();
 });
+
+/**
+ * A reply Microsoft may already have delivered used to read "No reply has been
+ * written", with nothing to press. It shows its text, warns before a retry,
+ * and offers nothing that could answer the person twice.
+ */
+test("a reply whose delivery is unknown shows its text and offers only a deliberate retry", () => {
+  const onRetryReply = vi.fn();
+  render(
+    <UnansweredEmailAttentionCard
+      awaiting={[{ ...waiting, drafted: true, draft_body: "Thank you, this is fixed.", uncertain_reply_id: "reply-9" }]}
+      onOpenTask={vi.fn()}
+      onSaveReply={vi.fn()}
+      onRetryReply={onRetryReply}
+      onDontSend={vi.fn()}
+      onSaveAsDraft={vi.fn()}
+    />,
+  );
+
+  expect(screen.queryByText(/No reply has been written/)).not.toBeInTheDocument();
+  expect(screen.getByText(/Swarm could not confirm whether this reply was delivered/)).toBeInTheDocument();
+  expect(screen.getByText("Thank you, this is fixed.", { exact: false })).toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent("Microsoft may already have delivered this reply.");
+  for (const name of ["Edit here", "Write the reply", "Don’t send", "Save as draft in Outlook"]) {
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+  }
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry the send" }));
+  expect(onRetryReply).toHaveBeenCalledWith("reply-9");
+});
