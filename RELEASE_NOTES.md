@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.6
+
+One database update (207). Your Hive backs its database up first, by itself, and your workers are not stopped.
+
+### New features
+- Jira projects have a new setting, "Ask me before resolving tickets", in Settings > Integrations > Jira. With it on, a ticket whose work finished without you closing it waits in Needs you until you choose Resolve in Jira or Leave open. The card says whether anyone has replied on the ticket. The setting starts off, so nothing changes until you turn it on. Completing a task yourself still resolves its ticket straight away.
+
+### Fixes
+- A worker whose turn ended with a shell or monitor still running now reads Buzzing, with "2 shells running" under its name, instead of Resting. The worker engine update warning counts that worker as busy, because the update would stop its shell.
+- Updated a cryptography library (ctutils) to fix a security advisory published on October 23.
+
 ## 1.17.5
 
 Three database updates (204, 205 and 206). Your Hive backs its database up first, by itself, and your workers are not stopped.
