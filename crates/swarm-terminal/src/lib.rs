@@ -53,7 +53,7 @@ pub use provider::{
     ProviderTerminalAdapter, provider_release, provider_release_superseded, shell_command,
 };
 pub use provider_activity::{
-    ProviderActivity, background_work_running, classify_provider_activity,
+    BackgroundWork, ProviderActivity, background_work, classify_provider_activity,
 };
 pub use provider_interview::{
     NativeInterviewObservation, NativeInterviewOption, NativeInterviewPhase,

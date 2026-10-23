@@ -54,6 +54,15 @@ test("shows terminal state separately from assigned work state", () => {
   expect(screen.getByText("1 active · 2 ready")).toHaveAttribute("title", "Open work: 1 active · 2 ready");
 });
 
+test("a worker with shells running reads as buzzing, with the count under its name", () => {
+  // The whole label in the pill cut the name beside it to "Or…" in the rail.
+  render(<WorkerRosterItem worker={{ ...queen, attention_state: "resting", background_work: true, background_shells: 2 }} selected detail="orchard-api" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
+
+  expect(screen.getByText("Buzzing")).toBeInTheDocument();
+  expect(screen.getByText("2 shells running")).toBeInTheDocument();
+  expect(screen.queryByText("Resting")).not.toBeInTheDocument();
+});
+
 test("shows a durable operator decision as awaiting you", () => {
   render(<WorkerRosterItem worker={{ ...queen, attention_state: "awaiting_operator" }} selected={false} detail="Decision requested" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
 

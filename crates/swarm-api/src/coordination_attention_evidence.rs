@@ -295,7 +295,7 @@ fn evidence(signals: Option<ProviderSignals>, checked_at: i64) -> Value {
     json!({
         "checked_at": checked_at,
         "activity": activity,
-        "background_work_visible": signals.map(|signals| signals.background_work),
+        "background_work_visible": signals.map(|signals| signals.background_work.is_running()),
         "scope": "Current canonical-terminal observation, not a process-tree check or permission to inject. The saved reason and age are historical. Active or awaiting-operator output must not be interrupted; unknown or unavailable is not resting. Recheck task ownership and engagement through guarded delivery before acting."
     })
 }
@@ -308,7 +308,7 @@ fn recovery_excerpt(
 ) -> Option<Value> {
     if operator_engaged
         || signals.activity != ProviderActivity::Resting
-        || signals.background_work
+        || signals.background_work.is_running()
         || crate::provider_activity::has_open_provider_input(provider, snapshot)
     {
         return None;
@@ -704,7 +704,7 @@ mod tests {
     fn recovery_excerpt_excludes_operator_engagement_and_unsent_input() {
         let signals = ProviderSignals {
             activity: ProviderActivity::Resting,
-            background_work: false,
+            background_work: swarm_terminal::BackgroundWork::default(),
         };
         let mut snapshot = swarm_terminal::TerminalSnapshot {
             sequence: 1,
@@ -823,7 +823,10 @@ mod tests {
                     evidence(
                         Some(ProviderSignals {
                             activity,
-                            background_work,
+                            background_work: swarm_terminal::BackgroundWork {
+                                shells: u16::from(background_work),
+                                ..swarm_terminal::BackgroundWork::default()
+                            },
                         }),
                         42,
                     ),
@@ -852,7 +855,7 @@ mod tests {
             evidence(
                 Some(ProviderSignals {
                     activity: ProviderActivity::Resting,
-                    background_work: false,
+                    background_work: swarm_terminal::BackgroundWork::default(),
                 }),
                 42,
             ),
@@ -885,7 +888,7 @@ mod tests {
             let mut observation = evidence(
                 Some(ProviderSignals {
                     activity: ProviderActivity::Resting,
-                    background_work: false,
+                    background_work: swarm_terminal::BackgroundWork::default(),
                 }),
                 42,
             );
@@ -910,19 +913,22 @@ mod tests {
             None,
             Some(ProviderSignals {
                 activity: ProviderActivity::Unknown,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             }),
             Some(ProviderSignals {
                 activity: ProviderActivity::Active,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             }),
             Some(ProviderSignals {
                 activity: ProviderActivity::AwaitingOperator,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             }),
             Some(ProviderSignals {
                 activity: ProviderActivity::Resting,
-                background_work: true,
+                background_work: swarm_terminal::BackgroundWork {
+                    shells: 1,
+                    ..swarm_terminal::BackgroundWork::default()
+                },
             }),
         ] {
             let observations = HashMap::from([(row.action_id.clone(), evidence(signals, 42))]);
@@ -940,7 +946,7 @@ mod tests {
             evidence(
                 Some(ProviderSignals {
                     activity: ProviderActivity::Resting,
-                    background_work: false,
+                    background_work: swarm_terminal::BackgroundWork::default(),
                 }),
                 42,
             ),
@@ -1148,7 +1154,10 @@ mod tests {
             let result = evidence(
                 Some(ProviderSignals {
                     activity,
-                    background_work: true,
+                    background_work: swarm_terminal::BackgroundWork {
+                        shells: 1,
+                        ..swarm_terminal::BackgroundWork::default()
+                    },
                 }),
                 42,
             );

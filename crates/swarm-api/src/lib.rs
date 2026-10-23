@@ -2605,8 +2605,8 @@ impl AppState {
                             signals,
                             Some(provider_activity::ProviderSignals {
                                 activity: ProviderActivity::Resting,
-                                background_work: false,
-                            })
+                                background_work,
+                            }) if !background_work.is_running()
                         ) {
                             return None;
                         }
@@ -3695,6 +3695,12 @@ struct WorkerView {
     /// "nothing to do" both read Resting, and the operator could not tell them
     /// apart.
     background_work: bool,
+    /// How many shells and monitors it counts, so the roster can say
+    /// "Buzzing · 2 shells". Absent when it counts none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    background_shells: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    background_monitors: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3930,7 +3936,7 @@ struct WorkerViewFacts {
     /// and "nothing to do" are not the same thing to look at.
     /// A wake is queued or in flight for this worker, and since when.
     waking_since: Option<i64>,
-    background_work: bool,
+    background_work: swarm_terminal::BackgroundWork,
     /// The worker's system role, if it holds one. Carried as the role itself
     /// rather than a flag per role, so adding a second one does not add a
     /// second boolean nobody can read at the call site.
@@ -3952,7 +3958,7 @@ impl Default for WorkerViewFacts {
             rest_reason: None,
             provider_activity: ProviderActivity::Unknown,
             waking_since: None,
-            background_work: false,
+            background_work: swarm_terminal::BackgroundWork::default(),
             system_role: None,
             last_output_at: None,
             held_for_answer: None,
@@ -4070,7 +4076,9 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         running,
         attention_state,
         provider_activity,
-        background_work,
+        background_work: background_work.is_running(),
+        background_shells: (background_work.shells > 0).then_some(background_work.shells),
+        background_monitors: (background_work.monitors > 0).then_some(background_work.monitors),
         waking_since,
         engagement_expires_at,
         runtime_error,
@@ -4133,7 +4141,7 @@ fn candidate_background_work(
 ) -> BackgroundWorkReading {
     match signals {
         None => BackgroundWorkReading::Unreadable,
-        Some(signals) if signals.background_work => BackgroundWorkReading::Running,
+        Some(signals) if signals.background_work.is_running() => BackgroundWorkReading::Running,
         Some(_) => BackgroundWorkReading::NoneVisible,
     }
 }
@@ -18780,6 +18788,46 @@ mod tests {
         );
     }
 
+    /// Operator, 2026-10-22: a worker with shells running is "not really
+    /// resting but buzzing". The roster says how many, so the view carries the
+    /// counts. The state stays Resting, because delivery and the stale-work
+    /// flag route on it and the prompt really is open.
+    #[test]
+    fn a_resting_worker_with_shells_running_says_how_many() {
+        let store = TaskStore::in_memory().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let profile = store
+            .ensure_queen(workspace.path().to_str().unwrap())
+            .unwrap();
+        let view = |background_work| {
+            serde_json::to_value(worker_view(
+                profile.clone(),
+                WorkerViewFacts {
+                    running: true,
+                    provider_activity: ProviderActivity::Resting,
+                    background_work,
+                    ..WorkerViewFacts::default()
+                },
+            ))
+            .unwrap()
+        };
+
+        let shells = view(swarm_terminal::BackgroundWork {
+            shells: 2,
+            monitors: 1,
+            workflow: false,
+        });
+        assert_eq!(shells["attention_state"], "resting");
+        assert_eq!(shells["background_work"], true);
+        assert_eq!(shells["background_shells"], 2);
+        assert_eq!(shells["background_monitors"], 1);
+
+        let idle = view(swarm_terminal::BackgroundWork::default());
+        assert_eq!(idle["background_work"], false);
+        assert!(idle.get("background_shells").is_none());
+        assert!(idle.get("background_monitors").is_none());
+    }
+
     /// THE TEST THAT MATTERS: can a reader tell a worker that cannot start from
     /// one that is merely resting?
     ///
@@ -18823,7 +18871,7 @@ mod tests {
             rest_reason: None,
             provider_activity: ProviderActivity::Resting,
             waking_since: None,
-            background_work: false,
+            background_work: swarm_terminal::BackgroundWork::default(),
             system_role: None,
             last_output_at: None,
             held_for_answer: None,
@@ -19012,7 +19060,7 @@ mod tests {
             session,
             provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             },
         );
 
@@ -19038,14 +19086,17 @@ mod tests {
         assert_eq!(
             candidate_background_work(Some(&provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
-                background_work: true,
+                background_work: swarm_terminal::BackgroundWork {
+                    shells: 1,
+                    ..swarm_terminal::BackgroundWork::default()
+                },
             })),
             BackgroundWorkReading::Running
         );
         assert_eq!(
             candidate_background_work(Some(&provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             })),
             BackgroundWorkReading::NoneVisible
         );
@@ -19192,9 +19243,9 @@ mod tests {
             );
         }
         let waiting_background =
-            swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &waiting);
+            swarm_terminal::background_work(ProviderKind::ClaudeCode, &waiting).is_running();
         let idle_background =
-            swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &idle);
+            swarm_terminal::background_work(ProviderKind::ClaudeCode, &idle).is_running();
         assert!(
             waiting_background && !idle_background,
             "the two screens disagree about background work"
@@ -19361,7 +19412,7 @@ mod tests {
             session,
             provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             },
         );
 
@@ -19427,7 +19478,7 @@ mod tests {
             session,
             provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
-                background_work: false,
+                background_work: swarm_terminal::BackgroundWork::default(),
             },
         );
         state.observe_assigned_ready_work_not_started(&store).await;

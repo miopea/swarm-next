@@ -37,6 +37,17 @@ test("separates workers that are merely loaded from workers actually working", (
   expect(workersMidCommand(workers)).toEqual(["Queen", "BudgetBug"]);
 });
 
+test("a resting worker with a shell still running is one the update would interrupt", () => {
+  // The engine update stops the shell, so the confirmation names the worker.
+  const workers = [
+    { name: "RCG Networks", attention_state: "resting", background_work: true },
+    { name: "Public Website", attention_state: "resting", background_work: false },
+    { name: "Sculpt Studio", attention_state: "sleeping", background_work: true },
+  ];
+
+  expect(workersMidCommand(workers)).toEqual(["RCG Networks"]);
+});
+
 test("an empty busy roster does not authorize a safe restart", () => {
   expect(engineUpdateCost([])).toContain("not proof");
   expect(engineUpdateCost([])).not.toContain("nothing in progress is lost");

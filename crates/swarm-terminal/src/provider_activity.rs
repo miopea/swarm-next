@@ -162,14 +162,14 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
         return ProviderActivity::Resting;
     }
 
-    if background_work_signal(provider, &normalized) {
+    if background_work_on_screen(provider, visible).is_running() {
         return ProviderActivity::Active;
     }
 
     ProviderActivity::Unknown
 }
 
-/// Whether something the worker started is still running after its turn ended.
+/// What a finished turn left running, as the provider's own screen counts it.
 ///
 /// The classifier deliberately lets a resting prompt outrank a background
 /// shell — the turn HAS ended, and treating the worker as busy stalled the
@@ -179,12 +179,28 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
 /// reported exactly that confusion.
 ///
 /// Reported separately rather than as another activity, so nothing that routes
-/// work on activity has to learn a new case.
+/// work on activity has to learn a new case. Counted rather than flagged,
+/// because the roster names what is running: "Buzzing · 2 shells".
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BackgroundWork {
+    pub shells: u16,
+    pub monitors: u16,
+    /// A dynamic workflow, which the provider names without a count.
+    pub workflow: bool,
+}
+
+impl BackgroundWork {
+    #[must_use]
+    pub fn is_running(self) -> bool {
+        self.shells > 0 || self.monitors > 0 || self.workflow
+    }
+}
+
 #[must_use]
-pub fn background_work_running(provider: ProviderKind, snapshot: &TerminalSnapshot) -> bool {
+pub fn background_work(provider: ProviderKind, snapshot: &TerminalSnapshot) -> BackgroundWork {
     let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
     parser.process(&snapshot.bytes);
-    background_work_signal(provider, &parser.screen().contents().to_lowercase())
+    background_work_on_screen(provider, &parser.screen().contents())
 }
 
 /// The provider is working on the operator's turn and must not be interrupted.
@@ -305,16 +321,50 @@ fn claude_spinner_is_running(line: &str) -> bool {
 ///
 /// It still counts as active when nothing says the prompt is resting, because
 /// then there is no evidence the turn has ended.
-fn background_work_signal(provider: ProviderKind, normalized: &str) -> bool {
+///
+/// ⚠️ THE FOOTER AS WELL AS THE BANNER. This read only the banner a turn ends
+/// with, "✻ Worked for 34s · 1 shell still running", which belongs to the
+/// moment the turn ended and need not be on screen. The footer under the input
+/// box, "⏵⏵ auto mode on · 1 shell · ↓ to manage", is redrawn for as long as
+/// the shell runs. Operator, 2026-10-22: "State shows resting when there are
+/// shells running on a worker."
+fn background_work_on_screen(provider: ProviderKind, visible: &str) -> BackgroundWork {
     match provider {
         ProviderKind::ClaudeCode => {
-            normalized.contains(" monitor still running")
-                || normalized.contains(" monitors still running")
-                || normalized.contains(" shell still running")
-                || normalized.contains(" shells still running")
-                || normalized.contains("running dynamic workflow")
-                || normalized.contains(" background dynamic workflow")
-                || normalized.contains(" remote dynamic workflow")
+            let normalized = visible.to_lowercase();
+            let recent = normalized
+                .lines()
+                .rev()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(10)
+                .collect::<Vec<_>>();
+            // Below the input box only, so a transcript that quotes a footer is
+            // not read as one. With no border on screen there is no footer.
+            let footer = if recent.iter().any(|line| line.starts_with('─')) {
+                below_input_box(&recent).collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            // The larger of the two, not the sum: both count the same shells.
+            let counted = |noun: &str| {
+                let banner = normalized
+                    .lines()
+                    .filter_map(|line| still_running_count(line, noun))
+                    .max();
+                let in_footer = footer
+                    .iter()
+                    .filter_map(|line| footer_count(line, noun))
+                    .max();
+                banner.max(in_footer).unwrap_or(0)
+            };
+            BackgroundWork {
+                shells: counted("shell"),
+                monitors: counted("monitor"),
+                workflow: normalized.contains("running dynamic workflow")
+                    || normalized.contains(" background dynamic workflow")
+                    || normalized.contains(" remote dynamic workflow"),
+            }
         }
         // Codex prints no background-work banner, and an unrecognised provider
         // emits nothing this build knows how to read. Unsupported is also
@@ -347,8 +397,34 @@ fn background_work_signal(provider: ProviderKind, normalized: &str) -> bool {
         | ProviderKind::Gemini
         | ProviderKind::Grok
         | ProviderKind::OpenCode
-        | ProviderKind::Unsupported => false,
+        | ProviderKind::Unsupported => BackgroundWork::default(),
     }
+}
+
+/// "2 shells still running", the banner a turn ends with, wherever it sits.
+/// A count the banner spells out in words reads as one.
+fn still_running_count(line: &str, noun: &str) -> Option<u16> {
+    let words = line.split_whitespace().collect::<Vec<_>>();
+    words.windows(4).find_map(|window| {
+        let named = window[1];
+        (window[2] == "still"
+            && window[3].starts_with("running")
+            && named.strip_suffix('s').unwrap_or(named) == noun)
+            .then(|| window[0].parse().unwrap_or(1))
+    })
+}
+
+/// "· 1 shell ·", one segment of the footer under the input box.
+fn footer_count(line: &str, noun: &str) -> Option<u16> {
+    line.split('·').find_map(|segment| {
+        let words = segment.split_whitespace().collect::<Vec<_>>();
+        let [count, named] = words.as_slice() else {
+            return None;
+        };
+        (named.strip_suffix('s').unwrap_or(named) == noun)
+            .then(|| count.parse().ok())
+            .flatten()
+    })
 }
 
 fn idle_prompt(provider: ProviderKind, line: &str) -> bool {
@@ -1002,11 +1078,11 @@ mod tests {
         );
         let resting_alone = "❯\n";
         assert!(
-            background_work_signal(ProviderKind::ClaudeCode, &resting_with_shell.to_lowercase()),
+            background_work_on_screen(ProviderKind::ClaudeCode, resting_with_shell).is_running(),
             "a shell the worker started is still running"
         );
         assert!(
-            !background_work_signal(ProviderKind::ClaudeCode, &resting_alone.to_lowercase()),
+            !background_work_on_screen(ProviderKind::ClaudeCode, resting_alone).is_running(),
             "and a bare prompt has nothing running behind it"
         );
         // Both are still Resting. The turn HAS ended in each; that is the whole
@@ -1018,6 +1094,95 @@ mod tests {
         assert_eq!(
             classify_visible_text(ProviderKind::ClaudeCode, resting_alone),
             ProviderActivity::Resting
+        );
+    }
+
+    /// Operator, 2026-10-22: "State shows resting when there are shells running
+    /// on a worker." Only the banner was read, and the banner a turn ends with
+    /// need not be on screen. The footer is, for as long as the shell runs.
+    /// Footer forms as this Hive's terminal history records them.
+    #[test]
+    fn the_footer_counts_a_shell_when_the_banner_is_not_on_screen() {
+        let screen = |footer: &str| {
+            [
+                "● Watching the build in the background.",
+                "",
+                "────────────────────────────────",
+                "❯ ",
+                "────────────────────────────────",
+                footer,
+            ]
+            .join("\n")
+        };
+        for (footer, shells, monitors) in [
+            ("  ⏵⏵ auto mode on · 1 shell · ↓ to manage", 1, 0),
+            ("  ⏵⏵ auto mode on · 2 shells · ← for agents", 2, 0),
+            ("  ⏵⏵ auto mode on · 1 monitor · 1 feedback draft", 0, 1),
+        ] {
+            let screen = screen(footer);
+            assert_eq!(
+                classify_visible_text(ProviderKind::ClaudeCode, &screen),
+                ProviderActivity::Resting,
+                "the turn has ended, so routing still sees a resting prompt: {footer}"
+            );
+            assert_eq!(
+                background_work_on_screen(ProviderKind::ClaudeCode, &screen),
+                BackgroundWork {
+                    shells,
+                    monitors,
+                    workflow: false
+                },
+                "{footer}"
+            );
+        }
+        assert!(
+            !background_work_on_screen(
+                ProviderKind::ClaudeCode,
+                &screen("  ⏵⏵ auto mode on · ← for agents")
+            )
+            .is_running(),
+            "a footer with no count has nothing running"
+        );
+    }
+
+    /// The banner keeps its count, and the footer does not add to it: both
+    /// describe the same shells.
+    #[test]
+    fn the_banner_and_the_footer_count_the_same_shells_once() {
+        let banner_only = "Running the deploy…\n2 shells still running\n";
+        assert_eq!(
+            background_work_on_screen(ProviderKind::ClaudeCode, banner_only).shells,
+            2
+        );
+        let both = [
+            "✻ Worked for 34s · done 4:52 PM· 2 shells still running",
+            "────────────────",
+            "❯ ",
+            "────────────────",
+            "  ⏵⏵ auto mode on · 2 shells · ← for agents",
+        ]
+        .join("\n");
+        assert_eq!(
+            background_work_on_screen(ProviderKind::ClaudeCode, &both).shells,
+            2
+        );
+    }
+
+    /// A worker that quotes a footer in its transcript is not running a shell.
+    /// Only the rows under the input box are the footer.
+    #[test]
+    fn a_transcript_quoting_a_shell_footer_counts_nothing() {
+        let screen = [
+            "● The footer read \"⏵⏵ auto mode on · 1 shell · ← for agents\".",
+            "────────────────",
+            "❯ ",
+            "────────────────",
+            "  ⏵⏵ auto mode on · ← for agents",
+        ]
+        .join("\n");
+        assert_eq!(
+            background_work_on_screen(ProviderKind::ClaudeCode, &screen),
+            BackgroundWork::default()
         );
     }
 }

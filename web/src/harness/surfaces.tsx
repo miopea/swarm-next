@@ -950,7 +950,7 @@ export const SURFACES: Surface[] = [
     why: "the roster, in every attention state it has — the terminal itself is a canvas and is never captured",
     render: () => (
       <div className="harness-roster">
-        {demoWorkers.map((worker, index) => (
+        {[...demoWorkers, { ...demoWorkers[2], id: "orchard-docs", name: "Orchard Docs", background_work: true, background_shells: 2 }].map((worker, index) => (
           <WorkerRosterItem
             key={worker.id}
             worker={worker}

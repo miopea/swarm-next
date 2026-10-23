@@ -97,16 +97,29 @@ test("tells a worker with nothing to do apart from one whose task is still runni
   // The operator saw a roster of Resting workers and could not tell which had
   // finished and which had left something going. The classifier is right that
   // the turn is over — a resting prompt outranks a background shell, and
-  // treating it as busy stalled the whole Hive — so this changes the label, not
-  // the state.
+  // treating it as busy stalled the whole Hive — so this changes what is shown,
+  // not the worker's state. The operator, 2026-10-22: with shells running "they
+  // are not really resting but also buzzing".
   const idle = { ...worker, running: true, attention_state: "resting" as const };
   const stillRunning = { ...idle, background_work: true };
 
   expect(workerAttention(idle).label).toBe("Resting");
-  expect(workerAttention(stillRunning).label).toBe("Resting · task running");
-  // Same state, so nothing that routes on it sees a new case.
-  expect(workerAttention(stillRunning).state).toBe("resting");
-  expect(workerAttention(stillRunning).presence).toBe(workerAttention(idle).presence);
+  expect(workerAttention(stillRunning).label).toBe("Buzzing · task running");
+  expect(workerAttention(stillRunning).state).toBe("buzzing");
+  expect(workerAttention(stillRunning).expression).toBe(workerAttention({ ...idle, attention_state: "buzzing" }).expression);
+  // The worker itself is unchanged, so delivery still sees a resting prompt.
+  expect(stillRunning.attention_state).toBe("resting");
+});
+
+test("a worker with shells running says how many", () => {
+  const idle = { ...worker, running: true, attention_state: "resting" as const };
+
+  expect(workerAttention({ ...idle, background_work: true, background_shells: 1 }).label).toBe("Buzzing · 1 shell");
+  expect(workerAttention({ ...idle, background_work: true, background_shells: 2 }).compactLabel).toBe("buzzing · 2 shells");
+  expect(workerAttention({ ...idle, background_work: true, background_shells: 1, background_monitors: 1 }).label)
+    .toBe("Buzzing · 1 shell · 1 monitor");
+  // A count with no running flag is not trusted on its own.
+  expect(workerAttention({ ...idle, background_shells: 1 }).label).toBe("Resting");
 });
 
 /**
@@ -139,9 +152,12 @@ test("an active assignment leads the switcher line instead of the resting prompt
 
   // AND THE TURN-ENDED-WITH-WORK-RUNNING LABEL KEEPS ITS OWN ANSWER, which is a
   // different question from this one.
-  const leftRunning = { ...running, background_work: true };
+  const leftRunning = { ...running, background_work: true, background_shells: 1 };
   expect(workerSwitcherDetail(leftRunning, "Fix the importer", false))
-    .toBe("Resting · task running · Fix the importer");
+    .toBe("Buzzing · 1 shell running · Fix the importer");
+  // The pill holds the word alone, so it cannot crowd the name beside it.
+  expect(workerSwitcherLine(leftRunning).state).toBe("Buzzing");
+  expect(workerSwitcherLine(leftRunning).rest).toBe("1 shell running");
 
   // A sleeping worker is still sleeping, whatever the board believes.
   const asleep = { ...worker, running: false, attention_state: "sleeping" as const };

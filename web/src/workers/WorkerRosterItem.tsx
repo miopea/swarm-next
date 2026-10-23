@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { TEMPORARY_PROVIDERS, type Worker } from "../api";
 import WorkerAvatar from "./WorkerAvatar";
 import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
-import { heldForAnswer, workerAttention, workerSilence } from "./workerAttention";
+import { attentionWord, heldForAnswer, workerAttention, workerSilence } from "./workerAttention";
 
 type Props = {
   worker: Worker;
@@ -85,7 +85,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
       >
         <WorkerAvatar worker={worker} />
         <span className="worker-copy">
-          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}{worker.answer_overdue ? <span className="worker-overdue" title="This request passed the deadline its asker set. The worker is still holding."> · overdue</span> : null}{worker.unconfirmed_delivery ? (
+          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.backgroundWork ? attentionWord(attention.state) : attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}{worker.answer_overdue ? <span className="worker-overdue" title="This request passed the deadline its asker set. The worker is still holding."> · overdue</span> : null}{worker.unconfirmed_delivery ? (
             <span
               className="worker-unconfirmed"
               role="img"
@@ -95,6 +95,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
           ) : null}</span></span>
           <small title={detail}>{detail}</small>
           {workSummary ? <span className="worker-work-summary" title={`Open work: ${workSummary}`}>{workSummary}</span> : null}
+          {attention.backgroundWork ? <span className="worker-work-summary">{attention.backgroundWork}</span> : null}
         </span>
         <span className={`presence ${attention.presence}`} title={attention.label} aria-hidden="true" />
       </button>

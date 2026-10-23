@@ -1539,7 +1539,7 @@ pub(super) async fn observe_review_continuation(
     Some(swarm_domain::QueenReviewContinuationObservation {
         current_complete_snapshot: !snapshot.truncated,
         activity,
-        background_work: signals.background_work,
+        background_work: signals.background_work.is_running(),
         // Durable engagement is rechecked by the continuation transaction and
         // again by the normal claim/submission gates, not trusted from a cache.
         operator_engaged: false,
@@ -2058,7 +2058,7 @@ mod tests {
                 session,
                 provider_activity::ProviderSignals {
                     activity: ProviderActivity::Resting,
-                    background_work: false,
+                    background_work: swarm_terminal::BackgroundWork::default(),
                 },
             );
             let concurrent_store = store.clone();

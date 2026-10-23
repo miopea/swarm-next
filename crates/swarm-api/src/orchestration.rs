@@ -496,7 +496,7 @@ pub(super) async fn coordinator_status(
                         swarm_domain::RecoveryTerminalActivity::Unknown
                     }
                 },
-                background_work: signals.background_work,
+                background_work: signals.background_work.is_running(),
             },
         )
         .collect::<Vec<_>>();

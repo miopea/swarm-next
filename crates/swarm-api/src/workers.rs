@@ -145,7 +145,7 @@ pub(super) async fn list_workers(
                 .active_session_id
                 .and_then(|session_id| provider_activity.get(&session_id).copied());
             let activity = signals.map_or(ProviderActivity::Unknown, |seen| seen.activity);
-            let background_work = signals.is_some_and(|seen| seen.background_work);
+            let background_work = signals.map(|seen| seen.background_work).unwrap_or_default();
             let is_scout = scout_id == Some(profile.id);
             let profile_id = profile.id;
             let last_output_at = profile

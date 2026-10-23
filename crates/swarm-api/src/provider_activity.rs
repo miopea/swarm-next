@@ -119,7 +119,7 @@ async fn observe(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ProviderSignals {
     pub(super) activity: ProviderActivity,
-    pub(super) background_work: bool,
+    pub(super) background_work: swarm_terminal::BackgroundWork,
 }
 
 pub(super) async fn observe_session(
@@ -155,7 +155,7 @@ pub(super) async fn observe_session_snapshot(
         }) if observed_session == session_id => Some((
             ProviderSignals {
                 activity: classify_observed_activity(provider, &snapshot),
-                background_work: swarm_terminal::background_work_running(provider, &snapshot),
+                background_work: swarm_terminal::background_work(provider, &snapshot),
             },
             snapshot,
         )),
@@ -453,7 +453,7 @@ mod tests {
             "the turn HAS ended, so Resting is correct -- this is the premise the stale flag then misreads"
         );
         assert!(
-            swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &snapshot),
+            swarm_terminal::background_work(ProviderKind::ClaudeCode, &snapshot).is_running(),
             "and the signal that tells this apart from an idle worker is true at the same instant"
         );
     }
@@ -469,7 +469,7 @@ mod tests {
             ProviderActivity::Resting
         );
         assert!(
-            !swarm_terminal::background_work_running(ProviderKind::ClaudeCode, &snapshot),
+            !swarm_terminal::background_work(ProviderKind::ClaudeCode, &snapshot).is_running(),
             "a genuinely idle worker must still read as having nothing running, or the stale flag goes blind"
         );
     }

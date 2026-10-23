@@ -20,10 +20,13 @@ export function workerEngineMatches(health: Health, host: TerminalHostStatus) {
  *
  * The roster is an activity observation, not maintenance admission. Resting
  * cannot rule out provider background work or an accepted pending submission.
+ * A resting worker with a shell it can see running is counted: the engine
+ * update stops that shell.
  */
-export function workersMidCommand(workers: { name: string; attention_state: string }[]) {
+export function workersMidCommand(workers: { name: string; attention_state: string; background_work?: boolean }[]) {
   return workers
-    .filter((worker) => worker.attention_state === "buzzing")
+    .filter((worker) => worker.attention_state === "buzzing"
+      || (worker.attention_state === "resting" && worker.background_work === true))
     .map((worker) => worker.name);
 }
 

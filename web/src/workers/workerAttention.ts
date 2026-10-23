@@ -7,7 +7,18 @@ export type WorkerAttentionPresentation = {
   compactLabel: string;
   expression: BeeExpression;
   presence: "offline" | "online" | "engaged" | "waiting" | "blocked";
+  /**
+   * What a finished turn left running, as its own line: "2 shells running".
+   * The roster's pill shares a row with the worker's name, and the whole label
+   * in it cut the name to "Or…" in a 280-pixel rail.
+   */
+  backgroundWork?: string;
 };
+
+/** The bare state word, for a pill whose label carries more than fits. */
+export function attentionWord(state: Worker["attention_state"]): string {
+  return presentation[state].label;
+}
 
 const presentation: Record<Worker["attention_state"], Omit<WorkerAttentionPresentation, "state">> = {
   sleeping: { label: "Sleeping", compactLabel: "sleeping", expression: "sleeping", presence: "offline" },
@@ -48,16 +59,29 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
   // Resting with something still running is not the same as resting with
   // nothing to do, and both used to read "Resting". The classifier is right to
   // call the turn over — treating the worker as busy stalled the whole Hive —
-  // so this distinguishes the two without changing which one it is.
+  // so delivery still sees a resting prompt. What the operator sees is that it
+  // is busy: "not really resting but buzzing" (2026-10-22).
   if (state === "resting" && worker.background_work) {
+    const counted = backgroundWorkCount(worker);
+    const running = counted ?? "task running";
     return {
-      state,
-      ...shown,
-      label: "Resting · task running",
-      compactLabel: "task running",
+      ...presentation.buzzing,
+      state: "buzzing",
+      label: `Buzzing · ${running}`,
+      compactLabel: `buzzing · ${running}`,
+      backgroundWork: counted ? `${counted} running` : running,
     };
   }
   return { state, ...shown };
+}
+
+/** "2 shells" or "1 shell · 1 monitor"; undefined when nothing is counted. */
+function backgroundWorkCount(worker: Worker): string | undefined {
+  const named: string[] = [];
+  for (const [count, noun] of [[worker.background_shells, "shell"], [worker.background_monitors, "monitor"]] as const) {
+    if (count !== undefined && count > 0) named.push(`${count} ${noun}${count === 1 ? "" : "s"}`);
+  }
+  return named.length > 0 ? named.join(" · ") : undefined;
 }
 
 /**
@@ -161,8 +185,11 @@ export function workerSwitcherLine(
 ): { key: Worker["attention_state"]; presence: WorkerAttentionPresentation["presence"]; state: string; rest?: string } {
   const attention = worker.running ? workerAttention(worker) : undefined;
   const resting = attention?.state === "resting" && attention.label === "Resting";
+  // The phone draws the state as a pill too, so what is running joins the
+  // sentence instead, as it does on the roster's second line.
+  const running = attention?.backgroundWork;
   const state = attention
-    ? (resting && assignedTaskIsActive ? "Active assignment" : attention.label)
+    ? (resting && assignedTaskIsActive ? "Active assignment" : running ? attentionWord(attention.state) : attention.label)
     : "Sleeping";
   // ⚠️ THE KEY FOLLOWS THE WORD, and that is the point of returning it rather
   // than letting the caller reach for `workerAttention` itself. This line calls
@@ -173,7 +200,8 @@ export function workerSwitcherLine(
   // the one channel this replaced.
   const key = worker.running ? attention?.state ?? "resting" : "sleeping";
   const presence = worker.running ? attention?.presence ?? "online" : "offline";
-  if (assignedTaskTitle) return { key, presence, state, rest: assignedTaskTitle };
+  const rest = running && assignedTaskTitle ? `${running} · ${assignedTaskTitle}` : running ?? assignedTaskTitle;
+  if (rest) return { key, presence, state, rest };
   return worker.running ? { key, presence, state } : { key, presence, state: "Sleeping", rest: "tap to wake" };
 }
 

@@ -75,6 +75,9 @@ export type Worker = {
   ephemeral?: boolean;
   /** Something this worker started is still running after its turn ended. */
   background_work?: boolean;
+  /** How many shells and monitors it counts; absent when none. */
+  background_shells?: number;
+  background_monitors?: number;
   /** A wake is queued or in flight for this worker, since this unix time. */
   waking_since?: number;
   /** Wall-clock second this worker's terminal last produced output. */
