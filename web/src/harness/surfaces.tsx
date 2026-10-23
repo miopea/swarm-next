@@ -44,6 +44,7 @@ import ExperimentalHandoffDialog from "../workers/ExperimentalHandoffDialog";
 import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 import DecisionInbox from "../decisions/DecisionInbox";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
+import JiraResolutionAttentionCard from "../tasks/JiraResolutionAttentionCard";
 import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
 import StaleBundleNotice from "../StaleBundleNotice";
@@ -518,7 +519,7 @@ export const SURFACES: Surface[] = [
   {
     id: "needs-you",
     title: "Needs you",
-    why: "an email draft and actionable request; waiting work is on the separate Queues fixture",
+    why: "an email draft, a Jira resolution waiting for the operator, and an actionable request; waiting work is on the separate Queues fixture",
     render: () => (
       <div className="attention-workspace">
         <DecisionInbox
@@ -526,9 +527,24 @@ export const SURFACES: Surface[] = [
           tasks={[]}
           workers={[]}
           busy={false}
-          additionalPendingCount={1}
+          additionalPendingCount={2}
           attentionCards={<>
             <UnansweredEmailAttentionCard awaiting={[waitingEmail]} busy={false} onOpenTask={() => undefined} />
+            <JiraResolutionAttentionCard
+              held={[{
+                task_id: "fictional-is-ticket",
+                issue_key: "IS-10736",
+                project_name: "IT: Support Requests",
+                title: "Photo downloads are slow on the member site",
+                held_since: 1_792_700_000,
+                last_reply_at: null,
+                handoff: "Downloads above twenty photos are throttled by the gallery service. Batching them in groups of ten brings a 300-photo download from four minutes to forty seconds; the setting is already changed.",
+              }]}
+              busy={false}
+              onConfirm={() => undefined}
+              onLeaveOpen={() => undefined}
+              onOpenTask={() => undefined}
+            />
           </>}
           onResolve={async () => undefined}
         />

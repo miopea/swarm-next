@@ -10,6 +10,7 @@ import {
   fetchJiraProjectStatuses,
   replaceJiraMappings,
   setJiraAssignedSync,
+  setJiraConfirmResolution,
   type JiraProject,
   type JiraProjectBinding,
   type JiraProjectStatus,
@@ -197,6 +198,22 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
     }
   }
 
+  async function changeConfirmResolution(binding: JiraProjectBinding, enabled: boolean) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const updated = await setJiraConfirmResolution(operatorToken, binding.id, enabled);
+      setBindings((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(enabled
+        ? `${binding.project_name} tickets will wait in Needs you before Swarm resolves them.`
+        : `${binding.project_name} tickets will resolve when their work completes. Any already waiting still wait for you.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Asking before resolving could not be changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function changeAssignedSync(binding: JiraProjectBinding, enabled: boolean) {
     setBusy(true);
     setMessage("");
@@ -301,6 +318,10 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
                 <label className="jira-binding-destination worker-autostart">
                   <input type="checkbox" checked={binding.auto_sync_assigned} disabled={busy || !binding.workflow_mapped} onChange={(event) => void changeAssignedSync(binding, event.target.checked)} />
                   <span><strong>Automatically sync my assigned work</strong><small>Open issues assigned to you appear within a minute. Jira closures move linked work to Completed.</small></span>
+                </label>
+                <label className="jira-binding-destination worker-autostart">
+                  <input type="checkbox" checked={binding.confirm_resolution} disabled={busy} onChange={(event) => void changeConfirmResolution(binding, event.target.checked)} />
+                  <span><strong>Ask me before resolving tickets</strong><small>When work finishes without you closing it, the ticket waits in Needs you until you resolve it or leave it open.</small></span>
                 </label>
                 {drift[binding.id]?.length ? (
                   <div className="jira-mapping-drift" role="status" aria-label={`${binding.project_key} status mapping drift`}>

@@ -102,6 +102,10 @@ export {
   replaceJiraMappings,
   retryJiraTaskLink,
   setJiraAssignedSync,
+  setJiraConfirmResolution,
+  fetchHeldJiraResolutions,
+  confirmJiraResolution,
+  leaveJiraTicketOpen,
   syncJiraBinding,
 } from "./api/jira";
 export {
@@ -147,6 +151,7 @@ export type {
   TaskDeployment,
 } from "./api/email";
 export type {
+  HeldJiraResolution,
   JiraComment,
   JiraCommentDispatch,
   JiraConnectionState,

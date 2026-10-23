@@ -98,9 +98,13 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira, operat
             >
               {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
                 ? "Updating Jira…"
-                : jiraLink.outbound_state === "conflict"
-                  ? "Jira changed — review before retry"
-                  : "Jira result unknown — sync before retry"}
+                : jiraLink.outbound_state === "held"
+                  ? "Waiting for you to resolve it in Jira"
+                  : jiraLink.outbound_state === "declined"
+                    ? "Left open in Jira"
+                    : jiraLink.outbound_state === "conflict"
+                      ? "Jira changed — review before retry"
+                      : "Jira result unknown — sync before retry"}
             </span>
           )}
           {(jiraLink.outbound_state === "conflict" || jiraLink.outbound_state === "uncertain") && (

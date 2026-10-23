@@ -29,6 +29,9 @@ import {
   resolveDecision,
   claimWorker,
   fetchEmailTasksAwaitingReply,
+  fetchHeldJiraResolutions,
+  confirmJiraResolution,
+  leaveJiraTicketOpen,
   fetchStartSurface,
   setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
@@ -39,6 +42,7 @@ import {
   restartAllWorkers,
   runQueenAutomation,
   type UnansweredEmailTask,
+  type HeldJiraResolution,
   type DecisionSurface,
   createWorker,
   fetchHealth,
@@ -121,6 +125,7 @@ import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
+import JiraResolutionAttentionCard from "./tasks/JiraResolutionAttentionCard";
 import OperatorWaitCard from "./decisions/OperatorWaitCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import WorkerCannotRunCard from "./workers/WorkerCannotRunCard";
@@ -380,6 +385,19 @@ export function App() {
     } catch { /* Keep the last known queue during an unavailable read. */ }
   }, [operatorToken, feedbackRevision]);
   useVisiblePolling(refreshAwaitingReply, Boolean(operatorToken), 30_000);
+  // Tickets whose Jira resolution waits for the operator (ADR 0120). Polled
+  // for the same reason as the replies above: a finished task waiting on them
+  // belongs in Needs you wherever they are standing.
+  const [heldResolutions, setHeldResolutions] = useState<HeldJiraResolution[]>([]);
+  useEffect(() => { if (!operatorToken) setHeldResolutions([]); }, [operatorToken]);
+  const refreshHeldResolutions = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    try {
+      const held = await fetchHeldJiraResolutions(operatorToken, signal);
+      if (!signal.aborted && Array.isArray(held)) setHeldResolutions(held);
+    } catch { /* Keep the last known queue during an unavailable read. */ }
+  }, [operatorToken, feedbackRevision]);
+  useVisiblePolling(refreshHeldResolutions, Boolean(operatorToken), 30_000);
   // WHETHER THIS PAGE IS STILL THE PAGE THE HIVE SERVES. Health is read once
   // at mount, which is fine for starting up and useless for a tab left open
   // across an upgrade — and a tab left open across an upgrade is exactly the
@@ -1318,6 +1336,16 @@ export function App() {
    * work is running belongs to the worker that did it, and is recorded as
    * deployment evidence rather than asked of the operator here.
    */
+  /** Resolves a held ticket in Jira, or leaves it open: the operator's answer. */
+  async function answerHeldResolution(taskId: string, resolve: boolean) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      if (resolve) await confirmJiraResolution(operatorToken, taskId);
+      else await leaveJiraTicketOpen(operatorToken, taskId);
+      setHeldResolutions(await fetchHeldJiraResolutions(operatorToken));
+    }, resolve ? "Resolving it in Jira…" : "Leaving it open…");
+  }
+
   async function sendAwaitingReply(replyId: string) {
     if (!operatorToken) return;
     await perform(async () => {
@@ -1724,7 +1752,7 @@ export function App() {
     + operatorWaitAttentionCount
     + workerReturnAttentionCount
     + workerCannotRunCount
-    + conversationDriftAttentionCount + awaitingReply.length;
+    + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
   // recorded from the surface being open and visible — never from a poll.
@@ -2592,13 +2620,14 @@ export function App() {
               busy={busy || databaseRecoveryRequired}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length}
               attentionCards={<>
                 {databaseRecoveryRequired && <DatabaseRecoveryCard />}
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
                 <WorkerReturnAttentionCard workers={workers} onReview={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />

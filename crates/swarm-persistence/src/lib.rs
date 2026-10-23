@@ -126,8 +126,8 @@ mod legacy_source;
 mod migration;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 pub use jira::{
-    JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch,
-    JiraTransitionFailure,
+    HeldJiraResolution, JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
+    JiraTransitionDispatch, JiraTransitionFailure,
 };
 pub use legacy_source::{
     LegacySourceError, claude_project_directory, claude_project_slugs, read_legacy_migration_bundle,
@@ -404,7 +404,9 @@ const TASK_WAITS_SCHEMA_MARKER: i64 = 204;
 const APIARY_TASK_WAITS_SCHEMA_MARKER: i64 = 205;
 /// A park's Needs you line names the decision, not only the answer.
 const PARK_NEEDS_SCHEMA_MARKER: i64 = 206;
-const CURRENT_SCHEMA_VERSION: i64 = PARK_NEEDS_SCHEMA_MARKER;
+/// A Jira resolution can wait for the operator to confirm it (ADR 0120).
+const JIRA_RESOLUTION_HOLD_SCHEMA_MARKER: i64 = 207;
+const CURRENT_SCHEMA_VERSION: i64 = JIRA_RESOLUTION_HOLD_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3232,7 +3234,7 @@ impl TaskStore {
         } else {
             None
         };
-        jira::queue_jira_transition(&transaction, id, target)?;
+        jira::queue_jira_transition(&transaction, id, target, actor)?;
         if current == TaskState::Review && target != TaskState::Review {
             review_answers::invalidate_pending_request(&transaction, id, None)?;
         }
@@ -4811,6 +4813,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < PARK_NEEDS_SCHEMA_MARKER {
         crate::decisions::migrate_park_needs(transaction)?;
+    }
+    if schema_version < JIRA_RESOLUTION_HOLD_SCHEMA_MARKER {
+        crate::jira::migrate_resolution_hold(transaction, JIRA_RESOLUTION_HOLD_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -10868,6 +10873,20 @@ mod tests {
             undo_sql: include_str!("fixtures/undo-park-needs.sql"),
             probe_sql: "SELECT NOT EXISTS(SELECT 1 FROM task_waits
                         WHERE needs LIKE 'You took on \"%\" yourself.')",
+        },
+        // A Jira resolution can wait for the operator (ADR 0120): one column
+        // and two widened CHECKs, so the undo rebuilds both tables.
+        SchemaStep {
+            table: "jira_project_bindings",
+            artifact: "confirm_resolution",
+            undo_sql: include_str!("fixtures/undo-jira-resolution-hold.sql"),
+            probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('jira_project_bindings')
+                                WHERE name = 'confirm_resolution')
+                             + (SELECT COUNT(*) FROM sqlite_master
+                                WHERE name = 'jira_transition_deliveries' AND sql LIKE '%''held''%')
+                             + (SELECT COUNT(*) FROM sqlite_master
+                                WHERE name = 'notification_deliveries'
+                                  AND sql LIKE '%''jira_resolution''%') = 3",
         },
     ];
 

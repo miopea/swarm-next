@@ -4,9 +4,11 @@ use std::{
 };
 
 use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use swarm_domain::{
     ApiaryId, ControlRoomEventKind, JiraIssueLink, JiraProjectBinding, JiraProjectBindingId,
-    JiraProjectScope, JiraStatusMapping, Task, TaskId, TaskPriority, TaskState,
+    JiraProjectScope, JiraStatusMapping, Task, TaskActivityActor, TaskActivityActorKind, TaskId,
+    TaskPriority, TaskState,
 };
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event, parse_domain_id};
@@ -26,6 +28,9 @@ const MAX_TRANSITION_ATTEMPTS: i64 = 3;
 const MAX_PENDING_TRANSITIONS: i64 = 256;
 const MAX_PENDING_COMMENTS: i64 = 256;
 const MAX_COMMENT_BYTES: usize = 4_000;
+/// The most held resolutions one read returns. Each is one completed task, so
+/// a Hive with more than this waiting has a backlog the card already shows.
+const MAX_HELD_RESOLUTIONS_LISTED: i64 = 200;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JiraCommentDispatch {
@@ -42,6 +47,25 @@ pub struct JiraTransitionDispatch {
     pub issue_key: String,
     pub target_task_state: TaskState,
     pub target_status_ids: Vec<String>,
+}
+
+/// A completed task whose Jira resolution waits for the operator (ADR 0120).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HeldJiraResolution {
+    pub task_id: TaskId,
+    pub issue_key: String,
+    pub project_name: String,
+    pub title: String,
+    /// When the resolution started waiting.
+    pub held_since: i64,
+    /// When a comment last reached the ticket, or None when none ever has.
+    ///
+    /// The requester's complaint was a ticket resolved with nothing posted on
+    /// it, so the card has to say so before the operator confirms one.
+    pub last_reply_at: Option<i64>,
+    /// The worker's handoff into review, so the operator can see what was done
+    /// without opening the task.
+    pub handoff: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,7 +173,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, project_id, project_key, project_name, scope, hive_id, apiary_id,
-                    access_verified, workflow_mapped, auto_sync_assigned
+                    access_verified, workflow_mapped, auto_sync_assigned, confirm_resolution
              FROM jira_project_bindings WHERE hive_id = ?1
              ORDER BY project_name COLLATE NOCASE, project_key",
         )?;
@@ -172,7 +196,7 @@ impl TaskStore {
         connection
             .query_row(
                 "SELECT id, project_id, project_key, project_name, scope, hive_id, apiary_id,
-                        access_verified, workflow_mapped, auto_sync_assigned
+                        access_verified, workflow_mapped, auto_sync_assigned, confirm_resolution
                  FROM jira_project_bindings WHERE id = ?1",
                 [id.to_string()],
                 jira_binding_from_row,
@@ -197,6 +221,33 @@ impl TaskStore {
         let changed = connection.execute(
             "UPDATE jira_project_bindings
              SET auto_sync_assigned = ?2, updated_at = unixepoch()
+             WHERE id = ?1",
+            params![id.to_string(), enabled],
+        )?;
+        drop(connection);
+        if changed != 1 {
+            return Err(TaskStoreError::JiraProjectBindingNotFound);
+        }
+        self.get_jira_project_binding(id)
+    }
+
+    /// Controls whether resolving this project's tickets waits for the
+    /// operator (ADR 0120). Applies to completions from now on: turning it off
+    /// does not release resolutions already waiting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the project binding does not exist or the database
+    /// cannot persist or reload the setting.
+    pub fn set_jira_confirm_resolution(
+        &self,
+        id: JiraProjectBindingId,
+        enabled: bool,
+    ) -> Result<JiraProjectBinding, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE jira_project_bindings
+             SET confirm_resolution = ?2, updated_at = unixepoch()
              WHERE id = ?1",
             params![id.to_string(), enabled],
         )?;
@@ -401,6 +452,9 @@ impl TaskStore {
                     )?;
                 }
                 let remote_changed = status_id != previous_status_id.trim();
+                // A DECLINED RESOLUTION STAYS DECLINED. The operator chose to
+                // leave the ticket open, so Jira moving it afterwards is not a
+                // Swarm write that failed and must not come back as one to retry.
                 if delivery_target.is_some()
                     && !remote_acknowledged
                     && remote_changed
@@ -410,8 +464,24 @@ impl TaskStore {
                         "UPDATE jira_transition_deliveries
                              SET state = 'conflict', last_error = 'remote_state_changed',
                                  updated_at = unixepoch()
-                             WHERE id = ?1 AND state <> 'delivered'",
+                             WHERE id = ?1 AND state NOT IN ('delivered','declined')",
                         [delivery_id],
+                    )?;
+                }
+                // A HELD RESOLUTION ENDS WHEN JIRA MOVES THE TICKET ITSELF
+                // (ADR 0120), whichever outstanding row the read above picked.
+                // Resolved by hand is the write already made; any other move
+                // makes it stale, exactly as for a write that was sent.
+                if remote_changed {
+                    let resolved = target_state == TaskState::Completed;
+                    transaction.execute(
+                        "UPDATE jira_transition_deliveries
+                         SET state = CASE WHEN ?2 THEN 'delivered' ELSE 'conflict' END,
+                             delivered_at = CASE WHEN ?2 THEN unixepoch() END,
+                             last_error = CASE WHEN ?2 THEN NULL ELSE 'remote_state_changed' END,
+                             updated_at = unixepoch()
+                         WHERE task_id = ?1 AND state = 'held'",
+                        params![task_id.to_string(), resolved],
                     )?;
                 }
                 let synchronized_state =
@@ -834,6 +904,113 @@ impl TaskStore {
         Ok(changed)
     }
 
+    /// Completed tasks whose Jira resolution waits for the operator, oldest
+    /// first (ADR 0120). The same rows the Needs-you count reads.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn held_jira_resolutions(&self) -> Result<Vec<HeldJiraResolution>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.id, link.issue_key, COALESCE(binding.project_name, ''), task.title,
+                    delivery.updated_at,
+                    (SELECT MAX(comment.delivered_at) FROM jira_comment_deliveries comment
+                     WHERE comment.task_id = task.id AND comment.state = 'delivered'),
+                    (SELECT activity.note FROM task_activity activity
+                     WHERE activity.task_id = task.id AND activity.kind = 'state_changed'
+                       AND activity.to_state = 'review' AND activity.note <> ''
+                     ORDER BY activity.sequence DESC LIMIT 1)
+             FROM jira_transition_deliveries delivery
+             JOIN tasks task ON task.id = delivery.task_id
+             JOIN jira_issue_links link ON link.task_id = task.id
+             LEFT JOIN jira_project_bindings binding ON binding.id = link.binding_id
+             WHERE delivery.state = 'held' AND task.state = 'completed'
+               AND task.removed_at IS NULL
+             ORDER BY delivery.updated_at, task.id LIMIT ?1",
+        )?;
+        statement
+            .query_map([MAX_HELD_RESOLUTIONS_LISTED], |row| {
+                Ok(HeldJiraResolution {
+                    task_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+                    issue_key: row.get(1)?,
+                    project_name: row.get(2)?,
+                    title: row.get(3)?,
+                    held_since: row.get(4)?,
+                    last_reply_at: row.get(5)?,
+                    handoff: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Releases a held resolution to Jira: the operator confirmed it.
+    ///
+    /// Returns false when nothing was waiting, so a second press, or one
+    /// racing a sync that already settled it, changes nothing.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn confirm_jira_resolution(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+        self.settle_held_resolution(
+            task_id,
+            "queued",
+            "the operator confirmed it, so Swarm is resolving it in Jira",
+        )
+    }
+
+    /// Drops a held resolution: the operator chose to leave the ticket open.
+    /// The task stays completed here and nothing is written to Jira.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn leave_jira_ticket_open(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+        self.settle_held_resolution(
+            task_id,
+            "declined",
+            "the operator chose to leave it open, so Swarm will not resolve it",
+        )
+    }
+
+    fn settle_held_resolution(
+        &self,
+        task_id: TaskId,
+        state: &str,
+        outcome: &str,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let issue_key = transaction
+            .query_row(
+                "SELECT link.issue_key FROM jira_transition_deliveries delivery
+                 JOIN jira_issue_links link ON link.task_id = delivery.task_id
+                 WHERE delivery.task_id = ?1 AND delivery.state = 'held'",
+                [task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(issue_key) = issue_key else {
+            return Ok(false);
+        };
+        transaction.execute(
+            "UPDATE jira_transition_deliveries
+             SET state = ?2, available_at = unixepoch(), updated_at = unixepoch()
+             WHERE task_id = ?1 AND state = 'held'",
+            params![task_id.to_string(), state],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind)
+             VALUES (?1, 'details_updated', ?2, 'operator')",
+            params![
+                task_id.to_string(),
+                format!("Resolving {issue_key} waited for the operator: {outcome}.")
+            ],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
     /// Returns the latest unresolved outbound Jira state for one task.
     ///
     /// # Errors
@@ -1102,15 +1279,26 @@ pub(super) fn queue_jira_transition(
     transaction: &rusqlite::Transaction<'_>,
     task_id: TaskId,
     target: TaskState,
+    actor: &TaskActivityActor,
 ) -> Result<(), TaskStoreError> {
     let link = transaction
         .query_row(
-            "SELECT binding_id, jira_status_id FROM jira_issue_links WHERE task_id = ?1",
+            "SELECT link.binding_id, link.jira_status_id,
+                    COALESCE(binding.confirm_resolution, 0)
+             FROM jira_issue_links link
+             LEFT JOIN jira_project_bindings binding ON binding.id = link.binding_id
+             WHERE link.task_id = ?1",
             [task_id.to_string()],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((binding_id, current_status_id)) = link else {
+    let Some((binding_id, current_status_id, confirm_resolution)) = link else {
         return Ok(());
     };
     let target_status_ids = {
@@ -1149,10 +1337,31 @@ pub(super) fn queue_jira_transition(
     // at the task's newest state and not walk through every intermediate one. A
     // write already dispatching cannot be recalled, so the new state queues
     // behind it and lands after.
+    //
+    // ⚠️ RESOLVING A TICKET IS THE OPERATOR'S CALL WHERE THEY ASKED FOR IT
+    // (ADR 0120). Every completion of a Jira-linked task used to resolve the
+    // ticket, so a support request whose answer lived only in Swarm went to
+    // Resolved with nothing posted on it, and the requester reopened it to ask.
+    // The operator chose to confirm each one. On a binding that asks, a
+    // completion anyone else made is HELD: the task completes here exactly as
+    // before, and the Jira write waits for them. Their own completion is the
+    // confirmation, so it is never held.
+    let state = if target == TaskState::Completed
+        && confirm_resolution
+        && actor.kind != TaskActivityActorKind::Operator
+    {
+        "held"
+    } else {
+        "queued"
+    };
+    // A held write is superseded like a queued one: it has not been sent, and
+    // the newest state is the one Jira should end at. A queued write backing
+    // off keeps its backoff; confirming a held one makes it available then.
     let superseded = transaction.execute(
-        "UPDATE jira_transition_deliveries SET target_task_state = ?2, updated_at = unixepoch()
-         WHERE task_id = ?1 AND state = 'queued'",
-        params![task_id.to_string(), target.to_string()],
+        "UPDATE jira_transition_deliveries
+         SET target_task_state = ?2, state = ?3, updated_at = unixepoch()
+         WHERE task_id = ?1 AND state IN ('queued','held')",
+        params![task_id.to_string(), target.to_string(), state],
     )?;
     if superseded > 0 {
         return Ok(());
@@ -1175,13 +1384,16 @@ pub(super) fn queue_jira_transition(
     if dispatching > 0 {
         return Ok(());
     }
+    // A held write is not in the send queue, so it neither counts against
+    // this bound nor is refused by it. It is bounded instead by the unique
+    // index: one outstanding write per task.
     let pending: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM jira_transition_deliveries
          WHERE state IN ('queued','dispatching')",
         [],
         |row| row.get(0),
     )?;
-    if pending >= MAX_PENDING_TRANSITIONS {
+    if state == "queued" && pending >= MAX_PENDING_TRANSITIONS {
         // Still not a reason to stop the Hive. The queue being full is a Swarm
         // problem, not a statement about this task, and refusing the local move
         // would hand an internal backlog the power to freeze internal work.
@@ -1190,14 +1402,138 @@ pub(super) fn queue_jira_transition(
     }
     transaction.execute(
         "INSERT INTO jira_transition_deliveries (id, task_id, target_task_state, state)
-         VALUES (?1, ?2, ?3, 'queued')",
+         VALUES (?1, ?2, ?3, ?4)",
         params![
             uuid::Uuid::now_v7().to_string(),
             task_id.to_string(),
-            target.to_string()
+            target.to_string(),
+            state
         ],
     )?;
     Ok(())
+}
+
+/// Widens the Jira write queue so a resolution can wait for the operator
+/// (ADR 0120): the per-binding setting, the 'held' and 'declined' states, and
+/// the Needs-you kind that tells them one is waiting.
+///
+/// `SQLite` cannot alter a CHECK, so both tables are rebuilt. Each step is
+/// guarded on the shape it changes rather than on the version alone, because
+/// the migration tests rewind `user_version` without rewinding the tables.
+pub(super) fn migrate_resolution_hold(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    let column_exists: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('jira_project_bindings')
+             WHERE name = 'confirm_resolution'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !column_exists {
+        transaction.execute_batch(
+            "ALTER TABLE jira_project_bindings
+                 ADD COLUMN confirm_resolution INTEGER NOT NULL DEFAULT 0
+                 CHECK (confirm_resolution IN (0,1));",
+        )?;
+    }
+    // Only a table that exists is rebuilt: copying from a missing one would
+    // fail the whole upgrade over a queue the older migration restores.
+    if table_sql_mentions(
+        transaction,
+        "jira_transition_deliveries",
+        "target_task_state",
+    )? && !table_sql_mentions(transaction, "jira_transition_deliveries", "'held'")?
+    {
+        transaction.execute_batch(
+            "CREATE TABLE jira_transition_deliveries_held (
+                 id TEXT PRIMARY KEY,
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 target_task_state TEXT NOT NULL CHECK (
+                     target_task_state IN ('draft','ready','active','blocked','review','completed')
+                 ),
+                 state TEXT NOT NULL CHECK (
+                     state IN ('queued','dispatching','held','delivered','declined',
+                               'conflict','uncertain')
+                 ),
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 3),
+                 available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 attempted_at INTEGER,
+                 delivered_at INTEGER,
+                 last_error TEXT,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO jira_transition_deliveries_held (
+                 id, task_id, target_task_state, state, attempts, available_at,
+                 attempted_at, delivered_at, last_error, created_at, updated_at
+             )
+             SELECT id, task_id, target_task_state, state, attempts, available_at,
+                    attempted_at, delivered_at, last_error, created_at, updated_at
+             FROM jira_transition_deliveries;
+             DROP TABLE jira_transition_deliveries;
+             ALTER TABLE jira_transition_deliveries_held RENAME TO jira_transition_deliveries;
+             CREATE UNIQUE INDEX jira_transition_one_active_per_task
+                 ON jira_transition_deliveries(task_id)
+                 WHERE state IN ('queued','dispatching','held');
+             CREATE INDEX jira_transition_delivery_queue
+                 ON jira_transition_deliveries(state, available_at, updated_at);",
+        )?;
+    }
+    if table_sql_mentions(transaction, "notification_deliveries", "'email_reply'")?
+        && !table_sql_mentions(transaction, "notification_deliveries", "'jira_resolution'")?
+    {
+        transaction.execute_batch(
+            "CREATE TABLE notification_deliveries_widened (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+                 subscription_id TEXT NOT NULL
+                     REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+                 decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
+                 subject_key TEXT NOT NULL,
+                 urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+                 kind TEXT NOT NULL CHECK (kind IN (
+                     'decision','assist','queen_automation','held_delivery',
+                     'email_reply','jira_resolution','test'
+                 )),
+                 state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+                 available_at INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
+                        OR (kind <> 'decision' AND decision_id IS NULL)),
+                 UNIQUE(subject_key, subscription_id)
+             );
+             INSERT INTO notification_deliveries_widened (
+                 id, operator_id, subscription_id, decision_id, subject_key,
+                 urgency, kind, state, attempts, available_at, created_at
+             )
+             SELECT id, operator_id, subscription_id, decision_id, subject_key,
+                    urgency, kind, state, attempts, available_at, created_at
+             FROM notification_deliveries;
+             DROP TABLE notification_deliveries;
+             ALTER TABLE notification_deliveries_widened RENAME TO notification_deliveries;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", version)
+}
+
+fn table_sql_mentions(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    text: &str,
+) -> rusqlite::Result<bool> {
+    transaction
+        .query_row(
+            "SELECT COALESCE(instr(sql, ?2) > 0, 0) FROM sqlite_master
+         WHERE type = 'table' AND name = ?1",
+            params![table, text],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|found| found.unwrap_or(false))
 }
 
 fn jira_issue_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraIssueLink> {
@@ -1231,6 +1567,7 @@ fn jira_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraProjec
         access_verified: row.get(7)?,
         workflow_mapped: row.get(8)?,
         auto_sync_assigned: row.get(9)?,
+        confirm_resolution: row.get(10)?,
     })
 }
 
@@ -2293,5 +2630,363 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap();
         assert_eq!(version, crate::CURRENT_SCHEMA_VERSION);
+    }
+
+    /// A support project whose completed tickets resolve to "Resolved", with
+    /// one imported ticket already handed to review.
+    fn support_ticket_in_review(store: &TaskStore, confirm: bool) -> (JiraProjectBinding, Task) {
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10027",
+                project_key: "IS",
+                project_name: "IT: Support Requests",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "Open".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "5".into(),
+                        jira_status_name: "Resolved".into(),
+                        task_state: TaskState::Completed,
+                    },
+                ],
+            )
+            .unwrap();
+        let binding = store
+            .set_jira_confirm_resolution(binding.id, confirm)
+            .unwrap();
+        let task = store
+            .sync_jira_issues(binding.id, &[support_snapshot("3", "In Progress")])
+            .unwrap()
+            .remove(0);
+        store
+            .transition_task_with_note(
+                task.id,
+                TaskState::Review,
+                "Answered the requester's question.",
+            )
+            .unwrap();
+        (binding, task)
+    }
+
+    fn support_snapshot<'a>(status_id: &'a str, status_name: &'a str) -> JiraIssueSnapshot<'a> {
+        JiraIssueSnapshot {
+            issue_id: "30736",
+            issue_key: "IS-10736",
+            summary: "Photo downloads are slow",
+            description: "",
+            status_id,
+            status_name,
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at: "2026-10-22T12:00:00.000+0000",
+            priority: TaskPriority::Normal,
+        }
+    }
+
+    /// The sweep's own completion, as IS-10736 was closed: an empty commit
+    /// report on reviewed work.
+    fn settle_as_the_coordinator(store: &TaskStore, task: &Task) {
+        store
+            .record_task_commits(
+                task.id,
+                &task.workspace,
+                swarm_domain::CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+        let settled = store
+            .settle_reviewed_work_without_deployment_page(1_001, None)
+            .unwrap()
+            .closed;
+        assert_eq!(
+            settled,
+            vec![task.id],
+            "the sweep closes the task here as before"
+        );
+    }
+
+    /// ⚠️ THE BUG, ON A PROJECT THAT ASKS. IS-10736 and IS-10688 were resolved in
+    /// Jira by the coordinator's no-commits sweep with no reply posted, and the
+    /// requester reopened both. The operator chose to confirm each Resolved
+    /// (decision 01a1690b). The task still completes; the Jira write waits.
+    #[test]
+    fn a_completion_the_operator_did_not_make_waits_for_them_on_a_project_that_asks() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, task) = support_ticket_in_review(&store, true);
+
+        settle_as_the_coordinator(&store, &task);
+
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+        assert_eq!(
+            store
+                .jira_transition_state_for_task(task.id)
+                .unwrap()
+                .as_deref(),
+            Some("held")
+        );
+        assert!(
+            store
+                .claim_jira_transitions(2_000_000_000)
+                .unwrap()
+                .is_empty(),
+            "nothing may reach Jira before the operator confirms"
+        );
+        let held = store.held_jira_resolutions().unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].issue_key, "IS-10736");
+        assert_eq!(held[0].last_reply_at, None, "no comment was ever posted");
+        assert_eq!(
+            held[0].handoff.as_deref(),
+            Some("Answered the requester's question.")
+        );
+    }
+
+    /// Queen completing it is held too: she approves the no-deployment claim
+    /// as before, and that does not answer whether to resolve the ticket.
+    #[test]
+    fn queens_completion_is_held_as_well() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, task) = support_ticket_in_review(&store, true);
+        let queen = TaskActivityActor {
+            kind: TaskActivityActorKind::Worker,
+            id: Some("queen".into()),
+        };
+
+        store
+            .transition_task_with_note_as(task.id, TaskState::Completed, "Approved.", &queen)
+            .unwrap();
+
+        assert_eq!(
+            store
+                .jira_transition_state_for_task(task.id)
+                .unwrap()
+                .as_deref(),
+            Some("held")
+        );
+    }
+
+    /// The operator completing a task is the confirmation, so it never waits
+    /// on themselves.
+    #[test]
+    fn the_operators_own_completion_resolves_the_ticket_straight_away() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, task) = support_ticket_in_review(&store, true);
+
+        store
+            .transition_task_with_note_as(
+                task.id,
+                TaskState::Completed,
+                "",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+
+        let dispatch = store
+            .claim_jira_transitions(2_000_000_000)
+            .unwrap()
+            .remove(0);
+        assert_eq!(dispatch.target_task_state, TaskState::Completed);
+        assert_eq!(dispatch.target_status_ids, vec!["5"]);
+        assert!(store.held_jira_resolutions().unwrap().is_empty());
+    }
+
+    /// A project that does not ask, such as website development, resolves
+    /// exactly as it did before.
+    #[test]
+    fn a_project_that_does_not_ask_resolves_as_before() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, task) = support_ticket_in_review(&store, false);
+
+        settle_as_the_coordinator(&store, &task);
+
+        let dispatch = store
+            .claim_jira_transitions(2_000_000_000)
+            .unwrap()
+            .remove(0);
+        assert_eq!(dispatch.target_task_state, TaskState::Completed);
+        assert!(store.held_jira_resolutions().unwrap().is_empty());
+    }
+
+    /// Confirming releases the write to the ordinary sender; leaving it open
+    /// drops it and the task stays completed. Either answer settles it once.
+    #[test]
+    fn confirming_sends_the_resolution_and_leaving_it_open_drops_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, task) = support_ticket_in_review(&store, true);
+        settle_as_the_coordinator(&store, &task);
+
+        assert!(store.confirm_jira_resolution(task.id).unwrap());
+        assert!(
+            !store.confirm_jira_resolution(task.id).unwrap(),
+            "a second press changes nothing"
+        );
+        let dispatch = store
+            .claim_jira_transitions(2_000_000_000)
+            .unwrap()
+            .remove(0);
+        assert_eq!(dispatch.issue_key, "IS-10736");
+        assert_eq!(dispatch.target_status_ids, vec!["5"]);
+        assert!(store.held_jira_resolutions().unwrap().is_empty());
+
+        let other = TaskStore::in_memory().unwrap();
+        let (other_binding, open) = support_ticket_in_review(&other, true);
+        settle_as_the_coordinator(&other, &open);
+        assert!(other.leave_jira_ticket_open(open.id).unwrap());
+        assert!(
+            other
+                .claim_jira_transitions(2_000_000_000)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(other.held_jira_resolutions().unwrap().is_empty());
+        assert_eq!(other.get_task(open.id).unwrap().state, TaskState::Completed);
+        assert_eq!(
+            other
+                .jira_transition_state_for_task(open.id)
+                .unwrap()
+                .as_deref(),
+            Some("declined")
+        );
+        // Jira still reads "In Progress", and a sync must not reopen the task.
+        let synced = other
+            .sync_jira_issues(other_binding.id, &[support_snapshot("3", "In Progress")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(synced.state, TaskState::Completed);
+    }
+
+    /// ⚠️ A SYNC MUST NOT REOPEN A HELD COMPLETION. Jira still says "In
+    /// Progress" while the resolution waits, and the sync treats Jira as the
+    /// truth whenever no write is outstanding. Held is outstanding.
+    #[test]
+    fn a_sync_leaves_a_held_completion_alone_until_jira_moves_the_ticket() {
+        let store = TaskStore::in_memory().unwrap();
+        let (binding, task) = support_ticket_in_review(&store, true);
+        settle_as_the_coordinator(&store, &task);
+
+        let unchanged = store
+            .sync_jira_issues(binding.id, &[support_snapshot("3", "In Progress")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(unchanged.state, TaskState::Completed);
+        assert_eq!(store.held_jira_resolutions().unwrap().len(), 1);
+
+        // Someone resolves it by hand: the write is already made.
+        let resolved = store
+            .sync_jira_issues(binding.id, &[support_snapshot("5", "Resolved")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(resolved.state, TaskState::Completed);
+        assert!(store.held_jira_resolutions().unwrap().is_empty());
+        assert_eq!(store.jira_transition_state_for_task(task.id).unwrap(), None);
+    }
+
+    /// Replacing a queued write with a newer state keeps its backoff. Only a
+    /// confirmed hold is made available at once; a write that failed on the
+    /// network still waits before it is tried again.
+    #[test]
+    fn a_superseded_write_keeps_its_backoff() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "5".into(),
+                        jira_status_name: "Done".into(),
+                        task_state: TaskState::Completed,
+                    },
+                ],
+            )
+            .unwrap();
+        let task = store
+            .sync_jira_issues(binding.id, &[support_snapshot("1", "To Do")])
+            .unwrap()
+            .remove(0);
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let now = 2_000_000_000;
+        let dispatch = store.claim_jira_transitions(now).unwrap().remove(0);
+        assert!(
+            store
+                .fail_jira_transition(
+                    &dispatch.id,
+                    now,
+                    JiraTransitionFailure::Retryable,
+                    "network_unavailable",
+                )
+                .unwrap()
+        );
+
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task_with_note_as(
+                task.id,
+                TaskState::Completed,
+                "",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+
+        assert!(store.claim_jira_transitions(now + 29).unwrap().is_empty());
+        let retry = store.claim_jira_transitions(now + 30).unwrap().remove(0);
+        assert_eq!(retry.target_task_state, TaskState::Completed);
+    }
+
+    /// Jira moving the ticket anywhere else makes the held write stale, as a
+    /// sent write would be, and the card goes.
+    #[test]
+    fn jira_reopening_a_held_ticket_ends_the_hold() {
+        let store = TaskStore::in_memory().unwrap();
+        let (binding, task) = support_ticket_in_review(&store, true);
+        settle_as_the_coordinator(&store, &task);
+
+        let reopened = store
+            .sync_jira_issues(binding.id, &[support_snapshot("1", "Open")])
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(reopened.state, TaskState::Ready);
+        assert!(store.held_jira_resolutions().unwrap().is_empty());
+        assert!(
+            store
+                .claim_jira_transitions(2_000_000_000)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
