@@ -95,6 +95,23 @@ pub(crate) enum OutlookError {
     ResponseLimitExceeded,
     UnsupportedAttachment,
     AmbiguousDelivery,
+    /// The mailbox has not let Swarm write mail, so a draft cannot be saved
+    /// until the operator reconnects it for drafts (ADR 0121).
+    DraftPermissionMissing,
+}
+
+/// A reply saved in the mailbox's Drafts folder, not sent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OutlookDraft {
+    pub(crate) id: String,
+    pub(crate) web_link: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GraphDraft {
+    id: String,
+    #[serde(rename = "webLink")]
+    web_link: Option<String>,
 }
 
 impl std::fmt::Display for OutlookError {
@@ -110,6 +127,9 @@ impl std::fmt::Display for OutlookError {
             Self::ResponseLimitExceeded => "The email response exceeded Swarm's safety limit",
             Self::UnsupportedAttachment => "The email attachment is not supported",
             Self::AmbiguousDelivery => "The reply result could not be confirmed",
+            Self::DraftPermissionMissing => {
+                "This mailbox has not let Swarm save drafts; reconnect it for drafts"
+            }
         })
     }
 }
@@ -505,6 +525,67 @@ impl OutlookProbe {
         }
     }
 
+    /// Saves a reply to one message as a draft in the mailbox it arrived on,
+    /// without sending it (ADR 0121).
+    ///
+    /// `createReply`, matching `reply_from`, so the draft is addressed to the
+    /// same person a send would have reached. A repeated call makes a second
+    /// draft rather than sending anything, which is why a failure here is
+    /// retried by the operator rather than treated as ambiguous delivery.
+    pub(crate) async fn reply_draft_from(
+        &self,
+        account_id: &str,
+        message_id: &str,
+        body: &str,
+    ) -> Result<OutlookDraft, OutlookError> {
+        validate_identifier(message_id)?;
+        let body = body.trim();
+        if body.is_empty() || body.len() > 10_000 || body.chars().any(|character| character == '\0')
+        {
+            return Err(OutlookError::InvalidRequest);
+        }
+        let access = match self {
+            Self::NotConfigured => return Err(OutlookError::NotConfigured),
+            Self::OAuth(client) => client
+                .draft_access_for(account_id)
+                .await
+                .map_err(map_oauth_error)?,
+        };
+        let url = endpoint(
+            &access.base_url,
+            &["me", "messages", message_id, "createReply"],
+        )?;
+        let response = access
+            .client
+            .post(url)
+            .bearer_auth(&access.access_token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&serde_json::json!({ "comment": Self::reply_html(body) }))
+            .send()
+            .await
+            .map_err(|_| OutlookError::NetworkUnavailable)?;
+        match response.status() {
+            StatusCode::CREATED | StatusCode::OK => {
+                let draft = response
+                    .json::<GraphDraft>()
+                    .await
+                    .map_err(|_| OutlookError::InvalidResponse)?;
+                validate_identifier(&draft.id)?;
+                Ok(OutlookDraft {
+                    id: draft.id,
+                    web_link: draft.web_link.filter(|link| link.len() <= 4_096),
+                })
+            }
+            StatusCode::UNAUTHORIZED => Err(OutlookError::CredentialsInvalid),
+            StatusCode::FORBIDDEN => Err(OutlookError::DraftPermissionMissing),
+            StatusCode::NOT_FOUND => Err(OutlookError::NotFound),
+            status if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS => {
+                Err(OutlookError::NetworkUnavailable)
+            }
+            _ => Err(OutlookError::InvalidResponse),
+        }
+    }
+
     async fn attachments_with_access(
         &self,
         access: &MicrosoftAccess,
@@ -704,6 +785,7 @@ fn validate_identifier(value: &str) -> Result<(), OutlookError> {
 fn map_oauth_error(error: OAuthError) -> OutlookError {
     match error {
         OAuthError::NotConnected => OutlookError::NotConfigured,
+        OAuthError::ConsentRequired => OutlookError::DraftPermissionMissing,
         OAuthError::CredentialsInvalid => OutlookError::CredentialsInvalid,
         OAuthError::PermissionDenied => OutlookError::PermissionDenied,
         OAuthError::NetworkUnavailable => OutlookError::NetworkUnavailable,
@@ -832,6 +914,106 @@ mod tests {
             Url::parse(&format!("http://{address}/")).unwrap(),
             directory,
         )
+    }
+
+    /// A mailbox whose refresh token may or may not mint a token that writes
+    /// mail, for the Outlook-draft path (ADR 0121).
+    async fn draft_probe(writes_allowed: bool) -> (OutlookProbe, tempfile::TempDir) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/token", post(move |body: Bytes| async move {
+                let form = String::from_utf8_lossy(&body).into_owned();
+                if form.contains("Mail.ReadWrite") && !writes_allowed {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error":"invalid_grant","error_description":"AADSTS65001: The user or administrator has not consented to use the application."})),
+                    );
+                }
+                let token = if form.contains("Mail.ReadWrite") { "write-access" } else { "access" };
+                (StatusCode::OK, Json(json!({"access_token":token,"refresh_token":"refresh","expires_in":3600})))
+            }))
+            .route("/me", get(|| async { Json(json!({"id":"account-1","displayName":"Operator","mail":"operator@example.test","userPrincipalName":"operator@example.test"})) }))
+            .route("/me/messages/{id}/createReply", post(|Path(id): Path<String>, headers: HeaderMap, body: Bytes| async move {
+                assert_eq!(id, "message-1");
+                assert_eq!(headers.get("authorization").unwrap(), "Bearer write-access");
+                assert!(String::from_utf8_lossy(&body).contains("Short answers for now"));
+                (StatusCode::CREATED, Json(json!({"id":"draft-1","webLink":"https://outlook.office.com/mail/drafts/draft-1"})))
+            }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let oauth = MicrosoftOAuthClient::new_with_endpoints(
+            Client::new(),
+            "client-id",
+            Some("client-secret"),
+            "https://swarm.example.test/",
+            directory.path().join("email-oauth.json"),
+            "https://login.microsoft.test/authorize",
+            &format!("http://{address}/token"),
+            &format!("http://{address}/"),
+        )
+        .unwrap();
+        let authorization = oauth.authorization_url().await.unwrap();
+        let state = authorization
+            .query_pairs()
+            .find_map(|(name, value)| (name == "state").then(|| value.into_owned()))
+            .unwrap();
+        oauth.exchange_code(&state, "code").await.unwrap();
+        (OutlookProbe::oauth(oauth), directory)
+    }
+
+    /// Saving a reply as a draft uses a token that may write, asked for at
+    /// that moment, and replies to the same message a send would.
+    #[tokio::test]
+    async fn a_reply_is_saved_as_an_outlook_draft_with_a_token_that_may_write() {
+        let (probe, _directory) = draft_probe(true).await;
+
+        let draft = probe
+            .reply_draft_from("account-1", "message-1", "Short answers for now.")
+            .await
+            .unwrap();
+
+        assert_eq!(draft.id, "draft-1");
+        assert_eq!(
+            draft.web_link.as_deref(),
+            Some("https://outlook.office.com/mail/drafts/draft-1")
+        );
+    }
+
+    /// A mailbox that never let Swarm write says so, so the card can offer a
+    /// reconnect, and it does not break the ordinary read-and-send token.
+    #[tokio::test]
+    async fn a_mailbox_that_never_allowed_writing_asks_for_a_reconnect() {
+        let (probe, _directory) = draft_probe(false).await;
+
+        assert_eq!(
+            probe
+                .reply_draft_from("account-1", "message-1", "Short answers for now.")
+                .await,
+            Err(OutlookError::DraftPermissionMissing)
+        );
+        // The ordinary token is untouched: the stored access still works.
+        assert!(probe.access_for("account-1").await.is_ok());
+    }
+
+    /// Reconnecting for drafts asks Microsoft for writing; the ordinary
+    /// connect still does not.
+    #[tokio::test]
+    async fn only_a_reconnect_for_drafts_asks_to_write_mail() {
+        let (probe, _directory) = draft_probe(true).await;
+        let OutlookProbe::OAuth(oauth) = &probe else {
+            panic!("configured probe");
+        };
+        let scope = |url: Url| {
+            url.query_pairs()
+                .find_map(|(name, value)| (name == "scope").then(|| value.into_owned()))
+                .unwrap()
+        };
+
+        assert!(!scope(oauth.authorization_url().await.unwrap()).contains("Mail.ReadWrite"));
+        assert!(
+            scope(oauth.authorization_url_for_drafts().await.unwrap()).contains("Mail.ReadWrite")
+        );
     }
 
     /// The reply the recipient actually reads.

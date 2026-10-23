@@ -56,6 +56,17 @@ pub(crate) const BUNDLED_CLIENT_ID: &str = "059c82a8-4d77-4b19-a6c7-d702dde10960
 /// point of not asking them which kind of account they have.
 pub(crate) const BUNDLED_AUTHORITY: &str = "common";
 const SCOPES: &str = "openid profile offline_access User.Read Mail.Read Mail.Send";
+/// What a reconnect for drafts asks for: everything above, plus writing mail.
+///
+/// ⚠️ ONLY WHEN THE OPERATOR ASKS, never on the ordinary connect (ADR 0121).
+/// A tenant that consents to reading and sending may not consent to writing,
+/// and folding it into every connect would let that one refusal stop a mailbox
+/// connecting at all.
+const SCOPES_WITH_DRAFTS: &str =
+    "openid profile offline_access User.Read Mail.Read Mail.Send Mail.ReadWrite";
+/// What saving a draft asks the refresh token for, and nothing else. Kept
+/// apart from the stored token, which stays the read-and-send token it was.
+const DRAFT_SCOPES: &str = "offline_access Mail.ReadWrite";
 const MAX_PENDING_STATES: usize = 8;
 const STATE_LIFETIME_SECONDS: u64 = 600;
 
@@ -225,6 +236,9 @@ struct PendingState {
     value: String,
     verifier: String,
     created_at: u64,
+    /// The scopes this authorization asked for, so the code exchange asks for
+    /// the same ones.
+    scope: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -247,6 +261,9 @@ struct GraphAccount {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OAuthError {
     NotConnected,
+    /// Microsoft refused a scope this mailbox never consented to. Today only
+    /// writing drafts, which needs a reconnect (ADR 0121).
+    ConsentRequired,
     CredentialsInvalid,
     PermissionDenied,
     NetworkUnavailable,
@@ -367,6 +384,15 @@ impl MicrosoftOAuthClient {
     }
 
     pub(crate) async fn authorization_url(&self) -> Result<Url, OAuthError> {
+        self.authorization_url_for(SCOPES).await
+    }
+
+    /// The same sign-in, also asking to write mail so Swarm can save drafts.
+    pub(crate) async fn authorization_url_for_drafts(&self) -> Result<Url, OAuthError> {
+        self.authorization_url_for(SCOPES_WITH_DRAFTS).await
+    }
+
+    async fn authorization_url_for(&self, scope: &'static str) -> Result<Url, OAuthError> {
         let mut state_bytes = [0_u8; 32];
         let mut verifier_bytes = [0_u8; 48];
         random_fill(&mut state_bytes).map_err(|_| OAuthError::Storage)?;
@@ -384,6 +410,7 @@ impl MicrosoftOAuthClient {
             value: state.clone(),
             verifier,
             created_at: now,
+            scope,
         });
         drop(pending);
 
@@ -393,7 +420,7 @@ impl MicrosoftOAuthClient {
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", self.inner.redirect_uri.as_str())
             .append_pair("response_mode", "query")
-            .append_pair("scope", SCOPES)
+            .append_pair("scope", scope)
             .append_pair("state", &state)
             .append_pair("code_challenge", &challenge)
             .append_pair("code_challenge_method", "S256")
@@ -412,7 +439,9 @@ impl MicrosoftOAuthClient {
         }) else {
             return Err(OAuthError::InvalidState);
         };
-        let verifier = pending.remove(position).expect("position exists").verifier;
+        let PendingState {
+            verifier, scope, ..
+        } = pending.remove(position).expect("position exists");
         drop(pending);
 
         let response = self
@@ -429,7 +458,7 @@ impl MicrosoftOAuthClient {
                     ("grant_type", "authorization_code"),
                     ("code", code),
                     ("redirect_uri", self.inner.redirect_uri.as_str()),
-                    ("scope", SCOPES),
+                    ("scope", scope),
                     ("code_verifier", &verifier),
                 ],
                 self.inner.client_secret.as_deref(),
@@ -528,6 +557,48 @@ impl MicrosoftOAuthClient {
         })
     }
 
+    /// A token that may WRITE to one named mailbox, for saving a reply as an
+    /// Outlook draft (ADR 0121).
+    ///
+    /// Asked for at the moment of use rather than stored. The stored token
+    /// stays the read-and-send token every other call relies on, so a mailbox
+    /// that never consented to writing keeps working exactly as it did; only
+    /// the draft fails, with `ConsentRequired`, and the operator can reconnect.
+    pub(crate) async fn draft_access_for(
+        &self,
+        account_id: &str,
+    ) -> Result<MicrosoftAccess, OAuthError> {
+        let mut tokens = self.inner.tokens.lock().await;
+        let Some(account) = tokens.get(account_id) else {
+            return Err(OAuthError::NotConnected);
+        };
+        if !account.is_linked() {
+            return Err(OAuthError::NotConnected);
+        }
+        let mut account = account.clone();
+        let refresh_token = account
+            .refresh_token
+            .clone()
+            .filter(|value| !value.is_empty())
+            .ok_or(OAuthError::NotConnected)?;
+        let granted = request_token(&self.inner, &refresh_token, DRAFT_SCOPES).await?;
+        // A rotated refresh token is kept, so the next ordinary refresh does
+        // not present one Microsoft has already replaced.
+        if let Some(next_refresh) = granted.refresh_token.filter(|value| !value.is_empty()) {
+            account.refresh_token = Some(next_refresh);
+            tokens.upsert(account.clone());
+            save_tokens(&self.inner.token_path, &tokens)?;
+        }
+        Ok(MicrosoftAccess {
+            client: self.inner.client.clone(),
+            base_url: self.inner.graph_base_url.clone(),
+            access_token: granted.access_token,
+            integration_id: account.account_id.clone(),
+            account_name: account.account_name.clone(),
+            account_address: account.account_address.clone(),
+        })
+    }
+
     /// Every linked mailbox, in the order they were linked.
     ///
     /// The first is the default one, so a caller can show which mailbox answers
@@ -584,6 +655,35 @@ async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthErr
         .clone()
         .filter(|value| !value.is_empty())
         .ok_or(OAuthError::NotConnected)?;
+    // The ordinary refresh reports a refused scope as it always has: only the
+    // draft path has a reconnect to offer for it.
+    let next = request_token(inner, &refresh_token, SCOPES)
+        .await
+        .map_err(|error| match error {
+            OAuthError::ConsentRequired => OAuthError::NetworkUnavailable,
+            other => other,
+        })?;
+    tokens.access_token = Some(next.access_token);
+    if let Some(next_refresh) = next.refresh_token.filter(|value| !value.is_empty()) {
+        tokens.refresh_token = Some(next_refresh);
+    }
+    tokens.expires_at = expiry_after(next.expires_in);
+    // Persisting is the CALLER's job now. This function renews one account in
+    // isolation and no longer knows the whole store, so writing here would save
+    // that account over every other linked mailbox.
+    Ok(())
+}
+
+/// One refresh-token grant for `scope`.
+///
+/// A refusal of the SCOPE is told apart from every other failure: Microsoft
+/// answers 400 with AADSTS65001 or AADSTS70000 (or `invalid_scope`) when the
+/// mailbox never consented to it, and that needs a reconnect, not a retry.
+async fn request_token(
+    inner: &Inner,
+    refresh_token: &str,
+    scope: &str,
+) -> Result<TokenResponse, OAuthError> {
     let response = inner
         .client
         .post(inner.token_url.clone())
@@ -595,8 +695,8 @@ async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthErr
             &[
                 ("client_id", inner.client_id.as_ref()),
                 ("grant_type", "refresh_token"),
-                ("refresh_token", refresh_token.as_str()),
-                ("scope", SCOPES),
+                ("refresh_token", refresh_token),
+                ("scope", scope),
             ],
             inner.client_secret.as_deref(),
         )))
@@ -609,6 +709,16 @@ async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthErr
     ) {
         return Err(OAuthError::CredentialsInvalid);
     }
+    if response.status() == reqwest::StatusCode::BAD_REQUEST {
+        let refusal = response.text().await.unwrap_or_default();
+        if refusal.contains("AADSTS65001")
+            || refusal.contains("AADSTS70000")
+            || refusal.contains("invalid_scope")
+        {
+            return Err(OAuthError::ConsentRequired);
+        }
+        return Err(OAuthError::NetworkUnavailable);
+    }
     if !response.status().is_success() {
         return Err(OAuthError::NetworkUnavailable);
     }
@@ -619,15 +729,7 @@ async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthErr
     if next.access_token.is_empty() {
         return Err(OAuthError::InvalidResponse);
     }
-    tokens.access_token = Some(next.access_token);
-    if let Some(next_refresh) = next.refresh_token.filter(|value| !value.is_empty()) {
-        tokens.refresh_token = Some(next_refresh);
-    }
-    tokens.expires_at = expiry_after(next.expires_in);
-    // Persisting is the CALLER's job now. This function renews one account in
-    // isolation and no longer knows the whole store, so writing here would save
-    // that account over every other linked mailbox.
-    Ok(())
+    Ok(next)
 }
 
 async fn discover_account(

@@ -94,8 +94,13 @@ export async function fetchEmailConfiguration(operatorToken: string): Promise<Em
   return response.json() as Promise<EmailOAuthConfiguration>;
 }
 
-export async function beginEmailAuthorization(operatorToken: string): Promise<string> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/auth/start", { method: "POST" });
+/**
+ * Starts Microsoft sign-in. `drafts` also asks to write mail, so Swarm can save
+ * replies as Outlook drafts; the ordinary connect never asks for it (ADR 0121).
+ */
+export async function beginEmailAuthorization(operatorToken: string, options: { drafts?: boolean } = {}): Promise<string> {
+  const url = options.drafts ? "/api/v1/integrations/email/auth/start?drafts=true" : "/api/v1/integrations/email/auth/start";
+  const response = await authenticatedFetch(operatorToken, url, { method: "POST" });
   return ((await response.json()) as { authorization_url: string }).authorization_url;
 }
 
@@ -207,6 +212,20 @@ export async function updateEmailReplyDraft(operatorToken: string, taskId: strin
 export async function sendEmailReply(operatorToken: string, replyId: string): Promise<EmailReply> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/replies/${encodeURIComponent(replyId)}/send`, { method: "POST" });
   return response.json() as Promise<EmailReply>;
+}
+
+/** Closes a completed email task's reply without sending one (ADR 0121). */
+export async function closeEmailReplyUnsent(operatorToken: string, taskId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply/not-needed`, { method: "POST" });
+}
+
+/**
+ * Saves the written reply as drafts in the operator's Outlook, one per person
+ * it would have gone to, and closes it here. Swarm sends nothing (ADR 0121).
+ */
+export async function saveEmailReplyAsOutlookDraft(operatorToken: string, taskId: string): Promise<{ drafts: number }> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply/outlook-draft`, { method: "POST" });
+  return response.json() as Promise<{ drafts: number }>;
 }
 
 export async function retryEmailReply(operatorToken: string, replyId: string): Promise<EmailReply> {

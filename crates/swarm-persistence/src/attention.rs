@@ -278,6 +278,9 @@ fn emails_awaiting_a_reply(
                SELECT 1 FROM email_reply_deliveries reply
                WHERE reply.task_id = t.id AND reply.state = 'delivered'
            )
+           AND NOT EXISTS (
+               SELECT 1 FROM email_reply_outcomes outcome WHERE outcome.task_id = t.id
+           )
          GROUP BY t.id",
     )?;
     let rows = statement.query_map([], |row| {

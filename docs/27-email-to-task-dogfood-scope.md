@@ -75,7 +75,8 @@ Microsoft protocol reference: <https://learn.microsoft.com/en-us/entra/identity-
 
 - automatic inbox rules or background task creation;
 - forwarding, moving, deleting, or marking mail read;
-- synchronizing intermediate task state back into Outlook;
+- synchronizing intermediate task state back into Outlook (amended by ADR 0121:
+  the operator can save a finished reply as a draft in their Outlook, on request);
 - ingesting an entire mailbox or attachment archive;
 - using email participants as Swarm authorization identities.
 

@@ -577,6 +577,11 @@ impl TaskStore {
                    SELECT 1 FROM email_reply_deliveries reply
                    WHERE reply.task_id = t.id AND reply.state = 'delivered'
                )
+               -- Closed by the operator without Swarm sending: no reply
+               -- needed, or saved as a draft in Outlook (ADR 0121).
+               AND NOT EXISTS (
+                   SELECT 1 FROM email_reply_outcomes outcome WHERE outcome.task_id = t.id
+               )
                -- A CANCELLED REPLY IS SHOWN, carrying why it failed. This used
                -- to exclude them, for a reason that was sound and rested on a
                -- premise that was wrong -- that the operator had deleted
@@ -1011,6 +1016,20 @@ impl TaskStore {
         )?;
         if !ready {
             return Err(TaskStoreError::EmailReplyNotReady);
+        }
+        // A reply the operator closed is not sent afterwards from somewhere
+        // else: saved as Outlook drafts, a send here would answer the same
+        // people twice (ADR 0121).
+        let closed: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM email_reply_outcomes outcome
+                 JOIN email_reply_deliveries reply ON reply.task_id = outcome.task_id
+                 WHERE reply.id = ?1)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if closed {
+            return Err(TaskStoreError::EmailReplyClosed);
         }
         let changed = transaction.execute(
             "UPDATE email_reply_deliveries SET state = 'queued', updated_at = unixepoch()

@@ -338,3 +338,60 @@ test("a reply already going out says so, and offers nothing to press", () => {
   expect(screen.queryByRole("button", { name: /Write the reply|Edit here/ })).toBeNull();
   expect(screen.queryByText(/No reply has been written/)).toBeNull();
 });
+
+const drafted = { ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Short answers for now." };
+
+/**
+ * "Sometimes we don't need to send an email" (ADR 0121). Send was the only way
+ * out of this card. Don't send asks once, because the card does not come back.
+ */
+test("Don't send asks once, then closes without sending", () => {
+  const onDontSend = vi.fn();
+  const onSendReply = vi.fn();
+  render(<UnansweredEmailAttentionCard awaiting={[drafted]} onOpenTask={vi.fn()} onSendReply={onSendReply} onDontSend={onDontSend} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Don’t send" }));
+  expect(onDontSend).not.toHaveBeenCalled();
+  expect(screen.getByText(/Close this without a reply\? Nothing is sent\./)).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+  expect(screen.getByRole("button", { name: "Send this reply" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Don’t send" }));
+  fireEvent.click(screen.getByRole("button", { name: "Yes, don’t send" }));
+  expect(onDontSend).toHaveBeenCalledWith("task-1");
+  expect(onSendReply).not.toHaveBeenCalled();
+});
+
+/** A thread with nothing written can still be closed, but has nothing to draft. */
+test("a reply nobody wrote can be closed but not saved as a draft", () => {
+  render(<UnansweredEmailAttentionCard awaiting={[waiting]} onOpenTask={vi.fn()} onDontSend={vi.fn()} onSaveAsDraft={vi.fn()} />);
+
+  expect(screen.getByRole("button", { name: "Don’t send" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Save as draft in Outlook" })).not.toBeInTheDocument();
+});
+
+/**
+ * Saving as a draft puts the reply in the operator's Outlook. A mailbox that
+ * never let Swarm write offers a reconnect rather than a dead end.
+ */
+test("saving as a draft offers a reconnect when Outlook has not allowed it", async () => {
+  const onSaveAsDraft = vi.fn(async () => "reconnect" as const);
+  const onReconnectForDrafts = vi.fn();
+  render(<UnansweredEmailAttentionCard awaiting={[drafted]} onOpenTask={vi.fn()} onSaveAsDraft={onSaveAsDraft} onReconnectForDrafts={onReconnectForDrafts} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Save as draft in Outlook" }));
+  expect(onSaveAsDraft).toHaveBeenCalledWith("task-1");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Outlook has not let Swarm save drafts yet.");
+
+  fireEvent.click(screen.getByRole("button", { name: "Reconnect for drafts" }));
+  expect(onReconnectForDrafts).toHaveBeenCalledOnce();
+});
+
+/** Nothing closes a reply that is going out: it could say something untrue. */
+test("a reply on its way offers neither Don't send nor a draft", () => {
+  render(<UnansweredEmailAttentionCard awaiting={[{ ...drafted, sending: true }]} onOpenTask={vi.fn()} onDontSend={vi.fn()} onSaveAsDraft={vi.fn()} />);
+
+  expect(screen.queryByRole("button", { name: "Don’t send" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Save as draft in Outlook" })).not.toBeInTheDocument();
+});

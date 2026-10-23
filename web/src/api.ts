@@ -128,6 +128,8 @@ export {
   prepareEmailReply,
   recordTaskDeployment,
   retryEmailReply,
+  closeEmailReplyUnsent,
+  saveEmailReplyAsOutlookDraft,
   reviseEmailReplyDraft,
   sendEmailReply,
   updateEmailReplyDraft,

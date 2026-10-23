@@ -34,14 +34,33 @@ import BeeMascot from "../brand/BeeMascot";
  * page". Reading and fixing the words is the only part of an email task that is
  * genuinely theirs, and it was the one part that sent them somewhere else.
  */
-export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply }: {
+/** What saving as an Outlook draft came to, so the card can offer a reconnect. */
+export type OutlookDraftResult = "saved" | "reconnect" | "failed";
+
+/**
+ * NOT EVERY EMAIL NEEDS AN ANSWER, AND NOT EVERY ANSWER SHOULD LEAVE FROM HERE
+ * (ADR 0121). The operator: "Sometimes we don't need to send an email. So we
+ * should have a way to not send an email, and also an option to save it as a
+ * draft so it sits in my outlook." Send was the only way out of this card, so
+ * a thread that needed no reply stayed in Needs you for good. "Don't send"
+ * closes it with nothing sent; "Save as draft in Outlook" puts the reply in
+ * their Drafts folder to finish there. Both leave the card, and both are
+ * recorded on the task.
+ */
+type ClosingHandlers = {
+  onDontSend?: (taskId: string) => void;
+  onSaveAsDraft?: (taskId: string) => Promise<OutlookDraftResult>;
+  onReconnectForDrafts?: () => void;
+};
+
+export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply, onDontSend, onSaveAsDraft, onReconnectForDrafts }: {
   awaiting: UnansweredEmailTask[];
   busy?: boolean;
   onOpenTask: (taskId: string) => void;
   onSendReply?: (replyId: string) => void;
   onSaveReply?: (taskId: string, body: string) => void;
   onReviseReply?: (taskId: string, instruction: string) => Promise<string | null>;
-}) {
+} & ClosingHandlers) {
   if (awaiting.length === 0) return null;
   return (
     <>
@@ -54,20 +73,31 @@ export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTas
           onSendReply={onSendReply}
           onSaveReply={onSaveReply}
           onReviseReply={onReviseReply}
+          onDontSend={onDontSend}
+          onSaveAsDraft={onSaveAsDraft}
+          onReconnectForDrafts={onReconnectForDrafts}
         />
       ))}
     </>
   );
 }
 
-function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply }: {
+function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply, onDontSend, onSaveAsDraft, onReconnectForDrafts }: {
   item: UnansweredEmailTask;
   busy?: boolean;
   onOpenTask: (taskId: string) => void;
   onSendReply?: (replyId: string) => void;
   onSaveReply?: (taskId: string, body: string) => void;
   onReviseReply?: (taskId: string, instruction: string) => Promise<string | null>;
-}) {
+} & ClosingHandlers) {
+  // "Don't send" sits beside Send, so it asks once before it closes the card:
+  // the item does not come back, and the person who wrote in hears nothing.
+  const [confirmingDontSend, setConfirmingDontSend] = useState(false);
+  const [needsDraftPermission, setNeedsDraftPermission] = useState(false);
+  async function saveAsDraft() {
+    if (!onSaveAsDraft) return;
+    setNeedsDraftPermission((await onSaveAsDraft(item.task_id)) === "reconnect");
+  }
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState(item.draft_body ?? "");
   const [instruction, setInstruction] = useState("");
@@ -176,6 +206,14 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             <small>{countWords(item.draft_body)} words</small>
           </blockquote>
         ) : null}
+        {needsDraftPermission ? (
+          <p className="unanswered-email-failure" role="alert">
+            <strong>Outlook has not let Swarm save drafts yet.</strong> Reconnect this mailbox once to allow it. Sending works as before.
+            {onReconnectForDrafts ? (
+              <> <button className="text-button" type="button" disabled={busy} onClick={onReconnectForDrafts}>Reconnect for drafts</button></>
+            ) : null}
+          </p>
+        ) : null}
       </div>
       <div className="queen-attention-actions">
         {editing ? (
@@ -193,6 +231,14 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
               onClick={() => { setBody(item.draft_body ?? ""); setEditing(false); }}
             >Cancel</button>
           </>
+        ) : confirmingDontSend ? (
+          <>
+            <span className="field-caption">Close this without a reply? Nothing is sent.</span>
+            <button className="primary-action" type="button" disabled={busy} onClick={() => { setConfirmingDontSend(false); onDontSend?.(item.task_id); }}>
+              Yes, don&rsquo;t send
+            </button>
+            <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmingDontSend(false)}>Keep it</button>
+          </>
         ) : (
           <>
             {item.draft_id && onSendReply ? (
@@ -203,9 +249,19 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             {/* Nothing to press while it is going out. Offering Edit or Write
                 here invites the operator to change or replace text that has
                 already left, or is leaving. */}
+            {item.draft_body && onSaveAsDraft && !item.sending ? (
+              <button className="secondary-button" type="button" disabled={busy} onClick={() => void saveAsDraft()}>
+                Save as draft in Outlook
+              </button>
+            ) : null}
             {canEditHere && !item.sending ? (
               <button className="secondary-button" type="button" disabled={busy} onClick={() => { setBody(item.draft_body ?? ""); setEditing(true); }}>
                 {item.draft_body ? "Edit here" : "Write the reply"}
+              </button>
+            ) : null}
+            {onDontSend && !item.sending ? (
+              <button className="text-button" type="button" disabled={busy} onClick={() => setConfirmingDontSend(true)}>
+                Don&rsquo;t send
               </button>
             ) : null}
             {/* Still a route to the task itself, for everything a reply editor

@@ -75,6 +75,7 @@ pub use task_waits::{OperatorWait, ResumedWaits};
 mod apiary_enrollment;
 mod decisions;
 mod email;
+mod email_outcomes;
 mod events;
 mod federation;
 mod federation_handoff_reconciliation;
@@ -166,6 +167,7 @@ pub use email::{
     EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, MAX_DEPLOYMENT_FIELD_BYTES,
     TaskDeploymentRecord, UnansweredEmailTask,
 };
+pub use email_outcomes::{EmailDraftPlan, EmailDraftTarget, EmailReplyOutcome};
 pub use night_watch::NightWatchConfiguration;
 pub use presence::PresenceMutation;
 pub use worker_engine_updates::{
@@ -406,7 +408,9 @@ const APIARY_TASK_WAITS_SCHEMA_MARKER: i64 = 205;
 const PARK_NEEDS_SCHEMA_MARKER: i64 = 206;
 /// A Jira resolution can wait for the operator to confirm it (ADR 0120).
 const JIRA_RESOLUTION_HOLD_SCHEMA_MARKER: i64 = 207;
-const CURRENT_SCHEMA_VERSION: i64 = JIRA_RESOLUTION_HOLD_SCHEMA_MARKER;
+/// An email reply can be closed without Swarm sending it (ADR 0121).
+const EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER: i64 = 208;
+const CURRENT_SCHEMA_VERSION: i64 = EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -820,6 +824,18 @@ pub enum TaskStoreError {
     TaskHasNoEmailThread,
     #[error("this task already has an email resolution reply")]
     EmailReplyAlreadyExists,
+    // ADR 0121. Closing or drafting while a send is going out, or while its
+    // result is unknown, could say something untrue or answer someone twice.
+    #[error(
+        "this reply is being sent or its result is unknown, so it cannot be closed or saved as a draft until that settles"
+    )]
+    EmailReplyInFlight,
+    #[error("there is no written reply to save as a draft")]
+    EmailReplyNotWritten,
+    #[error(
+        "this reply was already closed without Swarm sending it: either no reply was needed or it was saved as a draft in Outlook"
+    )]
+    EmailReplyClosed,
     #[error("this Hive already has the maximum number of pending email replies")]
     EmailReplyQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
@@ -4816,6 +4832,12 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < JIRA_RESOLUTION_HOLD_SCHEMA_MARKER {
         crate::jira::migrate_resolution_hold(transaction, JIRA_RESOLUTION_HOLD_SCHEMA_MARKER)?;
+    }
+    if schema_version < EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER {
+        crate::email_outcomes::migrate_email_reply_outcomes(
+            transaction,
+            EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -10887,6 +10909,14 @@ mod tests {
                              + (SELECT COUNT(*) FROM sqlite_master
                                 WHERE name = 'notification_deliveries'
                                   AND sql LIKE '%''jira_resolution''%') = 3",
+        },
+        // An email reply can be closed without Swarm sending it (ADR 0121).
+        SchemaStep {
+            table: "email_reply_outcomes",
+            artifact: "",
+            undo_sql: "DROP TABLE email_reply_outlook_drafts; DROP TABLE email_reply_outcomes;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
+                AND name IN ('email_reply_outcomes', 'email_reply_outlook_drafts')",
         },
     ];
 

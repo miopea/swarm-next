@@ -5219,6 +5219,14 @@ fn api_router(state: AppState) -> Router {
             post(revise_email_reply_draft),
         )
         .route(
+            "/api/v1/tasks/{task_id}/email/reply/not-needed",
+            post(close_email_reply_unsent),
+        )
+        .route(
+            "/api/v1/tasks/{task_id}/email/reply/outlook-draft",
+            post(save_email_reply_as_outlook_draft),
+        )
+        .route(
             "/api/v1/integrations/email/replies/{reply_id}/send",
             post(send_email_reply),
         )
@@ -8535,6 +8543,18 @@ struct EmailAuthorizationStart {
     authorization_url: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct EmailAuthorizationStartQuery {
+    /// Also ask to write mail, so Swarm can save replies as drafts (ADR 0121).
+    #[serde(default)]
+    drafts: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OutlookDraftsSaved {
+    drafts: usize,
+}
+
 #[derive(Serialize)]
 struct EmailOAuthConfigurationView {
     configured: bool,
@@ -8655,6 +8675,7 @@ async fn email_configuration(
 async fn email_auth_start(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<EmailAuthorizationStartQuery>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let outlook = state.outlook.read().await.clone();
@@ -8665,7 +8686,12 @@ async fn email_auth_start(
             "Microsoft email OAuth is not configured on this Swarm host",
         )
     })?;
-    let url = oauth.authorization_url().await.map_err(email_oauth_error)?;
+    let url = if query.drafts {
+        oauth.authorization_url_for_drafts().await
+    } else {
+        oauth.authorization_url().await
+    }
+    .map_err(email_oauth_error)?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(EmailAuthorizationStart {
@@ -9346,6 +9372,76 @@ async fn send_email_reply(
         StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
         Json(reply),
+    )
+        .into_response())
+}
+
+/// The operator decided this email needs no reply (ADR 0121).
+async fn close_email_reply_unsent(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    task_store(&state)?
+        .close_email_reply(task_id, swarm_persistence::EmailReplyOutcome::NotSent)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Saves the written reply as drafts in the operator's Outlook, one per
+/// person it would have answered, and closes it there (ADR 0121).
+///
+/// Each draft is recorded as it is made, so a failure part-way through is
+/// retried from where it stopped instead of drafting the same person twice.
+async fn save_email_reply_as_outlook_draft(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let store = task_store(&state)?;
+    let plan = store
+        .email_reply_draft_plan(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    let outlook = state.outlook.read().await.clone();
+    for target in plan.targets.iter().filter(|target| !target.drafted) {
+        let mut outcome = outlook
+            .reply_draft_from(&target.integration_id, &target.message_id, &plan.body)
+            .await;
+        // The same stale-id recovery a send uses: a filed message has a new
+        // Graph id and the same internet message id.
+        if matches!(outcome, Err(outlook::OutlookError::NotFound))
+            && let Some(internet_message_id) = target.internet_message_id.as_deref()
+            && let Ok(current) = outlook
+                .message_id_for_internet_id(&target.integration_id, internet_message_id)
+                .await
+        {
+            outcome = outlook
+                .reply_draft_from(&target.integration_id, &current, &plan.body)
+                .await;
+        }
+        let draft = outcome.map_err(outlook_error)?;
+        store
+            .record_email_reply_outlook_draft(
+                &target.target_id,
+                &draft.id,
+                draft.web_link.as_deref(),
+            )
+            .map_err(|error| task_store_error(&error))?;
+    }
+    store
+        .close_email_reply(task_id, swarm_persistence::EmailReplyOutcome::SavedAsDraft)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(OutlookDraftsSaved {
+            drafts: plan.targets.len(),
+        }),
     )
         .into_response())
 }
@@ -10632,6 +10728,7 @@ fn email_oauth_error(error: microsoft_oauth::OAuthError) -> ApiError {
             "email_oauth_unavailable",
             "Microsoft authorization is temporarily unavailable",
         ),
+        microsoft_oauth::OAuthError::ConsentRequired => email_draft_permission_missing(),
         microsoft_oauth::OAuthError::InvalidState => ApiError::new(
             StatusCode::BAD_REQUEST,
             "email_oauth_state_invalid",
@@ -10699,7 +10796,17 @@ fn outlook_error(error: outlook::OutlookError) -> ApiError {
             "email_delivery_uncertain",
             "Microsoft may have accepted this reply; review the original thread before retrying",
         ),
+        outlook::OutlookError::DraftPermissionMissing => email_draft_permission_missing(),
     }
+}
+
+/// The card offers a reconnect on this code, so it is named once (ADR 0121).
+fn email_draft_permission_missing() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "email_draft_permission_missing",
+        "Reconnect this mailbox to let Swarm save drafts in Outlook",
+    )
 }
 
 fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> ApiError {
@@ -11310,6 +11417,21 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::EmailSourceNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "email_source_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::EmailReplyInFlight => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_reply_in_flight",
+            error.to_string(),
+        ),
+        TaskStoreError::EmailReplyNotWritten => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_reply_not_written",
+            error.to_string(),
+        ),
+        TaskStoreError::EmailReplyClosed => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_reply_closed",
             error.to_string(),
         ),
         TaskStoreError::EmailReplyNotReady | TaskStoreError::EmailReplyAlreadyExists => {

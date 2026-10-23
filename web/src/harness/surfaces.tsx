@@ -529,7 +529,7 @@ export const SURFACES: Surface[] = [
           busy={false}
           additionalPendingCount={2}
           attentionCards={<>
-            <UnansweredEmailAttentionCard awaiting={[waitingEmail]} busy={false} onOpenTask={() => undefined} />
+            <UnansweredEmailAttentionCard awaiting={[waitingEmail]} busy={false} onOpenTask={() => undefined} onSendReply={() => undefined} onDontSend={() => undefined} onSaveAsDraft={async () => "reconnect"} onReconnectForDrafts={() => undefined} />
             <JiraResolutionAttentionCard
               held={[{
                 task_id: "fictional-is-ticket",

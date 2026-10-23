@@ -29,6 +29,9 @@ import {
   resolveDecision,
   claimWorker,
   fetchEmailTasksAwaitingReply,
+  closeEmailReplyUnsent,
+  saveEmailReplyAsOutlookDraft,
+  beginEmailAuthorization,
   fetchHeldJiraResolutions,
   confirmJiraResolution,
   leaveJiraTicketOpen,
@@ -124,7 +127,7 @@ import { bundleIsStale } from "./staleBundle";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
-import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
+import UnansweredEmailAttentionCard, { type OutlookDraftResult } from "./tasks/UnansweredEmailAttentionCard";
 import JiraResolutionAttentionCard from "./tasks/JiraResolutionAttentionCard";
 import OperatorWaitCard from "./decisions/OperatorWaitCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
@@ -1344,6 +1347,45 @@ export function App() {
       else await leaveJiraTicketOpen(operatorToken, taskId);
       setHeldResolutions(await fetchHeldJiraResolutions(operatorToken));
     }, resolve ? "Resolving it in Jira…" : "Leaving it open…");
+  }
+
+  /** Closes an email task's reply without sending one (ADR 0121). */
+  async function dontSendAwaitingReply(taskId: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await closeEmailReplyUnsent(operatorToken, taskId);
+      setAwaitingReply(await fetchEmailTasksAwaitingReply(operatorToken));
+    }, "Closing without a reply…");
+  }
+
+  /**
+   * Saves the reply as Outlook drafts. A mailbox that never let Swarm write is
+   * not an error to show: the card offers a reconnect instead.
+   */
+  async function saveAwaitingReplyAsDraft(taskId: string): Promise<OutlookDraftResult> {
+    if (!operatorToken) return "failed";
+    let result: OutlookDraftResult = "failed";
+    await perform(async () => {
+      try {
+        await saveEmailReplyAsOutlookDraft(operatorToken, taskId);
+      } catch (error) {
+        if (error instanceof RuntimeRequestError && error.code === "email_draft_permission_missing") {
+          result = "reconnect";
+          return;
+        }
+        throw error;
+      }
+      result = "saved";
+      setAwaitingReply(await fetchEmailTasksAwaitingReply(operatorToken));
+    }, "Saving the reply as a draft in Outlook…");
+    return result;
+  }
+
+  async function reconnectMailboxForDrafts() {
+    if (!operatorToken) return;
+    await perform(async () => {
+      window.location.assign(await beginEmailAuthorization(operatorToken, { drafts: true }));
+    }, "Opening Microsoft sign-in…");
   }
 
   async function sendAwaitingReply(replyId: string) {
@@ -2626,7 +2668,7 @@ export function App() {
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
                 <WorkerReturnAttentionCard workers={workers} onReview={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />
