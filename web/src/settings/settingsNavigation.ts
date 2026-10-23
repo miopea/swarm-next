@@ -82,7 +82,7 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
   { id: "settings-apiary", section: "settings-hive", title: "Apiary",
     keywords: ["apiary", "hive name", "identity", "keeper", "member", "join", "federation", "invite", "connections", "integrations"] },
   { id: "settings-integrations", section: "settings-connections", title: "Jira",
-    keywords: ["jira", "atlassian", "project", "issue", "board", "ticket"] },
+    keywords: ["jira", "atlassian", "project", "issue", "board", "ticket", "ask me before resolving tickets", "resolved", "approved", "approval", "confirm"] },
   { id: "settings-email", section: "settings-connections", title: "Email",
     keywords: ["email", "outlook", "microsoft", "mailbox", "reply", "oauth", "inbox"] },
   { id: "settings-usage", section: "settings-maintenance", title: "Provider usage",

@@ -93,6 +93,21 @@ test("finds a control by the word someone would actually type", () => {
   expect(titles("membership")).toEqual(["Your Hive"]);
 });
 
+/**
+ * Other operators learn about "Ask me before resolving tickets" from the
+ * release notes and then search for it in their own words. "resolve" also
+ * belongs to Terminal answers, and both are right to show.
+ */
+test("finds the Jira resolution setting by its label and by asking for approval", () => {
+  const titles = (query: string) => filterSettingsCards(query).map((card) => card.title);
+
+  expect(titles("ask me before resolving tickets")).toEqual(["Jira"]);
+  expect(titles("resolving")).toEqual(["Jira"]);
+  expect(titles("resolve")).toEqual(["Terminal answers", "Jira"]);
+  expect(titles("approve")).toEqual(["Jira"]);
+  expect(titles("approval")).toEqual(["Jira"]);
+});
+
 test("matches the section name too, so browsing by group still works", () => {
   expect(filterSettingsCards("access").map((card) => card.id))
     .toEqual(["settings-access", "settings-remote"]);
