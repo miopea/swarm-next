@@ -1133,6 +1133,10 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).endsWith("/integrations/email/awaiting-reply")) {
       return Promise.resolve(ok([]));
     }
+    // Polled app-wide like the replies above, so it is answered by name.
+    if (String(url).endsWith("/integrations/jira/resolutions")) {
+      return Promise.resolve(ok([]));
+    }
     if (String(url).includes("/api/v1/runtime/development")) {
       return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
     }

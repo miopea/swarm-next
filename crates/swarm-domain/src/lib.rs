@@ -225,6 +225,10 @@ impl fmt::Display for ParseJiraProjectScopeError {
 impl std::error::Error for ParseJiraProjectScopeError {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent setting or check on one binding, not states of one machine"
+)]
 pub struct JiraProjectBinding {
     pub id: JiraProjectBindingId,
     pub project_id: String,
@@ -236,6 +240,11 @@ pub struct JiraProjectBinding {
     pub access_verified: bool,
     pub workflow_mapped: bool,
     pub auto_sync_assigned: bool,
+    /// Whether Swarm asks the operator before resolving this project's
+    /// tickets. When on, a completion the operator did not make holds the Jira
+    /// write for their confirmation (ADR 0120).
+    #[serde(default)]
+    pub confirm_resolution: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1459,6 +1468,7 @@ mod tests {
             access_verified: true,
             workflow_mapped: true,
             auto_sync_assigned: true,
+            confirm_resolution: false,
         };
         assert_eq!(
             binding.readiness(JiraConnectionState::Ready, Some(apiary_id), false),
@@ -1500,6 +1510,7 @@ mod tests {
             access_verified: false,
             workflow_mapped: false,
             auto_sync_assigned: true,
+            confirm_resolution: false,
         };
         assert_eq!(
             binding.readiness(JiraConnectionState::CredentialsInvalid, None, false),

@@ -5131,6 +5131,22 @@ fn api_router(state: AppState) -> Router {
             put(set_jira_assigned_sync),
         )
         .route(
+            "/api/v1/integrations/jira/bindings/{binding_id}/confirm-resolution",
+            put(set_jira_confirm_resolution),
+        )
+        .route(
+            "/api/v1/integrations/jira/resolutions",
+            get(held_jira_resolutions),
+        )
+        .route(
+            "/api/v1/integrations/jira/resolutions/{task_id}/confirm",
+            post(confirm_jira_resolution),
+        )
+        .route(
+            "/api/v1/integrations/jira/resolutions/{task_id}/leave-open",
+            post(leave_jira_ticket_open),
+        )
+        .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/issues",
             get(jira_binding_issues),
         )
@@ -8300,6 +8316,75 @@ async fn set_jira_assigned_sync(
         state.reconcile_jira().await;
     }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(binding)).into_response())
+}
+
+async fn set_jira_confirm_resolution(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(binding_id): Path<JiraProjectBindingId>,
+    Json(request): Json<JiraAssignedSyncRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let binding = task_store(&state)?
+        .set_jira_confirm_resolution(binding_id, request.enabled)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(binding)).into_response())
+}
+
+/// Completed tickets whose Jira resolution waits for the operator (ADR 0120).
+async fn held_jira_resolutions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let held = task_store(&state)?
+        .held_jira_resolutions()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(held)).into_response())
+}
+
+async fn confirm_jira_resolution(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let confirmed = task_store(&state)?
+        .confirm_jira_resolution(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !confirmed {
+        return Err(no_held_resolution());
+    }
+    state.control_room_notify.notify_waiters();
+    state.deliver_jira_transitions().await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn leave_jira_ticket_open(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let left_open = task_store(&state)?
+        .leave_jira_ticket_open(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !left_open {
+        return Err(no_held_resolution());
+    }
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Nothing was waiting: already answered, or Jira moved the ticket first.
+fn no_held_resolution() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "jira_resolution_not_held",
+        "This ticket's resolution is no longer waiting for you",
+    )
 }
 
 async fn jira_binding_issues(
@@ -20064,6 +20149,110 @@ mod tests {
         assert_eq!(tasks[0].title, "Assigned operator work");
         assert_eq!(tasks[0].state, TaskState::Active);
         assert_eq!(store.list_jira_issue_links(binding.id).unwrap().len(), 1);
+    }
+
+    /// The operator's side of ADR 0120 over HTTP: turn the question on for a
+    /// project, see the ticket waiting, confirm it once. A second confirm is
+    /// refused rather than repeated, so a double press cannot resolve twice.
+    #[tokio::test]
+    async fn a_held_resolution_is_listed_and_confirmed_once() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10027",
+                project_key: "IS",
+                project_name: "IT: Support Requests",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "5".into(),
+                        jira_status_name: "Resolved".into(),
+                        task_state: TaskState::Completed,
+                    },
+                ],
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let enabled = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/integrations/jira/bindings/{}/confirm-resolution",
+                        binding.id
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(enabled.status(), StatusCode::OK);
+        assert_eq!(response_json(enabled).await["confirm_resolution"], true);
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "30736",
+                    issue_key: "IS-10736",
+                    summary: "Photo downloads are slow",
+                    description: "",
+                    status_id: "3",
+                    status_name: "In Progress",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-10-22T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+
+        let held = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/jira/resolutions").await,
+        )
+        .await;
+        assert_eq!(held.as_array().unwrap().len(), 1);
+        assert_eq!(held[0]["issue_key"], "IS-10736");
+        assert_eq!(held[0]["last_reply_at"], serde_json::Value::Null);
+
+        let confirm = || {
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/integrations/jira/resolutions/{}/confirm",
+                    task.id
+                ))
+                .header("authorization", "Bearer secret")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let first = app.clone().oneshot(confirm()).await.unwrap();
+        assert_eq!(first.status(), StatusCode::NO_CONTENT);
+        let second = app.clone().oneshot(confirm()).await.unwrap();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+        assert!(store.held_jira_resolutions().unwrap().is_empty());
     }
 
     #[tokio::test]

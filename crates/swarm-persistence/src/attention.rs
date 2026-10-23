@@ -17,11 +17,11 @@ const STALE_REFUSAL_SECONDS: i64 = 60 * 60;
 /// would not have helped — there was nothing on this side to widen it FOR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NeedsYouSubject {
-    /// Which of the five sources this came from.
+    /// Which of the six sources this came from.
     pub(crate) kind: &'static str,
     /// Stable identity for one item, and the deduplication key for a delivery.
     ///
-    /// Replaces `decision_id` in that role. Two of the five sources are
+    /// Replaces `decision_id` in that role. Two of the six sources are
     /// singletons — held deliveries and Queen automation are one card however
     /// much sits behind them — so the key cannot simply be a row id.
     pub(crate) subject_key: String,
@@ -81,7 +81,34 @@ pub(crate) fn needs_you_subjects(
     subjects.extend(queen_automation_attention(transaction)?);
     subjects.extend(held_deliveries(transaction, now)?);
     subjects.extend(emails_awaiting_a_reply(transaction)?);
+    subjects.extend(held_jira_resolutions(transaction)?);
     Ok(subjects)
+}
+
+/// Completed tickets whose resolution waits for the operator (ADR 0120).
+///
+/// One card each, like the email replies: each is one requester's ticket,
+/// and confirming one says nothing about another.
+fn held_jira_resolutions(
+    transaction: &Transaction<'_>,
+) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {
+    let mut statement = transaction.prepare(
+        "SELECT delivery.task_id, delivery.updated_at
+         FROM jira_transition_deliveries delivery
+         JOIN tasks t ON t.id = delivery.task_id
+         JOIN jira_issue_links link ON link.task_id = t.id
+         WHERE delivery.state = 'held' AND t.state = 'completed' AND t.removed_at IS NULL",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let id: String = row.get(0)?;
+        Ok(NeedsYouSubject {
+            kind: "jira_resolution",
+            subject_key: format!("jira-resolution:{id}"),
+            created_at: row.get(1)?,
+            urgency: "normal".to_owned(),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 fn pending_decisions(

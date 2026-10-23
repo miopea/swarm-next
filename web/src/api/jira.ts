@@ -37,6 +37,8 @@ export type JiraProjectBinding = {
   access_verified: boolean;
   workflow_mapped: boolean;
   auto_sync_assigned: boolean;
+  /** Ask the operator before resolving this project's tickets (ADR 0120). */
+  confirm_resolution: boolean;
 };
 export type JiraStatusMapping = { jira_status_id: string; jira_status_name: string; task_state: TaskState };
 export type JiraIssue = {
@@ -64,7 +66,19 @@ export type JiraTaskLink = {
   jira_assignee_name: string | null;
   remote_updated_at: string;
   last_synced_at: number;
-  outbound_state: "queued" | "dispatching" | "conflict" | "uncertain" | null;
+  /** "held": the resolution waits for the operator; "declined": they left it open. */
+  outbound_state: "queued" | "dispatching" | "held" | "declined" | "conflict" | "uncertain" | null;
+};
+/** A completed ticket whose Jira resolution waits for the operator (ADR 0120). */
+export type HeldJiraResolution = {
+  task_id: string;
+  issue_key: string;
+  project_name: string;
+  title: string;
+  held_since: number;
+  /** When a comment last reached the ticket; null when none ever has. */
+  last_reply_at: number | null;
+  handoff: string | null;
 };
 export type JiraComment = { id: string; author_name: string; body: string; created_at: string; updated_at: string };
 export type JiraCommentDispatch = { state: "queued" | "dispatching" | "delivered" | "conflict" | "uncertain" };
@@ -175,6 +189,28 @@ export async function setJiraAssignedSync(operatorToken: string, bindingId: stri
     body: JSON.stringify({ enabled }),
   });
   return response.json() as Promise<JiraProjectBinding>;
+}
+
+export async function setJiraConfirmResolution(operatorToken: string, bindingId: string, enabled: boolean): Promise<JiraProjectBinding> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/confirm-resolution`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<JiraProjectBinding>;
+}
+
+export async function fetchHeldJiraResolutions(operatorToken: string, signal?: AbortSignal): Promise<HeldJiraResolution[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/resolutions", { signal });
+  return response.json() as Promise<HeldJiraResolution[]>;
+}
+
+export async function confirmJiraResolution(operatorToken: string, taskId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/resolutions/${encodeURIComponent(taskId)}/confirm`, { method: "POST" });
+}
+
+export async function leaveJiraTicketOpen(operatorToken: string, taskId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/resolutions/${encodeURIComponent(taskId)}/leave-open`, { method: "POST" });
 }
 
 export async function fetchJiraBindingIssues(operatorToken: string, bindingId: string): Promise<JiraIssue[]> {

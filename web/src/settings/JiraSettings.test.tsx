@@ -340,3 +340,43 @@ test("offers a direct retry when Jira readiness is temporarily unavailable", () 
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
+
+test("a project can be set to ask before Swarm resolves its tickets", async () => {
+  // ADR 0120: IS-10736 and IS-10688 were resolved with no reply posted. The
+  // operator chose to confirm each Resolved, for support projects only.
+  const requests: { url: string; method: string; body?: string }[] = [];
+  const binding = {
+    id: "binding-1", project_id: "10027", project_key: "IS", project_name: "IT: Support Requests",
+    scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
+    auto_sync_assigned: true, confirm_resolution: false,
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    requests.push({ url, method, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url.includes("/bindings/binding-1/confirm-resolution") && method === "PUT") return ok({ ...binding, confirm_resolution: true });
+    if (url.includes("/bindings/binding-1/mappings")) return ok([]);
+    if (url.includes("/bindings") && method === "GET") return ok([binding]);
+    if (url.includes("/statuses")) return ok([]);
+    if (url.includes("/projects?")) return ok([]);
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  }));
+
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
+      unavailable={false}
+    />,
+  );
+
+  const ask = await screen.findByRole("checkbox", { name: /Ask me before resolving tickets/ });
+  expect(ask).not.toBeChecked();
+  fireEvent.click(ask);
+
+  await waitFor(() => expect(screen.getByRole("checkbox", { name: /Ask me before resolving tickets/ })).toBeChecked());
+  const write = requests.find((request) => request.url.includes("/confirm-resolution"));
+  expect(write?.method).toBe("PUT");
+  expect(write?.body).toBe(JSON.stringify({ enabled: true }));
+  expect(screen.getByText(/tickets will wait in Needs you before Swarm resolves them/)).toBeInTheDocument();
+});
