@@ -10,7 +10,7 @@ test("says how many workers are still running the release disk moved past", () =
   // Nothing said how many workers that applied to, so an update could be
   // installed and running nowhere.
   render(<ProviderReleaseAction busy={false} onRestart={vi.fn()} superseded={[
-    { provider: "claude_code", version: "2.1.236", installed_at: 1_000, worker_ids: ["a", "b"] },
+    { provider: "claude_code", version: "2.1.236", installed_at: 1_000, worker_ids: ["a", "b"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]} />);
 
   const card = screen.getByLabelText("Provider release status");
@@ -21,8 +21,8 @@ test("says how many workers are still running the release disk moved past", () =
 
 test("counts a worker once when more than one provider is behind", () => {
   render(<ProviderReleaseAction busy={false} onRestart={vi.fn()} superseded={[
-    { provider: "claude_code", version: "2.1.236", installed_at: 1_000, worker_ids: ["a", "b"] },
-    { provider: "codex", version: null, installed_at: 1_000, worker_ids: ["c"] },
+    { provider: "claude_code", version: "2.1.236", installed_at: 1_000, worker_ids: ["a", "b"], in_place_worker_ids: [], asked_worker_ids: [] },
+    { provider: "codex", version: null, installed_at: 1_000, worker_ids: ["c"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]} />);
 
   expect(screen.getByRole("button", { name: "Restart 3 workers" })).toBeInTheDocument();
@@ -31,7 +31,7 @@ test("counts a worker once when more than one provider is behind", () => {
 test("confirms before interrupting, and says what is lost", async () => {
   const onRestart = vi.fn().mockResolvedValue(undefined);
   render(<ProviderReleaseAction busy={false} onRestart={onRestart} superseded={[
-    { provider: "claude_code", version: "2.1.236", installed_at: 1_000, worker_ids: ["a"] },
+    { provider: "claude_code", version: "2.1.236", installed_at: 1_000, worker_ids: ["a"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]} />);
 
   fireEvent.click(screen.getByRole("button", { name: "Restart 1 worker" }));
@@ -40,6 +40,29 @@ test("confirms before interrupting, and says what is lost", async () => {
   expect(confirm).toHaveTextContent("already on the installed release are left alone");
 
   fireEvent.click(screen.getByRole("button", { name: "Restart and update" }));
+  expect(onRestart).toHaveBeenCalledOnce();
+});
+
+test("an update Swarm applies by itself offers no restart and interrupts nothing", () => {
+  const onRestart = vi.fn();
+  render(<ProviderReleaseAction busy={false} onRestart={onRestart} superseded={[
+    { provider: "claude_code", version: "2.1.310", installed_at: 1_000, worker_ids: ["a", "b"], in_place_worker_ids: ["a", "b"], asked_worker_ids: [] },
+  ]} />);
+
+  const card = screen.getByLabelText("Provider release status");
+  expect(card).toHaveTextContent("Swarm restarts each one onto it with /restart");
+  expect(card).toHaveTextContent("Nothing is interrupted");
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+});
+
+test("a worker Claude refused is asked again at once, without a confirmation", () => {
+  const onRestart = vi.fn().mockResolvedValue(undefined);
+  render(<ProviderReleaseAction busy={false} onRestart={onRestart} superseded={[
+    { provider: "claude_code", version: "2.1.310", installed_at: 1_000, worker_ids: ["a"], in_place_worker_ids: ["a"], asked_worker_ids: ["a"] },
+  ]} />);
+
+  expect(screen.getByRole("status")).toHaveTextContent("refuses while Remote Control is connected");
+  fireEvent.click(screen.getByRole("button", { name: "Ask again" }));
   expect(onRestart).toHaveBeenCalledOnce();
 });
 

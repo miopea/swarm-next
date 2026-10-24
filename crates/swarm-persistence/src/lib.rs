@@ -42,6 +42,7 @@ pub use hive_usage::StoredHiveUsage;
 mod check_gate;
 pub use check_gate::{CheckGateSetting, CiCandidate};
 mod worker_model;
+mod worker_remote_control;
 pub use worker_model::WorkerModelSetting;
 mod terminal_history;
 pub use terminal_history::TerminalHistorySetting;
@@ -410,7 +411,9 @@ const PARK_NEEDS_SCHEMA_MARKER: i64 = 206;
 const JIRA_RESOLUTION_HOLD_SCHEMA_MARKER: i64 = 207;
 /// An email reply can be closed without Swarm sending it (ADR 0121).
 const EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER: i64 = 208;
-const CURRENT_SCHEMA_VERSION: i64 = EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER;
+/// Whether Claude workers connect to Remote Control (ADR 0122).
+const WORKER_REMOTE_CONTROL_SCHEMA_MARKER: i64 = 209;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_REMOTE_CONTROL_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4837,6 +4840,12 @@ fn migrate_fleet_health_schema_steps(
         crate::email_outcomes::migrate_email_reply_outcomes(
             transaction,
             EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < WORKER_REMOTE_CONTROL_SCHEMA_MARKER {
+        crate::worker_remote_control::migrate_worker_remote_control(
+            transaction,
+            WORKER_REMOTE_CONTROL_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -10917,6 +10926,14 @@ mod tests {
             undo_sql: "DROP TABLE email_reply_outlook_drafts; DROP TABLE email_reply_outcomes;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('email_reply_outcomes', 'email_reply_outlook_drafts')",
+        },
+        // Whether Claude workers connect to Remote Control (ADR 0122).
+        SchemaStep {
+            table: "worker_remote_control_settings",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_remote_control_settings;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'worker_remote_control_settings'",
         },
     ];
 

@@ -103,21 +103,94 @@ function workerEngineUpdate(
   return undefined;
 }
 
+/**
+ * How the workers behind an installed provider release split (ADR 0122): the Claude workers
+ * Swarm moves onto it with /restart by itself, the ones of those Claude already refused, and
+ * the rest, which only stopping and starting can move.
+ */
+export function providerUpdateCounts(superseded: SupersededProvider[]) {
+  const behind = new Set(superseded.flatMap((entry) => entry.worker_ids));
+  const inPlace = new Set(superseded.flatMap((entry) => entry.in_place_worker_ids));
+  const refused = new Set(superseded.flatMap((entry) => entry.asked_worker_ids));
+  return {
+    behind: behind.size,
+    inPlace: inPlace.size,
+    refused: refused.size,
+    stopAndStart: [...behind].filter((worker) => !inPlace.has(worker)).length,
+  };
+}
+
+// The alpha three are listed for exhaustiveness, not because they can appear
+// here: nothing probes their releases, so the API never reports one superseded.
+// Naming them keeps this a total map, so adding a provider is a type error
+// rather than a blank label.
+const PROVIDER_NAME: Record<SupersededProvider["provider"], string> = {
+  claude_code: "Claude",
+  codex: "Codex",
+  gemini: "Gemini",
+  grok: "Grok",
+  opencode: "OpenCode",
+};
+
+/** "Claude 2.1.310 and Codex": one name for the rail and the settings card alike. */
+export function supersededReleaseNames(superseded: SupersededProvider[]): string {
+  return superseded
+    .map((entry) => `${PROVIDER_NAME[entry.provider]}${entry.version ? ` ${entry.version}` : ""}`)
+    .join(" and ");
+}
+
+function workers(count: number): string {
+  return `${count} worker${count === 1 ? "" : "s"}`;
+}
+
+function runningWorkers(count: number): string {
+  return `${count} running worker${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * A provider update asks the operator for something only when Swarm cannot do it alone.
+ * Moving Claude workers in place needs no button: they go one at a time, each as it comes
+ * free, and their conversations carry on (ADR 0122).
+ *
+ * ⚠️ ONE LINE, NOT A SPINNER CARD, though it is work in progress. A worker can stay busy for
+ * hours, and a full card held that long in the rail is what left the worker list at nothing
+ * on 2026-10-12. `busy` would buy the spinner and cost the list.
+ */
 function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary | undefined {
   if (superseded.length === 0) return undefined;
-  const workers = new Set(superseded.flatMap((entry) => entry.worker_ids)).size;
-  const named = superseded
-    .map((entry) => `${entry.provider === "codex" ? "Codex" : "Claude"}${entry.version ? ` ${entry.version}` : ""}`)
-    .join(" and ");
+  const counts = providerUpdateCounts(superseded);
+  const named = supersededReleaseNames(superseded);
+  if (counts.stopAndStart > 0) {
+    const others = counts.inPlace > 0
+      ? ` Swarm moves the other ${workers(counts.inPlace)} onto it by itself.`
+      : "";
+    return {
+      kind: "provider",
+      label: "Provider update",
+      detail: `${named} is installed, and ${runningWorkers(counts.stopAndStart)} started before that, so ${counts.stopAndStart === 1 ? "it is" : "they are"} still running the older release.${others}`,
+      busy: false,
+      action: "restart_providers",
+      actionLabel: "Restart onto the new release",
+      consequence: `${runningWorkers(counts.stopAndStart)} ${counts.stopAndStart === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations on the newer release. Running work is interrupted; unsent terminal input may be lost.`,
+      costShort: `Restarts ${runningWorkers(counts.stopAndStart)}`,
+    };
+  }
+  if (counts.refused > 0) {
+    return {
+      kind: "provider",
+      label: "Provider update",
+      detail: `${named} is installed. Claude did not restart ${workers(counts.refused)} onto it. It refuses while Remote Control is connected or background work is running.`,
+      busy: false,
+      action: "restart_providers",
+      actionLabel: "Retry the restart",
+    };
+  }
   return {
     kind: "provider",
-    label: "Provider update",
-    detail: `${named} is installed, and ${workers} running worker${workers === 1 ? "" : "s"} started before that, so ${workers === 1 ? "it is" : "they are"} still running the older release.`,
+    label: "Updating workers",
+    detail: `${named} is installed. Swarm is moving ${workers(counts.inPlace)} onto it, each as soon as it is free, and their conversations carry on.`,
     busy: false,
-    action: "restart_providers",
-    actionLabel: "Restart onto the new release",
-    consequence: `${workers} running worker${workers === 1 ? "" : "s"} ${workers === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations on the newer release. Running work is interrupted; unsent terminal input may be lost.`,
-    costShort: `Restarts ${workers} running worker${workers === 1 ? "" : "s"}`,
+    costShort: `Automatic, as ${counts.inPlace === 1 ? "it comes" : "each comes"} free`,
   };
 }
 

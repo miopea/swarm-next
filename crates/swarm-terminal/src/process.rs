@@ -260,7 +260,7 @@ pub enum ContinuationRecoveryOutcome {
 }
 
 /// What the host knows about one live terminal without reading its contents.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SessionResourceState {
     pub session_id: WorkerSessionId,
     pub running: bool,
@@ -273,6 +273,8 @@ pub struct SessionResourceState {
     pub provider_selection: Option<swarm_domain::ProviderConversationSelection>,
     pub continuation_unavailable: bool,
     pub continuation_recovery: Option<ContinuationRecoveryOutcome>,
+    /// The executable the session's process is running now.
+    pub provider_executable: Option<String>,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -1982,6 +1984,7 @@ impl SessionRegistry {
                         provider_selection: session.provider_selection()?,
                         continuation_unavailable: session.continuation_unavailable()?,
                         continuation_recovery: session.recovery_successor.get().copied(),
+                        provider_executable: process_id.and_then(crate::running_executable),
                     })
                 })
                 .collect()

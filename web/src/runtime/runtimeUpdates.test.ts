@@ -134,7 +134,7 @@ test("replaces the answer as soon as any subsystem reports", () => {
 });
 
 test("provider recovery is independent of the other runtime endpoints", () => {
-  const providers = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"] }];
+  const providers = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"], in_place_worker_ids: [], asked_worker_ids: [] }];
   const previous = runtimeUpdates(health("same"), host("same"), development({ state: "building" }), providers);
   const unavailable = nextRuntimeUpdates(previous, undefined, undefined, undefined);
   expect(unavailable?.map((entry) => entry.kind)).toEqual(["provider", "building"]);
@@ -152,7 +152,7 @@ test("provider recovery is independent of the other runtime endpoints", () => {
 test("unavailable provider data invents no pending update and keeps update ordering", () => {
   expect(nextRuntimeUpdates(undefined, undefined, undefined, undefined)).toBeUndefined();
   expect(nextRuntimeUpdates(undefined, health("same"), host("same"), development({}))).toEqual([]);
-  const pending = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"] }];
+  const pending = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"], in_place_worker_ids: [], asked_worker_ids: [] }];
   const previous = runtimeUpdates(health("new"), host("old"), development({ reload_available: true }), pending);
   const unavailable = nextRuntimeUpdates(previous, health("new"), host("old"), development({ reload_available: true }));
   expect(unavailable?.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "app"]);
@@ -191,7 +191,7 @@ test("reports a provider update, which is installed and running nowhere", () => 
   // the header said nothing. A provider update is the one that is installed and
   // running nowhere until each worker restarts.
   const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
-    { provider: "claude_code", version: "2.1.237", installed_at: 1_000, worker_ids: ["a", "b", "c"] },
+    { provider: "claude_code", version: "2.1.237", installed_at: 1_000, worker_ids: ["a", "b", "c"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]);
 
   expect(summary.kind).toBe("provider");
@@ -205,11 +205,51 @@ test("reports a provider update, which is installed and running nowhere", () => 
   expect(summary.consequence).not.toContain("loses its current conversation");
 });
 
+/**
+ * ADR 0122: Swarm moves Claude workers onto an installed update itself with /restart. Nothing
+ * is pressed, and the rail keeps it to one line, because a full card held for as long as a
+ * worker stays busy is what left the worker list at nothing (2026-10-12).
+ */
+test("an update Swarm is applying by itself asks for nothing and stays one line", () => {
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
+    { provider: "claude_code", version: "2.1.310", installed_at: 1_000, worker_ids: ["a", "b"], in_place_worker_ids: ["a", "b"], asked_worker_ids: [] },
+  ]);
+
+  expect(summary.label).toBe("Updating workers");
+  expect(summary.detail).toContain("Swarm is moving 2 workers onto it");
+  expect(summary.action).toBeUndefined();
+  expect(summary.consequence).toBeUndefined();
+  expect(summary.busy).toBe(false);
+  expect(summary.costShort).toBe("Automatic, as each comes free");
+});
+
+test("a worker Claude refused to restart is offered again without a warning", () => {
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
+    { provider: "claude_code", version: "2.1.310", installed_at: 1_000, worker_ids: ["a", "b"], in_place_worker_ids: ["a", "b"], asked_worker_ids: ["b"] },
+  ]);
+
+  expect(summary.detail).toContain("Claude did not restart 1 worker onto it");
+  expect(summary.action).toBe("restart_providers");
+  expect(summary.actionLabel).toBe("Retry the restart");
+  expect(summary.consequence).toBeUndefined();
+});
+
+test("only the workers that need stopping are counted in what a restart costs", () => {
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
+    { provider: "claude_code", version: "2.1.310", installed_at: 1_000, worker_ids: ["a", "b"], in_place_worker_ids: ["a"], asked_worker_ids: [] },
+    { provider: "codex", version: null, installed_at: 1_000, worker_ids: ["c"], in_place_worker_ids: [], asked_worker_ids: [] },
+  ]);
+
+  expect(summary.detail).toContain("2 running workers started before that");
+  expect(summary.detail).toContain("Swarm moves the other 1 worker onto it by itself");
+  expect(summary.consequence).toContain("2 running workers are restarted");
+});
+
 test("ranks a worker engine update above a provider one", () => {
   // Both need a restart; replacing the engine is the more fundamental of the
   // two, and doing it also restarts the providers.
   const summary = runtimeUpdateSummary(health("new"), host("old"), development({}), [
-    { provider: "claude_code", version: "2.1.237", installed_at: 1_000, worker_ids: ["a"] },
+    { provider: "claude_code", version: "2.1.237", installed_at: 1_000, worker_ids: ["a"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]);
 
   expect(summary.kind).toBe("worker_engine");
@@ -217,8 +257,8 @@ test("ranks a worker engine update above a provider one", () => {
 
 test("counts a worker once when both providers are behind", () => {
   const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
-    { provider: "claude_code", version: "2.1.237", installed_at: 1, worker_ids: ["a", "b"] },
-    { provider: "codex", version: null, installed_at: 1, worker_ids: ["b"] },
+    { provider: "claude_code", version: "2.1.237", installed_at: 1, worker_ids: ["a", "b"], in_place_worker_ids: [], asked_worker_ids: [] },
+    { provider: "codex", version: null, installed_at: 1, worker_ids: ["b"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]);
 
   expect(summary.detail).toContain("2 running workers");
@@ -231,7 +271,7 @@ test("reports every pending update, not only the most severe", () => {
     health("new"),
     host("old"),
     development({ reload_available: true }),
-    [{ provider: "claude_code", version: "2.1.237", installed_at: 1, worker_ids: ["a"] }],
+    [{ provider: "claude_code", version: "2.1.237", installed_at: 1, worker_ids: ["a"], in_place_worker_ids: [], asked_worker_ids: [] }],
   );
 
   expect(all.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "app"]);
@@ -241,7 +281,7 @@ test("orders them by what they cost the operator", () => {
   // The engine takes workers away; a provider update is installed and running
   // nowhere until each worker restarts; App and API leaves workers online.
   const all = runtimeUpdates(health("same"), host("same"), development({ reload_available: true }), [
-    { provider: "codex", version: null, installed_at: 1, worker_ids: ["a"] },
+    { provider: "codex", version: null, installed_at: 1, worker_ids: ["a"], in_place_worker_ids: [], asked_worker_ids: [] },
   ]);
 
   expect(all.map((entry) => entry.kind)).toEqual(["provider", "app"]);

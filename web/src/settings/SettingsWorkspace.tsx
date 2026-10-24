@@ -12,6 +12,7 @@ import type { LockDetectionState } from "../presence/PresenceController";
 import NightWatchSettings from "./NightWatchSettings";
 import CheckGateSettings from "./CheckGateSettings";
 import WorkerModelSettings from "./WorkerModelSettings";
+import WorkerRemoteControlSettings from "./WorkerRemoteControlSettings";
 import TerminalHistorySettings from "./TerminalHistorySettings";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
@@ -455,6 +456,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       )}
       {shows("settings-check-gate") && operatorToken && <CheckGateSettings operatorToken={operatorToken} />}
       {shows("settings-worker-model") && operatorToken && <WorkerModelSettings operatorToken={operatorToken} />}
+      {shows("settings-worker-remote-control") && operatorToken && <WorkerRemoteControlSettings operatorToken={operatorToken} />}
       {shows("settings-notifications") && (
     <section id="settings-notifications" className="settings-card notification-settings" aria-labelledby="notification-heading">
           <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>

@@ -97,6 +97,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       ? { days: 3, set_by_apiary: 3, host: "awaiting_engine_update", host_max_age_seconds: null }
       : { days: 14, set_by_apiary: null, host: "in_effect", host_max_age_seconds: 14 * 86_400 };
   }
+  // ?remoteControl=on is a Hive whose workers connect to Remote Control (ADR 0122).
+  if (path === "/api/v1/runtime/worker-remote-control") {
+    return { enabled: new URLSearchParams(window.location.search).get("remoteControl") === "on" };
+  }
   // ?workerModel=locked is a member whose Apiary sets the worker model (ADR 0116).
   if (path === "/api/v1/runtime/worker-model") {
     const locked = new URLSearchParams(window.location.search).get("workerModel") === "locked";

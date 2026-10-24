@@ -410,6 +410,14 @@ pub struct HostSessionSummary {
     pub continuation_unavailable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_recovery: Option<crate::ContinuationRecoveryOutcome>,
+    /// The executable this terminal's process is running now (ADR 0122).
+    ///
+    /// Claude's `/restart` re-executes the same process onto the installed
+    /// release, so this is what tells an updated worker from one still on the
+    /// older release. Absent from a host that predates the field, and that
+    /// absence is how the API knows it cannot confirm a restart in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_executable: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -300,19 +300,7 @@ pub(super) async fn start_worker_process_unlocked(
     } else {
         None
     };
-    // Refreshed on every start, so a grant approved since the last one takes
-    // effect and one whose task has left the board stops existing. The host
-    // finds this by deriving it from the MCP config path above; nothing needs
-    // to be passed, which is what keeps this off the wire protocol.
-    if profile.provider == ProviderKind::ClaudeCode
-        && let Some(bridge) = state.agent_bridge.as_ref()
-        && let Err(error) = bridge.ensure_worker_settings(worker_id)
-    {
-        // A grant that cannot be written must not stop a worker starting. The
-        // worker then runs without it and is denied exactly as it is today,
-        // which is the safe direction and the state it was already in.
-        tracing::warn!(%error, "could not write the approved-command grants for this worker");
-    }
+    write_claude_launch_settings(state, worker_id, profile.provider);
     // The Hive's worker model, written after the grants because both share the
     // file and each owns only its own key (ADR 0116). A model that cannot be
     // applied must not stop a worker starting either: the start is recorded with
@@ -451,6 +439,34 @@ fn session_workspace(state: &AppState, worker_id: WorkerId, checkout: PathBuf) -
             );
             checkout
         }
+    }
+}
+
+/// The approved-command grants and the Remote Control choice, written beside a
+/// Claude worker's config before it starts. Each writer owns only its own key in
+/// the shared file; the model writer that follows owns another.
+fn write_claude_launch_settings(state: &AppState, worker_id: WorkerId, provider: ProviderKind) {
+    let Some(bridge) = state.agent_bridge.as_ref() else {
+        return;
+    };
+    if provider != ProviderKind::ClaudeCode {
+        return;
+    }
+    // Refreshed on every start, so a grant approved since the last one takes
+    // effect and one whose task has left the board stops existing. The host
+    // finds this by deriving it from the MCP config path above; nothing needs
+    // to be passed, which is what keeps this off the wire protocol.
+    if let Err(error) = bridge.ensure_worker_settings(worker_id) {
+        // A grant that cannot be written must not stop a worker starting. The
+        // worker then runs without it and is denied exactly as it is today,
+        // which is the safe direction and the state it was already in.
+        tracing::warn!(%error, "could not write the approved-command grants for this worker");
+    }
+    // Whether this worker connects to Remote Control (ADR 0122). A choice that
+    // cannot be written leaves Claude's own default, which is where every
+    // worker was before the setting existed.
+    if let Err(error) = bridge.apply_worker_remote_control(worker_id) {
+        tracing::warn!(%error, "could not write the Remote Control choice for this worker");
     }
 }
 
@@ -1529,6 +1545,7 @@ mod tests {
             stop_pending_release: false,
             continuation_unavailable: false,
             continuation_recovery: None,
+            provider_executable: None,
             resources: None,
             last_output_at: None,
             recovery_attempt: None,
@@ -1553,6 +1570,7 @@ mod tests {
             stop_pending_release: true,
             continuation_unavailable: false,
             continuation_recovery: None,
+            provider_executable: None,
             resources: None,
             last_output_at: None,
             recovery_attempt: None,
@@ -1629,6 +1647,7 @@ mod tests {
                 stop_pending_release: frozen,
                 continuation_unavailable: false,
                 continuation_recovery: None,
+                provider_executable: None,
                 resources: None,
                 last_output_at: None,
                 recovery_attempt: None,
@@ -1898,6 +1917,7 @@ mod tests {
             recovery_attempt: Some(continuation),
             continuation_unavailable: true,
             continuation_recovery: Some(swarm_terminal::ContinuationRecoveryOutcome::LaunchFailed),
+            provider_executable: None,
             ..bare_session_summary(previous, false)
         }];
         // No engine configured: an accidental retry would be observable.

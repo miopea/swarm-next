@@ -808,6 +808,7 @@ fn dispatch_blocking(
                         provider_selection: state.provider_selection,
                         continuation_unavailable: state.continuation_unavailable,
                         continuation_recovery: state.continuation_recovery,
+                        provider_executable: state.provider_executable,
                     })
                     .collect(),
             })
@@ -1797,10 +1798,16 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
         );
         return base;
     };
+    let remote_control = worker_remote_control_beside(Some(mcp_config));
     let result = std::env::current_exe()
         .map_err(|_| "helper executable unavailable".to_owned())
         .and_then(|executable| {
-            provider_settings::startup_settings(base.as_deref(), mcp_config, &executable)
+            provider_settings::startup_settings(
+                base.as_deref(),
+                mcp_config,
+                &executable,
+                remote_control,
+            )
         });
     if let Ok(path) = result {
         Some(path)
@@ -1830,6 +1837,18 @@ fn worker_model_beside(mcp_config: Option<&Path>) -> Option<String> {
     let document = provider_settings::read_settings(&settings).ok()?;
     let model = document.get("model")?.as_str()?.trim();
     (!model.is_empty()).then(|| model.to_owned())
+}
+
+/// Whether this worker connects to Remote Control, from the file the API writes
+/// (ADR 0122).
+///
+/// Read separately for the reason `worker_model_beside` is: the grant merge
+/// refuses a file that lists no commands, and most workers list none. Absent
+/// when an older API wrote no choice, which leaves Claude's own default alone.
+fn worker_remote_control_beside(mcp_config: Option<&Path>) -> Option<bool> {
+    let settings = mcp_config.and_then(worker_settings_beside)?;
+    let document = provider_settings::read_settings(&settings).ok()?;
+    document.get("remoteControlAtStartup")?.as_bool()
 }
 
 /// `<worker>.json` -> `<worker>.settings.json`, when that file exists.
@@ -2044,6 +2063,23 @@ mod worker_model_tests {
         )
         .unwrap();
         assert_eq!(worker_model_beside(Some(&config)), None);
+    }
+
+    #[test]
+    fn the_remote_control_choice_is_read_only_when_the_api_wrote_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(&config, "{}").unwrap();
+        assert_eq!(worker_remote_control_beside(Some(&config)), None);
+
+        let settings = directory.path().join("worker.settings.json");
+        std::fs::write(&settings, r#"{"model":"sonnet"}"#).unwrap();
+        assert_eq!(worker_remote_control_beside(Some(&config)), None);
+
+        std::fs::write(&settings, r#"{"remoteControlAtStartup":false}"#).unwrap();
+        assert_eq!(worker_remote_control_beside(Some(&config)), Some(false));
+        std::fs::write(&settings, r#"{"remoteControlAtStartup":true}"#).unwrap();
+        assert_eq!(worker_remote_control_beside(Some(&config)), Some(true));
     }
 }
 

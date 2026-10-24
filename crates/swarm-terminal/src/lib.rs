@@ -50,7 +50,8 @@ pub use process::{
 pub use provider::{
     AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter,
     CodexConversationStart, ProviderCommand, ProviderCommandError, ProviderRelease,
-    ProviderTerminalAdapter, provider_release, provider_release_superseded, shell_command,
+    ProviderTerminalAdapter, provider_release, provider_release_superseded, running_executable,
+    running_release_current, shell_command,
 };
 pub use provider_activity::{
     BackgroundWork, ProviderActivity, background_work, classify_provider_activity,

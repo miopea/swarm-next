@@ -108,6 +108,13 @@ test("finds the Jira resolution setting by its label and by asking for approval"
   expect(titles("approval")).toEqual(["Jira"]);
 });
 
+test("finds the Remote Control setting by its name and by /rc", () => {
+  const titles = (query: string) => filterSettingsCards(query).map((card) => card.title);
+
+  expect(titles("remote control")).toEqual(["Remote Control"]);
+  expect(titles("/rc")).toEqual(["Remote Control"]);
+});
+
 test("matches the section name too, so browsing by group still works", () => {
   expect(filterSettingsCards("access").map((card) => card.id))
     .toEqual(["settings-access", "settings-remote"]);

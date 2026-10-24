@@ -251,6 +251,10 @@ export type SupersededProvider = {
   version: string | null;
   installed_at: number | null;
   worker_ids: string[];
+  /** Of those, the Claude workers Swarm moves onto it with /restart by itself (ADR 0122). */
+  in_place_worker_ids: string[];
+  /** Of those, the ones already asked and still on the older release: Claude refused. */
+  asked_worker_ids: string[];
 };
 export type ProviderCapabilities = {
   claude_code: boolean;
@@ -2666,9 +2670,14 @@ export async function restartAllWorkers(operatorToken: string): Promise<{ restar
   return response.json() as Promise<{ restarted_workers: number }>;
 }
 
-export async function restartSupersededWorkers(operatorToken: string): Promise<{ restarted_workers: number }> {
+/**
+ * Restarts the workers behind an installed provider release. A Claude worker Swarm can move in
+ * place is asked again to /restart, which happens once it is at rest, and is not stopped; those
+ * still waiting are `waiting_workers` (ADR 0122).
+ */
+export async function restartSupersededWorkers(operatorToken: string): Promise<{ restarted_workers: number; waiting_workers: number }> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/providers/restart", { method: "POST" });
-  return response.json() as Promise<{ restarted_workers: number }>;
+  return response.json() as Promise<{ restarted_workers: number; waiting_workers: number }>;
 }
 
 export async function fetchProviderCapabilities(operatorToken: string, signal?: AbortSignal): Promise<ProviderCapabilities> {
@@ -2751,6 +2760,23 @@ export async function setWorkerModel(operatorToken: string, model: WorkerModel):
     body: JSON.stringify({ model }),
   });
   return response.json() as Promise<WorkerModelSetting>;
+}
+
+/** Whether this Hive's Claude workers connect to Remote Control (ADR 0122). */
+export type WorkerRemoteControl = { enabled: boolean };
+
+export async function fetchWorkerRemoteControl(operatorToken: string, signal?: AbortSignal): Promise<WorkerRemoteControl> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/worker-remote-control", { signal });
+  return response.json() as Promise<WorkerRemoteControl>;
+}
+
+export async function setWorkerRemoteControl(operatorToken: string, enabled: boolean): Promise<WorkerRemoteControl> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/worker-remote-control", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<WorkerRemoteControl>;
 }
 
 /** Days of terminal history a Hive keeps (ADR 0118). */

@@ -151,6 +151,7 @@ pub(super) fn startup_settings(
     base: Option<&Path>,
     mcp_config: &Path,
     executable: &Path,
+    remote_control: Option<bool>,
 ) -> Result<PathBuf, String> {
     // A running process can outlive its unlinked binary. Never publish the
     // resulting `current_exe()` path (including a Linux " (deleted)" suffix)
@@ -165,6 +166,12 @@ pub(super) fn startup_settings(
         json!({})
     };
     add_hook(&mut document, executable)?;
+    // The operator's Remote Control choice for workers (ADR 0122), written
+    // explicitly either way. Left to Claude's own default, a worker connects to
+    // Remote Control, and Claude refuses `/restart` while it is connected.
+    if let (Some(enabled), Some(settings)) = (remote_control, document.as_object_mut()) {
+        settings.insert("remoteControlAtStartup".to_owned(), json!(enabled));
+    }
     let bytes = serde_json::to_vec_pretty(&document).map_err(|_| "settings invalid")?;
     if bytes.len() as u64 > MAX_SETTINGS_BYTES {
         return Err("settings exceed limit".into());
@@ -348,7 +355,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mcp = root.path().join("worker.json");
         let executable = std::env::current_exe().unwrap();
-        let target = startup_settings(None, &mcp, &executable).unwrap();
+        let target = startup_settings(None, &mcp, &executable, None).unwrap();
         let before = fs::read(&target).unwrap();
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
@@ -356,9 +363,34 @@ mod tests {
         );
         let invalid = root.path().join("bad.json");
         fs::write(&invalid, "{broken").unwrap();
-        assert!(startup_settings(Some(&invalid), &mcp, &executable).is_err());
+        assert!(startup_settings(Some(&invalid), &mcp, &executable, None).is_err());
         assert_eq!(fs::read(&target).unwrap(), before);
         assert_eq!(fs::read_to_string(invalid).unwrap(), "{broken");
+    }
+
+    /// Claude refuses `/restart` while Remote Control is connected, so the
+    /// worker's choice is written in full either way rather than left to
+    /// Claude's own default (ADR 0122). No choice leaves the operator's file
+    /// as it was.
+    #[test]
+    fn the_remote_control_choice_is_written_into_the_worker_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let mcp = root.path().join("worker.json");
+        let executable = std::env::current_exe().unwrap();
+        let base = root.path().join("operator.json");
+        fs::write(&base, r#"{"remoteControlAtStartup":true,"theme":"dark"}"#).unwrap();
+
+        for (choice, expected) in [
+            (Some(false), json!(false)),
+            (Some(true), json!(true)),
+            (None, json!(true)),
+        ] {
+            let target = startup_settings(Some(&base), &mcp, &executable, choice).unwrap();
+            let written: serde_json::Value =
+                serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
+            assert_eq!(written["remoteControlAtStartup"], expected, "{choice:?}");
+            assert_eq!(written["theme"], "dark");
+        }
     }
 
     #[test]
@@ -378,7 +410,9 @@ mod tests {
         )
         .unwrap();
         let mcp = root.path().join("worker.json");
-        assert!(startup_settings(Some(&base), &mcp, &std::env::current_exe().unwrap()).is_err());
+        assert!(
+            startup_settings(Some(&base), &mcp, &std::env::current_exe().unwrap(), None).is_err()
+        );
         assert!(!mcp.with_extension("startup.settings.json").exists());
     }
 
@@ -387,7 +421,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mcp = root.path().join("worker.json");
         let executable = std::env::current_exe().unwrap();
-        let target = startup_settings(None, &mcp, &executable).unwrap();
+        let target = startup_settings(None, &mcp, &executable, None).unwrap();
         let original = fs::read(&target).unwrap();
         let non_executable = root.path().join("host");
         fs::write(&non_executable, "not executable").unwrap();
@@ -400,12 +434,15 @@ mod tests {
             PathBuf::from("relative-host"),
         ] {
             assert_eq!(
-                startup_settings(None, &mcp, &invalid).unwrap_err(),
+                startup_settings(None, &mcp, &invalid, None).unwrap_err(),
                 "helper executable unavailable"
             );
             assert_eq!(fs::read(&target).unwrap(), original);
         }
         // A later valid launch can regenerate its own overlay.
-        assert_eq!(startup_settings(None, &mcp, &executable).unwrap(), target);
+        assert_eq!(
+            startup_settings(None, &mcp, &executable, None).unwrap(),
+            target
+        );
     }
 }

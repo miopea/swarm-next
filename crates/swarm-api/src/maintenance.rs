@@ -78,6 +78,9 @@ pub(super) async fn maintain_worker_engine(
 #[derive(Debug, Serialize)]
 pub(super) struct RestartWorkersResponse {
     restarted_workers: usize,
+    /// Claude workers Swarm will `/restart` onto the installed release as soon
+    /// as each comes to rest with nothing running in the background (ADR 0122).
+    waiting_workers: usize,
 }
 
 /// Package-owned replacement records its return set while the engine is drained.
@@ -124,10 +127,15 @@ pub(super) async fn prepare_worker_engine_return(
 ///
 /// Claude and Codex update themselves and a running process keeps executing the
 /// release it started with, so an update installed while workers are up is not
-/// running anywhere until each one restarts. This is the same stop-and-revive
-/// the worker engine update performs, without replacing anything: the roster is
-/// written down before a worker is stopped, so an interruption still gets the
-/// workers back.
+/// running anywhere until each one restarts.
+///
+/// A CLAUDE WORKER IS NOT STOPPED when its host can say which release it runs
+/// (ADR 0122). It is asked again to `/restart` in place, which happens as soon
+/// as it is at rest with nothing running in the background, and its
+/// conversation carries on. Everything else gets the stop-and-revive the worker
+/// engine update performs, without replacing anything: the roster is written
+/// down before a worker is stopped, so an interruption still gets the workers
+/// back.
 pub(super) async fn restart_superseded_workers(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -146,36 +154,60 @@ pub(super) async fn restart_superseded_workers(
             "terminal host returned an unexpected provider response",
         ));
     };
+    let executables = crate::provider_updates::running_executables(&state)
+        .await
+        .unwrap_or_default();
     let store = task_store(&state)?;
     let sessions = store
         .active_worker_sessions()
         .map_err(|error| task_store_error(&error))?;
-    let superseded = sessions
-        .into_iter()
-        .filter(|session| {
-            let release = match session.provider {
-                swarm_domain::ProviderKind::ClaudeCode => claude_release.as_ref(),
-                swarm_domain::ProviderKind::Codex => codex_release.as_ref(),
-                // No installed release to compare a session against, so it can
-                // never be superseded by one. It cannot be running either.
-                //
-                // The alpha three are here for a different reason: nothing
-                // probes their releases, so there is no version to compare and
-                // an alpha worker is never reported as running a superseded
-                // build. That is a missing feature stated honestly rather than
-                // a comparison against a value invented here.
-                swarm_domain::ProviderKind::Gemini
-                | swarm_domain::ProviderKind::Grok
-                | swarm_domain::ProviderKind::OpenCode
-                | swarm_domain::ProviderKind::Unsupported => None,
-            };
-            swarm_terminal::provider_release_superseded(release, session.started_at)
-        })
-        .map(|session| session.worker_id)
-        .collect::<Vec<_>>();
+    let mut in_place = Vec::new();
+    let mut superseded = Vec::new();
+    for session in sessions {
+        let release = match session.provider {
+            swarm_domain::ProviderKind::ClaudeCode => claude_release.as_ref(),
+            swarm_domain::ProviderKind::Codex => codex_release.as_ref(),
+            // No installed release to compare a session against, so it can
+            // never be superseded by one. It cannot be running either.
+            //
+            // The alpha three are here for a different reason: nothing
+            // probes their releases, so there is no version to compare and
+            // an alpha worker is never reported as running a superseded
+            // build. That is a missing feature stated honestly rather than
+            // a comparison against a value invented here.
+            swarm_domain::ProviderKind::Gemini
+            | swarm_domain::ProviderKind::Grok
+            | swarm_domain::ProviderKind::OpenCode
+            | swarm_domain::ProviderKind::Unsupported => None,
+        };
+        let running = executables
+            .get(&session.session_id)
+            .and_then(Option::as_deref);
+        if !swarm_terminal::provider_release_superseded(release, session.started_at, running) {
+            continue;
+        }
+        let restartable_in_place = session.provider == swarm_domain::ProviderKind::ClaudeCode
+            && release.zip(running).is_some_and(|(release, running)| {
+                swarm_terminal::running_release_current(release, running) == Some(false)
+            });
+        if restartable_in_place {
+            in_place.push(session.session_id);
+        } else {
+            superseded.push(session.worker_id);
+        }
+    }
+    let restarted_in_place = if in_place.is_empty() {
+        0
+    } else {
+        state.provider_updates.ask_again(&in_place);
+        let observed = state.provider_activity.read().await.clone();
+        crate::provider_updates::advance(&state, &observed).await
+    };
+    let waiting_workers = in_place.len().saturating_sub(restarted_in_place);
     if superseded.is_empty() {
         return Ok(Json(RestartWorkersResponse {
-            restarted_workers: 0,
+            restarted_workers: restarted_in_place,
+            waiting_workers,
         })
         .into_response());
     }
@@ -203,7 +235,11 @@ pub(super) async fn restart_superseded_workers(
     drop(guard);
     let restarted_workers = revive_loaded_workers(&state, &superseded).await;
     state.control_room_notify.notify_waiters();
-    Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
+    Ok(Json(RestartWorkersResponse {
+        restarted_workers: restarted_workers + restarted_in_place,
+        waiting_workers,
+    })
+    .into_response())
 }
 
 /// How many live sessions can actually call what this build serves.
@@ -383,6 +419,7 @@ pub(super) async fn restart_all_workers(
     if workers.is_empty() {
         return Ok(Json(RestartWorkersResponse {
             restarted_workers: 0,
+            waiting_workers: 0,
         })
         .into_response());
     }
@@ -412,7 +449,11 @@ pub(super) async fn restart_all_workers(
     drop(guard);
     let restarted_workers = revive_loaded_workers(&state, &workers).await;
     state.control_room_notify.notify_waiters();
-    Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
+    Ok(Json(RestartWorkersResponse {
+        restarted_workers,
+        waiting_workers: 0,
+    })
+    .into_response())
 }
 
 pub(super) async fn request_development_reload(

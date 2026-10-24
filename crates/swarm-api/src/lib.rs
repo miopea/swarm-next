@@ -57,6 +57,7 @@ mod presence;
 mod presentation;
 mod private_store;
 mod provider_activity;
+mod provider_updates;
 mod provider_usage;
 mod queen_run_history;
 mod release;
@@ -418,6 +419,8 @@ pub struct AppState {
     /// the journal should have to explain.
     engine_drift_reported: Arc<std::sync::atomic::AtomicBool>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
+    /// The `/restart` requests Swarm has typed into Claude workers (ADR 0122).
+    provider_updates: Arc<provider_updates::ProviderUpdates>,
     coordinator_start_admission: Arc<AtomicU8>,
     #[cfg(test)]
     test_start_admission: Option<runtime::CoordinatorStartAdmission>,
@@ -602,6 +605,7 @@ impl AppState {
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             engine_drift_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
+            provider_updates: Arc::default(),
             github_feedback: None,
             central_support: None,
             support_admission: Arc::new(Semaphore::new(4)),
@@ -1746,7 +1750,7 @@ impl AppState {
             .keys()
             .copied()
             .collect::<std::collections::HashSet<_>>();
-        provider_activity::refresh(self, &profiles, &live_ids).await;
+        let observed = provider_activity::refresh(self, &profiles, &live_ids).await;
         // ⚠️ THE USAGE FIGURES USED TO REFRESH ONLY WHEN SOMEBODY OPENED THE
         // PANEL, which made them a side effect of being looked at. Measured
         // 2026-09-19: 41 hours stale, and a stale row is indistinguishable from
@@ -1823,6 +1827,9 @@ impl AppState {
                 }
             }
         }
+        // Before ordinary deliveries, so a worker moving onto a new Claude is
+        // not also handed a message in the same pass (ADR 0122).
+        provider_updates::advance(self, &observed).await;
         self.deliver_coordination().await;
         self.deliver_notifications().await;
     }
@@ -4879,6 +4886,11 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/runtime/worker-model",
             get(worker_model_routes::worker_model).put(worker_model_routes::set_worker_model),
+        )
+        .route(
+            "/api/v1/runtime/worker-remote-control",
+            get(provider_updates::worker_remote_control)
+                .put(provider_updates::set_worker_remote_control),
         )
         .route(
             "/api/v1/runtime/terminal-history",

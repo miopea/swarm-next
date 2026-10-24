@@ -397,24 +397,115 @@ mod tests {
             installed_at: Some(1_000),
         };
 
-        assert!(provider_release_superseded(Some(&release), 999));
-        assert!(!provider_release_superseded(Some(&release), 1_000));
-        assert!(!provider_release_superseded(Some(&release), 1_001));
+        assert!(provider_release_superseded(Some(&release), 999, None));
+        assert!(!provider_release_superseded(Some(&release), 1_000, None));
+        assert!(!provider_release_superseded(Some(&release), 1_001, None));
     }
 
     #[test]
     fn an_unknown_release_never_asks_for_a_restart() {
         // Reporting a restart that is not needed teaches the operator to ignore
         // the one that is.
-        assert!(!provider_release_superseded(None, 0));
+        assert!(!provider_release_superseded(None, 0, None));
         assert!(!provider_release_superseded(
             Some(&ProviderRelease {
                 resolved_path: "/usr/bin/codex".into(),
                 version: None,
                 installed_at: None,
             }),
-            0
+            0,
+            None
         ));
+    }
+
+    /// Measured 2026-10-23 against Claude 2.1.309: `/restart` kept the process
+    /// id and re-executed it as 2.1.310. The session's start time did not move,
+    /// so start time alone would have called the updated worker superseded.
+    #[test]
+    fn a_worker_restarted_in_place_is_current_by_the_release_it_runs() {
+        let release = ProviderRelease {
+            resolved_path: "/home/op/.local/share/claude/versions/2.1.310".into(),
+            version: Some("2.1.310".into()),
+            installed_at: Some(1_000),
+        };
+        let started_before_the_install = 999;
+
+        assert!(!provider_release_superseded(
+            Some(&release),
+            started_before_the_install,
+            Some("/home/op/.local/share/claude/versions/2.1.310"),
+        ));
+        assert!(provider_release_superseded(
+            Some(&release),
+            1_001,
+            Some("/home/op/.local/share/claude/versions/2.1.309"),
+        ));
+        // Claude prunes old releases; the running image is then reported as
+        // deleted, and it is still the older release.
+        assert!(provider_release_superseded(
+            Some(&release),
+            1_001,
+            Some("/home/op/.local/share/claude/versions/2.1.308 (deleted)"),
+        ));
+    }
+
+    /// An installer that replaces the file at the same path leaves the older
+    /// process reporting that path, marked deleted. It is still behind.
+    #[test]
+    fn a_binary_replaced_at_the_same_path_is_still_superseded() {
+        let release = ProviderRelease {
+            resolved_path: "/usr/local/bin/codex".into(),
+            version: None,
+            installed_at: Some(1_000),
+        };
+
+        assert_eq!(
+            running_release_current(&release, "/usr/local/bin/codex (deleted)"),
+            Some(false)
+        );
+        assert_eq!(
+            running_release_current(&release, "/usr/local/bin/codex"),
+            Some(true)
+        );
+        assert!(provider_release_superseded(
+            Some(&release),
+            1_001,
+            Some("/usr/local/bin/codex (deleted)"),
+        ));
+    }
+
+    #[test]
+    fn an_executable_outside_the_release_directory_is_no_evidence() {
+        // A launcher script runs as its interpreter. Comparing that with the
+        // release file would report a difference no restart can remove.
+        let release = ProviderRelease {
+            resolved_path: "/home/op/.local/share/claude/versions/2.1.310".into(),
+            version: Some("2.1.310".into()),
+            installed_at: Some(1_000),
+        };
+
+        assert_eq!(running_release_current(&release, "/usr/bin/bash"), None);
+        assert!(!provider_release_superseded(
+            Some(&release),
+            1_001,
+            Some("/usr/bin/bash")
+        ));
+        assert!(provider_release_superseded(
+            Some(&release),
+            999,
+            Some("/usr/bin/bash")
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_running_executable_is_read_from_the_kernel() {
+        let own = running_executable(std::process::id()).unwrap();
+
+        assert_eq!(
+            std::path::Path::new(&own),
+            std::env::current_exe().unwrap().as_path()
+        );
     }
 
     #[test]
@@ -788,7 +879,60 @@ pub fn provider_release(executable: &Path, search_path: Option<&str>) -> Option<
     })
 }
 
-/// Whether a session started before the release its provider now resolves to.
+/// The executable a running process is executing now, as the kernel records it.
+///
+/// Claude's `/restart` re-executes the same process onto the release on disk,
+/// so the process id and the session's start time both stay where they were
+/// while the release it runs moves on. Only the kernel's record of the image
+/// says which release a worker is running after one.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn running_executable(process_id: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{process_id}/exe"))
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub const fn running_executable(_process_id: u32) -> Option<String> {
+    None
+}
+
+/// Whether a process running `executable` is on the installed `release`, when
+/// the executable can say.
+///
+/// It can say only when it sits beside the release, in the same versions
+/// directory, which is how Claude's installer lays releases out. A launcher
+/// script or a package-managed binary has a running image that is not the
+/// release file, and comparing it would report a difference no restart can
+/// remove. `None` is that: no evidence either way.
+///
+/// Linux names an image whose file has since been removed with a " (deleted)"
+/// suffix. Claude prunes old releases, so that is an ordinary state for a
+/// long-lived worker, and the path still names the release it runs.
+///
+/// ⚠️ A DELETED IMAGE IS NEVER THE INSTALLED RELEASE, even at the same path. An
+/// installer without versions in its paths replaces the file in place, so the
+/// older process reports the very path now installed, marked deleted. Matching
+/// on the path alone would call it current.
+#[must_use]
+pub fn running_release_current(release: &ProviderRelease, executable: &str) -> Option<bool> {
+    let deleted = executable.strip_suffix(" (deleted)");
+    let running = Path::new(deleted.unwrap_or(executable));
+    let installed = Path::new(&release.resolved_path);
+    (running.parent().is_some() && running.parent() == installed.parent())
+        .then(|| deleted.is_none() && running == installed)
+}
+
+/// Whether a session is running an older release than its provider now
+/// resolves to.
+///
+/// THE RUNNING EXECUTABLE DECIDES WHENEVER IT CAN. A session restarted in place
+/// keeps its start time, so judged by start time alone a worker that has just
+/// updated reads as superseded for as long as it lives, and would be asked to
+/// restart again and again. Start time is the answer only when the executable
+/// is unknown or cannot be compared.
 ///
 /// Conservative on purpose: with no release, no install time, or no session
 /// start it answers no. Reporting a restart that is not needed teaches the
@@ -797,8 +941,17 @@ pub fn provider_release(executable: &Path, search_path: Option<&str>) -> Option<
 pub fn provider_release_superseded(
     release: Option<&ProviderRelease>,
     session_started_at: i64,
+    running_executable: Option<&str>,
 ) -> bool {
+    let Some(release) = release else {
+        return false;
+    };
+    if let Some(current) =
+        running_executable.and_then(|running| running_release_current(release, running))
+    {
+        return !current;
+    }
     release
-        .and_then(|release| release.installed_at)
+        .installed_at
         .is_some_and(|installed_at| session_started_at < installed_at)
 }

@@ -40,6 +40,11 @@ pub(super) struct SupersededProviderView {
     version: Option<String>,
     installed_at: Option<i64>,
     worker_ids: Vec<String>,
+    /// Of those, the workers Swarm moves onto the release itself with
+    /// `/restart` (ADR 0122). The rest need stopping and starting.
+    in_place_worker_ids: Vec<String>,
+    /// Of those, the ones already asked and still on the older release.
+    asked_worker_ids: Vec<String>,
 }
 
 /// The workers still running a provider release that disk has moved past.
@@ -49,10 +54,16 @@ fn superseded_providers(
     state: &AppState,
     claude_release: Option<&swarm_terminal::ProviderRelease>,
     codex_release: Option<&swarm_terminal::ProviderRelease>,
+    executables: &HashMap<WorkerSessionId, Option<String>>,
 ) -> Result<Vec<SupersededProviderView>, ApiError> {
     let sessions = crate::task_store(state)?
         .active_worker_sessions()
         .map_err(|error| crate::task_store_error(&error))?;
+    let running = |session: &swarm_persistence::ActiveWorkerSession| {
+        executables
+            .get(&session.session_id)
+            .and_then(Option::as_deref)
+    };
     Ok([
         (
             "claude_code",
@@ -63,19 +74,48 @@ fn superseded_providers(
     ]
     .into_iter()
     .filter_map(|(name, kind, release)| {
-        let worker_ids = sessions
+        let behind = sessions
             .iter()
             .filter(|session| {
                 session.provider == kind
-                    && swarm_terminal::provider_release_superseded(release, session.started_at)
+                    && swarm_terminal::provider_release_superseded(
+                        release,
+                        session.started_at,
+                        running(session),
+                    )
             })
-            .map(|session| session.worker_id.to_string())
             .collect::<Vec<_>>();
-        (!worker_ids.is_empty()).then(|| SupersededProviderView {
+        let in_place = behind
+            .iter()
+            .filter(|session| {
+                kind == swarm_domain::ProviderKind::ClaudeCode
+                    && release
+                        .zip(running(session))
+                        .is_some_and(|(release, running)| {
+                            swarm_terminal::running_release_current(release, running) == Some(false)
+                        })
+            })
+            .collect::<Vec<_>>();
+        let asked = release
+            .map(|release| state.provider_updates.asked_onto(release))
+            .unwrap_or_default();
+        (!behind.is_empty()).then(|| SupersededProviderView {
             provider: name,
             version: release.and_then(|release| release.version.clone()),
             installed_at: release.and_then(|release| release.installed_at),
-            worker_ids,
+            worker_ids: behind
+                .iter()
+                .map(|session| session.worker_id.to_string())
+                .collect(),
+            in_place_worker_ids: in_place
+                .iter()
+                .map(|session| session.worker_id.to_string())
+                .collect(),
+            asked_worker_ids: in_place
+                .iter()
+                .filter(|session| asked.contains(&session.session_id))
+                .map(|session| session.worker_id.to_string())
+                .collect(),
         })
     })
     .collect())
@@ -404,6 +444,9 @@ pub(super) async fn capabilities(
                 &state,
                 claude_release.as_ref(),
                 codex_release.as_ref(),
+                &crate::provider_updates::running_executables(&state)
+                    .await
+                    .unwrap_or_default(),
             )?,
         },
         _ => {

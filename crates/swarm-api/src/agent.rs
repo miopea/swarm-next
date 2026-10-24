@@ -266,6 +266,47 @@ impl AgentBridge {
         Ok(self.worker_model_in_file(worker_id))
     }
 
+    /// Puts this Hive's Remote Control choice beside a Claude worker's config
+    /// before it starts (ADR 0122).
+    ///
+    /// This writer owns the `remoteControlAtStartup` key and nothing else, as
+    /// the grants writer owns `permissions` and the model writer `model`.
+    ///
+    /// WRITTEN EITHER WAY, never left out to mean off. Without it Claude's own
+    /// default decides, that default connects workers to Remote Control, and
+    /// Claude refuses `/restart` while it is connected.
+    ///
+    /// # Errors
+    /// Returns an error when the setting cannot be read or the file cannot be
+    /// written privately.
+    pub fn apply_worker_remote_control(&self, worker_id: WorkerId) -> Result<(), AgentBridgeError> {
+        let path = self.worker_settings_path(worker_id);
+        let enabled = self.tasks.store().worker_remote_control()?;
+        let mut document = match std::fs::read_to_string(&path) {
+            Ok(contents) => serde_json::from_str::<Value>(&contents).unwrap_or_else(|_| json!({})),
+            Err(_) => json!({}),
+        };
+        // An operator file that is not an object is theirs to fix, as the model
+        // writer leaves it.
+        let Some(object) = document.as_object_mut() else {
+            return Ok(());
+        };
+        if object
+            .get("remoteControlAtStartup")
+            .and_then(Value::as_bool)
+            == Some(enabled)
+        {
+            return Ok(());
+        }
+        object.insert("remoteControlAtStartup".to_owned(), json!(enabled));
+        std::fs::create_dir_all(self.config_root.as_ref())?;
+        set_private_directory(self.config_root.as_ref())?;
+        let payload = serde_json::to_vec_pretty(&document)
+            .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
+        write_private_atomic(&path, &payload)?;
+        Ok(())
+    }
+
     /// The model this worker's settings file names, as the terminal host reads
     /// it at launch: trimmed, and absent when empty.
     #[must_use]
@@ -5879,6 +5920,42 @@ mod tests {
         .unwrap();
         assert_eq!(settings["model"], "opus", "an explicit choice survives");
         assert_eq!(settings["keep"], "mine", "and so does everything beside it");
+    }
+
+    /// The Remote Control choice is written for every Claude worker, off unless
+    /// the operator turns it on, beside whatever else the file holds (ADR 0122).
+    #[test]
+    fn the_remote_control_choice_reaches_every_claude_worker() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let start = |id: WorkerId, role: WorkerRole| {
+            bridge.ensure_worker_config(id).unwrap();
+            bridge.ensure_worker_settings(id).unwrap();
+            bridge.apply_worker_model(id, role).unwrap();
+            bridge.apply_worker_remote_control(id).unwrap();
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(bridge.worker_settings_path(id)).unwrap(),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            start(worker_id, WorkerRole::Worker)["remoteControlAtStartup"],
+            false
+        );
+        let queen = start(queen_id, WorkerRole::Queen);
+        assert_eq!(queen["remoteControlAtStartup"], false);
+        assert_eq!(queen["model"], "sonnet", "the model beside it is untouched");
+
+        store.set_worker_remote_control(true, 10).unwrap();
+        assert_eq!(
+            start(worker_id, WorkerRole::Worker)["remoteControlAtStartup"],
+            true
+        );
+        store.set_worker_remote_control(false, 20).unwrap();
+        assert_eq!(
+            start(worker_id, WorkerRole::Worker)["remoteControlAtStartup"],
+            false
+        );
     }
 
     /// ⚠️ THE OPERATOR'S RULINGS (decision 01a13bc9) AT THE FILE THE HOST

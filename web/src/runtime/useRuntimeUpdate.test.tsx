@@ -82,7 +82,7 @@ test("a failed provider check preserves an honest notice until recovery confirms
     if (String(input).includes("providers")) {
       if (providerState === "unavailable") return Promise.reject(new Error("provider check failed"));
       return Promise.resolve(ok({ superseded: providerState === "pending"
-        ? [{ provider: "claude_code", version: "2.1.0", installed_at: null, worker_ids: ["demo"] }]
+        ? [{ provider: "claude_code", version: "2.1.0", installed_at: null, worker_ids: ["demo"], in_place_worker_ids: [], asked_worker_ids: [] }]
         : [] }));
     }
     return normalFetch(input, init);

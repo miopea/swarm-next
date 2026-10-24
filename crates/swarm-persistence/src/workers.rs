@@ -85,6 +85,7 @@ pub(super) fn migrate_worker_revival_intents(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActiveWorkerSession {
     pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
     pub provider: ProviderKind,
     pub started_at: i64,
 }
@@ -1952,7 +1953,7 @@ impl TaskStore {
     pub fn active_worker_sessions(&self) -> Result<Vec<ActiveWorkerSession>, TaskStoreError> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT p.id, p.provider, s.started_at
+            "SELECT p.id, s.session_id, p.provider, s.started_at
              FROM worker_sessions s
              JOIN worker_profiles p ON p.id = s.worker_id
              WHERE s.ended_at IS NULL
@@ -1963,20 +1964,40 @@ impl TaskStore {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(id, provider, started_at)| {
+            .map(|(id, session, provider, started_at)| {
                 Ok(ActiveWorkerSession {
                     worker_id: WorkerId::from_str(&id)
+                        .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                    session_id: WorkerSessionId::from_str(&session)
                         .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
                     provider: ProviderKind::from_stored(&provider),
                     started_at,
                 })
             })
             .collect()
+    }
+
+    /// Whether this worker holds Active work right now.
+    ///
+    /// After Swarm restarts a worker onto a new Claude release (ADR 0122) this
+    /// decides whether it is told to carry on: a worker with Active work was in
+    /// the middle of something, and one without was not.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn worker_has_active_task(&self, worker_id: WorkerId) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks
+                 WHERE assigned_worker_id = ?1 AND state = 'active' AND removed_at IS NULL)",
+            [worker_id.to_string()],
+            |row| row.get(0),
+        )?)
     }
 
     /// Whether this worker is currently COMING UP from a given moment: a session
@@ -2585,6 +2606,33 @@ pub(super) fn migrate_session_end_reason(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_active_work_counts_as_work_in_hand() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Fix the build", "/workspace/petal")
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+
+        assert!(!store.worker_has_active_task(worker.id).unwrap());
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Active)
+            .unwrap();
+        assert!(store.worker_has_active_task(worker.id).unwrap());
+    }
+
     /// THE COOLDOWN HOLDS, AND THEN IT LETS GO ON ITS OWN.
     ///
     /// Both halves matter and only the second one is hard to get wrong by
