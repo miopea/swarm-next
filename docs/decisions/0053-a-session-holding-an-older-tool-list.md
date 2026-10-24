@@ -9,6 +9,12 @@ this Hive cannot detect the condition, which that task allowed for explicitly â€
 answer is documentation, that is a legitimate outcome â€” record it with the
 evidence rather than building something that only appears to help".
 
+Amended by ADR 0123 (2026-10-23). Workers reach `/mcp` through a stdio relay,
+and that relay is the server-to-client channel this record found missing: it
+now declares `listChanged` and sends `notifications/tools/list_changed` when
+the revision `/mcp` names in `x-swarm-tool-surface` moves. Claude 2.1.310 lists
+the tools again as soon as it arrives.
+
 ## The question
 
 A tool is present in the server and absent from a running worker. Nothing says

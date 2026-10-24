@@ -418,6 +418,10 @@ pub struct HostSessionSummary {
     /// absence is how the API knows it cannot confirm a restart in place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_executable: Option<String>,
+    /// Whether Swarm's tools relay is running under the provider (ADR 0123).
+    /// Absent from an older host and when the process table cannot say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_tools_relay: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -520,6 +524,14 @@ pub enum HostResponse {
         session_id: WorkerSessionId,
         resume: Resume,
         running: bool,
+        /// Claude's own report of its turn, read with the same snapshot (ADR
+        /// 0123). Absent from a host that predates it and before the first
+        /// hook, and either way the reader falls back to the screen alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_turn: Option<crate::ProviderTurn>,
+        /// Wall-clock second of this terminal's most recent output.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_output_at: Option<i64>,
     },
     Control {
         session_id: WorkerSessionId,

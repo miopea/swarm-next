@@ -13,11 +13,36 @@ export type WorkerAttentionPresentation = {
    * in it cut the name to "Or…" in a 280-pixel rail.
    */
   backgroundWork?: string;
+  /**
+   * The pill's word when a line under the name carries the rest of the label,
+   * so "Buzzing · 2 shells running" reads BUZZING over "2 shells running".
+   */
+  word?: string;
+  /**
+   * What Claude itself reported that needs a look, as its own line: why a turn
+   * stopped, what auto mode refused, tools that dropped (ADR 0123).
+   */
+  notice?: string;
 };
 
-/** The bare state word, for a pill whose label carries more than fits. */
-export function attentionWord(state: Worker["attention_state"]): string {
-  return presentation[state].label;
+const TURN_FAILURE: Record<NonNullable<Worker["turn_failure"]>, string> = {
+  rate_limit: "rate limit",
+  overloaded: "API overloaded",
+  authentication: "login refused",
+  billing: "account or billing",
+  server: "API error",
+  other: "API error",
+};
+
+/** "Auto mode blocked Bash (Irreversible Local Destruction)", "Swarm tools disconnected". */
+function reportedNotices(worker: Worker): string[] {
+  const notices: string[] = [];
+  if (worker.auto_mode_denial) {
+    const reason = worker.auto_mode_denial.reason.replace(/^\[(.*)\]$/, "$1").trim();
+    notices.push(`Auto mode blocked ${worker.auto_mode_denial.tool}${reason ? ` (${reason})` : ""}`);
+  }
+  if (worker.tools_disconnected) notices.push("Swarm tools disconnected");
+  return notices;
 }
 
 const presentation: Record<Worker["attention_state"], Omit<WorkerAttentionPresentation, "state">> = {
@@ -30,12 +55,38 @@ const presentation: Record<Worker["attention_state"], Omit<WorkerAttentionPresen
 };
 
 export function workerAttention(worker: Worker, now = Date.now()): WorkerAttentionPresentation {
+  const shown = workerStatePresentation(worker, now);
+  const notices = worker.running ? reportedNotices(worker) : [];
+  // A failed turn that is not read as Blocked, such as a usage limit Claude
+  // will not resume (Awaiting you), still says what stopped it.
+  if (worker.running && worker.turn_failure && shown.notice === undefined) {
+    notices.unshift(`Turn stopped: ${TURN_FAILURE[worker.turn_failure]}`);
+  }
+  if (notices.length === 0) return shown;
+  return { ...shown, notice: [shown.notice, ...notices].filter(Boolean).join(" · ") };
+}
+
+function workerStatePresentation(worker: Worker, now: number): WorkerAttentionPresentation {
   const state = worker.attention_state === "with_operator"
     && worker.engagement_expires_at !== undefined
     && worker.engagement_expires_at * 1000 <= now
     ? "resting"
     : worker.attention_state;
   const shown = presentation[state];
+  // A turn that died on an API error left a resting prompt that will not do
+  // anything until the limit resets or someone fixes the login. Resting would
+  // read as "free for work"; it is blocked, and the line says on what.
+  if (worker.running && state === "resting" && worker.turn_failure) {
+    const reason = TURN_FAILURE[worker.turn_failure];
+    return {
+      ...presentation.blocked,
+      state: "blocked",
+      label: `Blocked · ${reason}`,
+      compactLabel: `blocked · ${reason}`,
+      word: presentation.blocked.label,
+      notice: `Turn stopped: ${reason}`,
+    };
+  }
   // The legacy held-for-answer field is the oldest pending decision timestamp,
   // not proof that the provider stopped. Queen can keep coordinating other work.
   if (state === "awaiting_operator" && worker.held_for_answer_since !== undefined) {
@@ -69,6 +120,7 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
       state: "buzzing",
       label: `Buzzing · ${running}`,
       compactLabel: `buzzing · ${running}`,
+      word: presentation.buzzing.label,
       backgroundWork: counted ? `${counted} running` : running,
     };
   }
@@ -185,11 +237,11 @@ export function workerSwitcherLine(
 ): { key: Worker["attention_state"]; presence: WorkerAttentionPresentation["presence"]; state: string; rest?: string } {
   const attention = worker.running ? workerAttention(worker) : undefined;
   const resting = attention?.state === "resting" && attention.label === "Resting";
-  // The phone draws the state as a pill too, so what is running joins the
-  // sentence instead, as it does on the roster's second line.
-  const running = attention?.backgroundWork;
+  // The phone draws the state as a pill too, so what is running, and what
+  // Claude reported, join the sentence instead, as on the roster's own lines.
+  const running = [attention?.backgroundWork, attention?.notice].filter(Boolean).join(" · ") || undefined;
   const state = attention
-    ? (resting && assignedTaskIsActive ? "Active assignment" : running ? attentionWord(attention.state) : attention.label)
+    ? (resting && assignedTaskIsActive ? "Active assignment" : attention.word ?? attention.label)
     : "Sleeping";
   // ⚠️ THE KEY FOLLOWS THE WORD, and that is the point of returning it rather
   // than letting the caller reach for `workerAttention` itself. This line calls

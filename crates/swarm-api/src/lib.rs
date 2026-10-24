@@ -77,6 +77,7 @@ mod terminal_control_socket;
 mod terminal_history_routes;
 mod terminal_host;
 mod terminal_socket;
+mod tool_reconnects;
 mod tunnel;
 mod unprompted_engine_updates;
 mod worker_description_ai;
@@ -421,6 +422,12 @@ pub struct AppState {
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     /// The `/restart` requests Swarm has typed into Claude workers (ADR 0122).
     provider_updates: Arc<provider_updates::ProviderUpdates>,
+    /// The `/mcp reconnect all` asks Swarm has typed (ADR 0123).
+    tool_reconnects: Arc<tool_reconnects::ToolReconnects>,
+    /// Whether each provider session's tools relay was running at the last
+    /// host listing (ADR 0123). Sessions the host could not say about are
+    /// absent, which is not the same as a relay that is gone.
+    tools_relays: Arc<RwLock<HashMap<WorkerSessionId, bool>>>,
     coordinator_start_admission: Arc<AtomicU8>,
     #[cfg(test)]
     test_start_admission: Option<runtime::CoordinatorStartAdmission>,
@@ -606,6 +613,8 @@ impl AppState {
             engine_drift_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             provider_updates: Arc::default(),
+            tool_reconnects: Arc::default(),
+            tools_relays: Arc::default(),
             github_feedback: None,
             central_support: None,
             support_admission: Arc::new(Semaphore::new(4)),
@@ -1830,6 +1839,7 @@ impl AppState {
         // Before ordinary deliveries, so a worker moving onto a new Claude is
         // not also handed a message in the same pass (ADR 0122).
         provider_updates::advance(self, &observed).await;
+        tool_reconnects::advance(self, &observed).await;
         self.deliver_coordination().await;
         self.deliver_notifications().await;
     }
@@ -2599,9 +2609,10 @@ impl AppState {
         let activity = self.provider_activity.read().await.clone();
         let observations = futures_util::stream::iter(candidates)
             .map(|candidate| {
-                let signals = activity.get(&candidate.session_id).copied();
+                let signals = activity.get(&candidate.session_id).cloned();
                 async move {
-                    if worker_is_mid_turn(signals.map(|signals| signals.activity).as_ref()) {
+                    if worker_is_mid_turn(signals.as_ref().map(|signals| signals.activity).as_ref())
+                    {
                         return None;
                     }
                     if candidate.age_seconds < STALE_OWNED_WORK_SECONDS {
@@ -2613,6 +2624,7 @@ impl AppState {
                             Some(provider_activity::ProviderSignals {
                                 activity: ProviderActivity::Resting,
                                 background_work,
+                                ..
                             }) if !background_work.is_running()
                         ) {
                             return None;
@@ -3708,6 +3720,18 @@ struct WorkerView {
     background_shells: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     background_monitors: Option<u16>,
+    /// Why this worker's latest turn ended on an API error, while it is the
+    /// latest (ADR 0123): a rate limit, an overloaded API, a refused login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    turn_failure: Option<swarm_terminal::ProviderTurnFailure>,
+    /// The latest tool call auto mode refused this worker, and why, until its
+    /// next turn starts. Never the call's input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_mode_denial: Option<swarm_terminal::ProviderDenial>,
+    /// Claude dropped Swarm's tools for this worker. Swarm reconnects them
+    /// when it rests; until then the worker cannot record its work.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    tools_disconnected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3954,6 +3978,9 @@ struct WorkerViewFacts {
     held_for_answer: Option<swarm_persistence::HeldForAnswer>,
     unconfirmed_delivery: bool,
     engaged_device: Option<(String, String)>,
+    turn_failure: Option<swarm_terminal::ProviderTurnFailure>,
+    auto_mode_denial: Option<swarm_terminal::ProviderDenial>,
+    tools_disconnected: bool,
 }
 
 impl Default for WorkerViewFacts {
@@ -3971,6 +3998,9 @@ impl Default for WorkerViewFacts {
             held_for_answer: None,
             unconfirmed_delivery: false,
             engaged_device: None,
+            turn_failure: None,
+            auto_mode_denial: None,
+            tools_disconnected: false,
         }
     }
 }
@@ -4044,6 +4074,9 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         held_for_answer,
         unconfirmed_delivery,
         engaged_device,
+        turn_failure,
+        auto_mode_denial,
+        tools_disconnected,
     } = facts;
     let (engaged_device_id, engaged_device_class) = match engaged_device {
         Some((device_id, device_class)) => (Some(device_id), Some(device_class)),
@@ -4086,6 +4119,9 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         background_work: background_work.is_running(),
         background_shells: (background_work.shells > 0).then_some(background_work.shells),
         background_monitors: (background_work.monitors > 0).then_some(background_work.monitors),
+        turn_failure,
+        auto_mode_denial,
+        tools_disconnected,
         waking_since,
         engagement_expires_at,
         runtime_error,
@@ -5364,7 +5400,13 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     let Some(bridge) = state.agent_bridge.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let response = agent::handle(bridge, Arc::clone(&state), request).await;
+    let mut response = agent::handle(bridge, Arc::clone(&state), request).await;
+    // The relay compares this across responses and tells Claude when it moves,
+    // so a running worker sees a tool shipped by a reload (ADR 0123).
+    response.headers_mut().insert(
+        swarm_terminal::AGENT_TOOL_SURFACE_HEADER,
+        axum::http::HeaderValue::from(agent::AGENT_TOOL_SURFACE_REVISION),
+    );
     state.deliver_coordination().await;
     response
 }
@@ -19035,6 +19077,7 @@ mod tests {
             shells: 2,
             monitors: 1,
             workflow: false,
+            others: 0,
         });
         assert_eq!(shells["attention_state"], "resting");
         assert_eq!(shells["background_work"], true);
@@ -19045,6 +19088,84 @@ mod tests {
         assert_eq!(idle["background_work"], false);
         assert!(idle.get("background_shells").is_none());
         assert!(idle.get("background_monitors").is_none());
+    }
+
+    /// ADR 0123: every answer from the tools route names the revision of the
+    /// tools it serves. The relay compares it across responses to tell a
+    /// running worker its tools changed; without it nothing is ever announced.
+    #[tokio::test]
+    async fn the_tools_route_names_the_tool_revision_it_serves() {
+        let store = TaskStore::in_memory().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::default()
+                .with_task_store(store)
+                .with_agent_configuration(config.path().to_path_buf(), "http://127.0.0.1:8876/mcp"),
+        );
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::HOST, "127.0.0.1:8876")
+            .header(header::ACCEPT, "application/json, text/event-stream")
+            .body(axum::body::Body::from(
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+            ))
+            .unwrap();
+        let response = mcp(State(state), request).await;
+        assert_eq!(
+            response
+                .headers()
+                .get(swarm_terminal::AGENT_TOOL_SURFACE_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(agent::AGENT_TOOL_SURFACE_REVISION.to_string().as_str())
+        );
+    }
+
+    /// ADR 0123: what Claude reported about the turn reaches the roster under
+    /// the names the web reads, and says nothing when there is nothing to say.
+    #[test]
+    fn a_worker_view_carries_the_turn_report() {
+        let store = TaskStore::in_memory().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let profile = store
+            .ensure_queen(workspace.path().to_str().unwrap())
+            .unwrap();
+        let reported = serde_json::to_value(worker_view(
+            profile.clone(),
+            WorkerViewFacts {
+                running: true,
+                provider_activity: ProviderActivity::Resting,
+                turn_failure: Some(swarm_terminal::ProviderTurnFailure::RateLimit),
+                auto_mode_denial: Some(swarm_terminal::ProviderDenial {
+                    tool: "Bash".into(),
+                    reason: "[Irreversible Local Destruction]".into(),
+                }),
+                tools_disconnected: true,
+                ..WorkerViewFacts::default()
+            },
+        ))
+        .unwrap();
+        assert_eq!(reported["turn_failure"], "rate_limit");
+        assert_eq!(reported["auto_mode_denial"]["tool"], "Bash");
+        assert_eq!(
+            reported["auto_mode_denial"]["reason"],
+            "[Irreversible Local Destruction]"
+        );
+        assert_eq!(reported["tools_disconnected"], true);
+
+        let quiet = serde_json::to_value(worker_view(
+            profile,
+            WorkerViewFacts {
+                running: true,
+                provider_activity: ProviderActivity::Resting,
+                ..WorkerViewFacts::default()
+            },
+        ))
+        .unwrap();
+        for absent in ["turn_failure", "auto_mode_denial", "tools_disconnected"] {
+            assert!(quiet.get(absent).is_none(), "{absent}");
+        }
     }
 
     /// THE TEST THAT MATTERS: can a reader tell a worker that cannot start from
@@ -19096,6 +19217,9 @@ mod tests {
             held_for_answer: None,
             unconfirmed_delivery: false,
             engaged_device: None,
+            turn_failure: None,
+            auto_mode_denial: None,
+            tools_disconnected: false,
         };
 
         let at_rest = worker_view(resting, facts());
@@ -19280,6 +19404,8 @@ mod tests {
             provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             },
         );
 
@@ -19309,6 +19435,8 @@ mod tests {
                     shells: 1,
                     ..swarm_terminal::BackgroundWork::default()
                 },
+                turn_failure: None,
+                denial: None,
             })),
             BackgroundWorkReading::Running
         );
@@ -19316,6 +19444,8 @@ mod tests {
             candidate_background_work(Some(&provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             })),
             BackgroundWorkReading::NoneVisible
         );
@@ -19632,6 +19762,8 @@ mod tests {
             provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             },
         );
 
@@ -19698,6 +19830,8 @@ mod tests {
             provider_activity::ProviderSignals {
                 activity: ProviderActivity::Resting,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             },
         );
         state.observe_assigned_ready_work_not_started(&store).await;

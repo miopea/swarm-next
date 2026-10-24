@@ -774,9 +774,18 @@ fn baseline_from_response(
         HostResponse::Output {
             resume: swarm_terminal::Resume::Snapshot { snapshot },
             running: true,
+            provider_turn,
+            last_output_at,
             ..
         } => {
-            let activity = provider_activity::classify_observed_activity(provider, &snapshot);
+            let activity = provider_activity::observed_signals(
+                provider,
+                &snapshot,
+                provider_turn.as_ref(),
+                last_output_at,
+                unix_timestamp(),
+            )
+            .activity;
             if let Some(reason) = activity_deferral(activity, busy) {
                 return Baseline::Refused(TerminalSubmission::Deferred(reason));
             }
@@ -1131,6 +1140,8 @@ async fn observe_terminal_submission_inner(
         let HostResponse::Output {
             resume: swarm_terminal::Resume::Snapshot { snapshot },
             running: true,
+            provider_turn,
+            last_output_at,
             ..
         } = client
             .request(&HostRequest::Read {
@@ -1141,7 +1152,16 @@ async fn observe_terminal_submission_inner(
         else {
             return Ok(SubmissionObservation::Uncertain);
         };
-        let activity = provider_activity::classify_observed_activity(provider, &snapshot);
+        // Claude's UserPromptSubmit makes this exact: the message was taken
+        // the moment the turn opens, whatever the screen has drawn yet.
+        let activity = provider_activity::observed_signals(
+            provider,
+            &snapshot,
+            provider_turn.as_ref(),
+            last_output_at,
+            unix_timestamp(),
+        )
+        .activity;
         if activity == ProviderActivity::Active {
             return Ok(SubmissionObservation::Accepted);
         }
@@ -1996,6 +2016,8 @@ mod tests {
             resume: swarm_terminal::Resume::Snapshot {
                 snapshot: state.snapshot(),
             },
+            provider_turn: None,
+            last_output_at: None,
         }
     }
 
@@ -2059,6 +2081,8 @@ mod tests {
                 provider_activity::ProviderSignals {
                     activity: ProviderActivity::Resting,
                     background_work: swarm_terminal::BackgroundWork::default(),
+                    turn_failure: None,
+                    denial: None,
                 },
             );
             let concurrent_store = store.clone();
@@ -2482,6 +2506,8 @@ mod tests {
                     session_id: session,
                     running: true,
                     resume: swarm_terminal::Resume::Deltas { frames: Vec::new() },
+                    provider_turn: None,
+                    last_output_at: None,
                 },
                 "terminal_snapshot_required",
             ),

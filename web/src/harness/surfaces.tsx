@@ -970,7 +970,14 @@ export const SURFACES: Surface[] = [
     why: "the roster, in every attention state it has — the terminal itself is a canvas and is never captured",
     render: () => (
       <div className="harness-roster">
-        {[...demoWorkers, { ...demoWorkers[2], id: "orchard-docs", name: "Orchard Docs", background_work: true, background_shells: 2 }].map((worker, index) => (
+        {[
+          ...demoWorkers,
+          { ...demoWorkers[2], id: "orchard-docs", name: "Orchard Docs", background_work: true, background_shells: 2 },
+          // ADR 0123: what Claude reports about its own turn.
+          { ...demoWorkers[2], id: "orchard-api", name: "Orchard API", running: true, turn_failure: "rate_limit" as const },
+          { ...demoWorkers[2], id: "orchard-web", name: "Orchard Web", running: true, attention_state: "buzzing" as const, auto_mode_denial: { tool: "Bash", reason: "[Irreversible Local Destruction]" } },
+          { ...demoWorkers[2], id: "orchard-ops", name: "Orchard Ops", running: true, tools_disconnected: true },
+        ].map((worker, index) => (
           <WorkerRosterItem
             key={worker.id}
             worker={worker}

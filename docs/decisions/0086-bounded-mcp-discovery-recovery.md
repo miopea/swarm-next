@@ -5,6 +5,11 @@
 Accepted implementation direction, September 8, under the approved daily-driver
 reliability program. Live acceptance remains required.
 
+Amended by ADR 0123 (2026-10-23): the provider reconnect this record leaves to
+"its supported interaction and guarded input" is now typed by Swarm. When a
+resting Claude worker's relay is gone, Swarm sends `/mcp reconnect all` through
+guarded delivery, once per loss and at most three times per session.
+
 ## Evidence
 
 Platform's September 8 provider transcript records failed MCP initialization:

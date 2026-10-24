@@ -41,7 +41,11 @@ fn identity(
 // can keep runtime shutdown waiting forever when the provider holds stdin open.
 // This helper exclusively owns stdin. Poll bounds each read without changing
 // shared file-description flags inherited from the provider.
-fn read_input(input: &mut (impl Read + AsFd), deadline: Instant) -> io::Result<Vec<u8>> {
+fn read_input(
+    input: &mut (impl Read + AsFd),
+    deadline: Instant,
+    limit: usize,
+) -> io::Result<Vec<u8>> {
     let mut result = Vec::new();
     loop {
         let remaining = deadline
@@ -58,17 +62,13 @@ fn read_input(input: &mut (impl Read + AsFd), deadline: Instant) -> io::Result<V
             return Err(unavailable());
         }
         let mut buffer = [0; 4096];
-        let limit = buffer
-            .len()
-            .min(MAX_PROVIDER_LIFECYCLE_BYTES + 1 - result.len());
-        let count = input
-            .read(&mut buffer[..limit])
-            .map_err(|_| unavailable())?;
+        let room = buffer.len().min(limit + 1 - result.len());
+        let count = input.read(&mut buffer[..room]).map_err(|_| unavailable())?;
         if count == 0 {
             return Ok(result);
         }
         result.extend_from_slice(&buffer[..count]);
-        if result.len() > MAX_PROVIDER_LIFECYCLE_BYTES {
+        if result.len() > limit {
             return Err(unavailable());
         }
     }
@@ -80,6 +80,44 @@ pub async fn run(resume_end: bool) -> io::Result<()> {
 
 pub async fn run_interview() -> io::Result<()> {
     run_mode(false, true).await
+}
+
+/// Forwards one turn hook (ADR 0123) as the compact form, never Claude's input.
+///
+/// Reads up to 8 MiB because a `Stop` carries the whole final answer and a
+/// `UserPromptSubmit` the whole prompt. A hook that says nothing about the turn
+/// is not an error: there is nothing to deliver. Prints nothing, ever, because
+/// what a `UserPromptSubmit` hook prints is added to the prompt.
+pub async fn run_turn() -> io::Result<()> {
+    let deadline = Instant::now() + DEADLINE;
+    let (session_id, capability) = identity(
+        &env::var("SWARM_PROVIDER_SESSION").map_err(|_| unavailable())?,
+        &env::var("SWARM_PROVIDER_START_CAPABILITY").map_err(|_| unavailable())?,
+    )?;
+    let descriptor = io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map_err(|_| unavailable())?;
+    let input = read_input(
+        &mut std::fs::File::from(descriptor),
+        deadline,
+        swarm_terminal::MAX_PROVIDER_TURN_INPUT_BYTES,
+    )?;
+    let Some(payload) = swarm_terminal::read_claude_turn_event(&input)
+        .as_ref()
+        .and_then(swarm_terminal::compact_turn_payload)
+    else {
+        return Ok(());
+    };
+    let socket = env::var_os("SWARM_TERMINAL_SOCKET")
+        .map_or_else(default_terminal_socket_path, PathBuf::from);
+    let request = HostRequest::ProviderInterview {
+        session_id,
+        capability,
+        ticket: None,
+        payload: swarm_terminal::NativeInterviewPayload(payload),
+    };
+    send_until(&HostClient::new(socket), &request, deadline).await
 }
 
 async fn run_mode(resume_end: bool, interview: bool) -> io::Result<()> {
@@ -101,7 +139,11 @@ async fn run_mode(resume_end: bool, interview: bool) -> io::Result<()> {
         .as_fd()
         .try_clone_to_owned()
         .map_err(|_| unavailable())?;
-    let input = read_input(&mut std::fs::File::from(descriptor), deadline)?;
+    let input = read_input(
+        &mut std::fs::File::from(descriptor),
+        deadline,
+        MAX_PROVIDER_LIFECYCLE_BYTES,
+    )?;
     let socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
     let client = HostClient::new(socket);
@@ -272,19 +314,41 @@ mod tests {
         file.write_all(&vec![b'x'; MAX_PROVIDER_LIFECYCLE_BYTES + 1])
             .unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
-        assert!(read_input(&mut file, Instant::now() + DEADLINE).is_err());
+        let limit = MAX_PROVIDER_LIFECYCLE_BYTES;
+        assert!(read_input(&mut file, Instant::now() + DEADLINE, limit).is_err());
         file.set_len(MAX_PROVIDER_LIFECYCLE_BYTES as u64).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
         assert_eq!(
-            read_input(&mut file, Instant::now() + DEADLINE)
+            read_input(&mut file, Instant::now() + DEADLINE, limit)
                 .unwrap()
                 .len(),
             MAX_PROVIDER_LIFECYCLE_BYTES
         );
+        // The turn helper's larger limit reads what the lifecycle one refuses.
+        file.set_len(MAX_PROVIDER_LIFECYCLE_BYTES as u64 + 1)
+            .unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        assert!(read_input(&mut file, Instant::now() + DEADLINE, limit).is_err());
+        file.seek(SeekFrom::Start(0)).unwrap();
+        assert!(
+            read_input(
+                &mut file,
+                Instant::now() + DEADLINE,
+                swarm_terminal::MAX_PROVIDER_TURN_INPUT_BYTES
+            )
+            .is_ok()
+        );
 
         let (reader, _held_writer) = nix::unistd::pipe().unwrap();
         let mut reader = File::from(reader);
-        assert!(read_input(&mut reader, Instant::now() + Duration::from_millis(10)).is_err());
+        assert!(
+            read_input(
+                &mut reader,
+                Instant::now() + Duration::from_millis(10),
+                limit
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]

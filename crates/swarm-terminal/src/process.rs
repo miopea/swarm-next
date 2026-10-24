@@ -275,6 +275,9 @@ pub struct SessionResourceState {
     pub continuation_recovery: Option<ContinuationRecoveryOutcome>,
     /// The executable the session's process is running now.
     pub provider_executable: Option<String>,
+    /// Whether Swarm's tools relay runs under the provider (ADR 0123). `None`
+    /// for a shell and whenever the process table cannot say.
+    pub provider_tools_relay: Option<bool>,
 }
 
 /// Seconds since the Unix epoch, saturating rather than panicking on a clock
@@ -303,6 +306,9 @@ pub struct ProcessTerminalSession {
     continuation_launch: OnceLock<FreshRecoveryLaunch>,
     recovery_successor: OnceLock<ContinuationRecoveryOutcome>,
     provider_lifecycle: Mutex<Option<crate::ProviderLifecycleGate>>,
+    /// Claude's own report of its current turn (ADR 0123). `None` until the
+    /// first hook lands, which is what an older engine's sessions always say.
+    provider_turn: Mutex<Option<crate::ProviderTurn>>,
     control: TerminalControlGate,
     control_changes: watch::Sender<()>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -506,6 +512,7 @@ impl ProcessTerminalSession {
             continuation_launch: OnceLock::new(),
             recovery_successor: OnceLock::new(),
             provider_lifecycle: Mutex::new(provider_lifecycle),
+            provider_turn: Mutex::new(None),
             control_changes: watch::channel(()).0,
             child: Mutex::new(child),
             writer: Mutex::new(writer),
@@ -651,6 +658,50 @@ impl ProcessTerminalSession {
             return Ok(None);
         }
         Ok(gate.fence_selection())
+    }
+
+    /// The latest turn report Claude's hooks delivered, if any.
+    /// # Errors
+    /// Returns an error when the turn lock is poisoned.
+    pub fn provider_turn(&self) -> Result<Option<crate::ProviderTurn>, SessionRegistryError> {
+        Ok(lock(&self.provider_turn)?.clone())
+    }
+
+    /// Applies one turn observation from the live provider process only.
+    ///
+    /// The capability proves the hook came from this incarnation. The
+    /// conversation must be the current one whenever the startup gate has
+    /// selected one; a turn reported before startup evidence landed is still
+    /// accepted, because what it changes is how the worker reads, not which
+    /// conversation the worker is bound to.
+    /// # Errors
+    /// Returns lock or process-status errors without exposing the capability.
+    pub fn observe_provider_turn(
+        &self,
+        capability: &[u8; 32],
+        observation: &crate::ProviderTurnObservation,
+    ) -> Result<bool, SessionRegistryError> {
+        let mut child = lock(&self.child)?;
+        let mut gate = lock(&self.provider_lifecycle)?;
+        let Some(gate) = gate.as_mut() else {
+            return Ok(false);
+        };
+        if !gate.authenticates(self.id, capability) {
+            tracing::warn!(session_id = %self.id, "turn report refused: capability did not authenticate");
+            return Ok(false);
+        }
+        if child.try_wait().map_err(terminal_error)?.is_some() {
+            gate.revoke();
+            return Ok(false);
+        }
+        if gate.selection().is_some() && !gate.is_current_conversation(observation.conversation) {
+            tracing::warn!(session_id = %self.id, "turn report refused: it belongs to another conversation");
+            return Ok(false);
+        }
+        lock(&self.provider_turn)?
+            .get_or_insert_with(crate::ProviderTurn::default)
+            .apply(&observation.event);
+        Ok(true)
     }
 
     /// Arms an interactive-resume boundary only for this still-live process.
@@ -1985,6 +2036,9 @@ impl SessionRegistry {
                         continuation_unavailable: session.continuation_unavailable()?,
                         continuation_recovery: session.recovery_successor.get().copied(),
                         provider_executable: process_id.and_then(crate::running_executable),
+                        provider_tools_relay: process_id
+                            .filter(|_| session.provider.is_some())
+                            .and_then(|pid| resources.tools_relay_running(pid)),
                     })
                 })
                 .collect()

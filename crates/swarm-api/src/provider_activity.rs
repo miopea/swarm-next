@@ -14,7 +14,8 @@ use serde::Serialize;
 use swarm_domain::ProviderKind;
 use swarm_domain::{ControlRoomEventKind, WorkerProfile, WorkerSessionId};
 use swarm_terminal::{
-    HostRequest, HostResponse, ProviderActivity, TerminalSnapshot, classify_provider_activity,
+    HostRequest, HostResponse, ProviderActivity, ProviderTurn, ProviderTurnPhase, ProviderTurnWait,
+    TerminalSnapshot, classify_provider_activity,
 };
 
 use crate::{ApiError, AppState, authorize, terminal_host::request_host};
@@ -156,10 +157,31 @@ async fn observe(
 /// operator can tell a worker with nothing to do from one that finished while
 /// something it started is still running. Both classify as Resting, and that is
 /// deliberate — the turn HAS ended — but they are not the same situation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ProviderSignals {
     pub(super) activity: ProviderActivity,
     pub(super) background_work: swarm_terminal::BackgroundWork,
+    /// Why the latest turn ended on an API error, while it is the latest
+    /// (ADR 0123). Routing still reads the turn as over; this is what the
+    /// operator is told about it.
+    pub(super) turn_failure: Option<swarm_terminal::ProviderTurnFailure>,
+    /// The latest tool call auto mode refused, until the next turn starts.
+    pub(super) denial: Option<swarm_terminal::ProviderDenial>,
+}
+
+impl ProviderSignals {
+    /// What the screen alone says, for a provider with no turn report.
+    pub(super) const fn from_screen(
+        activity: ProviderActivity,
+        background_work: swarm_terminal::BackgroundWork,
+    ) -> Self {
+        Self {
+            activity,
+            background_work,
+            turn_failure: None,
+            denial: None,
+        }
+    }
 }
 
 pub(super) async fn observe_session(
@@ -191,16 +213,143 @@ pub(super) async fn observe_session_snapshot(
             session_id: observed_session,
             resume: swarm_terminal::Resume::Snapshot { snapshot },
             running: true,
-            ..
+            provider_turn,
+            last_output_at,
         }) if observed_session == session_id => Some((
-            ProviderSignals {
-                activity: classify_observed_activity(provider, &snapshot),
-                background_work: swarm_terminal::background_work(provider, &snapshot),
-            },
+            observed_signals(
+                provider,
+                &snapshot,
+                provider_turn.as_ref(),
+                last_output_at,
+                crate::unix_timestamp(),
+            ),
             snapshot,
         )),
         _ => None,
     }
+}
+
+/// A turn the hooks call open, on a resting prompt whose terminal has drawn
+/// nothing for this long, is over.
+///
+/// A working Claude redraws its spinner and elapsed time every second, so a
+/// quiet minute is not a long tool call. This is the bound for a turn that
+/// ended without a Stop AND without Claude's end-of-turn line, which has two
+/// documented causes (an interrupt and a lost hook) and one undocumented one
+/// (a Claude release that draws the line differently). It is never the first
+/// answer: the hooks and the end-of-turn line are.
+pub(super) const QUIET_TURN_SECONDS: i64 = 60;
+
+/// Everything one read of a session says: the screen, and Claude's own report
+/// of its turn when the session has one (ADR 0123).
+pub(super) fn observed_signals(
+    provider: ProviderKind,
+    snapshot: &TerminalSnapshot,
+    turn: Option<&ProviderTurn>,
+    last_output_at: Option<i64>,
+    now: i64,
+) -> ProviderSignals {
+    let screen = classify_observed_activity(provider, snapshot);
+    let screen_background = swarm_terminal::background_work(provider, snapshot);
+    let Some(turn) = turn.filter(|_| provider == ProviderKind::ClaudeCode) else {
+        return ProviderSignals::from_screen(screen, screen_background);
+    };
+    let quiet = last_output_at.is_some_and(|at| now.saturating_sub(at) >= QUIET_TURN_SECONDS);
+    ProviderSignals {
+        activity: turn_activity(screen, turn, || turn_ended_on_screen(snapshot), quiet),
+        // Claude's list is exact and typed, and every task that finishes
+        // starts a short turn of its own whose Stop lists the rest. It is
+        // read only from a turn that ENDED: a failed one never refreshed it,
+        // and a running one may already have started more.
+        background_work: match (turn.phase, turn.background) {
+            (ProviderTurnPhase::Ended, Some(reported)) => reported.into(),
+            _ => screen_background,
+        },
+        turn_failure: turn
+            .failure
+            .filter(|_| turn.phase == ProviderTurnPhase::Failed),
+        denial: turn.denial.clone(),
+    }
+}
+
+/// The screen and the hooks, combined (ADR 0123).
+///
+/// The hooks are exact about what they report and silent about the rest: Esc
+/// and Ctrl+C fire nothing, a queued message starts a turn with no
+/// `UserPromptSubmit` of its own, and a local command such as `/compact` is not
+/// a turn at all. So:
+///
+/// - A menu on screen is a question, whatever the hooks last said.
+/// - An open turn is working, even on a screen that looks idle. That screen
+///   misread is what the hooks are for. Unless Claude's end-of-turn line sits
+///   on the resting prompt, or the terminal has gone quiet: then the turn
+///   ended without telling anyone.
+/// - An ended turn adds nothing to the screen, which is right about the work
+///   the hooks never report, except a usage limit Claude will not resume.
+fn turn_activity(
+    screen: ProviderActivity,
+    turn: &ProviderTurn,
+    ended_on_screen: impl FnOnce() -> bool,
+    quiet: bool,
+) -> ProviderActivity {
+    if screen == ProviderActivity::AwaitingOperator {
+        return ProviderActivity::AwaitingOperator;
+    }
+    match turn.phase {
+        ProviderTurnPhase::Working => {
+            if screen == ProviderActivity::Resting && (quiet || ended_on_screen()) {
+                ProviderActivity::Resting
+            } else if screen != ProviderActivity::Active && turn.waiting.is_some() {
+                ProviderActivity::AwaitingOperator
+            } else {
+                ProviderActivity::Active
+            }
+        }
+        ProviderTurnPhase::Ended | ProviderTurnPhase::Failed => {
+            if screen != ProviderActivity::Active
+                && turn.waiting == Some(ProviderTurnWait::UsageLimit)
+            {
+                ProviderActivity::AwaitingOperator
+            } else {
+                screen
+            }
+        }
+    }
+}
+
+/// Whether Claude's own end-of-turn line is the last thing above its prompt.
+///
+/// Two forms, both measured on 2.1.310 and in this Hive's terminal history:
+/// `⎿  Interrupted · What should Claude do instead?` after Esc or Ctrl+C, and
+/// `✻ Baked for 3s · done 10:14 PM` after a turn that finished (the verb
+/// varies; the shape does not). Directly above the input box only: once a new
+/// prompt is echoed below it, the line belongs to a turn that is over.
+fn turn_ended_on_screen(snapshot: &TerminalSnapshot) -> bool {
+    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+    parser.process(&snapshot.bytes);
+    let screen = parser.screen();
+    let Some(composer) = provider_composer_row(ProviderKind::ClaudeCode, screen) else {
+        return false;
+    };
+    let columns = screen.size().1;
+    let Some(line) = (0..composer)
+        .rev()
+        .map(|row| screen.contents_between(row, 0, row, columns))
+        .map(|line| line.trim().to_owned())
+        .find(|line| {
+            !line.is_empty() && !line.chars().all(|glyph| matches!(glyph, '─' | '━' | '═'))
+        })
+    else {
+        return false;
+    };
+    let interrupted = line.starts_with('⎿') && line.contains("Interrupted");
+    // A past tense and a number. The working spinner carries the same glyph
+    // and a present participle, and can say "thought for 1s" in parentheses.
+    let finished = line.starts_with('✻')
+        && line.split_once(" for ").is_some_and(|(verb, rest)| {
+            verb.ends_with("ed") && rest.starts_with(|glyph: char| glyph.is_ascii_digit())
+        });
+    interrupted || finished
 }
 
 /// Adds application-level provider UI recognition without changing the
@@ -472,6 +621,249 @@ mod tests {
         );
         state.push(text.as_bytes().to_vec());
         state.snapshot()
+    }
+
+    const RULE: &str = "────────────────────────────────────────";
+
+    /// A Claude screen at rest, with `above` as the last thing over its prompt.
+    fn claude_at_rest(above: &str) -> TerminalSnapshot {
+        snapshot(&format!(
+            "● Earlier output.\r\n{above}\r\n{RULE}\r\n❯ \r\n{RULE}\r\n  ⏵⏵ auto mode on (shift+tab to cycle)"
+        ))
+    }
+
+    fn turn(phase: ProviderTurnPhase) -> ProviderTurn {
+        ProviderTurn {
+            phase,
+            ..ProviderTurn::default()
+        }
+    }
+
+    fn read(
+        snapshot: &TerminalSnapshot,
+        turn: Option<&ProviderTurn>,
+        quiet_for: i64,
+    ) -> ProviderSignals {
+        observed_signals(
+            ProviderKind::ClaudeCode,
+            snapshot,
+            turn,
+            Some(1_000),
+            1_000 + quiet_for,
+        )
+    }
+
+    /// The precondition every case below leans on: these screens read as
+    /// Resting on their own. Without it a case could pass because the screen
+    /// said something else, and prove nothing about the hooks.
+    #[test]
+    fn the_test_screens_rest_on_their_own() {
+        for above in [
+            "● Still working through the files.",
+            "  ⎿  Interrupted · What should Claude do instead?",
+            "✻ Cogitated for 1s · done 10:14 PM",
+            "✻ Churned for 1m 4s · done 9:02 AM · 1 shell still running",
+        ] {
+            assert_eq!(
+                classify_observed_activity(ProviderKind::ClaudeCode, &claude_at_rest(above)),
+                ProviderActivity::Resting,
+                "{above}"
+            );
+        }
+    }
+
+    /// THE MISREAD THE HOOKS EXIST FOR (ADR 0123). A turn Claude has opened
+    /// and not closed is working, even on a screen that looks idle: the screen
+    /// reader has read working workers as Resting before (2b631fba, cd9abd1c).
+    #[test]
+    fn an_open_turn_is_working_on_a_screen_that_looks_idle() {
+        let screen = claude_at_rest("● Still working through the files.");
+        let working = turn(ProviderTurnPhase::Working);
+        assert_eq!(
+            read(&screen, Some(&working), 5).activity,
+            ProviderActivity::Active
+        );
+        assert_eq!(read(&screen, None, 5).activity, ProviderActivity::Resting);
+    }
+
+    /// Esc and Ctrl+C fire no hook, measured on 2.1.310. Claude prints its
+    /// interrupt line over the prompt instead, and that ends the turn.
+    #[test]
+    fn an_interrupted_turn_rests_at_once() {
+        let screen = claude_at_rest("  ⎿  Interrupted · What should Claude do instead?");
+        let working = turn(ProviderTurnPhase::Working);
+        assert_eq!(
+            read(&screen, Some(&working), 1).activity,
+            ProviderActivity::Resting
+        );
+    }
+
+    /// A Stop that never arrived must not pin a worker busy forever. Claude's
+    /// own end-of-turn line over the prompt says the turn finished.
+    #[test]
+    fn a_finished_turn_whose_stop_was_lost_rests_at_once() {
+        let working = turn(ProviderTurnPhase::Working);
+        for above in [
+            "✻ Cogitated for 1s · done 10:14 PM",
+            "✻ Churned for 1m 4s · done 9:02 AM · 1 shell still running",
+        ] {
+            assert_eq!(
+                read(&claude_at_rest(above), Some(&working), 1).activity,
+                ProviderActivity::Resting,
+                "{above}"
+            );
+        }
+    }
+
+    /// The working spinner carries the same glyph and can say "thought for".
+    #[test]
+    fn the_working_spinner_is_not_an_end_of_turn_line() {
+        let working = turn(ProviderTurnPhase::Working);
+        for above in [
+            "✻ Simmering… (4s · ↓ 339 tokens · thought for 1s)",
+            "✻ Thought for 3s",
+        ] {
+            assert!(!turn_ended_on_screen(&claude_at_rest(above)), "{above}");
+        }
+        // And a finished line above a newly echoed prompt belongs to the turn
+        // before: the one now open is working.
+        let next = claude_at_rest("✻ Baked for 3s · done 10:14 PM\r\n❯ Next task, please.");
+        assert!(!turn_ended_on_screen(&next));
+        assert_eq!(
+            read(&next, Some(&working), 1).activity,
+            ProviderActivity::Active
+        );
+    }
+
+    /// The last bound, for a turn that ended with neither a hook nor the line:
+    /// a working Claude redraws every second, so a quiet minute is not work.
+    #[test]
+    fn an_open_turn_on_a_quiet_resting_screen_rests_after_a_minute() {
+        let screen = claude_at_rest("● Still working through the files.");
+        let working = turn(ProviderTurnPhase::Working);
+        assert_eq!(
+            read(&screen, Some(&working), QUIET_TURN_SECONDS - 1).activity,
+            ProviderActivity::Active
+        );
+        assert_eq!(
+            read(&screen, Some(&working), QUIET_TURN_SECONDS).activity,
+            ProviderActivity::Resting
+        );
+        // Quiet on a screen that is not resting proves nothing.
+        let busy = snapshot("✻ Brewing… (12s · esc to interrupt)\r\n");
+        assert_eq!(
+            read(&busy, Some(&working), QUIET_TURN_SECONDS * 10).activity,
+            ProviderActivity::Active
+        );
+    }
+
+    #[test]
+    fn a_question_the_hooks_report_waits_on_the_operator_unless_the_screen_shows_work() {
+        let mut asking = turn(ProviderTurnPhase::Working);
+        asking.waiting = Some(ProviderTurnWait::Question);
+        let unknown = snapshot("something this build cannot read\r\n");
+        assert_eq!(
+            read(&unknown, Some(&asking), 1).activity,
+            ProviderActivity::AwaitingOperator
+        );
+        let busy = snapshot("✻ Brewing… (12s · esc to interrupt)\r\n");
+        assert_eq!(
+            read(&busy, Some(&asking), 1).activity,
+            ProviderActivity::Active
+        );
+        // Esc on the question is an interrupt like any other.
+        let interrupted = claude_at_rest("  ⎿  Interrupted · What should Claude do instead?");
+        assert_eq!(
+            read(&interrupted, Some(&asking), 1).activity,
+            ProviderActivity::Resting
+        );
+    }
+
+    /// An ended turn adds nothing to the screen: a queued message starts its
+    /// turn with no `UserPromptSubmit`, and `/compact` is not a turn at all.
+    #[test]
+    fn an_ended_turn_leaves_the_screen_in_charge() {
+        let ended = turn(ProviderTurnPhase::Ended);
+        let busy = snapshot("✻ Brewing… (12s · esc to interrupt)\r\n");
+        assert_eq!(
+            read(&busy, Some(&ended), 1).activity,
+            ProviderActivity::Active
+        );
+        let unknown = snapshot("something this build cannot read\r\n");
+        assert_eq!(
+            read(&unknown, Some(&ended), 1).activity,
+            ProviderActivity::Unknown
+        );
+        let resting = claude_at_rest("● Done.");
+        assert_eq!(
+            read(&resting, Some(&ended), 1).activity,
+            ProviderActivity::Resting
+        );
+    }
+
+    #[test]
+    fn a_failed_turn_is_reported_and_a_usage_limit_claude_will_not_resume_waits_on_someone() {
+        let mut failed = turn(ProviderTurnPhase::Failed);
+        failed.failure = Some(swarm_terminal::ProviderTurnFailure::RateLimit);
+        let resting = claude_at_rest("● API Error: Rate limit reached");
+        let seen = read(&resting, Some(&failed), 1);
+        assert_eq!(seen.activity, ProviderActivity::Resting);
+        assert_eq!(
+            seen.turn_failure,
+            Some(swarm_terminal::ProviderTurnFailure::RateLimit)
+        );
+        failed.waiting = Some(ProviderTurnWait::UsageLimit);
+        assert_eq!(
+            read(&resting, Some(&failed), 1).activity,
+            ProviderActivity::AwaitingOperator
+        );
+        // A failure from an earlier turn is not reported once a turn ends well.
+        let mut ended = turn(ProviderTurnPhase::Ended);
+        ended.failure = Some(swarm_terminal::ProviderTurnFailure::RateLimit);
+        assert_eq!(read(&resting, Some(&ended), 1).turn_failure, None);
+    }
+
+    /// The operator's reminder, 2026-10-23: a worker with shells running reads
+    /// "Buzzing · N shells". Claude's own list counts them once the turn ends;
+    /// any other turn falls back to the footer.
+    #[test]
+    fn shells_come_from_claude_s_list_after_a_finished_turn_and_from_the_screen_otherwise() {
+        let footer = claude_at_rest("● Started the build.\r\n  2 shells still running");
+        let mut ended = turn(ProviderTurnPhase::Ended);
+        ended.background = Some(swarm_terminal::ProviderTurnBackground {
+            shells: 3,
+            others: 1,
+            ..swarm_terminal::ProviderTurnBackground::default()
+        });
+        let seen = read(&footer, Some(&ended), 1);
+        assert_eq!(seen.background_work.shells, 3);
+        assert_eq!(seen.background_work.others, 1);
+        // A finished turn that left nothing running says so, footer or not.
+        ended.background = Some(swarm_terminal::ProviderTurnBackground::default());
+        assert!(!read(&footer, Some(&ended), 1).background_work.is_running());
+        for phase in [ProviderTurnPhase::Working, ProviderTurnPhase::Failed] {
+            let mut other = turn(phase);
+            other.background = Some(swarm_terminal::ProviderTurnBackground::default());
+            assert_eq!(
+                read(&footer, Some(&other), 1).background_work.shells,
+                2,
+                "{phase:?}"
+            );
+        }
+        // No list (Claude could not reach its registry): the footer.
+        ended.background = None;
+        assert_eq!(read(&footer, Some(&ended), 1).background_work.shells, 2);
+    }
+
+    #[test]
+    fn a_turn_report_is_ignored_for_providers_that_do_not_send_one() {
+        let working = turn(ProviderTurnPhase::Working);
+        let screen = snapshot("› \r\n  gpt-5.6 medium · ~/projects");
+        let alone = classify_observed_activity(ProviderKind::Codex, &screen);
+        assert_eq!(
+            observed_signals(ProviderKind::Codex, &screen, Some(&working), None, 0).activity,
+            alone
+        );
     }
 
     /// The premise behind the stale-work false positives, measured rather than

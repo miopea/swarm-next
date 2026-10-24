@@ -462,3 +462,80 @@ fn an_operator_label_on_legacy_input_is_not_generation_checked_provenance() {
     );
     assert!(registry.native_interview_evidence().unwrap().is_empty());
 }
+
+fn turn(
+    conversation: ProviderConversationId,
+    event: crate::ProviderTurnEvent,
+) -> crate::ProviderTurnObservation {
+    crate::ProviderTurnObservation {
+        conversation,
+        event,
+        interview: false,
+    }
+}
+
+/// A turn report changes how the worker reads, so it is taken only from the
+/// live provider incarnation and only about the conversation it is running
+/// (ADR 0123). Anything else is refused and leaves the turn as it was.
+#[test]
+fn turn_reports_need_the_live_capability_and_the_current_conversation() {
+    let (_registry, session, conversation, _grant) = fixture();
+    assert_eq!(session.provider_turn().unwrap(), None);
+    assert!(
+        session
+            .observe_provider_turn(
+                &CAPABILITY,
+                &turn(conversation, crate::ProviderTurnEvent::Submitted)
+            )
+            .unwrap()
+    );
+    let working = session.provider_turn().unwrap().unwrap();
+    assert_eq!(working.phase, crate::ProviderTurnPhase::Working);
+
+    let ended = crate::ProviderTurnEvent::Ended { background: None };
+    assert!(
+        !session
+            .observe_provider_turn(&[7; 32], &turn(conversation, ended.clone()))
+            .unwrap()
+    );
+    assert!(
+        !session
+            .observe_provider_turn(
+                &CAPABILITY,
+                &turn(ProviderConversationId::new(), ended.clone())
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        session.provider_turn().unwrap(),
+        Some(working),
+        "refusals change nothing"
+    );
+
+    assert!(
+        session
+            .observe_provider_turn(&CAPABILITY, &turn(conversation, ended))
+            .unwrap()
+    );
+    assert_eq!(
+        session.provider_turn().unwrap().unwrap().phase,
+        crate::ProviderTurnPhase::Ended
+    );
+}
+
+#[test]
+fn a_session_without_a_provider_gate_takes_no_turn_reports() {
+    let (_registry, session) = control_tests::fixture();
+    assert!(
+        !session
+            .observe_provider_turn(
+                &CAPABILITY,
+                &turn(
+                    ProviderConversationId::new(),
+                    crate::ProviderTurnEvent::Submitted
+                )
+            )
+            .unwrap()
+    );
+    assert_eq!(session.provider_turn().unwrap(), None);
+}

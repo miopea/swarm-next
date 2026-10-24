@@ -12,6 +12,12 @@ mod provider_activity;
 mod provider_interview;
 mod provider_lifecycle;
 mod provider_lifecycle_gate;
+mod provider_turn;
+
+/// The response header carrying the revision of the tools Swarm serves an
+/// agent. The relay compares it across responses and tells Claude when it
+/// moves, so a running worker refetches its tools (ADR 0123).
+pub const AGENT_TOOL_SURFACE_HEADER: &str = "x-swarm-tool-surface";
 mod resources;
 mod startup_failure;
 mod state;
@@ -65,6 +71,11 @@ pub use provider_lifecycle::{
     read_claude_session_start,
 };
 pub use provider_lifecycle_gate::{ProviderLifecycleAcceptance, ProviderLifecycleGate};
+pub use provider_turn::{
+    MAX_PROVIDER_TURN_INPUT_BYTES, ProviderDenial, ProviderTurn, ProviderTurnBackground,
+    ProviderTurnEvent, ProviderTurnFailure, ProviderTurnObservation, ProviderTurnPhase,
+    ProviderTurnWait, compact_turn_payload, read_claude_turn_event,
+};
 mod provider_prompt;
 pub use provider_prompt::{ProviderPromptObservation, read_claude_prompt_submission};
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};

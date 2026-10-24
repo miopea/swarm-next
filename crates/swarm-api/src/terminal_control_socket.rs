@@ -641,6 +641,7 @@ impl SocketContext {
                     session_id,
                     resume,
                     running,
+                    ..
                 }) if session_id == self.session_id => (resume, running),
                 Ok(HostResponse::ControlledOutput {
                     session_id,

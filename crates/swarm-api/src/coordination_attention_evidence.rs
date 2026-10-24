@@ -61,7 +61,7 @@ pub(super) async fn observe(
                     profile.active_session_id == Some(item.session_id)
                 })
             });
-            let mut observation = evidence(signals.as_ref().map(|(signals, _)| *signals), crate::unix_timestamp());
+            let mut observation = evidence(signals.as_ref().map(|(signals, _)| signals), crate::unix_timestamp());
             observation["prompt_has_unsent_input"] = match (&signals, &current_profile) {
                 (Some((signals, snapshot)), Some(profile))
                     if profile.active_session_id == Some(item.session_id)
@@ -74,7 +74,7 @@ pub(super) async fn observe(
                 && let Some(profile) = &current_profile
                 && profile.active_session_id == Some(item.session_id)
                 && let Some(excerpt) = recovery_excerpt(
-                    *signals, profile.provider, snapshot, profile.engagement_expires_at.is_some(),
+                    signals, profile.provider, snapshot, profile.engagement_expires_at.is_some(),
                 )
             {
                 observation["resting_terminal_excerpt"] = excerpt;
@@ -194,7 +194,7 @@ pub(super) async fn observe_unexplained_briefings(state: &AppState, store: &Task
                 });
             let observed = observed.filter(|(_, snapshot)| current && !snapshot.truncated);
             let mut result = evidence(
-                observed.as_ref().map(|(signals, _)| *signals),
+                observed.as_ref().map(|(signals, _)| signals),
                 crate::unix_timestamp(),
             );
             result["task_id"] = json!(briefing.task_id);
@@ -284,7 +284,7 @@ fn recovery_fact(observation: &Value) -> Option<swarm_domain::QueenRecoveryFacts
     })
 }
 
-fn evidence(signals: Option<ProviderSignals>, checked_at: i64) -> Value {
+fn evidence(signals: Option<&ProviderSignals>, checked_at: i64) -> Value {
     let activity = match signals.map(|signals| signals.activity) {
         Some(ProviderActivity::Active) => "active",
         Some(ProviderActivity::Resting) => "resting",
@@ -301,7 +301,7 @@ fn evidence(signals: Option<ProviderSignals>, checked_at: i64) -> Value {
 }
 
 fn recovery_excerpt(
-    signals: ProviderSignals,
+    signals: &ProviderSignals,
     provider: swarm_domain::ProviderKind,
     snapshot: &swarm_terminal::TerminalSnapshot,
     operator_engaged: bool,
@@ -484,6 +484,8 @@ mod tests {
                             bytes: b"Fictional completed turn\r\n> ".to_vec(),
                         },
                     },
+                    provider_turn: None,
+                    last_output_at: None,
                 };
                 let mut bytes = serde_json::to_vec(&response).unwrap();
                 bytes.push(b'\n');
@@ -569,6 +571,8 @@ mod tests {
                         sequence: index + 1, rows: 24, columns: 80, truncated: index == 2,
                         bytes: "2. Hold this fictional test\r\n3. Type something.\r\n4. Chat about this\r\nEnter to select · ↑/↓ to navigate · Esc to cancel".as_bytes().to_vec(),
                     } },
+                    provider_turn: None,
+                    last_output_at: None,
                 };
                 let mut bytes = serde_json::to_vec(&response).unwrap();
                 bytes.push(b'\n');
@@ -705,6 +709,8 @@ mod tests {
         let signals = ProviderSignals {
             activity: ProviderActivity::Resting,
             background_work: swarm_terminal::BackgroundWork::default(),
+            turn_failure: None,
+            denial: None,
         };
         let mut snapshot = swarm_terminal::TerminalSnapshot {
             sequence: 1,
@@ -716,21 +722,21 @@ mod tests {
                 .to_vec(),
         };
         let provider = swarm_domain::ProviderKind::ClaudeCode;
-        let excerpt = recovery_excerpt(signals, provider, &snapshot, false).unwrap();
+        let excerpt = recovery_excerpt(&signals, provider, &snapshot, false).unwrap();
         assert!(!excerpt["text"].as_str().unwrap().contains("yes, commit"));
         assert!(excerpt["text"].as_str().unwrap().contains("May I commit?"));
         assert_eq!(excerpt["composer_excluded"], true);
-        assert!(recovery_excerpt(signals, provider, &snapshot, true).is_none());
+        assert!(recovery_excerpt(&signals, provider, &snapshot, true).is_none());
         snapshot.bytes = "● May I commit?\r\n❯ private unsent draft\r\n? for shortcuts"
             .as_bytes()
             .to_vec();
-        assert!(recovery_excerpt(signals, provider, &snapshot, false).is_none());
+        assert!(recovery_excerpt(&signals, provider, &snapshot, false).is_none());
         snapshot.bytes = "● May I commit?\r\n❯ \x1b[2myes, commit and submit for review\x1b[22m\r\n? for shortcuts"
             .as_bytes().to_vec();
         assert!(!crate::provider_activity::has_open_provider_input(
             provider, &snapshot
         ));
-        let excerpt = recovery_excerpt(signals, provider, &snapshot, false).unwrap();
+        let excerpt = recovery_excerpt(&signals, provider, &snapshot, false).unwrap();
         assert!(!excerpt["text"].as_str().unwrap().contains("yes, commit"));
         assert!(excerpt["text"].as_str().unwrap().contains("May I commit?"));
     }
@@ -821,12 +827,14 @@ mod tests {
                 let observations = HashMap::from([(
                     row.action_id.clone(),
                     evidence(
-                        Some(ProviderSignals {
+                        Some(&ProviderSignals {
                             activity,
                             background_work: swarm_terminal::BackgroundWork {
                                 shells: u16::from(background_work),
                                 ..swarm_terminal::BackgroundWork::default()
                             },
+                            turn_failure: None,
+                            denial: None,
                         }),
                         42,
                     ),
@@ -853,9 +861,11 @@ mod tests {
         let observations = HashMap::from([(
             row.action_id.clone(),
             evidence(
-                Some(ProviderSignals {
+                Some(&ProviderSignals {
                     activity: ProviderActivity::Resting,
                     background_work: swarm_terminal::BackgroundWork::default(),
+                    turn_failure: None,
+                    denial: None,
                 }),
                 42,
             ),
@@ -886,9 +896,11 @@ mod tests {
             json!({"observation":"none_recorded"}),
         ] {
             let mut observation = evidence(
-                Some(ProviderSignals {
+                Some(&ProviderSignals {
                     activity: ProviderActivity::Resting,
                     background_work: swarm_terminal::BackgroundWork::default(),
+                    turn_failure: None,
+                    denial: None,
                 }),
                 42,
             );
@@ -914,14 +926,20 @@ mod tests {
             Some(ProviderSignals {
                 activity: ProviderActivity::Unknown,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             }),
             Some(ProviderSignals {
                 activity: ProviderActivity::Active,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             }),
             Some(ProviderSignals {
                 activity: ProviderActivity::AwaitingOperator,
                 background_work: swarm_terminal::BackgroundWork::default(),
+                turn_failure: None,
+                denial: None,
             }),
             Some(ProviderSignals {
                 activity: ProviderActivity::Resting,
@@ -929,9 +947,12 @@ mod tests {
                     shells: 1,
                     ..swarm_terminal::BackgroundWork::default()
                 },
+                turn_failure: None,
+                denial: None,
             }),
         ] {
-            let observations = HashMap::from([(row.action_id.clone(), evidence(signals, 42))]);
+            let observations =
+                HashMap::from([(row.action_id.clone(), evidence(signals.as_ref(), 42))]);
             assert!(
                 active_work_recovery(rows, &observations)["tasks"]
                     .as_array()
@@ -944,9 +965,11 @@ mod tests {
         let observations = HashMap::from([(
             row.action_id.clone(),
             evidence(
-                Some(ProviderSignals {
+                Some(&ProviderSignals {
                     activity: ProviderActivity::Resting,
                     background_work: swarm_terminal::BackgroundWork::default(),
+                    turn_failure: None,
+                    denial: None,
                 }),
                 42,
             ),
@@ -1041,6 +1064,8 @@ mod tests {
                             .to_vec(),
                         },
                     },
+                    provider_turn: None,
+                    last_output_at: None,
                 };
                 let mut bytes = serde_json::to_vec(&response).unwrap();
                 bytes.push(b'\n');
@@ -1152,12 +1177,14 @@ mod tests {
             (ProviderActivity::Unknown, "unknown"),
         ] {
             let result = evidence(
-                Some(ProviderSignals {
+                Some(&ProviderSignals {
                     activity,
                     background_work: swarm_terminal::BackgroundWork {
                         shells: 1,
                         ..swarm_terminal::BackgroundWork::default()
                     },
+                    turn_failure: None,
+                    denial: None,
                 }),
                 42,
             );

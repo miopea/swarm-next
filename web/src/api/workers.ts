@@ -78,6 +78,12 @@ export type Worker = {
   /** How many shells and monitors it counts; absent when none. */
   background_shells?: number;
   background_monitors?: number;
+  /** Why its latest turn ended on an API error, while that turn is the latest. */
+  turn_failure?: "rate_limit" | "overloaded" | "authentication" | "billing" | "server" | "other";
+  /** The latest tool call auto mode refused, and why, until the next turn starts. */
+  auto_mode_denial?: { tool: string; reason: string };
+  /** Claude dropped Swarm's tools for this worker; Swarm reconnects them when it rests. */
+  tools_disconnected?: boolean;
   /** A wake is queued or in flight for this worker, since this unix time. */
   waking_since?: number;
   /** Wall-clock second this worker's terminal last produced output. */

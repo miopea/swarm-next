@@ -119,6 +119,7 @@ pub(super) async fn list_workers(
     let mut engaged = task_store(&state)?
         .engaged_devices_by_worker(crate::unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    let relays = state.tools_relays.read().await.clone();
     let errors = state.worker_errors.read().await;
     let return_attention = task_store(&state)?
         .worker_return_attention()
@@ -143,9 +144,18 @@ pub(super) async fn list_workers(
             let needs_operator = awaiting_operator.contains(&profile.id);
             let signals = profile
                 .active_session_id
-                .and_then(|session_id| provider_activity.get(&session_id).copied());
-            let activity = signals.map_or(ProviderActivity::Unknown, |seen| seen.activity);
-            let background_work = signals.map(|seen| seen.background_work).unwrap_or_default();
+                .and_then(|session_id| provider_activity.get(&session_id).cloned());
+            let activity = signals
+                .as_ref()
+                .map_or(ProviderActivity::Unknown, |seen| seen.activity);
+            let background_work = signals
+                .as_ref()
+                .map(|seen| seen.background_work)
+                .unwrap_or_default();
+            let (turn_failure, auto_mode_denial) = signals
+                .map(|seen| (seen.turn_failure, seen.denial))
+                .unwrap_or_default();
+            let tools_disconnected = running && tools_disconnected(&profile, &relays);
             let is_scout = scout_id == Some(profile.id);
             let profile_id = profile.id;
             let last_output_at = profile
@@ -179,6 +189,9 @@ pub(super) async fn list_workers(
                     held_for_answer: held.get(&profile_id).copied(),
                     unconfirmed_delivery: unconfirmed.contains(&profile_id),
                     engaged_device: engaged.remove(&profile_id),
+                    turn_failure,
+                    auto_mode_denial,
+                    tools_disconnected,
                 },
             );
             view.return_attention = return_status;
@@ -186,6 +199,19 @@ pub(super) async fn list_workers(
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
+}
+
+/// A running Claude worker whose tools relay the host saw gone (ADR 0123).
+/// A session the host could not say about is not reported as disconnected.
+fn tools_disconnected(
+    profile: &swarm_domain::WorkerProfile,
+    relays: &std::collections::HashMap<swarm_domain::WorkerSessionId, bool>,
+) -> bool {
+    profile.provider == swarm_domain::ProviderKind::ClaudeCode
+        && profile
+            .active_session_id
+            .and_then(|session_id| relays.get(&session_id))
+            == Some(&false)
 }
 
 pub(super) async fn list_workspaces(

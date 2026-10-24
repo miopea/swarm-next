@@ -529,6 +529,8 @@ async fn dispatch_wait(
             session_id,
             resume,
             running,
+            provider_turn: None,
+            last_output_at: None,
         },
         Ok(Err(error)) => error_response("terminal_operation_failed", &error.to_string()),
         Err(_) => match (session.resume_after(after_sequence), session.is_running()) {
@@ -536,6 +538,8 @@ async fn dispatch_wait(
                 session_id,
                 resume,
                 running,
+                provider_turn: None,
+                last_output_at: None,
             },
             (Err(error), _) | (_, Err(error)) => {
                 error_response("terminal_operation_failed", &error.to_string())
@@ -585,6 +589,28 @@ async fn dispatch_wait_controlled(
     }
 }
 
+fn provider_interview(
+    registry: &SessionRegistry,
+    session_id: WorkerSessionId,
+    capability: &swarm_terminal::ProviderLifecycleCapability,
+    payload: &swarm_terminal::NativeInterviewPayload,
+    ticket: Option<swarm_domain::OperatorSubmissionId>,
+) -> Result<HostResponse, String> {
+    (if let Some(ticket) = ticket {
+        registry.begin_native_interview(session_id, &capability.0, ticket, payload.0.as_bytes())
+    } else {
+        registry.observe_native_interview(session_id, &capability.0, payload.0.as_bytes())
+    })
+    .map_err(|_| "native interview capture unavailable".to_owned())
+    .and_then(|accepted| {
+        if accepted {
+            Ok(HostResponse::Acknowledged)
+        } else {
+            Err("native interview capture refused".to_owned())
+        }
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 fn dispatch_blocking(
     registry: &SessionRegistry,
@@ -610,19 +636,29 @@ fn dispatch_blocking(
             capability,
             payload,
             ticket,
-        } => (if let Some(ticket) = ticket {
-            registry.begin_native_interview(session_id, &capability.0, ticket, payload.0.as_bytes())
-        } else {
-            registry.observe_native_interview(session_id, &capability.0, payload.0.as_bytes())
-        })
-        .map_err(|_| "native interview capture unavailable".to_owned())
-        .and_then(|accepted| {
-            if accepted {
-                Ok(HostResponse::Acknowledged)
-            } else {
-                Err("native interview capture refused".to_owned())
+        } => {
+            // ⚠️ ONE REQUEST, TWO READERS (ADR 0123). The wire name predates
+            // turn reports and stays, because renaming a request is a protocol
+            // change: this carries every Claude hook Swarm installs apart from
+            // session start and end. A turn report is applied here; the hooks
+            // native interview capture also reads go on to it unchanged.
+            let turn = swarm_terminal::read_claude_turn_event(payload.0.as_bytes());
+            let accepted = turn.as_ref().map(|observation| {
+                registry
+                    .get(session_id)
+                    .and_then(|session| session.observe_provider_turn(&capability.0, observation))
+                    .unwrap_or(false)
+            });
+            match (turn.as_ref(), accepted) {
+                (Some(observation), Some(true)) if !observation.interview => {
+                    Ok(HostResponse::Acknowledged)
+                }
+                (Some(observation), Some(false)) if !observation.interview => {
+                    Err("provider turn report refused".to_owned())
+                }
+                _ => provider_interview(registry, session_id, &capability, &payload, ticket),
             }
-        }),
+        }
         HostRequest::ReadNativeInterviews => registry
             .native_interview_evidence()
             .map(|entries| HostResponse::NativeInterviews { entries })
@@ -809,6 +845,7 @@ fn dispatch_blocking(
                         continuation_unavailable: state.continuation_unavailable,
                         continuation_recovery: state.continuation_recovery,
                         provider_executable: state.provider_executable,
+                        provider_tools_relay: state.provider_tools_relay,
                     })
                     .collect(),
             })
@@ -830,12 +867,23 @@ fn dispatch_blocking(
             after_sequence,
         } => registry
             .get(session_id)
-            .and_then(|session| Ok((session.resume_after(after_sequence)?, session.is_running()?)))
-            .map(|(resume, running)| HostResponse::Output {
-                session_id,
-                resume,
-                running,
+            .and_then(|session| {
+                Ok((
+                    session.resume_after(after_sequence)?,
+                    session.is_running()?,
+                    session.provider_turn()?,
+                    session.last_output_at(),
+                ))
             })
+            .map(
+                |(resume, running, provider_turn, last_output_at)| HostResponse::Output {
+                    session_id,
+                    resume,
+                    running,
+                    provider_turn,
+                    last_output_at: Some(last_output_at),
+                },
+            )
             .map_err(|error| error.to_string()),
         HostRequest::Wait { .. } | HostRequest::WaitControlled { .. } => {
             return error_response(
@@ -1192,6 +1240,76 @@ mod tests {
             provenance: swarm_terminal::TerminalWriteProvenance::operator(None, b"operator"),
         }), HostResponse::Error { code, .. } if code != "coordination_control_held")
         );
+        session.stop().unwrap();
+    }
+
+    /// ⚠️ ONE REQUEST, TWO READERS (ADR 0123). A pure turn report is answered
+    /// by the turn gate and never reaches interview capture; a hook capture
+    /// also reads goes on to it. Swapping the two would either feed every Stop
+    /// to capture, which declines it, or starve capture of the batches it
+    /// finalises from.
+    #[test]
+    fn turn_reports_and_interview_hooks_reach_their_own_readers() {
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            SessionRegistry::new(JournalLimits::new(4096, 64), 1, [workspace.clone()]).unwrap();
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-c".into(), "read value".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let request = |payload: serde_json::Value| HostRequest::ProviderInterview {
+            session_id: session.id(),
+            capability: swarm_terminal::ProviderLifecycleCapability([9; 32]),
+            payload: swarm_terminal::NativeInterviewPayload(payload.to_string()),
+            ticket: None,
+        };
+        let conversation = swarm_domain::ProviderConversationId::new().to_string();
+        let message = |response: HostResponse| match response {
+            HostResponse::Error { message, .. } => message,
+            other => panic!("a shell has no provider gate, so this must refuse: {other:?}"),
+        };
+        assert_eq!(
+            message(dispatch_blocking(
+                &registry,
+                "test",
+                "test",
+                request(serde_json::json!({"hook_event_name": "Stop", "session_id": conversation}))
+            )),
+            "provider turn report refused"
+        );
+        assert_eq!(
+            message(dispatch_blocking(
+                &registry,
+                "test",
+                "test",
+                request(
+                    serde_json::json!({"hook_event_name": "PostToolBatch", "session_id": conversation})
+                )
+            )),
+            "native interview capture refused"
+        );
+
+        // A read carries the terminal's last output time, and no turn yet.
+        let HostResponse::Output {
+            provider_turn,
+            last_output_at,
+            ..
+        } = dispatch_blocking(
+            &registry,
+            "test",
+            "test",
+            HostRequest::Read {
+                session_id: session.id(),
+                after_sequence: None,
+            },
+        )
+        else {
+            panic!("expected output");
+        };
+        assert_eq!(provider_turn, None);
+        assert!(last_output_at.is_some());
         session.stop().unwrap();
     }
 

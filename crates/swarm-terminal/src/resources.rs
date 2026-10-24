@@ -61,6 +61,29 @@ impl ProcessResourceSnapshot {
         Self {}
     }
 
+    /// Whether Swarm's tools relay runs under this provider (ADR 0123).
+    ///
+    /// Claude stops a stdio tool server whose connection failed and never
+    /// retries it by itself, so a provider with no relay beneath it has lost
+    /// Swarm's tools until someone reconnects them. `None` when the provider
+    /// itself is not in the snapshot: unknown, not absent. The command line is
+    /// read and compared, never kept.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn tools_relay_running(&self, root_pid: u32) -> Option<bool> {
+        self.processes.get(&root_pid)?;
+        Some(self.children.get(&root_pid).is_some_and(|children| {
+            children.iter().any(|child| {
+                std::fs::read(format!("/proc/{child}/cmdline"))
+                    .is_ok_and(|argv| is_tools_relay(&argv))
+            })
+        }))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) const fn tools_relay_running(&self, _root_pid: u32) -> Option<bool> {
+        None
+    }
+
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn sample(&self, _root_pid: u32) -> ProcessResourceSample {
         ProcessResourceSample::default()
@@ -234,5 +257,51 @@ mod tests {
                 .process_tree_process_count
                 .is_some_and(|count| count >= 1)
         );
+    }
+}
+
+/// The relay as Claude launches it from a worker's tool config:
+/// `swarm-terminal-host mcp-proxy`, found through `PATH`, so the image path
+/// differs between releases while the command name does not.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_tools_relay(argv: &[u8]) -> bool {
+    let mut arguments = argv.split(|byte| *byte == 0);
+    let program = arguments.next().unwrap_or_default();
+    let name = program
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or_default();
+    name == b"swarm-terminal-host" && arguments.next() == Some(b"mcp-proxy".as_slice())
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_tools_relay_is_recognised_as_one() {
+        for relay in [
+            b"swarm-terminal-host\0mcp-proxy\0".as_slice(),
+            b"/home/bee/.local/lib/swarm/releases/1.17.6/bin/swarm-terminal-host\0mcp-proxy\0",
+        ] {
+            assert!(is_tools_relay(relay));
+        }
+        for other in [
+            b"swarm-terminal-host\0".as_slice(),
+            b"swarm-terminal-host\0provider-turn\0",
+            b"/usr/bin/python3\0mcp-proxy\0",
+            b"not-swarm-terminal-host\0mcp-proxy\0",
+            b"",
+        ] {
+            assert!(!is_tools_relay(other), "{}", String::from_utf8_lossy(other));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_provider_missing_from_the_snapshot_is_unknown_and_one_without_children_has_no_relay() {
+        let snapshot = ProcessResourceSnapshot::from_processes(HashMap::from([(10, (1, 0))]));
+        assert_eq!(snapshot.tools_relay_running(99), None);
+        assert_eq!(snapshot.tools_relay_running(10), Some(false));
     }
 }

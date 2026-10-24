@@ -397,6 +397,7 @@ async fn request_output(
             session_id: response_session,
             resume,
             running,
+            ..
         }) if response_session == session_id => Ok((resume, running)),
         Ok(HostResponse::Error { code, message }) => Err((code, message)),
         Ok(_) => Err((

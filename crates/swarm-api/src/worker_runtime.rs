@@ -1294,6 +1294,10 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         }
     }
     cleanup_recovery_parents(state, &sessions).await?;
+    *state.tools_relays.write().await = sessions
+        .iter()
+        .filter_map(|session| Some((session.session_id, session.provider_tools_relay?)))
+        .collect();
     let live = sessions
         .into_iter()
         .filter(|session| session.running && !session.stop_pending_release)
@@ -1546,6 +1550,7 @@ mod tests {
             continuation_unavailable: false,
             continuation_recovery: None,
             provider_executable: None,
+            provider_tools_relay: None,
             resources: None,
             last_output_at: None,
             recovery_attempt: None,
@@ -1571,6 +1576,7 @@ mod tests {
             continuation_unavailable: false,
             continuation_recovery: None,
             provider_executable: None,
+            provider_tools_relay: None,
             resources: None,
             last_output_at: None,
             recovery_attempt: None,
@@ -1648,6 +1654,7 @@ mod tests {
                 continuation_unavailable: false,
                 continuation_recovery: None,
                 provider_executable: None,
+                provider_tools_relay: None,
                 resources: None,
                 last_output_at: None,
                 recovery_attempt: None,
@@ -1918,6 +1925,7 @@ mod tests {
             continuation_unavailable: true,
             continuation_recovery: Some(swarm_terminal::ContinuationRecoveryOutcome::LaunchFailed),
             provider_executable: None,
+            provider_tools_relay: None,
             ..bare_session_summary(previous, false)
         }];
         // No engine configured: an accidental retry would be observable.

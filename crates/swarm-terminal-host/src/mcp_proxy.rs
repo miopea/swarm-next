@@ -43,6 +43,7 @@ pub(crate) async fn run() -> Result<(), McpProxyError> {
     let authorization = required_env("SWARM_MCP_AUTHORIZATION")?;
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
     let mut session_id = None;
+    let mut surface = ToolSurface::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut output = tokio::io::stdout();
 
@@ -52,19 +53,34 @@ pub(crate) async fn run() -> Result<(), McpProxyError> {
         }
         let message = serde_json::from_str::<Value>(&line)?;
         let request_id = message.get("id").cloned();
+        let method = message.get("method").and_then(Value::as_str);
         match recover_discovery(
-            message.get("method").and_then(Value::as_str),
+            method,
             || forward(&client, &url, &authorization, session_id.as_deref(), &line),
             DISCOVERY_RECOVERY,
         )
         .await
         {
-            Ok(forwarded) => {
+            Ok(mut forwarded) => {
                 if forwarded.session_id.is_some() {
-                    session_id = forwarded.session_id;
+                    session_id = forwarded.session_id.take();
                 }
+                if method == Some("initialize") {
+                    forwarded
+                        .messages
+                        .iter_mut()
+                        .for_each(announce_tool_changes);
+                }
+                let changed = surface.observe(method, forwarded.surface.as_deref());
                 for response in forwarded.messages {
                     write_json_line(&mut output, &response).await?;
+                }
+                if changed {
+                    write_json_line(
+                        &mut output,
+                        &json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}),
+                    )
+                    .await?;
                 }
             }
             Err(error) => {
@@ -128,7 +144,54 @@ where
 
 struct ForwardedResponse {
     session_id: Option<String>,
+    /// The revision of the tools the API serves, from its response header.
+    surface: Option<String>,
     messages: Vec<Value>,
+}
+
+/// Which tools this connection last listed, and whether a newer set has
+/// already been announced (ADR 0123).
+///
+/// An API reload can add a tool while a worker runs, and Claude asks for its
+/// tools once. Claude refetches them when its server says they changed, so the
+/// relay says so the first time a response carries a revision other than the
+/// one it last listed. That is the next tool call after a reload: a worker
+/// that just shipped a tool and asks whether the reload landed can then see it.
+#[derive(Default)]
+struct ToolSurface {
+    listed: Option<String>,
+    announced: Option<String>,
+}
+
+impl ToolSurface {
+    /// Returns whether to tell Claude its tools changed.
+    fn observe(&mut self, method: Option<&str>, seen: Option<&str>) -> bool {
+        let Some(seen) = seen else {
+            // An API that predates the header says nothing about its tools.
+            return false;
+        };
+        if method == Some("tools/list") {
+            self.listed = Some(seen.to_owned());
+            self.announced = None;
+            return false;
+        }
+        let moved = self.listed.as_deref().is_some_and(|listed| listed != seen)
+            && self.announced.as_deref() != Some(seen);
+        if moved {
+            self.announced = Some(seen.to_owned());
+        }
+        moved
+    }
+}
+
+/// Declares that this server's tools can change, so Claude acts on the notice.
+fn announce_tool_changes(response: &mut Value) {
+    if let Some(tools) = response
+        .pointer_mut("/result/capabilities/tools")
+        .and_then(Value::as_object_mut)
+    {
+        tools.insert("listChanged".to_owned(), Value::Bool(true));
+    }
 }
 
 async fn forward(
@@ -168,11 +231,15 @@ async fn response_payload(response: Response) -> Result<ForwardedResponse, McpPr
     if !status.is_success() {
         return Err(McpProxyError::HttpStatus(status.as_u16()));
     }
-    let session_id = response
-        .headers()
-        .get(MCP_SESSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    let session_id = header(MCP_SESSION_HEADER);
+    let surface = header(swarm_terminal::AGENT_TOOL_SURFACE_HEADER);
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
@@ -183,6 +250,7 @@ async fn response_payload(response: Response) -> Result<ForwardedResponse, McpPr
     if bytes.is_empty() {
         return Ok(ForwardedResponse {
             session_id,
+            surface,
             messages: Vec::new(),
         });
     }
@@ -194,6 +262,7 @@ async fn response_payload(response: Response) -> Result<ForwardedResponse, McpPr
     };
     Ok(ForwardedResponse {
         session_id,
+        surface,
         messages,
     })
 }
@@ -243,6 +312,7 @@ mod tests {
                     } else {
                         Ok(ForwardedResponse {
                             session_id: Some("same-session".into()),
+                            surface: None,
                             messages: vec![json!({"jsonrpc":"2.0","id":17,"result":{"tools":[]}})],
                         })
                     })
@@ -324,6 +394,46 @@ mod tests {
         .await;
         assert!(matches!(result, Err(McpProxyError::DiscoveryDeadline)));
         assert_eq!(calls, 1);
+    }
+
+    /// Measured against Claude Code 2.1.310 on 2026-10-23: after this notice
+    /// it lists the server's tools again at once, while idle.
+    #[test]
+    fn a_new_tool_revision_is_announced_once_until_the_tools_are_listed_again() {
+        let mut surface = ToolSurface::default();
+        // Nothing to compare against before the first listing.
+        assert!(!surface.observe(Some("tools/call"), Some("34")));
+        assert!(!surface.observe(Some("tools/list"), Some("34")));
+        assert!(!surface.observe(Some("tools/call"), Some("34")));
+        // An API reload serves revision 35.
+        assert!(surface.observe(Some("tools/call"), Some("35")));
+        assert!(
+            !surface.observe(Some("tools/call"), Some("35")),
+            "announced once"
+        );
+        assert!(!surface.observe(Some("tools/list"), Some("35")));
+        assert!(!surface.observe(Some("tools/call"), Some("35")));
+        // An older API sends no header and is never announced.
+        assert!(!surface.observe(Some("tools/call"), None));
+    }
+
+    #[test]
+    fn the_initialize_answer_declares_that_tools_can_change() {
+        let mut response = json!({"jsonrpc":"2.0","id":0,"result":{
+            "protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"swarm"}}});
+        announce_tool_changes(&mut response);
+        assert_eq!(
+            response["result"]["capabilities"]["tools"]["listChanged"],
+            true
+        );
+        // A server offering no tools is not given a tools capability.
+        let mut no_tools = json!({"jsonrpc":"2.0","id":0,"result":{"capabilities":{}}});
+        announce_tool_changes(&mut no_tools);
+        assert_eq!(no_tools["result"]["capabilities"], json!({}));
+        let mut error = json!({"jsonrpc":"2.0","id":0,"error":{"code":-32000,"message":"x"}});
+        let before = error.clone();
+        announce_tool_changes(&mut error);
+        assert_eq!(error, before);
     }
 
     #[test]

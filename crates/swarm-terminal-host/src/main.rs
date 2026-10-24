@@ -21,6 +21,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .map_err(Into::into);
     }
+    if env::args().nth(1).as_deref() == Some("provider-turn") {
+        return provider_session_start::run_turn().await.map_err(Into::into);
+    }
     if env::args().nth(1).as_deref() == Some("provider-session-start") {
         return provider_session_start::run(false).await.map_err(Into::into);
     }

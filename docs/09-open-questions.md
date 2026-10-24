@@ -1,5 +1,18 @@
 # Open product questions
 
+## Messages to a worker stopped on a rate limit — October 23, 2026
+
+Since ADR 0123 Swarm knows when a Claude worker's turn died on an API error,
+and the roster shows it Blocked with the cause. Routing still treats the
+prompt as free, so coordination messages are typed into a worker that will do
+nothing with them until its limit resets. Claude keeps them in the conversation
+and carries on after the reset, so nothing is lost, but the stale-work flag can
+also fire on a worker that is only waiting for a reset.
+
+Open: should delivery hold for a rate limit or a refused login until the next
+turn, and should the stale-work flag skip a worker whose turn failed? Not
+chosen silently, because holding changes when work reaches a worker.
+
 ## Genuine recommendations versus no preference — September 11, 2026
 
 Approved by the operator on September 11, 2026; implemented, tested and activated

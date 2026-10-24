@@ -247,3 +247,49 @@ test("the switcher line's colour follows its own word, not the raw attention sta
   // always was.
   expect(workerSwitcherDetail(restingButUnloaded)).toBe("Sleeping · tap to wake");
 });
+
+// ADR 0123: what Claude itself reports about a turn.
+test("a turn that died on an API error reads as blocked, with the reason on its own line", () => {
+  const stopped: Worker = { ...worker, attention_state: "resting", turn_failure: "rate_limit" };
+  expect(workerAttention(stopped)).toMatchObject({
+    state: "blocked", label: "Blocked · rate limit", word: "Blocked", notice: "Turn stopped: rate limit", presence: "blocked",
+  });
+  expect(workerSwitcherDetail(stopped, "Fix the build", true)).toBe("Blocked · Turn stopped: rate limit · Fix the build");
+  for (const [failure, reason] of [
+    ["overloaded", "API overloaded"], ["authentication", "login refused"], ["billing", "account or billing"],
+    ["server", "API error"], ["other", "API error"],
+  ] as const) {
+    expect(workerAttention({ ...stopped, turn_failure: failure }).label).toBe(`Blocked · ${reason}`);
+  }
+  // Only a resting prompt reads as Blocked. A usage limit Claude will not
+  // resume is waiting on someone, and the line still says what stopped it.
+  expect(workerAttention({ ...stopped, attention_state: "awaiting_operator" })).toMatchObject({
+    label: "Awaiting you", notice: "Turn stopped: rate limit",
+  });
+  expect(workerAttention({ ...stopped, running: false, attention_state: "sleeping" }).label).toBe("Sleeping");
+});
+
+test("an auto-mode refusal and dropped tools get a line of their own without hiding the state", () => {
+  const denied: Worker = {
+    ...worker, attention_state: "buzzing",
+    auto_mode_denial: { tool: "Bash", reason: "[Irreversible Local Destruction]" },
+  };
+  expect(workerAttention(denied)).toMatchObject({
+    label: "Buzzing", notice: "Auto mode blocked Bash (Irreversible Local Destruction)",
+  });
+  expect(workerAttention(denied).word).toBeUndefined();
+  const both: Worker = { ...denied, tools_disconnected: true };
+  expect(workerAttention(both).notice).toBe("Auto mode blocked Bash (Irreversible Local Destruction) · Swarm tools disconnected");
+  // A pending decision keeps its own words in the pill.
+  const pending: Worker = { ...worker, attention_state: "awaiting_operator", held_for_answer_since: 100, tools_disconnected: true };
+  expect(workerAttention(pending)).toMatchObject({ label: "Decision pending", notice: "Swarm tools disconnected" });
+  expect(workerSwitcherDetail(pending)).toBe("Decision pending · Swarm tools disconnected");
+  // A worker that is not running has no turn to report on.
+  expect(workerAttention({ ...both, running: false, attention_state: "sleeping" }).notice).toBeUndefined();
+});
+
+test("shells and a turn report share the switcher line", () => {
+  const shells: Worker = { ...worker, attention_state: "resting", background_work: true, background_shells: 2, tools_disconnected: true };
+  expect(workerAttention(shells)).toMatchObject({ word: "Buzzing", backgroundWork: "2 shells running", notice: "Swarm tools disconnected" });
+  expect(workerSwitcherDetail(shells)).toBe("Buzzing · 2 shells running · Swarm tools disconnected");
+});

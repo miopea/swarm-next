@@ -131,6 +131,43 @@ fn add_hook(document: &mut Value, executable: &Path) -> Result<(), String> {
     if !slot.contains(&batch) {
         slot.push(batch);
     }
+    add_turn_hooks(hooks, executable)
+}
+
+/// The hooks that report each turn (ADR 0123), and the notification types
+/// that mean Claude is waiting on someone. Every other notification would
+/// start the helper for nothing.
+const TURN_HOOKS: &[(&str, Option<&str>)] = &[
+    ("UserPromptSubmit", None),
+    ("Stop", None),
+    ("StopFailure", None),
+    (
+        "Notification",
+        Some(
+            "permission_prompt|elicitation_dialog|quota_auto_resume_stale|quota_auto_resume_disabled",
+        ),
+    ),
+    ("PermissionDenied", None),
+];
+
+fn add_turn_hooks(hooks: &mut Value, executable: &str) -> Result<(), String> {
+    let command = format!("'{}' provider-turn", executable.replace('\'', "'\\''"));
+    for (event, matcher) in TURN_HOOKS {
+        let mut entry = json!({"hooks": [{"type": "command", "command": command}]});
+        if let Some(matcher) = matcher {
+            entry["matcher"] = json!(matcher);
+        }
+        let slot = hooks
+            .as_object_mut()
+            .ok_or("hooks are not an object")?
+            .entry(*event)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or("hook event is not an array")?;
+        if !slot.contains(&entry) {
+            slot.push(entry);
+        }
+    }
     Ok(())
 }
 
@@ -315,6 +352,63 @@ mod tests {
         );
     }
 
+    /// ⚠️ EVERY TURN HOOK, OR THE TURN NEVER CLOSES (ADR 0123). A `Stop` without
+    /// its `UserPromptSubmit` reports turns ending that never started, and a
+    /// `UserPromptSubmit` without its `Stop` leaves every turn open, which reads as
+    /// a worker busy forever. Same failure shape as the interview hooks above:
+    /// install one half and the other half's code runs on nothing.
+    #[test]
+    fn every_turn_hook_is_installed_once_with_the_turn_helper() {
+        let mut document = json!({"hooks":{"Stop":[
+            {"hooks":[{"type":"command","command":"say done"}]}]}});
+        let executable = Path::new("/opt/hive/host");
+        add_hook(&mut document, executable).unwrap();
+        add_hook(&mut document, executable).unwrap();
+        for event in [
+            "UserPromptSubmit",
+            "Stop",
+            "StopFailure",
+            "Notification",
+            "PermissionDenied",
+        ] {
+            let ours = document["hooks"][event]
+                .as_array()
+                .unwrap_or_else(|| panic!("{event} is missing"))
+                .iter()
+                .filter(|entry| entry["hooks"][0]["command"] == "'/opt/hive/host' provider-turn")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                ours.len(),
+                1,
+                "{event} must carry the turn hook exactly once"
+            );
+            if event == "Notification" {
+                for kind in [
+                    "permission_prompt",
+                    "elicitation_dialog",
+                    "quota_auto_resume_stale",
+                    "quota_auto_resume_disabled",
+                ] {
+                    assert!(
+                        ours[0]["matcher"]
+                            .as_str()
+                            .unwrap()
+                            .split('|')
+                            .any(|m| m == kind),
+                        "Notification must match {kind}"
+                    );
+                }
+            } else {
+                assert!(ours[0].get("matcher").is_none(), "{event} takes no matcher");
+            }
+        }
+        // The operator's own Stop hook is kept, ahead of ours.
+        assert_eq!(
+            document["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "say done"
+        );
+    }
+
     /// An operator's own `PreToolUse` hooks survive, because this file merges.
     #[test]
     fn the_operator_s_own_pre_tool_use_hooks_are_kept() {
@@ -338,7 +432,12 @@ mod tests {
         add_hook(&mut document, executable).unwrap();
         assert_eq!(document["permissions"], original["permissions"]);
         assert_eq!(document["disableAllHooks"], true);
-        assert_eq!(document["hooks"]["Stop"], original["hooks"]["Stop"]);
+        // The operator's Stop list was empty; it now holds the turn report
+        // once, however many times the overlay is applied.
+        assert_eq!(
+            document["hooks"]["Stop"],
+            json!([{"hooks":[{"type":"command","command":"'/opt/bee'\\''s hive/host' provider-turn"}]}])
+        );
         let starts = document["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(starts.len(), 2);
         assert_eq!(document["hooks"]["SessionEnd"].as_array().unwrap().len(), 1);

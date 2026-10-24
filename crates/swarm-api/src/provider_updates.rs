@@ -109,7 +109,7 @@ pub(super) enum UpdateStep {
 pub(super) fn update_step(
     release: &ProviderRelease,
     executable: Option<&str>,
-    signals: Option<ProviderSignals>,
+    signals: Option<&ProviderSignals>,
     request: Option<&UpdateRequest>,
 ) -> UpdateStep {
     // No executable, or one that cannot be compared, is no evidence: such a
@@ -227,7 +227,7 @@ pub(super) async fn advance(
                 executables
                     .get(&session.session_id)
                     .and_then(Option::as_deref),
-                observed.get(&session.session_id).copied(),
+                observed.get(&session.session_id),
                 request.as_ref(),
             ) {
                 UpdateStep::Wait => {}
@@ -373,7 +373,10 @@ mod tests {
                 shells,
                 monitors: 0,
                 workflow: false,
+                others: 0,
             },
+            turn_failure: None,
+            denial: None,
         }
     }
 
@@ -390,30 +393,35 @@ mod tests {
     #[test]
     fn a_worker_behind_the_installed_release_is_restarted_only_at_rest() {
         let release = release();
-        let step = |executable, signals| update_step(&release, executable, signals, None);
+        let step = |executable, signals: Option<&ProviderSignals>| {
+            update_step(&release, executable, signals, None)
+        };
 
         assert_eq!(
-            step(Some(OLDER), Some(signals(ProviderActivity::Resting, 0))),
+            step(Some(OLDER), Some(&signals(ProviderActivity::Resting, 0))),
             UpdateStep::Restart
         );
         assert_eq!(
-            step(Some(OLDER), Some(signals(ProviderActivity::Active, 0))),
+            step(Some(OLDER), Some(&signals(ProviderActivity::Active, 0))),
             UpdateStep::Wait
         );
         assert_eq!(
-            step(Some(OLDER), Some(signals(ProviderActivity::Resting, 2))),
+            step(Some(OLDER), Some(&signals(ProviderActivity::Resting, 2))),
             UpdateStep::Wait
         );
         assert_eq!(
             step(
                 Some(OLDER),
-                Some(signals(ProviderActivity::AwaitingOperator, 0))
+                Some(&signals(ProviderActivity::AwaitingOperator, 0))
             ),
             UpdateStep::Wait
         );
         assert_eq!(step(Some(OLDER), None), UpdateStep::Wait);
         assert_eq!(
-            step(Some(INSTALLED), Some(signals(ProviderActivity::Resting, 0))),
+            step(
+                Some(INSTALLED),
+                Some(&signals(ProviderActivity::Resting, 0))
+            ),
             UpdateStep::Wait
         );
     }
@@ -423,7 +431,7 @@ mod tests {
     #[test]
     fn a_session_whose_release_cannot_be_read_is_never_restarted_in_place() {
         let release = release();
-        let resting = Some(signals(ProviderActivity::Resting, 0));
+        let resting = Some(&signals(ProviderActivity::Resting, 0));
 
         assert_eq!(update_step(&release, None, resting, None), UpdateStep::Wait);
         assert_eq!(
@@ -441,7 +449,7 @@ mod tests {
             update_step(
                 &release,
                 Some(OLDER),
-                Some(signals(ProviderActivity::Resting, 0)),
+                Some(&signals(ProviderActivity::Resting, 0)),
                 Some(&request)
             ),
             UpdateStep::Wait
@@ -451,7 +459,7 @@ mod tests {
     #[test]
     fn an_arrival_tells_a_worker_with_work_in_hand_to_carry_on() {
         let release = release();
-        let resting = Some(signals(ProviderActivity::Resting, 0));
+        let resting = Some(&signals(ProviderActivity::Resting, 0));
 
         assert_eq!(
             update_step(
@@ -484,7 +492,7 @@ mod tests {
             update_step(
                 &release,
                 Some(OLDER),
-                Some(signals(ProviderActivity::Resting, 0)),
+                Some(&signals(ProviderActivity::Resting, 0)),
                 Some(&stale)
             ),
             UpdateStep::Restart
@@ -493,7 +501,7 @@ mod tests {
             update_step(
                 &release,
                 Some(OLDER),
-                Some(signals(ProviderActivity::Active, 0)),
+                Some(&signals(ProviderActivity::Active, 0)),
                 Some(&stale)
             ),
             UpdateStep::Forget
@@ -580,6 +588,7 @@ mod tests {
                             continuation_unavailable: false,
                             continuation_recovery: None,
                             provider_executable: Some(running.clone()),
+                            provider_tools_relay: None,
                         }],
                     },
                     HostRequest::Read { .. } => HostResponse::Output {
@@ -588,6 +597,8 @@ mod tests {
                         resume: swarm_terminal::Resume::Snapshot {
                             snapshot: terminal.snapshot(),
                         },
+                        provider_turn: None,
+                        last_output_at: None,
                     },
                     HostRequest::Write { bytes, .. } => {
                         if bytes == b"\r" {

@@ -187,12 +187,26 @@ pub struct BackgroundWork {
     pub monitors: u16,
     /// A dynamic workflow, which the provider names without a count.
     pub workflow: bool,
+    /// Subagents, teammates and other kinds Claude lists in its own turn
+    /// report (ADR 0123). The screen never counts these.
+    pub others: u16,
 }
 
 impl BackgroundWork {
     #[must_use]
     pub fn is_running(self) -> bool {
-        self.shells > 0 || self.monitors > 0 || self.workflow
+        self.shells > 0 || self.monitors > 0 || self.workflow || self.others > 0
+    }
+}
+
+impl From<crate::ProviderTurnBackground> for BackgroundWork {
+    fn from(reported: crate::ProviderTurnBackground) -> Self {
+        Self {
+            shells: reported.shells,
+            monitors: reported.monitors,
+            workflow: reported.workflows > 0,
+            others: reported.others,
+        }
     }
 }
 
@@ -364,6 +378,7 @@ fn background_work_on_screen(provider: ProviderKind, visible: &str) -> Backgroun
                 workflow: normalized.contains("running dynamic workflow")
                     || normalized.contains(" background dynamic workflow")
                     || normalized.contains(" remote dynamic workflow"),
+                others: 0,
             }
         }
         // Codex prints no background-work banner, and an unrecognised provider
@@ -1130,7 +1145,8 @@ mod tests {
                 BackgroundWork {
                     shells,
                     monitors,
-                    workflow: false
+                    workflow: false,
+                    others: 0,
                 },
                 "{footer}"
             );
