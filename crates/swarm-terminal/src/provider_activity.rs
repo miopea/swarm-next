@@ -203,7 +203,8 @@ impl From<crate::ProviderTurnBackground> for BackgroundWork {
     fn from(reported: crate::ProviderTurnBackground) -> Self {
         Self {
             shells: reported.shells,
-            monitors: reported.monitors,
+            // Claude lists a Monitor tool watch as a shell.
+            monitors: 0,
             workflow: reported.workflows > 0,
             others: reported.others,
         }

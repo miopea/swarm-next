@@ -115,6 +115,15 @@ list, and a running one may already have started more. So "Buzzing · 2 shells"
 is still shown, and is now counted from Claude's own list, which also names
 subagents and workflows the screen never counted.
 
+Claude's `monitor` entries are not counted (amended 2026-10-24, the day the
+engine update put this in front of real workers). Measured on 2.1.310: a
+Monitor tool watch is listed as a `shell`, and the `monitor` entries carry an
+MCP server and tool. Swarm Next listed one and Platform three for minutes with
+no process behind them and no count on Claude's own footer, so counting them
+held resting workers at "Buzzing · 3 monitors". A Monitor watch now reads as a
+shell once its turn ends. The engine installed before the amendment still
+sends a monitor count; the API ignores it, so the fix ships with a reload.
+
 A `StopFailure` is reported with its cause: rate limit, API overloaded, login
 refused, account or billing, API error. Routing still reads the turn as over.
 The roster shows the worker as **Blocked** with "Turn stopped: rate limit" on

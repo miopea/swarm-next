@@ -57,10 +57,16 @@ pub enum ProviderTurnWait {
 }
 
 /// What a finished turn left running, by the kind Claude names.
+///
+/// Claude's `monitor` entries are not counted. Measured on 2.1.310 on
+/// 2026-10-24: a Monitor tool watch is listed as a `shell`, and the `monitor`
+/// entries belong to an MCP server. Live workers carried one to three of them
+/// for minutes with no process behind them and nothing on Claude's own
+/// footer, so counting them kept resting workers Buzzing. An engine from
+/// before this sends a `monitors` count, which is ignored.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderTurnBackground {
     pub shells: u16,
-    pub monitors: u16,
     pub workflows: u16,
     /// Subagents, teammates, cloud sessions, MCP tasks and kinds this build
     /// does not know by name.
@@ -70,7 +76,7 @@ pub struct ProviderTurnBackground {
 impl ProviderTurnBackground {
     #[must_use]
     pub const fn is_running(self) -> bool {
-        self.shells > 0 || self.monitors > 0 || self.workflows > 0 || self.others > 0
+        self.shells > 0 || self.workflows > 0 || self.others > 0
     }
 }
 
@@ -290,7 +296,6 @@ pub fn compact_turn_payload(observation: &ProviderTurnObservation) -> Option<Str
             if let Some(background) = background {
                 let tasks = [
                     ("shell", background.shells),
-                    ("monitor", background.monitors),
                     ("workflow", background.workflows),
                     ("other", background.others),
                 ]
@@ -335,7 +340,8 @@ fn background(tasks: &[ClaudeBackgroundTask<'_>]) -> ProviderTurnBackground {
     for task in tasks {
         let slot = match task.kind.as_ref() {
             "shell" => &mut counted.shells,
-            "monitor" => &mut counted.monitors,
+            // Not work the operator can see; see `ProviderTurnBackground`.
+            "monitor" => continue,
             "workflow" => &mut counted.workflows,
             _ => &mut counted.others,
         };
@@ -424,7 +430,6 @@ mod tests {
             Some(ProviderTurnEvent::Ended {
                 background: Some(ProviderTurnBackground {
                     shells: 2,
-                    monitors: 1,
                     workflows: 1,
                     others: 2,
                 }),
@@ -606,6 +611,48 @@ mod tests {
             read_claude_turn_event(compact.as_bytes()),
             Some(observation)
         );
+    }
+
+    /// Measured on live workers on 2026-10-24: Swarm Next listed one MCP
+    /// `monitor` and Platform three, with neither a process nor a footer
+    /// count behind them. A Monitor tool watch is listed as a shell.
+    #[test]
+    fn an_mcp_monitor_is_not_work_and_an_older_engine_s_count_is_ignored() {
+        let mut stop = hook("Stop");
+        stop["background_tasks"] = serde_json::json!([
+            {"id": "m1", "type": "monitor", "status": "running", "server": "s", "tool": "t"},
+            {"id": "m2", "type": "monitor", "status": "running", "server": "s", "tool": "u"},
+        ]);
+        let Some(ProviderTurnEvent::Ended {
+            background: Some(left),
+        }) = event(&stop)
+        else {
+            panic!("a Stop with a task list ends the turn with that list");
+        };
+        assert!(!left.is_running());
+
+        stop["background_tasks"] = serde_json::json!([
+            {"id": "bwthnd08i", "type": "shell", "status": "running",
+             "description": "tick after 25 seconds", "command": "sleep 25; echo tick"},
+        ]);
+        assert_eq!(
+            event(&stop),
+            Some(ProviderTurnEvent::Ended {
+                background: Some(ProviderTurnBackground {
+                    shells: 1,
+                    ..ProviderTurnBackground::default()
+                }),
+            })
+        );
+
+        // The engine running before this release reports them as a count.
+        let older: ProviderTurn = serde_json::from_value(serde_json::json!({
+            "sequence": 32,
+            "phase": "ended",
+            "background": {"shells": 0, "monitors": 3, "workflows": 0, "others": 0},
+        }))
+        .unwrap();
+        assert!(!older.background.unwrap().is_running());
     }
 
     #[test]
