@@ -165,7 +165,8 @@ pub(super) struct ProviderSignals {
     /// (ADR 0123). Routing still reads the turn as over; this is what the
     /// operator is told about it.
     pub(super) turn_failure: Option<swarm_terminal::ProviderTurnFailure>,
-    /// The latest tool call auto mode refused, until the next turn starts.
+    /// The latest tool call auto mode refused, until Claude runs another tool
+    /// or the next turn starts.
     pub(super) denial: Option<swarm_terminal::ProviderDenial>,
 }
 

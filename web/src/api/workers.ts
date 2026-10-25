@@ -80,7 +80,7 @@ export type Worker = {
   background_monitors?: number;
   /** Why its latest turn ended on an API error, while that turn is the latest. */
   turn_failure?: "rate_limit" | "overloaded" | "authentication" | "billing" | "server" | "other";
-  /** The latest tool call auto mode refused, and why, until the next turn starts. */
+  /** The latest tool call auto mode refused, and why, until Claude runs another tool or the next turn starts. */
   auto_mode_denial?: { tool: string; reason: string };
   /** Claude dropped Swarm's tools for this worker; Swarm reconnects them when it rests. */
   tools_disconnected?: boolean;

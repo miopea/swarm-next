@@ -3724,8 +3724,8 @@ struct WorkerView {
     /// latest (ADR 0123): a rate limit, an overloaded API, a refused login.
     #[serde(skip_serializing_if = "Option::is_none")]
     turn_failure: Option<swarm_terminal::ProviderTurnFailure>,
-    /// The latest tool call auto mode refused this worker, and why, until its
-    /// next turn starts. Never the call's input.
+    /// The latest tool call auto mode refused this worker, and why, until it
+    /// runs another tool or its next turn starts. Never the call's input.
     #[serde(skip_serializing_if = "Option::is_none")]
     auto_mode_denial: Option<swarm_terminal::ProviderDenial>,
     /// Claude dropped Swarm's tools for this worker. Swarm reconnects them
@@ -19140,6 +19140,7 @@ mod tests {
                 auto_mode_denial: Some(swarm_terminal::ProviderDenial {
                     tool: "Bash".into(),
                     reason: "[Irreversible Local Destruction]".into(),
+                    call: Some("toolu_1".into()),
                 }),
                 tools_disconnected: true,
                 ..WorkerViewFacts::default()
@@ -19152,6 +19153,7 @@ mod tests {
             reported["auto_mode_denial"]["reason"],
             "[Irreversible Local Destruction]"
         );
+        assert_eq!(reported["auto_mode_denial"].get("call"), None);
         assert_eq!(reported["tools_disconnected"], true);
 
         let quiet = serde_json::to_value(worker_view(

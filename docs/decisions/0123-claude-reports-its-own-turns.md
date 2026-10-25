@@ -129,7 +129,21 @@ refused, account or billing, API error. Routing still reads the turn as over.
 The roster shows the worker as **Blocked** with "Turn stopped: rate limit" on
 the line below, because a resting prompt that will do nothing until a limit
 resets is not free for work. A `PermissionDenied` shows as "Auto mode blocked
-Bash (Irreversible Local Destruction)" until the next turn starts.
+Bash (Irreversible Local Destruction)" until Claude runs another tool after it,
+or the next turn starts.
+
+That first clause was added on 2026-10-25. The rule was "until the next turn
+starts", and Platform carried on past a refusal for 45 minutes of one turn
+while the roster kept showing it. Measured on 2.1.310 with a session-only
+`hard_deny` rule: `PermissionDenied` names the refused call's `tool_use_id`,
+and the `PostToolBatch` for that call's own batch arrives right after it,
+naming the call too. A later batch that does not name it means Claude moved
+on. A refusal Claude stopped on is followed by `Stop` instead, so it stays
+until the next prompt: the case the notice exists for. The interview hook
+that carries `PostToolBatch` reads at most 64 KiB, so a batch with a larger
+output is not seen and the next small one clears the refusal. The host keeps
+the id; nothing downstream receives it. The rule runs in the worker engine, so
+it takes effect with the next worker engine update.
 
 Codex workers, and Claude workers on an older engine, have no turn report and
 read exactly as before.

@@ -20,6 +20,7 @@ pub const MAX_PROVIDER_TURN_INPUT_BYTES: usize = 8 * 1024 * 1024;
 
 const MAX_DENIED_TOOL_CHARS: usize = 64;
 const MAX_DENIAL_REASON_CHARS: usize = 160;
+const MAX_TOOL_CALL_ID_CHARS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -86,6 +87,10 @@ impl ProviderTurnBackground {
 pub struct ProviderDenial {
     pub tool: String,
     pub reason: String,
+    /// The refused call's id, so the batch it belongs to is not read as Claude
+    /// moving on. Kept by the host and never sent on: nothing else needs it.
+    #[serde(skip)]
+    pub call: Option<String>,
 }
 
 /// The turn state the host keeps per provider session.
@@ -103,7 +108,8 @@ pub struct ProviderTurn {
     /// reach its task registry, so the screen is read instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<ProviderTurnBackground>,
-    /// The latest refusal in the current turn, kept until the next turn starts.
+    /// The latest refusal in the current turn, kept until Claude runs another
+    /// tool after it or the next turn starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial: Option<ProviderDenial>,
 }
@@ -133,8 +139,12 @@ pub enum ProviderTurnEvent {
     /// `StopFailure`.
     Failed(ProviderTurnFailure),
     Waiting(ProviderTurnWait),
-    /// An `AskUserQuestion` was answered, or a tool batch resolved.
+    /// An `AskUserQuestion` was answered.
     Resolved,
+    /// `PostToolBatch`: every call in a batch resolved, named by id.
+    BatchResolved {
+        calls: Vec<String>,
+    },
     /// `PermissionDenied`.
     Denied(ProviderDenial),
 }
@@ -174,15 +184,32 @@ impl ProviderTurn {
                 self.waiting = None;
             }
             ProviderTurnEvent::Waiting(wait) => self.waiting = Some(*wait),
-            ProviderTurnEvent::Resolved => {
-                if matches!(
-                    self.waiting,
-                    Some(ProviderTurnWait::Question | ProviderTurnWait::Permission)
-                ) {
-                    self.waiting = None;
+            ProviderTurnEvent::Resolved => self.resolve_wait(),
+            ProviderTurnEvent::BatchResolved { calls } => {
+                self.resolve_wait();
+                // Measured on 2.1.310: the refused call's own batch resolves
+                // right after the refusal and names it. A batch without it
+                // means Claude ran something else, so it has moved on. One it
+                // stopped on stays through the Stop until the next prompt.
+                if self
+                    .denial
+                    .as_ref()
+                    .and_then(|denial| denial.call.as_ref())
+                    .is_some_and(|call| !calls.contains(call))
+                {
+                    self.denial = None;
                 }
             }
             ProviderTurnEvent::Denied(denial) => self.denial = Some(denial.clone()),
+        }
+    }
+
+    fn resolve_wait(&mut self) {
+        if matches!(
+            self.waiting,
+            Some(ProviderTurnWait::Question | ProviderTurnWait::Permission)
+        ) {
+            self.waiting = None;
         }
     }
 }
@@ -197,6 +224,10 @@ struct ClaudeHook<'a> {
     agent_id: Option<serde::de::IgnoredAny>,
     #[serde(default, borrow)]
     tool_name: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    tool_use_id: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    tool_calls: Option<Vec<ClaudeToolCall<'a>>>,
     #[serde(default, borrow)]
     notification_type: Option<Cow<'a, str>>,
     #[serde(default, borrow)]
@@ -213,6 +244,13 @@ struct ClaudeHook<'a> {
 struct ClaudeBackgroundTask<'a> {
     #[serde(borrow, rename = "type")]
     kind: Cow<'a, str>,
+}
+
+/// One call in a `PostToolBatch`. Its input and response are skipped unread.
+#[derive(Deserialize)]
+struct ClaudeToolCall<'a> {
+    #[serde(default, borrow)]
+    tool_use_id: Option<Cow<'a, str>>,
 }
 
 /// Reads one Claude hook payload for what it says about the turn.
@@ -261,6 +299,7 @@ pub fn read_claude_turn_event(input: &[u8]) -> Option<ProviderTurnObservation> {
                     hook.reason.as_deref().unwrap_or_default(),
                     MAX_DENIAL_REASON_CHARS,
                 ),
+                call: hook.tool_use_id.as_deref().map(call_id),
             }),
             false,
         ),
@@ -268,7 +307,17 @@ pub fn read_claude_turn_event(input: &[u8]) -> Option<ProviderTurnObservation> {
             (ProviderTurnEvent::Waiting(ProviderTurnWait::Question), true)
         }
         "PostToolUse" if tool == Some("AskUserQuestion") => (ProviderTurnEvent::Resolved, true),
-        "PostToolBatch" => (ProviderTurnEvent::Resolved, true),
+        "PostToolBatch" => (
+            ProviderTurnEvent::BatchResolved {
+                calls: hook
+                    .tool_calls
+                    .iter()
+                    .flatten()
+                    .filter_map(|call| call.tool_use_id.as_deref().map(call_id))
+                    .collect(),
+            },
+            true,
+        ),
         _ => return None,
     };
     Some(ProviderTurnObservation {
@@ -326,10 +375,11 @@ pub fn compact_turn_payload(observation: &ProviderTurnObservation) -> Option<Str
             "hook_event_name": "PermissionDenied",
             "session_id": session_id,
             "tool_name": denial.tool,
+            "tool_use_id": denial.call,
             "reason": denial.reason,
         }),
         // These reach the host through the interview hook, unchanged.
-        ProviderTurnEvent::Resolved => return None,
+        ProviderTurnEvent::Resolved | ProviderTurnEvent::BatchResolved { .. } => return None,
     };
     Some(payload.to_string())
 }
@@ -372,6 +422,11 @@ const fn failure_name(failure: ProviderTurnFailure) -> &'static str {
         ProviderTurnFailure::Server => "server_error",
         ProviderTurnFailure::Other => "unknown",
     }
+}
+
+/// Bounded the same way on both sides, so a refusal and its batch still match.
+fn call_id(id: &str) -> String {
+    bounded(id, MAX_TOOL_CALL_ID_CHARS)
 }
 
 fn bounded(text: &str, limit: usize) -> String {
@@ -517,6 +572,7 @@ mod tests {
             ProviderTurnEvent::Denied(ProviderDenial {
                 tool: "Bash".into(),
                 reason: "[Irreversible Local Destruction]".into(),
+                call: Some("toolu_1".into()),
             })
         );
         assert!(!format!("{observation:?}").contains("secret"));
@@ -545,7 +601,10 @@ mod tests {
         asked["hook_event_name"] = "PostToolUse".into();
         assert_eq!(read(&asked).unwrap().event, ProviderTurnEvent::Resolved);
         let batch = hook("PostToolBatch");
-        assert_eq!(read(&batch).unwrap().event, ProviderTurnEvent::Resolved);
+        assert_eq!(
+            read(&batch).unwrap().event,
+            ProviderTurnEvent::BatchResolved { calls: Vec::new() }
+        );
         assert!(read(&batch).unwrap().interview);
 
         // Any other tool says nothing about the turn.
@@ -586,6 +645,7 @@ mod tests {
             serde_json::json!([{"type": "shell"}, {"type": "subagent"}, {"type": "workflow"}]);
         let mut denied = hook("PermissionDenied");
         denied["tool_name"] = "Bash".into();
+        denied["tool_use_id"] = "toolu_01Q8hrpWNB".into();
         denied["reason"] = "[Data Exfiltration]".into();
         let mut failed = hook("StopFailure");
         failed["error"] = "overloaded".into();
@@ -700,6 +760,7 @@ mod tests {
         let denial = ProviderDenial {
             tool: "Bash".into(),
             reason: "[Data Exfiltration]".into(),
+            call: Some("toolu_1".into()),
         };
         turn.apply(&ProviderTurnEvent::Submitted);
         turn.apply(&ProviderTurnEvent::Denied(denial.clone()));
@@ -709,5 +770,62 @@ mod tests {
         assert_eq!(turn.denial, Some(denial), "kept after the turn ends");
         turn.apply(&ProviderTurnEvent::Submitted);
         assert_eq!(turn.denial, None, "a new turn starts clean");
+    }
+
+    /// Measured on 2.1.310 on 2026-10-25 with a session-only `hard_deny`
+    /// rule: `PermissionDenied` names the refused call, and the batch it was
+    /// in resolves straight after, naming it too. Platform carried on past a
+    /// refusal for 45 minutes of one turn while the roster kept showing it.
+    #[test]
+    fn a_refusal_clears_once_claude_runs_something_else_and_stays_if_it_stopped() {
+        let mut denied = hook("PermissionDenied");
+        denied["tool_name"] = "Bash".into();
+        denied["tool_input"] = serde_json::json!({"command": "echo swarmprobeblock"});
+        denied["tool_use_id"] = "toolu_01Q8hrpWNB".into();
+        denied["reason"] =
+            "The server-side auto mode classifier judged this action dangerous (it gave no explanation)"
+                .into();
+        let batch = |id: &str, response: &str| {
+            let mut batch = hook("PostToolBatch");
+            batch["tool_calls"] = serde_json::json!([{
+                "tool_name": "Bash",
+                "tool_input": {"command": "private command"},
+                "tool_use_id": id,
+                "tool_response": response,
+            }]);
+            event(&batch).unwrap()
+        };
+        let refused = event(&denied).unwrap();
+        let refused_batch = batch(
+            "toolu_01Q8hrpWNB",
+            "Permission for this action was denied by the Claude Code auto mode classifier.",
+        );
+
+        let mut carried_on = ProviderTurn::default();
+        carried_on.apply(&ProviderTurnEvent::Submitted);
+        carried_on.apply(&refused);
+        carried_on.apply(&refused_batch);
+        assert!(
+            carried_on.denial.is_some(),
+            "its own batch is not moving on"
+        );
+        carried_on.apply(&batch("toolu_01Vo3NLY2X", "carried-on"));
+        assert_eq!(carried_on.denial, None);
+
+        let mut stopped = ProviderTurn::default();
+        stopped.apply(&ProviderTurnEvent::Submitted);
+        stopped.apply(&refused);
+        stopped.apply(&refused_batch);
+        stopped.apply(&ProviderTurnEvent::Ended {
+            background: Some(ProviderTurnBackground::default()),
+        });
+        assert!(stopped.denial.is_some(), "what stopped the worker is kept");
+
+        // A refusal that names no call cannot be told from its own batch.
+        let mut unnamed = ProviderTurn::default();
+        denied.as_object_mut().unwrap().remove("tool_use_id");
+        unnamed.apply(&event(&denied).unwrap());
+        unnamed.apply(&batch("toolu_01Vo3NLY2X", "carried-on"));
+        assert!(unnamed.denial.is_some());
     }
 }
