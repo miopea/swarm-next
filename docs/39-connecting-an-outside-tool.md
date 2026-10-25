@@ -75,6 +75,14 @@ Two details are load-bearing and easy to lose:
   prefix public with the comment that the MCP SDK probes discovery and must get
   a 404. Putting discovery behind auth makes the probe indistinguishable from a
   server that requires credentials to tell you how to get credentials.
+- **The client opens `/oauth/authorize` from its own site, and the operator's
+  session cookie is `SameSite=Strict`.** The browser leaves it off, so a
+  signed-in operator was refused with `access_denied` on a real connect
+  attempt, 2026-10-25. Measured in Chromium against a two-origin probe: a link
+  and a redirect from the other site both drop the cookie; a meta refresh from
+  the page itself sends it. So a cross-site arrival without a session gets a
+  page that opens the same address again, and only the second, same-origin
+  request is refused.
 
 ## Decisions taken (interview, 2026-08-28)
 

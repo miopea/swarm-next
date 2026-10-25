@@ -514,6 +514,9 @@ pub(super) async fn authorize_client(
         );
     }
     if crate::auth::authorize(&state, &headers).is_err() {
+        if opened_from_another_site(&headers) {
+            return open_again_from_this_site();
+        }
         return oauth_error(
             StatusCode::UNAUTHORIZED,
             "access_denied",
@@ -548,6 +551,44 @@ pub(super) async fn authorize_client(
         }),
     );
     consent_page(&name, &consent)
+}
+
+/// Whether a browser opened this page from another site.
+///
+/// A client sends the operator here from its own site, and the session cookie
+/// is `SameSite=Strict`, so the browser leaves it off even when they are signed
+/// in. Measured in Chromium on 2026-10-25, for a link and for a redirect from
+/// the other site alike.
+fn opened_from_another_site(headers: &HeaderMap) -> bool {
+    headers
+        .get("sec-fetch-site")
+        .is_some_and(|site| site == "cross-site")
+        && headers
+            .get("sec-fetch-dest")
+            .is_some_and(|dest| dest == "document")
+}
+
+/// Opens the same address again, this time from this Hive's own page.
+///
+/// That navigation is same-origin, so the cookie goes with it and a signed-in
+/// operator sees the consent page; measured in the same Chromium run, with this
+/// Hive's own headers. It cannot loop: the second request is not cross-site, so
+/// a signed-out browser is refused there. A meta refresh, as in
+/// `redirect_with_code`, so no script runs; the link is for a browser that does
+/// not follow it.
+fn open_again_from_this_site() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        axum::response::Html(
+            "<!doctype html><meta charset=utf-8><title>Opening Swarm</title>\
+<meta http-equiv=\"refresh\" content=\"0\">\
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.5rem;color:#20261f;background:#faf8f0}</style>\
+<p>Opening Swarm&hellip;</p>\
+<p><a href=\"\">Continue</a></p>",
+        ),
+    )
+        .into_response()
 }
 
 /// How long a rendered consent page stays good for. Long enough to read, short
@@ -1507,6 +1548,50 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(response.headers().get(header::LOCATION).is_none());
+    }
+
+    /// The client sends the operator here from its own site, so the browser
+    /// leaves the `SameSite=Strict` session cookie off. The page opens itself
+    /// again from this Hive, where the cookie is sent, and issues nothing; the
+    /// second request, now same-origin, is refused rather than sent round again.
+    #[tokio::test]
+    async fn a_browser_sent_from_another_site_is_opened_again_from_this_one() {
+        let app = signed_app();
+        let redirect = "https://claude.ai/api/mcp/auth_callback";
+        let client = register_a_client(&app, redirect).await;
+        let client_id = client["client_id"].as_str().unwrap();
+        let (_, challenge) = verifier_and_challenge();
+        let uri = format!(
+            "/oauth/authorize?client_id={client_id}&redirect_uri={redirect}\
+             &response_type=code&code_challenge={challenge}&code_challenge_method=S256"
+        );
+        let opened_from = |site: &str| {
+            Request::builder()
+                .uri(&uri)
+                .header(header::HOST, "swarm.example.test")
+                .header("x-forwarded-for", "203.0.113.9")
+                .header("sec-fetch-site", site)
+                .header("sec-fetch-dest", "document")
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let first = app
+            .clone()
+            .oneshot(opened_from("cross-site"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(first.headers().get(header::LOCATION).is_none());
+        let page = body_text(first).await;
+        assert!(page.contains("<meta http-equiv=\"refresh\" content=\"0\">"));
+        assert!(!page.contains("code="));
+        assert!(!page.contains("consent"));
+
+        let again = app.oneshot(opened_from("same-origin")).await.unwrap();
+        assert_eq!(again.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(again).await["error"], "access_denied");
     }
 
     /// PKCE is required, not offered — a public client without it is
