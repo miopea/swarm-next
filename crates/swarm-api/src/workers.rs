@@ -741,6 +741,9 @@ pub(super) async fn conversation_freshness(
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
+    let reported = task_store(&state)?
+        .reported_conversations()
+        .map_err(|error| task_store_error(&error))?;
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Err(ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -755,7 +758,7 @@ pub(super) async fn conversation_freshness(
         let mut budget = crate::worker_runtime::ConversationScanBudget::new();
         let mut workers = Vec::new();
         for profile in &profiles {
-            let freshness = crate::worker_runtime::conversation_freshness(profile, &projects, &home, &mut budget, &confirmed_selections);
+            let freshness = crate::worker_runtime::conversation_freshness(profile, &projects, &home, &mut budget, &confirmed_selections, reported.get(&profile.id).unwrap_or(&std::collections::HashSet::new()));
             if budget.exhausted {
                 return Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "conversation_scan_incomplete", "Conversation checks reached their work limit. No partial result was used to judge conversation health."));
             }

@@ -836,9 +836,12 @@ struct TranscriptScan {
 
 /// Reads every transcript in one directory under the SHARED budget, so fault
 /// classification cannot restore the unbounded scan it follows.
+///
+/// Only a conversation in `reported` can be newest: see `conversation_freshness`.
 fn scan_transcripts(
     entries: std::fs::ReadDir,
     pinned: &str,
+    reported: &HashSet<String>,
     budget: &mut ConversationScanBudget,
 ) -> TranscriptScan {
     let mut scan = TranscriptScan {
@@ -880,7 +883,7 @@ fn scan_transcripts(
         // else, stamped now. Ranking on timestamp alone let that stub beat a
         // conversation of hundreds of turns, and the notice it raised could
         // never be cleared, because the stub stays newest forever.
-        if !tail.substantive {
+        if !tail.substantive || !reported.contains(id) {
             continue;
         }
         if scan
@@ -917,12 +920,22 @@ pub(super) async fn forget_worker_failure(state: &AppState, worker_id: WorkerId)
     }
 }
 
+/// Whether a start would resume an older conversation than this worker's own
+/// Claude was last in.
+///
+/// ⚠️ A WORKSPACE DIRECTORY IS NOT THE WORKER'S ALONE. Every Claude started in
+/// the same directory writes its transcript there, and only conversations this
+/// worker's own sessions reported (`reported`) can outrank the pin. On
+/// 2026-10-25 Scout, whose workspace is all of `~/projects`, was reported as
+/// resuming an older conversation because of throwaway probe sessions another
+/// worker had run in `~/projects`; none of them was Scout's (ADR 0124).
 pub(crate) fn conversation_freshness(
     profile: &WorkerProfile,
     projects_root: &Path,
     home: &Path,
     budget: &mut ConversationScanBudget,
     confirmed: &HashMap<WorkerSessionId, swarm_domain::ProviderConversationSelection>,
+    reported: &HashSet<String>,
 ) -> ConversationFreshness {
     if profile.provider == ProviderKind::ClaudeCode
         && profile
@@ -966,7 +979,7 @@ pub(crate) fn conversation_freshness(
             reason: "the Claude project directory could not be read".to_owned(),
         };
     };
-    let scan = scan_transcripts(entries, &pinned.to_string(), budget);
+    let scan = scan_transcripts(entries, &pinned.to_string(), reported, budget);
     let TranscriptScan {
         newest,
         pinned_last,
@@ -993,8 +1006,9 @@ pub(crate) fn conversation_freshness(
                 ),
             }
         } else {
-            // Read cleanly, and not one holds a conversation. Nothing real can
-            // be newer than the pin, so there is nothing to tell the operator.
+            // Read cleanly, and not one holds a conversation this worker
+            // reported. Nothing of its own can be newer than the pin, so there
+            // is nothing to tell the operator.
             ConversationFreshness::Current
         };
     };
@@ -1120,6 +1134,33 @@ fn reconcile_worker_context(
             .map_err(|error| task_store_error(&error))?
     {
         state.control_room_notify.notify_waiters();
+    }
+    // Recorded whatever the pin does with them, including while following is
+    // suspended: they are what tells this worker's history apart from every
+    // other Claude that writes into the same workspace directory. Last, and
+    // never fatal: it feeds a report, and must not hold back the pin or a stop.
+    for conversation in [
+        session
+            .provider_start
+            .map(|observation| observation.conversation),
+        session
+            .provider_selection
+            .map(|selection| selection.conversation),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Err(error) = task_store(state).and_then(|store| {
+            store
+                .record_reported_conversation(session.session_id, conversation)
+                .map_err(|error| task_store_error(&error))
+        }) {
+            tracing::warn!(
+                session_id = %session.session_id,
+                message = %error.message,
+                "a conversation the worker reported could not be recorded"
+            );
+        }
     }
     Ok(())
 }
@@ -1557,6 +1598,28 @@ mod tests {
             provider_start: None,
             provider_selection: None,
         }
+    }
+
+    /// The conversation a worker's own Claude reports is what lets the
+    /// freshness check tell its history from another Claude's in the same
+    /// directory, so a report that is not recorded silences that check.
+    #[test]
+    fn a_conversation_the_engine_reports_is_recorded_for_its_worker() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        let started = swarm_domain::ProviderConversationId::new();
+        let mut summary = bare_session_summary(session, true);
+        summary.provider_selection = Some(swarm_domain::ProviderConversationSelection {
+            revision: 1,
+            conversation: started,
+        });
+
+        reconcile_worker_context(&state, &summary).unwrap();
+
+        assert!(store.reported_conversations().unwrap()[&worker.id].contains(&started.to_string()));
     }
 
     #[tokio::test]
@@ -2822,6 +2885,11 @@ mod tests {
         std::fs::write(directory.join(format!("{id}.jsonl")), body).unwrap();
     }
 
+    /// The conversations a worker's own Claude reported, as the scan reads them.
+    fn own(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
     /// Writes what `/clear` leaves behind: the command and nothing else. No
     /// assistant turn ever lands in it, and it is stamped at the moment the
     /// operator cleared.
@@ -2871,6 +2939,10 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+            ]),
         );
 
         assert!(
@@ -2922,6 +2994,10 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+            ]),
         );
 
         assert!(
@@ -2963,6 +3039,10 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+            ]),
         );
 
         match freshness {
@@ -2972,6 +3052,40 @@ mod tests {
             } => assert_eq!(newest_conversation, "22222222-2222-4222-8222-222222222222"),
             other => panic!("a worked-in conversation is genuinely newer history: {other:?}"),
         }
+    }
+
+    /// ⚠️ ANOTHER CLAUDE IN THE SAME DIRECTORY IS NOT THIS WORKER'S HISTORY.
+    ///
+    /// On 2026-10-25 Scout, whose workspace is all of `~/projects`, was
+    /// running the conversation the operator wanted and was reported as
+    /// resuming an older one. The "newer" transcripts were throwaway probes
+    /// another worker had run in `~/projects`. Asserted beside the stale case
+    /// above, so a guard that silenced both cannot pass.
+    #[test]
+    fn a_newer_conversation_this_worker_never_reported_is_not_its_history() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("projects");
+        let projects = home.path().join(".claude/projects");
+        let slug = workspace.to_string_lossy().replace(['/', '.'], "-");
+        let pinned = "11111111-1111-4111-8111-111111111111";
+        transcript(&projects.join(&slug), pinned, "2026-10-23T23:21:42.989Z");
+        transcript(
+            &projects.join(&slug),
+            "22222222-2222-4222-8222-222222222222",
+            "2026-10-26T01:03:45.326Z",
+        );
+
+        let profile = worker_profile(&workspace, Some(pinned), true);
+        let freshness = conversation_freshness(
+            &profile,
+            &projects,
+            home.path(),
+            &mut ConversationScanBudget::new(),
+            &HashMap::new(),
+            &own(&[pinned]),
+        );
+
+        assert_eq!(freshness, ConversationFreshness::Current);
     }
 
     /// Every transcript is a stub. That is not the file-permission fault, and
@@ -3005,6 +3119,10 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+            ]),
         );
 
         assert!(
@@ -3045,6 +3163,10 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+            ]),
         );
 
         match freshness {
@@ -3087,7 +3209,8 @@ mod tests {
                     &projects,
                     home.path(),
                     &mut budget,
-                    &HashMap::new()
+                    &HashMap::new(),
+                    &own(&["11111111-1111-4111-8111-111111111111"])
                 ),
                 ConversationFreshness::Unknown { .. }
             ));
@@ -3125,7 +3248,17 @@ mod tests {
         let mut budget = ConversationScanBudget::new();
         budget.entries = 0;
         assert_eq!(
-            conversation_freshness(&profile, &projects, home.path(), &mut budget, &confirmed),
+            conversation_freshness(
+                &profile,
+                &projects,
+                home.path(),
+                &mut budget,
+                &confirmed,
+                &own(&[
+                    "11111111-1111-4111-8111-111111111111",
+                    "22222222-2222-4222-8222-222222222222"
+                ])
+            ),
             ConversationFreshness::Current
         );
         assert!(
@@ -3140,7 +3273,11 @@ mod tests {
                 &projects,
                 home.path(),
                 &mut ConversationScanBudget::new(),
-                &confirmed
+                &confirmed,
+                &own(&[
+                    "11111111-1111-4111-8111-111111111111",
+                    "22222222-2222-4222-8222-222222222222"
+                ])
             ),
             ConversationFreshness::Stale { .. }
         ));
@@ -3152,7 +3289,11 @@ mod tests {
                 &projects,
                 home.path(),
                 &mut ConversationScanBudget::new(),
-                &confirmed
+                &confirmed,
+                &own(&[
+                    "11111111-1111-4111-8111-111111111111",
+                    "22222222-2222-4222-8222-222222222222"
+                ])
             ),
             ConversationFreshness::Stale { .. }
         ));
@@ -3163,7 +3304,11 @@ mod tests {
                 &projects,
                 home.path(),
                 &mut ConversationScanBudget::new(),
-                &confirmed
+                &confirmed,
+                &own(&[
+                    "11111111-1111-4111-8111-111111111111",
+                    "22222222-2222-4222-8222-222222222222"
+                ])
             ),
             ConversationFreshness::Stale { .. }
         ));
@@ -3212,6 +3357,10 @@ mod tests {
                 home.path(),
                 &mut ConversationScanBudget::new(),
                 &HashMap::new(),
+                &own(&[
+                    "11111111-1111-4111-8111-111111111111",
+                    "22222222-2222-4222-8222-222222222222"
+                ]),
             ),
             ConversationFreshness::Current
         );
@@ -3239,6 +3388,7 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[]),
         );
 
         assert!(
@@ -3278,6 +3428,7 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&[]),
         );
 
         // A real directory, made unreadable for real rather than mocked — the
@@ -3305,6 +3456,7 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&["22222222-2222-4222-8222-222222222222"]),
         );
         {
             // Restored so the tempdir can be cleaned up.
@@ -3369,6 +3521,7 @@ mod tests {
             home.path(),
             &mut ConversationScanBudget::new(),
             &HashMap::new(),
+            &own(&["33333333-3333-4333-8333-333333333333"]),
         );
 
         let ConversationFreshness::Unknown { cause, .. } = freshness else {

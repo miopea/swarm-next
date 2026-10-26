@@ -41,6 +41,7 @@ mod hive_usage;
 pub use hive_usage::StoredHiveUsage;
 mod check_gate;
 pub use check_gate::{CheckGateSetting, CiCandidate};
+mod reported_conversations;
 mod worker_model;
 mod worker_remote_control;
 pub use worker_model::WorkerModelSetting;
@@ -413,7 +414,9 @@ const JIRA_RESOLUTION_HOLD_SCHEMA_MARKER: i64 = 207;
 const EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER: i64 = 208;
 /// Whether Claude workers connect to Remote Control (ADR 0122).
 const WORKER_REMOTE_CONTROL_SCHEMA_MARKER: i64 = 209;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_REMOTE_CONTROL_SCHEMA_MARKER;
+/// The conversations each worker's own Claude reported (ADR 0124).
+const REPORTED_CONVERSATIONS_SCHEMA_MARKER: i64 = 210;
+const CURRENT_SCHEMA_VERSION: i64 = REPORTED_CONVERSATIONS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4846,6 +4849,12 @@ fn migrate_fleet_health_schema_steps(
         crate::worker_remote_control::migrate_worker_remote_control(
             transaction,
             WORKER_REMOTE_CONTROL_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < REPORTED_CONVERSATIONS_SCHEMA_MARKER {
+        crate::reported_conversations::migrate_reported_conversations(
+            transaction,
+            REPORTED_CONVERSATIONS_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -10934,6 +10943,14 @@ mod tests {
             undo_sql: "DROP TABLE worker_remote_control_settings;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'worker_remote_control_settings'",
+        },
+        // The conversations each worker's own Claude reported (ADR 0124).
+        SchemaStep {
+            table: "worker_reported_conversations",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_reported_conversations;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'worker_reported_conversations'",
         },
     ];
 
