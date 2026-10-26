@@ -927,8 +927,8 @@ pub(super) async fn forget_worker_failure(state: &AppState, worker_id: WorkerId)
 /// the same directory writes its transcript there, and only conversations this
 /// worker's own sessions reported (`reported`) can outrank the pin. On
 /// 2026-10-25 Scout, whose workspace is all of `~/projects`, was reported as
-/// resuming an older conversation because of throwaway probe sessions another
-/// worker had run in `~/projects`; none of them was Scout's (ADR 0124).
+/// resuming an older conversation because of throwaway probe sessions the
+/// Swarm Next worker had run in `~/projects`; none of them was Scout's (ADR 0124).
 pub(crate) fn conversation_freshness(
     profile: &WorkerProfile,
     projects_root: &Path,
@@ -3059,7 +3059,7 @@ mod tests {
     /// On 2026-10-25 Scout, whose workspace is all of `~/projects`, was
     /// running the conversation the operator wanted and was reported as
     /// resuming an older one. The "newer" transcripts were throwaway probes
-    /// another worker had run in `~/projects`. Asserted beside the stale case
+    /// the Swarm Next worker had run in `~/projects`. Asserted beside the stale case
     /// above, so a guard that silenced both cannot pass.
     #[test]
     fn a_newer_conversation_this_worker_never_reported_is_not_its_history() {

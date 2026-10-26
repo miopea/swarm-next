@@ -19,8 +19,8 @@ started in the same directory writes its transcript there.
 
 Scout's workspace is all of `~/projects`. On 2026-10-25 Scout was running the
 conversation the operator wanted, and the card said it would resume an older
-one. The "newer" transcripts were throwaway probes another worker had run in
-`~/projects` on 2026-10-24: "Reply with only the word PINEAPPLE." and a
+one. The "newer" transcripts were throwaway probes the Swarm Next worker had
+run in `~/projects` on 2026-10-24 while measuring Claude's hooks for ADR 0123: "Reply with only the word PINEAPPLE." and a
 700-word story. None was Scout's.
 
 ADR 0101 made the engine report every conversation change it can see (start,
