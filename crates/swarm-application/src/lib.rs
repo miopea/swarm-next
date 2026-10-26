@@ -3741,18 +3741,24 @@ impl TaskService {
         &self,
         principal: AgentPrincipal,
     ) -> Result<Vec<Task>, ApplicationError> {
-        // Read from the store rather than from the principal, so revoking the
-        // capability takes effect on the next call instead of when a long-lived
-        // session happens to end.
-        let reads_the_board = principal.role == WorkerRole::Queen
-            || self
-                .store
-                .get_worker_profile(principal.worker_id)
-                .is_ok_and(|profile| profile.board_read);
-        if reads_the_board {
+        if self.reads_the_board(principal) {
             return self.list_tasks();
         }
         self.list_visible_tasks(principal)
+    }
+
+    /// Whether this principal reads the whole board rather than only its own
+    /// assignment: Queen, or a worker granted `board_read`.
+    #[must_use]
+    pub fn reads_the_board(&self, principal: AgentPrincipal) -> bool {
+        // Read from the store rather than from the principal, so revoking the
+        // capability takes effect on the next call instead of when a long-lived
+        // session happens to end.
+        principal.role == WorkerRole::Queen
+            || self
+                .store
+                .get_worker_profile(principal.worker_id)
+                .is_ok_and(|profile| profile.board_read)
     }
 
     /// Whether this principal may READ one task, by either route.

@@ -2423,8 +2423,15 @@ impl AgentMcp {
         // expose current state so absence from the board cannot be mistaken for
         // the last Ready/Active state remembered from a previous run.
         let current = self.tasks.store().get_task(task_id)?;
+        // The task itself, as the board lists it. A closed task, and an open one
+        // past the listing's size bound, is named on the board by id and title
+        // only, so its brief and amendments are read here or nowhere.
+        let task = self
+            .tasks_with_amendments(std::slice::from_ref(&current))?
+            .pop();
         structured(json!({
             "task_id": input.task_id,
+            "task": task,
             "current_task": {
                 "state": current.state,
                 "next_move_owner": current.next_move_owner,
@@ -2960,6 +2967,77 @@ read are not wrong, they are dated — and this board moves within minutes."
         envelope
     }
 
+    /// How much of one reply the open tasks may take, serialized.
+    const BOARD_LISTING_BYTES: usize = 2 * 1024 * 1024;
+
+    /// How much of one reply the one-line index of closed tasks may take.
+    const CLOSED_INDEX_BYTES: usize = 64 * 1024;
+
+    /// The board as a reader lists it: open tasks in full, closed ones as one
+    /// line each, and both bounded.
+    ///
+    /// ⚠️ AN UNBOUNDED LISTING DISCONNECTS THE READER FROM EVERY SWARM TOOL.
+    /// Queen's listing carried all 1,718 tasks with their descriptions and
+    /// amendments, 1,582 of them closed, and reached 8.2 million characters
+    /// on 2026-10-24. From then on every call closed Claude's connection to
+    /// its tools, the relay exited, and Queen had no Swarm tools at all until
+    /// a reconnect, which the next listing broke again. Measured on Claude
+    /// 2.1.310: a 22.7 MB result closes the connection, and an interactive
+    /// session does not restart the server afterwards.
+    ///
+    /// Closed work keeps its id and title here, so it can still be recognised
+    /// and read in full by id with `swarm_read_task_history`.
+    fn board_listing(
+        &self,
+        tasks: &[swarm_domain::Task],
+    ) -> Result<CallToolResult, ApplicationError> {
+        let (mut closed, open): (Vec<&swarm_domain::Task>, Vec<&swarm_domain::Task>) = tasks
+            .iter()
+            .partition(|task| matches!(task.state, TaskState::Completed | TaskState::Abandoned));
+        let open = open.into_iter().cloned().collect::<Vec<_>>();
+        let (listed, omitted) = fit_in_bytes(
+            self.tasks_with_amendments(&open)?,
+            Self::BOARD_LISTING_BYTES,
+        );
+        let omitted = open[open.len() - omitted..]
+            .iter()
+            .map(|task| json!({ "id": task.id, "title": task.title, "state": task.state }))
+            .collect::<Vec<_>>();
+        closed.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
+        let closed_total = closed.len();
+        let (closed, _) = fit_in_bytes(
+            closed
+                .into_iter()
+                .map(|task| {
+                    json!({
+                        "id": task.id,
+                        "title": task.title,
+                        "state": task.state,
+                        "updated_at": task.updated_at,
+                    })
+                })
+                .collect(),
+            Self::CLOSED_INDEX_BYTES,
+        );
+        let mut listing = json!({
+            "tasks": listed,
+            "closed": closed,
+            "closed_total": closed_total,
+            "closed_note": format!(
+                "Completed and abandoned tasks are not in `tasks`. `closed` names the {} most recently closed of {closed_total}, newest first; read one in full by id with swarm_read_task_history.",
+                closed.len()
+            ),
+        });
+        if !omitted.is_empty() {
+            listing["omitted"] = json!(omitted);
+            listing["omitted_note"] = json!(format!(
+                "{} open tasks did not fit in this reply and are named in `omitted` by id. `tasks` is the board in order up to that point; read the rest by id with swarm_read_task_history.",
+                omitted.len()
+            ));
+        }
+        structured(Self::stamped(listing))
+    }
+
     /// The visible tasks, and — when there are none — why.
     ///
     /// AN EMPTY LIST IS CORRECT AND READS AS CATASTROPHIC. A worker whose only
@@ -2976,6 +3054,9 @@ read are not wrong, they are dated — and this board moves within minutes."
         tasks: &[swarm_domain::Task],
     ) -> Result<CallToolResult, ApplicationError> {
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
+            if self.tasks.reads_the_board(self.principal) {
+                return self.board_listing(tasks);
+            }
             return structured(Self::stamped(
                 json!({ "tasks": self.tasks_with_amendments(tasks)? }),
             ));
@@ -3408,6 +3489,23 @@ fn review_evidence_next_step(
         ),
         CompletionEvidence::Deployed | CompletionEvidence::ExemptionApproved => None,
     }
+}
+
+/// The leading values whose serialized size fits in `budget`, and how many
+/// were left off the end. Stops at the first that does not fit, so what is
+/// kept is always a prefix and keeps its order.
+fn fit_in_bytes(values: Vec<Value>, budget: usize) -> (Vec<Value>, usize) {
+    let total = values.len();
+    let mut spent = 0;
+    let kept = values
+        .into_iter()
+        .take_while(|value| {
+            spent += value.to_string().len();
+            spent <= budget
+        })
+        .collect::<Vec<_>>();
+    let omitted = total - kept.len();
+    (kept, omitted)
 }
 
 fn structured<T: serde::Serialize>(value: T) -> Result<CallToolResult, ApplicationError> {
@@ -3881,7 +3979,7 @@ fn request_decision_tool() -> Tool {
 fn list_tasks_tool() -> Tool {
     tool(
         "swarm_list_tasks",
-        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
+        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment. A whole-board listing carries open tasks in full and names the most recently closed ones in `closed` by id and title; read any task in full with swarm_read_task_history. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -4033,7 +4131,7 @@ fn approve_no_deployment_tool() -> Tool {
 fn read_task_history_tool() -> Tool {
     tool(
         "swarm_read_task_history",
-        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
+        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists an open one, so a closed task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
         &json!({
             "type": "object",
             "properties": {
@@ -5038,6 +5136,96 @@ mod tests {
             (before..=after).contains(&observed),
             "observed_at must be the moment of the read, got {observed} outside {before}..={after}"
         );
+    }
+
+    /// ⚠️ CLOSED WORK IN FULL IS WHAT MADE QUEEN'S LISTING TOO LARGE TO RETURN.
+    /// By 2026-10-24 it was 8.2 million characters, nine tenths of them closed
+    /// tasks, and every call after that disconnected her from her tools.
+    #[tokio::test]
+    async fn a_board_listing_names_closed_work_without_carrying_it() {
+        let (bridge, store, queen_id, _, _) = setup();
+        store.create_task("Still open", "/workspace").unwrap();
+        let finished = store
+            .create_task_with_details(
+                "Finished",
+                "THE FINISHED DESCRIPTION",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        store
+            .amend_task_facts(finished.id, queen_id, "THE FINISHED AMENDMENT")
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(finished.id, state).unwrap();
+        }
+        let given_up = store.create_task("Given up", "/workspace").unwrap();
+        store
+            .transition_task(given_up.id, TaskState::Abandoned)
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listing = &response["result"]["structuredContent"];
+        let titles = |key: &str| {
+            listing[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("{key} is listed: {response}"))
+                .iter()
+                .map(|task| task["title"].as_str().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(titles("tasks"), ["Still open"], "{response}");
+        let mut closed = titles("closed");
+        closed.sort();
+        assert_eq!(closed, ["Finished", "Given up"], "{response}");
+        assert_eq!(listing["closed_total"], 2, "{response}");
+        assert!(
+            !response.to_string().contains("THE FINISHED DESCRIPTION"),
+            "a closed task is named, not carried: {response}"
+        );
+        assert!(
+            listing.get("omitted").is_none(),
+            "nothing open was left out: {response}"
+        );
+
+        // The note sends the reader to history for the rest, so history must
+        // carry it.
+        let history = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({ "task_id": finished.id }),
+        )
+        .await;
+        let task = &history["result"]["structuredContent"]["task"];
+        assert_eq!(task["description"], "THE FINISHED DESCRIPTION", "{history}");
+        assert!(
+            task["amendments"]
+                .to_string()
+                .contains("THE FINISHED AMENDMENT"),
+            "{history}"
+        );
+    }
+
+    /// The bound keeps the board's order: a large task ends the listing rather
+    /// than being skipped for smaller ones behind it, so `tasks` is always the
+    /// top of the board and `omitted` is everything below it.
+    #[test]
+    fn a_listing_bounded_by_size_keeps_the_top_of_the_board() {
+        let values = vec![json!("a"), json!("b"), json!("c".repeat(20)), json!("d")];
+
+        let (kept, omitted) = fit_in_bytes(values, 10);
+
+        assert_eq!(kept, [json!("a"), json!("b")]);
+        assert_eq!(omitted, 2);
     }
 
     /// ⚠️ A BRIEF THAT NAMES A RECORD BY PART OF ITS ID SENDS A WORKER SOMEWHERE
