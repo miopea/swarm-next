@@ -151,11 +151,13 @@ by reading source.
 11. **Seen, not just tested.** The Connections surface is looked at through the
     harness (`docs/38`) at desktop and narrow widths before it is called done.
 
-## Not proven here
+## Proven, and what is not
 
-The operator's existing connector points at the legacy server. Nothing in this
-document has been run against a real client — the flow is reconstructed from
-legacy's tests and from probes against the live endpoint. **A green test suite
-is not evidence that Claude's Connect button works.** That needs the operator to
-add the connector and reach the board, and until that happens this ships as
-implemented, not verified.
+On 2026-10-25 the operator added Claude's connector for
+`https://swarm.bfgsolutions.net/mcp`, signed in, approved it, and reported it
+working ("That is fixed") once bdefad86 let a sign-in sent from Claude reach the
+approval page.
+
+Not observed from this side: a board read or write made through that connector,
+and any client other than Claude. The approval page's reopen-once guard was
+measured in Chromium only.
