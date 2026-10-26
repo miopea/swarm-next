@@ -9628,6 +9628,12 @@ fn application_error(error: ApplicationError) -> ApiError {
             "transition_not_permitted",
             error.to_string(),
         ),
+        // 400: the store is fine and the request is what was turned down.
+        ApplicationError::Refused(_) => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "request_refused",
+            error.to_string(),
+        ),
         // 409: the request is fine and this Hive may make it once it updates.
         ApplicationError::SharedWorkRefused(_) => ApiError::new(
             StatusCode::CONFLICT,

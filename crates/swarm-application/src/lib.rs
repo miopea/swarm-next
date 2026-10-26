@@ -4880,6 +4880,15 @@ pub enum ApplicationError {
     // than in more standing instruction.
     #[error("{0}")]
     TransitionNotPermitted(String),
+    // A REFUSAL IS NOT A DAMAGED DATABASE. Agent tools sent unreadable
+    // arguments and rule refusals as a store integrity failure, so every one
+    // reached the caller as "database integrity check failed: ...". Queen read
+    // that on 2026-10-25 for an argument the tool does not take, which points
+    // the reader at the store when the remedy is in the request. The words are
+    // the refusal's own, or the failure's when a passed-through call failed,
+    // and nothing is added to them.
+    #[error("{0}")]
+    Refused(String),
     /// The Apiary refuses this Hive shared work until it updates (ADR 0113).
     /// The words say which release it runs and which it needs.
     #[error("{0}")]

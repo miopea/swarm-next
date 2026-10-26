@@ -1486,11 +1486,9 @@ impl ServerHandler for AgentMcp {
                             == QueenAutomationState::Running
                     {
                         if input.task_id.is_none() {
-                            return Err(ApplicationError::Store(
-                                TaskStoreError::IntegrityFailure(
+                            return Err(ApplicationError::Refused(
                                     "An unattended review must create one decision per concrete task. Do not group unrelated tasks into one approval.".into(),
-                                ),
-                            ));
+                                ));
                         }
                         if input.questions.is_empty()
                             && !input.suggested_action.is_empty()
@@ -1499,11 +1497,9 @@ impl ServerHandler for AgentMcp {
                                 .iter()
                                 .any(|action| action == &input.suggested_action)
                         {
-                            return Err(ApplicationError::Store(
-                                TaskStoreError::IntegrityFailure(
+                            return Err(ApplicationError::Refused(
                                     "The suggested action must exactly match one button in allowed_actions during unattended review, or be an empty string for No preference.".into(),
-                                ),
-                            ));
+                                ));
                         }
                     }
                     let task_id = input
@@ -1642,9 +1638,9 @@ impl ServerHandler for AgentMcp {
                             "No Queen automation run has been recorded on this Hive.".to_owned(),
                         ),
                     } {
-                        return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                        return Err(ApplicationError::Refused(
                             reason,
-                        )));
+                        ));
                     }
                     let QueenAutomationFinish::Closed(recorded_outcome) = finish else {
                         unreachable!("non-closed outcomes returned an error above");
@@ -1722,9 +1718,9 @@ impl AgentMcp {
         if permitted {
             Ok(())
         } else {
-            Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+            Err(ApplicationError::Refused(
                 "The current unattended Queen run is not authorized for that action. Ask the operator for a decision or finish the run as needs_operator.".into(),
-            )))
+            ))
         }
     }
 
@@ -1854,19 +1850,17 @@ impl AgentMcp {
             .iter()
             .any(|task| task.state == TaskState::Active);
         if holding_active_work {
-            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+            return Err(ApplicationError::Refused(
                 "You still hold Active work. This checks YOUR OWN assignments only, not the fleet's — finish or report your task and ask again."
                     .into(),
-            )));
+            ));
         }
         let started = crate::maintenance::start_development_reload(
             &self.state,
             Some(&self.principal.worker_id.to_string()),
         )
         .await
-        .map_err(|error| {
-            ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
-        })?;
+        .map_err(|error| ApplicationError::Refused(error.message.clone()))?;
         structured(json!({
             "requested": true,
             "expect_revision": started.source_revision,
@@ -1904,9 +1898,9 @@ impl AgentMcp {
             .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
         let reason = input.reason.trim();
         if reason.is_empty() {
-            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+            return Err(ApplicationError::Refused(
                 "say why this worker is being stood down; a worker that is simply gone is the failure this exists to avoid".to_owned(),
-            )));
+            ));
         }
         let store = self.tasks.store();
         let profile = store
@@ -1920,11 +1914,9 @@ impl AgentMcp {
                 task.assigned_worker_id == Some(worker_id) && task.state == TaskState::Active
             });
         if holds_active {
-            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
-                format!(
-                    "{} still holds Active work, so it is mid-sentence. Move that task out of flight first.",
-                    profile.name
-                ),
+            return Err(ApplicationError::Refused(format!(
+                "{} still holds Active work, so it is mid-sentence. Move that task out of flight first.",
+                profile.name
             )));
         }
         // The reason travels with the session that ends, which is where a
@@ -1933,9 +1925,7 @@ impl AgentMcp {
         // so a sleep recorded there would be gone in three minutes.
         crate::workers::stand_worker_down(&self.state, worker_id, Some((reason, "queen")))
             .await
-            .map_err(|error| {
-                ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
-            })?;
+            .map_err(|error| ApplicationError::Refused(error.message.clone()))?;
         structured(json!({
             "worker_id": input.worker_id,
             "asleep": true,
@@ -1961,9 +1951,9 @@ impl AgentMcp {
             .map_err(|_| ApplicationError::MalformedIdentifier("worker id"))?;
         let reason = input.reason.trim();
         if reason.is_empty() {
-            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+            return Err(ApplicationError::Refused(
                 "say why this worker is being started; a session that appeared with no explanation is the same failure a silent stand-down is".to_owned(),
-            )));
+            ));
         }
         let store = self.tasks.store();
         let profile = store
@@ -1974,9 +1964,9 @@ impl AgentMcp {
             .operator_presence(crate::unix_timestamp())
             .map_err(ApplicationError::Store)?;
         if !profile.provider.permits_automation_in(presence.mode) {
-            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+            return Err(ApplicationError::Refused(
                 "Experimental providers cannot be started by Queen during Night Watch. Keep the assigned work and provider unchanged until the policy permits startup.".to_owned(),
-            )));
+            ));
         }
 
         // Sampled FRESH rather than read from the coordinator's cached tick.
@@ -1984,12 +1974,10 @@ impl AgentMcp {
         // tick ago is not the answer now.
         let admission = crate::runtime::coordinator_start_admission(&self.state).await;
         if admission != crate::runtime::CoordinatorStartAdmission::Allowed {
-            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
-                format!(
-                    "{} was not started: {}",
-                    profile.name,
-                    admission.refusal_reason()
-                ),
+            return Err(ApplicationError::Refused(format!(
+                "{} was not started: {}",
+                profile.name,
+                admission.refusal_reason()
             )));
         }
 
@@ -2003,9 +1991,7 @@ impl AgentMcp {
             swarm_terminal::TerminalSize::default(),
         )
         .await
-        .map_err(|error| {
-            ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
-        })?;
+        .map_err(|error| ApplicationError::Refused(error.message.clone()))?;
         tracing::info!(%worker_id, worker = %profile.name, reason, "Queen started a worker");
         structured(json!({
             "worker_id": input.worker_id,
@@ -3525,9 +3511,9 @@ fn structured<T: serde::Serialize>(value: T) -> Result<CallToolResult, Applicati
 /// never in question.
 fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ApplicationError> {
     serde_json::from_value(value).map_err(|error| {
-        ApplicationError::Store(TaskStoreError::IntegrityFailure(format!(
+        ApplicationError::Refused(format!(
             "The arguments for this tool could not be read: {error}. Check the tool's schema; a field may be missing or the wrong type."
-        )))
+        ))
     })
 }
 
@@ -8149,6 +8135,10 @@ mod tests {
             refused.contains("still hold Active work"),
             "a worker holding active work must not restart the API under it: {refused}"
         );
+        assert!(
+            !refused.contains("integrity"),
+            "a refusal is not a damaged database: {refused}"
+        );
         // And the refusal says whose work it checked. It used to read "a reload
         // restarts the API under whatever is in flight", which names the fleet
         // while the condition above it reads one worker's assignments — so a
@@ -10763,12 +10753,16 @@ mod tests {
         // authority does not retry with a corrected payload.
         let refused = parse::<RequestDecisionInput>(json!({ "kind": "input" }));
 
-        let message = match refused {
-            Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(message))) => message,
+        let error = match refused {
+            Err(error @ ApplicationError::Refused(_)) => error,
             Err(other) => panic!("expected a readable argument error, got {other:?}"),
             Ok(_) => panic!("arguments with no title should not parse"),
         };
-        assert!(message.contains("could not be read"));
+        // What the caller reads. It used to begin "database integrity check
+        // failed:", which sent Queen to the store over a field the tool does
+        // not take.
+        let message = error.to_string();
+        assert!(message.starts_with("The arguments for this tool could not be read"));
         assert!(message.contains("schema"));
     }
 
