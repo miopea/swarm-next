@@ -56,11 +56,12 @@ pub use process::{
 pub use provider::{
     AlphaProviderAdapter, ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter,
     CodexConversationStart, ProviderCommand, ProviderCommandError, ProviderRelease,
-    ProviderTerminalAdapter, provider_release, provider_release_superseded, running_executable,
-    running_release_current, shell_command,
+    ProviderTerminalAdapter, claude_global_config, claude_restart_enabled, provider_release,
+    provider_release_superseded, running_executable, running_release_current, shell_command,
 };
 pub use provider_activity::{
     BackgroundWork, ProviderActivity, background_work, classify_provider_activity,
+    claude_restart_unknown,
 };
 pub use provider_interview::{
     NativeInterviewObservation, NativeInterviewOption, NativeInterviewPhase,

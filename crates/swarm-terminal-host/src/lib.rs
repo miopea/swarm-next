@@ -743,6 +743,17 @@ fn dispatch_blocking(
                     std::path::Path::new("codex"),
                     search_path.as_deref(),
                 ),
+                // Read here for the same reason: Claude inherits this process's
+                // environment, so its config is this one's (ADR 0109).
+                claude_restart: swarm_terminal::claude_global_config(
+                    std::env::var_os("CLAUDE_CONFIG_DIR")
+                        .as_deref()
+                        .map(std::path::Path::new),
+                    std::env::var_os("HOME")
+                        .as_deref()
+                        .map(std::path::Path::new),
+                )
+                .and_then(|config| swarm_terminal::claude_restart_enabled(&config)),
             })
         }
         HostRequest::BeginDrain => registry

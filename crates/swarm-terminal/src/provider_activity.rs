@@ -506,6 +506,23 @@ fn is_numbered_choice(line: &str) -> bool {
     digits > 0 && line[digits..].starts_with('.')
 }
 
+/// Whether Claude has answered `/restart` as a command it does not have, which
+/// is how it answers while the command is switched off (ADR 0125).
+///
+/// The line Claude draws, not the words anywhere on screen. A worker talking
+/// about this very failure has them in its own prose, and reading that as
+/// Claude's answer would turn in-place updates off for the whole Hive.
+#[must_use]
+pub fn claude_restart_unknown(snapshot: &TerminalSnapshot) -> bool {
+    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+    parser.process(&snapshot.bytes);
+    parser
+        .screen()
+        .contents()
+        .lines()
+        .any(|line| line.trim() == "● Unknown command: /restart")
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -634,6 +651,21 @@ mod tests {
                 "{provider} mid-turn must not read as idle"
             );
         }
+    }
+
+    /// Measured 2026-10-26 on six workers asked onto 2.1.311: Claude drew this
+    /// line, and the same text in a worker's own words is not Claude's answer.
+    #[test]
+    fn claudes_unknown_command_line_is_its_answer_and_prose_is_not() {
+        assert!(super::claude_restart_unknown(&snapshot(
+            "  you restart.\r\n\r\n✻ Churned for 1m 21s\r\n\r\n● Unknown command: /restart\r\n\r\n❯ "
+        )));
+        assert!(!super::claude_restart_unknown(&snapshot(
+            "● Each ask got \"Unknown command: /restart\" back.\r\n\r\n❯ "
+        )));
+        assert!(!super::claude_restart_unknown(&snapshot(
+            "❯ /restart\r\n  ⎿  Can't restart while Remote Control is connected.\r\n❯ "
+        )));
     }
 
     fn snapshot(text: &str) -> TerminalSnapshot {

@@ -54,6 +54,7 @@ pub(super) struct SupersededProviderView {
 fn superseded_providers(
     state: &AppState,
     claude_release: Option<&swarm_terminal::ProviderRelease>,
+    claude_restart: Option<bool>,
     codex_release: Option<&swarm_terminal::ProviderRelease>,
     executables: &HashMap<WorkerSessionId, Option<String>>,
 ) -> Result<Vec<SupersededProviderView>, ApiError> {
@@ -89,12 +90,12 @@ fn superseded_providers(
         let in_place = behind
             .iter()
             .filter(|session| {
-                kind == swarm_domain::ProviderKind::ClaudeCode
-                    && release
-                        .zip(running(session))
-                        .is_some_and(|(release, running)| {
-                            swarm_terminal::running_release_current(release, running) == Some(false)
-                        })
+                state.provider_updates.restarts_in_place(
+                    session.provider,
+                    release,
+                    claude_restart,
+                    running(session),
+                )
             })
             .collect::<Vec<_>>();
         let asked = release
@@ -586,6 +587,7 @@ pub(super) async fn capabilities(
             experimental,
             claude_release,
             codex_release,
+            claude_restart,
         } => ProviderCapabilitiesView {
             claude_code,
             codex,
@@ -593,6 +595,7 @@ pub(super) async fn capabilities(
             superseded: superseded_providers(
                 &state,
                 claude_release.as_ref(),
+                claude_restart,
                 codex_release.as_ref(),
                 &crate::provider_updates::running_executables(&state)
                     .await
@@ -622,6 +625,47 @@ mod tests {
         );
         state.push(text.as_bytes().to_vec());
         state.snapshot()
+    }
+
+    /// ADR 0125: while Claude's `/restart` is off, a Claude worker behind the
+    /// release counts with the ones that need stopping. That is what brings the
+    /// Restart button and its warning back, and the button reads the same
+    /// answer, so it stops the worker rather than asking it again.
+    #[test]
+    fn a_claude_worker_needs_stopping_while_its_restart_is_off() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let state = AppState::default().with_task_store(store);
+        let release = swarm_terminal::ProviderRelease {
+            resolved_path: "/home/op/.local/share/claude/versions/2.1.311".into(),
+            version: Some("2.1.311".into()),
+            installed_at: Some(1_000),
+        };
+        let executables = HashMap::from([(
+            session,
+            Some("/home/op/.local/share/claude/versions/2.1.310".to_owned()),
+        )]);
+        let view = |restart| {
+            superseded_providers(&state, Some(&release), restart, None, &executables).unwrap()
+        };
+
+        let on = view(None);
+        assert_eq!(on[0].worker_ids, vec![worker.id.to_string()]);
+        assert_eq!(on[0].in_place_worker_ids, on[0].worker_ids);
+
+        let off = view(Some(false));
+        assert_eq!(off[0].worker_ids, vec![worker.id.to_string()]);
+        assert!(off[0].in_place_worker_ids.is_empty());
     }
 
     const RULE: &str = "────────────────────────────────────────";

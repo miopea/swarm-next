@@ -955,3 +955,83 @@ pub fn provider_release_superseded(
         .installed_at
         .is_some_and(|installed_at| session_started_at < installed_at)
 }
+
+/// The flag Claude's `/restart` command is gated on, as Claude 2.1.311 names it.
+const CLAUDE_RESTART_FLAG: &str = "tengu_fancy_wand";
+
+/// Where Claude keeps its global config: `.claude.json` in `CLAUDE_CONFIG_DIR`
+/// when that is set, and in the home directory otherwise. Read from Claude
+/// 2.1.311, which joins the same name onto whichever of the two it has.
+#[must_use]
+pub fn claude_global_config(config_dir: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    config_dir
+        .or(home)
+        .map(|directory| directory.join(".claude.json"))
+}
+
+/// Whether Claude's `/restart` is switched on, as Claude last cached it (ADR 0125).
+///
+/// Every installed release has the command. It is behind a feature flag set
+/// for the account, and while that is off Claude answers "Unknown command:
+/// /restart". On 2026-10-26 the copy Claude caches in its global config read
+/// `false`, and every worker Swarm asked onto 2.1.311 answered exactly that.
+///
+/// `None` is no evidence: no file, no cache, or a flag a later release renamed.
+/// The caller then asks as before and Claude's own answer is the backstop.
+#[must_use]
+pub fn claude_restart_enabled(global_config: &Path) -> Option<bool> {
+    let text = std::fs::read_to_string(global_config).ok()?;
+    let config = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    config
+        .get("cachedGrowthBookFeatures")?
+        .get(CLAUDE_RESTART_FLAG)?
+        .as_bool()
+}
+
+#[cfg(test)]
+mod claude_restart_tests {
+    use std::path::Path;
+
+    use super::{claude_global_config, claude_restart_enabled};
+
+    #[test]
+    fn the_config_lives_in_the_config_directory_when_one_is_set() {
+        let home = Path::new("/home/op");
+        assert_eq!(
+            claude_global_config(None, Some(home)),
+            Some(home.join(".claude.json"))
+        );
+        assert_eq!(
+            claude_global_config(Some(Path::new("/srv/claude")), Some(home)),
+            Some(Path::new("/srv/claude/.claude.json").to_path_buf())
+        );
+        assert_eq!(claude_global_config(None, None), None);
+    }
+
+    #[test]
+    fn the_restart_flag_is_read_as_claude_cached_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join(".claude.json");
+        let cached = |features: &str| {
+            std::fs::write(
+                &config,
+                format!(r#"{{"numStartups":3,"cachedGrowthBookFeatures":{features}}}"#),
+            )
+            .unwrap();
+            claude_restart_enabled(&config)
+        };
+
+        assert_eq!(cached(r#"{"tengu_fancy_wand":false}"#), Some(false));
+        assert_eq!(cached(r#"{"tengu_fancy_wand":true}"#), Some(true));
+        // A renamed flag, or one cached as something other than a switch, says
+        // nothing about the command.
+        assert_eq!(cached(r#"{"tengu_other":false}"#), None);
+        assert_eq!(cached(r#"{"tengu_fancy_wand":"off"}"#), None);
+        std::fs::write(&config, "not json").unwrap();
+        assert_eq!(claude_restart_enabled(&config), None);
+        assert_eq!(
+            claude_restart_enabled(&directory.path().join("missing.json")),
+            None
+        );
+    }
+}

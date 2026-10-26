@@ -501,6 +501,10 @@ pub enum HostResponse {
         claude_release: Option<crate::ProviderRelease>,
         #[serde(default)]
         codex_release: Option<crate::ProviderRelease>,
+        /// Whether Claude's `/restart` is switched on, read where Claude runs
+        /// (ADR 0125). Defaulted: an older host says nothing, which is not off.
+        #[serde(default)]
+        claude_restart: Option<bool>,
     },
     SessionStarted {
         session_id: WorkerSessionId,

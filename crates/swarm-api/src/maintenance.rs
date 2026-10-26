@@ -132,10 +132,11 @@ pub(super) async fn prepare_worker_engine_return(
 /// A CLAUDE WORKER IS NOT STOPPED when its host can say which release it runs
 /// (ADR 0122). It is asked again to `/restart` in place, which happens as soon
 /// as it is at rest with nothing running in the background, and its
-/// conversation carries on. Everything else gets the stop-and-revive the worker
-/// engine update performs, without replacing anything: the roster is written
-/// down before a worker is stopped, so an interruption still gets the workers
-/// back.
+/// conversation carries on. Not while Claude's `/restart` is switched off:
+/// asking again cannot work then, so it is stopped and started (ADR 0125).
+/// Everything else gets the stop-and-revive the worker engine update performs,
+/// without replacing anything: the roster is written down before a worker is
+/// stopped, so an interruption still gets the workers back.
 pub(super) async fn restart_superseded_workers(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -145,6 +146,7 @@ pub(super) async fn restart_superseded_workers(
     let HostResponse::ProviderCapabilities {
         claude_release,
         codex_release,
+        claude_restart,
         ..
     } = request_host(&state, HostRequest::ProviderCapabilities).await?
     else {
@@ -186,11 +188,12 @@ pub(super) async fn restart_superseded_workers(
         if !swarm_terminal::provider_release_superseded(release, session.started_at, running) {
             continue;
         }
-        let restartable_in_place = session.provider == swarm_domain::ProviderKind::ClaudeCode
-            && release.zip(running).is_some_and(|(release, running)| {
-                swarm_terminal::running_release_current(release, running) == Some(false)
-            });
-        if restartable_in_place {
+        if state.provider_updates.restarts_in_place(
+            session.provider,
+            release,
+            claude_restart,
+            running,
+        ) {
             in_place.push(session.session_id);
         } else {
             superseded.push(session.worker_id);

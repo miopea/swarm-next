@@ -62,6 +62,10 @@ pub(super) struct ProviderUpdates {
     /// One pass at a time. The supervisor and the Restart button both run it,
     /// and two passes together could type `/restart` twice into one worker.
     pass: tokio::sync::Mutex<()>,
+    /// The release a worker answered "Unknown command" for (ADR 0125). Claude
+    /// switches the command on or off for the account, so one answer stands
+    /// for every worker behind that release. A newer release is a new question.
+    unknown_on: Mutex<Option<String>>,
 }
 
 impl ProviderUpdates {
@@ -78,6 +82,41 @@ impl ProviderUpdates {
             .filter(|(_, request)| request.target == release.resolved_path)
             .map(|(session, _)| *session)
             .collect()
+    }
+
+    /// Whether workers behind `release` can be moved onto it with `/restart`
+    /// (ADR 0125): not while Claude's cached flag says the command is off, and
+    /// not once a worker has answered that it has no such command. Otherwise
+    /// they take the stop-and-start every other provider gets.
+    pub(super) fn moves_in_place(&self, release: &ProviderRelease, restart: Option<bool>) -> bool {
+        restart != Some(false)
+            && self
+                .unknown_on
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref()
+                != Some(release.resolved_path.as_str())
+    }
+
+    /// Whether Swarm moves this session onto `release` itself (ADR 0122, 0125):
+    /// a Claude worker known to be running an older release, while Claude's
+    /// `/restart` can run. The Updates view and the Restart button both ask
+    /// this, so the worker the notice says is moving is the one the button
+    /// leaves running.
+    pub(super) fn restarts_in_place(
+        &self,
+        provider: ProviderKind,
+        release: Option<&ProviderRelease>,
+        restart: Option<bool>,
+        running: Option<&str>,
+    ) -> bool {
+        provider == ProviderKind::ClaudeCode
+            && release.is_some_and(|release| {
+                self.moves_in_place(release, restart)
+                    && running.and_then(|running| {
+                        swarm_terminal::running_release_current(release, running)
+                    }) == Some(false)
+            })
     }
 
     /// Lets these sessions be asked again: the Restart button.
@@ -117,9 +156,7 @@ pub(super) fn update_step(
     // `/restart` that cannot be confirmed would be asked for again forever.
     let current =
         executable.and_then(|running| swarm_terminal::running_release_current(release, running));
-    let at_rest = signals.is_some_and(|signals| {
-        signals.activity == ProviderActivity::Resting && !signals.background_work.is_running()
-    });
+    let at_rest = at_rest(signals);
     match (request, current) {
         (Some(request), Some(true)) if request.carry_on => UpdateStep::CarryOn,
         (Some(_), Some(true)) => UpdateStep::Forget,
@@ -134,12 +171,68 @@ pub(super) fn update_step(
     }
 }
 
-/// The release `claude` resolves to on the terminal host's `PATH` now.
-pub(super) async fn installed_claude_release(state: &AppState) -> Option<ProviderRelease> {
+/// At rest with nothing running in the background: the only time `/restart` is
+/// typed.
+fn at_rest(signals: Option<&ProviderSignals>) -> bool {
+    signals.is_some_and(|signals| {
+        signals.activity == ProviderActivity::Resting && !signals.background_work.is_running()
+    })
+}
+
+/// The release `claude` resolves to on the terminal host's `PATH` now, and
+/// whether its `/restart` is switched on (ADR 0125).
+pub(super) async fn installed_claude(state: &AppState) -> Option<(ProviderRelease, Option<bool>)> {
     match request_host(state, HostRequest::ProviderCapabilities).await {
-        Ok(HostResponse::ProviderCapabilities { claude_release, .. }) => claude_release,
+        Ok(HostResponse::ProviderCapabilities {
+            claude_release,
+            claude_restart,
+            ..
+        }) => claude_release.map(|release| (release, claude_restart)),
         _ => None,
     }
+}
+
+/// Whether a worker behind `release` shows Claude's answer that it has no
+/// `/restart` (ADR 0125).
+///
+/// The backstop for the cached flag, which can be missing or renamed. It reads
+/// the workers already asked, and the ones at rest that this pass would ask:
+/// an API restart forgets every ask, and a worker still showing the answer to
+/// the last one must not be typed into again to learn it twice.
+async fn claude_answered_unknown(
+    state: &AppState,
+    release: &ProviderRelease,
+    executables: &HashMap<WorkerSessionId, Option<String>>,
+    observed: &HashMap<WorkerSessionId, ProviderSignals>,
+) -> bool {
+    let asked = state.provider_updates.asked_onto(release);
+    for (&session, running) in executables {
+        let behind = running
+            .as_deref()
+            .and_then(|running| swarm_terminal::running_release_current(release, running))
+            == Some(false);
+        if !behind || !(asked.contains(&session) || at_rest(observed.get(&session))) {
+            continue;
+        }
+        if let Ok(HostResponse::Output {
+            session_id,
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            ..
+        }) = request_host(
+            state,
+            HostRequest::Read {
+                session_id: session,
+                after_sequence: None,
+            },
+        )
+        .await
+            && session_id == session
+            && swarm_terminal::claude_restart_unknown(&snapshot)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The executable each live terminal is running, as the host reports it.
@@ -194,6 +287,34 @@ fn carry_on_message(version: Option<&str>) -> CoordinationMessage {
     }
 }
 
+/// The installed Claude release, and whether this pass may type `/restart`
+/// onto it (ADR 0125). A worker's answer that Claude has no such command is
+/// recorded for the release here, so the Updates view and the Restart button
+/// read it too.
+async fn restart_target(
+    state: &AppState,
+    executables: &HashMap<WorkerSessionId, Option<String>>,
+    observed: &HashMap<WorkerSessionId, ProviderSignals>,
+) -> Option<(ProviderRelease, bool)> {
+    let (release, restart) = installed_claude(state).await?;
+    if !state.provider_updates.moves_in_place(&release, restart) {
+        return Some((release, false));
+    }
+    if !claude_answered_unknown(state, &release, executables, observed).await {
+        return Some((release, true));
+    }
+    tracing::warn!(
+        version = release.version.as_deref().unwrap_or("unknown"),
+        "Claude answered /restart as an unknown command; workers behind this release need stopping and starting"
+    );
+    *state
+        .provider_updates
+        .unknown_on
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(release.resolved_path.clone());
+    Some((release, false))
+}
+
 /// One pass over every live Claude worker. Returns how many were restarted.
 pub(super) async fn advance(
     state: &AppState,
@@ -203,10 +324,10 @@ pub(super) async fn advance(
     let (Some(client), Ok(store)) = (state.terminal_host.as_ref(), task_store(state)) else {
         return 0;
     };
-    let Some(release) = installed_claude_release(state).await else {
+    let Some(executables) = running_executables(state).await else {
         return 0;
     };
-    let Some(executables) = running_executables(state).await else {
+    let Some((release, in_place)) = restart_target(state, &executables, observed).await else {
         return 0;
     };
     let Ok(sessions) = store.active_worker_sessions() else {
@@ -231,6 +352,7 @@ pub(super) async fn advance(
                 request.as_ref(),
             ) {
                 UpdateStep::Wait => {}
+                UpdateStep::Restart if !in_place => {}
                 UpdateStep::Forget => {
                     requests.remove(&session.session_id);
                 }
@@ -521,12 +643,25 @@ mod tests {
         assert!(text.contains(std::str::from_utf8(&carry_on.marker).unwrap()));
     }
 
-    /// A fake terminal host holding one Claude session, which `/restart` moves
-    /// onto the installed release unless it refuses.
+    /// How the fake Claude answers `/restart`.
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum Reply {
+        /// Moves onto the installed release.
+        Moves,
+        /// Refuses, as it does with Remote Control connected.
+        Refuses,
+        /// Has no such command, as while its flag is off (ADR 0125).
+        Unknown,
+    }
+
+    /// A fake terminal host holding one Claude session, which answers
+    /// `/restart` with `reply`, and reports `restart` as Claude's cached flag.
     #[cfg(unix)]
     fn fake_host(
         session: WorkerSessionId,
-        refuses: bool,
+        reply: Reply,
+        restart: Option<bool>,
     ) -> (
         tempfile::TempDir,
         crate::HostClient,
@@ -574,6 +709,7 @@ mod tests {
                         experimental: None,
                         claude_release: Some(release()),
                         codex_release: None,
+                        claude_restart: restart,
                     },
                     HostRequest::ListSessions => HostResponse::Sessions {
                         sessions: vec![swarm_terminal::HostSessionSummary {
@@ -604,13 +740,17 @@ mod tests {
                         if bytes == b"\r" {
                             let _ = write!(transcript, "\r\n❯ {typed}\r\n");
                             if typed == "/restart" {
-                                if refuses {
-                                    transcript.push_str(
+                                match reply {
+                                    Reply::Moves => {
+                                        running = INSTALLED.to_owned();
+                                        transcript.push_str("  ⎿  Successfully updated from 2.1.309 to version 2.1.310\r\n");
+                                    }
+                                    Reply::Refuses => transcript.push_str(
                                         "  ⎿  Can't restart while Remote Control is connected.\r\n",
-                                    );
-                                } else {
-                                    running = INSTALLED.to_owned();
-                                    transcript.push_str("  ⎿  Successfully updated from 2.1.309 to version 2.1.310\r\n");
+                                    ),
+                                    Reply::Unknown => {
+                                        transcript.push_str("\r\n● Unknown command: /restart\r\n");
+                                    }
                                 }
                             }
                             recorder.lock().unwrap().push(std::mem::take(&mut typed));
@@ -670,7 +810,7 @@ mod tests {
     #[tokio::test]
     async fn a_resting_worker_is_restarted_onto_the_update_and_told_to_carry_on() {
         let session = WorkerSessionId::new();
-        let (_directory, client, submitted) = fake_host(session, false);
+        let (_directory, client, submitted) = fake_host(session, Reply::Moves, None);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
@@ -699,7 +839,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_restart_is_not_repeated_until_the_operator_asks() {
         let session = WorkerSessionId::new();
-        let (_directory, client, submitted) = fake_host(session, true);
+        let (_directory, client, submitted) = fake_host(session, Reply::Refuses, None);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
@@ -710,6 +850,92 @@ mod tests {
         state.provider_updates.ask_again(&[session]);
         assert_eq!(advance(&state, &observed).await, 1);
         assert_eq!(submitted.lock().unwrap().len(), 2);
+    }
+
+    /// Measured 2026-10-26: Claude's flag was off, and every worker Swarm asked
+    /// onto 2.1.311 answered "Unknown command: /restart", twice. With the flag
+    /// read first, nothing is typed at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_switched_off_restart_is_never_typed() {
+        let session = WorkerSessionId::new();
+        let (_directory, client, submitted) = fake_host(session, Reply::Unknown, Some(false));
+        let (state, observed) = hive_with_working_worker(client, session);
+
+        assert_eq!(advance(&state, &observed).await, 0);
+        state.provider_updates.ask_again(&[session]);
+        assert_eq!(advance(&state, &observed).await, 0);
+        assert!(submitted.lock().unwrap().is_empty());
+        assert!(
+            !state
+                .provider_updates
+                .moves_in_place(&release(), Some(false))
+        );
+    }
+
+    /// The backstop for a flag Swarm cannot read: Claude's own answer stops the
+    /// asking for that release, and the button no longer asks again in place.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claudes_unknown_command_answer_ends_in_place_updates_for_the_release() {
+        let session = WorkerSessionId::new();
+        let (_directory, client, submitted) = fake_host(session, Reply::Unknown, None);
+        let (state, observed) = hive_with_working_worker(client, session);
+
+        assert_eq!(advance(&state, &observed).await, 1);
+        assert_eq!(advance(&state, &observed).await, 0);
+        assert!(!state.provider_updates.moves_in_place(&release(), None));
+
+        state.provider_updates.ask_again(&[session]);
+        assert_eq!(advance(&state, &observed).await, 0);
+        assert_eq!(*submitted.lock().unwrap(), vec!["/restart".to_owned()]);
+
+        // A newer release is asked about afresh.
+        let newer = ProviderRelease {
+            resolved_path: "/home/op/.local/share/claude/versions/2.1.311".into(),
+            version: Some("2.1.311".into()),
+            installed_at: Some(2_000),
+        };
+        assert!(state.provider_updates.moves_in_place(&newer, None));
+    }
+
+    /// An API restart forgets every ask. The worker still shows Claude's answer
+    /// to the last one, so it is read before anything is typed again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_answer_still_on_screen_is_read_before_asking_again() {
+        let session = WorkerSessionId::new();
+        let (directory, client, submitted) = fake_host(session, Reply::Unknown, None);
+        let (state, observed) = hive_with_working_worker(client, session);
+        assert_eq!(advance(&state, &observed).await, 1);
+
+        let reloaded = hive_with_working_worker(
+            crate::HostClient::new(directory.path().join("host.sock")),
+            session,
+        )
+        .0;
+        assert_eq!(advance(&reloaded, &observed).await, 0);
+        assert_eq!(*submitted.lock().unwrap(), vec!["/restart".to_owned()]);
+        assert!(!reloaded.provider_updates.moves_in_place(&release(), None));
+    }
+
+    /// A refusal over Remote Control is not Claude lacking the command, so it
+    /// leaves the button asking again in place.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refusal_is_not_read_as_a_missing_command() {
+        let session = WorkerSessionId::new();
+        let (_directory, client, _submitted) = fake_host(session, Reply::Refuses, None);
+        let (state, observed) = hive_with_working_worker(client, session);
+
+        assert_eq!(advance(&state, &observed).await, 1);
+        assert_eq!(advance(&state, &observed).await, 0);
+        assert!(state.provider_updates.moves_in_place(&release(), None));
+        assert!(
+            state
+                .provider_updates
+                .moves_in_place(&release(), Some(true))
+        );
     }
 
     #[test]
