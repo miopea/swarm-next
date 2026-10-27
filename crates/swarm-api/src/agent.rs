@@ -28,7 +28,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use swarm_application::{
-    AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService,
+    AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, IntakeRequest,
+    TaskService,
 };
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
@@ -821,8 +822,13 @@ fn standing_brief(role: WorkerRole) -> String {
 
 impl ServerHandler for AgentMcp {
     fn get_info(&self) -> ServerInfo {
+        let brief = if self.tasks.files_by_intake(self.principal) {
+            intake_brief()
+        } else {
+            standing_brief(self.principal.role)
+        };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(standing_brief(self.principal.role))
+            .with_instructions(brief)
     }
 
     async fn list_tools(
@@ -830,6 +836,7 @@ impl ServerHandler for AgentMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        let intake = self.tasks.files_by_intake(self.principal);
         let mut tools = vec![
             list_tasks_tool(),
             read_task_history_tool(),
@@ -845,7 +852,11 @@ impl ServerHandler for AgentMcp {
             record_no_deployment_tool(),
             withdraw_no_deployment_tool(),
             draft_email_reply_tool(),
-            create_task_tool(),
+            if intake {
+                intake_create_task_tool()
+            } else {
+                create_task_tool()
+            },
             list_decisions_tool(),
             operator_submissions_tool(),
             request_decision_tool(),
@@ -891,6 +902,9 @@ impl ServerHandler for AgentMcp {
                 message_worker_tool(),
                 return_reviewed_work_tool(),
             ]);
+        }
+        if intake {
+            tools.extend([routing_roster_tool(), search_tasks_tool()]);
         }
         // Recorded because THIS is the moment the session's surface is fixed.
         // An MCP client asks once and caches, so everything shipped after this
@@ -955,6 +969,20 @@ impl ServerHandler for AgentMcp {
                 .tasks
                 .list_tasks_readable_by(self.principal)
                 .and_then(|tasks| self.task_list_result(&tasks)),
+            // An outside tool files and reads by intake (ADR 0126).
+            "swarm_create_task" if self.tasks.files_by_intake(self.principal) => {
+                self.file_intake_task(arguments)
+            }
+            "swarm_list_workers" if self.tasks.files_by_intake(self.principal) => self
+                .tasks
+                .routing_roster(self.principal)
+                .and_then(|workers| {
+                    structured(json!({
+                        "workers": workers,
+                        "note": "The workers work can be routed to. Name one as recommended_worker on swarm_create_task to suggest it; Queen decides, and nothing here says who is free.",
+                    }))
+                }),
+            "swarm_search_tasks" => self.search_tasks(arguments),
             "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_message_worker" => self.message_worker(arguments),
             "swarm_return_reviewed_work" => self.return_reviewed_work(arguments),
@@ -1678,6 +1706,7 @@ impl ServerHandler for AgentMcp {
             Ok(result) => {
                 if request.name.as_ref() != "swarm_list_tasks"
                     && request.name.as_ref() != "swarm_list_workers"
+                    && request.name.as_ref() != "swarm_search_tasks"
                     && request.name.as_ref() != "swarm_list_decisions"
                     && request.name.as_ref() != "swarm_read_clarifications"
                     && request.name.as_ref() != "swarm_operator_submissions"
@@ -2854,7 +2883,7 @@ impl AgentMcp {
             }
         }
         let resolved = self.tasks.store().records_starting_with(&fragments)?;
-        Ok(tasks
+        let values = tasks
             .iter()
             .map(|task| {
                 let mut value = json!(task);
@@ -2913,7 +2942,63 @@ impl AgentMcp {
                 }
                 value
             })
-            .collect())
+            .collect();
+        self.with_intake(tasks, values)
+    }
+
+    /// Adds what an outside tool said when it filed each task (ADR 0126), in
+    /// one read for the whole listing.
+    fn with_intake(
+        &self,
+        tasks: &[swarm_domain::Task],
+        mut values: Vec<Value>,
+    ) -> Result<Vec<Value>, ApplicationError> {
+        let ids = tasks.iter().map(|task| task.id).collect::<Vec<_>>();
+        let mut intake = self.tasks.store().intake_for_tasks(&ids)?;
+        for (task, value) in tasks.iter().zip(&mut values) {
+            if let Some(facts) = intake.remove(&task.id) {
+                add_intake(value, task, &facts);
+            }
+        }
+        Ok(values)
+    }
+
+    fn file_intake_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<IntakeCreateTaskInput>(arguments)?;
+        let source = input.source.unwrap_or_default();
+        let task = self.tasks.file_intake_task(
+            self.principal,
+            &IntakeRequest {
+                title: &input.title,
+                description: &input.description,
+                priority: input.priority,
+                workspace: input.workspace.as_deref(),
+                recommended_worker: input.recommended_worker.as_deref(),
+                source_link: source.link.as_deref(),
+                source_jira_key: source.jira_key.as_deref(),
+                requested_by: source.requested_by.as_deref(),
+            },
+        )?;
+        let notice = self.ambiguous_references(&format!("{} {}", input.title, input.description));
+        let mut value = json!(task);
+        if let Some(facts) = self
+            .tasks
+            .store()
+            .intake_for_tasks(&[task.id])?
+            .remove(&task.id)
+        {
+            add_intake(&mut value, &task, &facts);
+        }
+        structured(Self::with_notice(value, notice))
+    }
+
+    fn search_tasks(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<SearchTasksInput>(arguments)?;
+        let hits = self.tasks.search_open_tasks(self.principal, &input.query)?;
+        structured(Self::stamped(json!({
+            "tasks": hits,
+            "note": "Open tasks whose titles match, best first, at most 20: id, title, state and repository only. Read one in full with swarm_read_task_history when filed_by_you is true. A match is a possible duplicate to check, and no match does not prove the work is not on the board under other words.",
+        })))
     }
 
     /// Stamps a listing with the moment it was read.
@@ -2976,6 +3061,7 @@ read are not wrong, they are dated — and this board moves within minutes."
     fn board_listing(
         &self,
         tasks: &[swarm_domain::Task],
+        scope_note: Option<&str>,
     ) -> Result<CallToolResult, ApplicationError> {
         let (mut closed, open): (Vec<&swarm_domain::Task>, Vec<&swarm_domain::Task>) = tasks
             .iter()
@@ -3021,6 +3107,9 @@ read are not wrong, they are dated — and this board moves within minutes."
                 omitted.len()
             ));
         }
+        if let Some(note) = scope_note {
+            listing["scope_note"] = json!(note);
+        }
         structured(Self::stamped(listing))
     }
 
@@ -3039,9 +3128,20 @@ read are not wrong, they are dated — and this board moves within minutes."
         &self,
         tasks: &[swarm_domain::Task],
     ) -> Result<CallToolResult, ApplicationError> {
+        // An outside tool holds no assignment, so the worker notes below would
+        // tell it something untrue. Its list is what it filed (ADR 0126).
+        if self.tasks.files_by_intake(self.principal) && !self.tasks.reads_the_board(self.principal)
+        {
+            return self.board_listing(
+                tasks,
+                Some(
+                    "These are the tasks you filed, newest first: open ones in full, closed ones by id and title. Read any of them in full with swarm_read_task_history. Other open work is found by title with swarm_search_tasks.",
+                ),
+            );
+        }
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
             if self.tasks.reads_the_board(self.principal) {
-                return self.board_listing(tasks);
+                return self.board_listing(tasks, None);
             }
             return structured(Self::stamped(
                 json!({ "tasks": self.tasks_with_amendments(tasks)? }),
@@ -3515,6 +3615,39 @@ fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ApplicationErr
             "The arguments for this tool could not be read: {error}. Check the tool's schema; a field may be missing or the wrong type."
         ))
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntakeCreateTaskInput {
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: TaskPriority,
+    #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
+    recommended_worker: Option<String>,
+    #[serde(default)]
+    source: Option<IntakeSourceInput>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntakeSourceInput {
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    jira_key: Option<String>,
+    #[serde(default)]
+    requested_by: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchTasksInput {
+    query: String,
 }
 
 #[derive(Deserialize)]
@@ -4268,6 +4401,98 @@ fn create_task_tool() -> Tool {
         }),
         false,
     )
+}
+
+fn intake_create_task_tool() -> Tool {
+    tool(
+        "swarm_create_task",
+        "File one piece of work as a draft for Queen to route. Search with swarm_search_tasks first, so the same work is not filed twice. Name the repository in `workspace` when you know it; when you do not, leave it out and write the description for someone who has not seen the source, because Queen routes from it. `recommended_worker` takes a name from swarm_list_workers and is a suggestion, not an assignment. `source` records where the work came from. While the draft is unrouted it stays yours to fix with swarm_retitle_task, swarm_amend_task_facts and swarm_record_task_note.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+                "description": { "type": "string", "maxLength": 10000, "default": "" },
+                "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "default": "normal" },
+                "workspace": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Absolute path of the repository the work belongs to, as swarm_list_workers shows it. Leave it out when you do not know it." },
+                "recommended_worker": { "type": "string", "minLength": 1, "description": "The name of the worker you think should do this, from swarm_list_workers." },
+                "source": {
+                    "type": "object",
+                    "description": "Where the work came from. Every field is optional.",
+                    "properties": {
+                        "link": { "type": "string", "maxLength": 2048, "description": "A link to the email, message or page that asked for this." },
+                        "jira_key": { "type": "string", "maxLength": 64, "description": "The Jira issue key, such as ABC-123." },
+                        "requested_by": { "type": "string", "maxLength": 200, "description": "Who asked for it." }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "required": ["title"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn routing_roster_tool() -> Tool {
+    tool(
+        "swarm_list_workers",
+        "List the workers work can be routed to: each one's name, what it owns, and its repository. Use a name as recommended_worker and a repository as workspace on swarm_create_task. Queen decides the routing, and this says nothing about who is free.",
+        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
+fn search_tasks_tool() -> Tool {
+    tool(
+        "swarm_search_tasks",
+        "Find open tasks by title before filing, so the same work is not filed twice. Matches the words of `query` against titles, and a Jira key against the key work was filed under. Best match first, at most 20. Returns id, title, state and repository, never descriptions; filed_by_you marks the ones you filed, which swarm_read_task_history reads in full.",
+        &json!({
+            "type": "object",
+            "properties": { "query": { "type": "string", "minLength": 1, "maxLength": 200 } },
+            "required": ["query"],
+            "additionalProperties": false
+        }),
+        true,
+    )
+}
+
+/// What an outside tool is told when it connects (ADR 0126). The worker brief
+/// told it that its authority was its assignment, and it never has one.
+fn intake_brief() -> String {
+    "Swarm is the durable record of this Hive's work. What is not on the board did not happen.\n\n\
+     You are an outside tool connected to this Hive, not one of its workers. You file work and \
+     Queen routes it. You cannot assign or approve work.\n\n\
+     BEFORE FILING. swarm_search_tasks finds open tasks by title, so you can see whether the \
+     work is already on the board.\n\n\
+     FILING. swarm_create_task files a draft for Queen. Name the repository in workspace when \
+     you know it. When you do not, leave it out and write the description for someone who has \
+     not seen the source, because Queen routes from it. recommended_worker takes a name from \
+     swarm_list_workers and is a suggestion. source records where the work came from: a link, \
+     a Jira key, and who asked.\n\n\
+     AFTERWARDS. swarm_list_tasks lists the tasks you filed, and swarm_read_task_history reads \
+     any of them in full. Other work is visible to you only as search results: titles, states \
+     and repositories."
+        .to_owned()
+}
+
+/// Puts the intake facts on one task's payload, with what they mean for
+/// whoever reads it: usually Queen, deciding where the work goes.
+fn add_intake(value: &mut Value, task: &swarm_domain::Task, intake: &swarm_domain::TaskIntake) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let mut note = String::from(
+        "Filed by an outside tool. `source` is what it said about where the work came from, and \
+         `recommended_worker` is its suggestion, not an assignment.",
+    );
+    if !intake.repository_named && task.assigned_worker_id.is_none() {
+        note.push_str(
+            " It named no repository, so `workspace` is a placeholder: route this from its \
+             description. Assigning it gives it the assigned worker's repository.",
+        );
+    }
+    object.insert("intake".into(), json!(intake));
+    object.insert("intake_note".into(), json!(note));
 }
 
 fn read_queen_review_evidence_tool() -> Tool {
@@ -6897,6 +7122,229 @@ mod tests {
         assert_eq!(connection.len(), 1);
         assert_eq!(connection[0].name, "Claude Desktop");
         assert_ne!(connection[0].id, worker_id);
+    }
+
+    async fn call_as(
+        bridge: &AgentBridge,
+        state: &Arc<crate::AppState>,
+        token: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Value {
+        response_json(
+            handle(
+                bridge.clone(),
+                Arc::clone(state),
+                mcp_request(
+                    Some(token),
+                    "tools/call",
+                    &json!({ "name": name, "arguments": arguments }),
+                ),
+            )
+            .await,
+        )
+        .await
+    }
+
+    async fn tool_schemas(
+        bridge: &AgentBridge,
+        state: &Arc<crate::AppState>,
+        token: &str,
+    ) -> std::collections::HashMap<String, Value> {
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                Arc::clone(state),
+                mcp_request(Some(token), "tools/list", &json!({})),
+            )
+            .await,
+        )
+        .await;
+        listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| {
+                (
+                    tool["name"].as_str().unwrap().to_owned(),
+                    tool["inputSchema"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ADR 0126. An outside tool is offered intake: filing without a
+    /// repository, the roster and search. A worker keeps exactly what it had.
+    #[tokio::test]
+    async fn a_connection_is_offered_intake_and_a_worker_is_not() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let state = connected_state(&store);
+        let tool_token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude")
+            .expect("a token this Hive signed");
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let tool = tool_schemas(&bridge, &state, &tool_token).await;
+        assert!(tool.contains_key("swarm_search_tasks"));
+        assert!(tool.contains_key("swarm_list_workers"));
+        assert_eq!(tool["swarm_create_task"]["required"], json!(["title"]));
+
+        let worker = tool_schemas(&bridge, &state, &worker_token).await;
+        assert!(!worker.contains_key("swarm_search_tasks"));
+        assert!(!worker.contains_key("swarm_list_workers"));
+        assert_eq!(
+            worker["swarm_create_task"]["required"],
+            json!(["title", "workspace"])
+        );
+    }
+
+    /// ADR 0126, end to end through the tool's own token: file with no
+    /// repository, read it back, find it by title, and see who it could go to.
+    #[tokio::test]
+    async fn a_connection_files_without_a_repository_and_reads_it_back() {
+        let (bridge, store, _, _, _) = setup();
+        let state = connected_state(&store);
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude")
+            .expect("a token this Hive signed");
+        let other = store
+            .create_task_with_details(
+                "Renewal email for members",
+                "A description the tool must not read",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+
+        let filed = call_as(&bridge, &state, &token, "swarm_create_task", json!({
+            "title": "Renewal email is late",
+            "description": "Ann wrote that the renewal email did not arrive.",
+            "recommended_worker": "petal",
+            "source": { "link": "https://mail.example/1", "jira_key": "abc-12", "requested_by": "Ann" }
+        }))
+        .await;
+        let filed = &filed["result"]["structuredContent"];
+        assert_eq!(filed["state"], "draft", "{filed}");
+        assert_eq!(filed["intake"]["repository_named"], false);
+        assert_eq!(filed["intake"]["recommended_worker"]["name"], "Petal");
+        assert_eq!(filed["intake"]["source"]["jira_key"], "ABC-12");
+        assert!(
+            filed["intake_note"]
+                .as_str()
+                .unwrap()
+                .contains("placeholder")
+        );
+
+        let listed = call_as(&bridge, &state, &token, "swarm_list_tasks", json!({})).await;
+        let listed = &listed["result"]["structuredContent"];
+        assert_eq!(listed["tasks"].as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed["tasks"][0]["id"], filed["id"]);
+        assert!(listed["scope_note"].is_string());
+
+        let found = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_search_tasks",
+            json!({ "query": "renewal email" }),
+        )
+        .await;
+        let found = found["result"]["structuredContent"]["tasks"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(found.len(), 2);
+        let theirs = found
+            .iter()
+            .find(|hit| hit["id"] == json!(other.id))
+            .unwrap();
+        assert_eq!(theirs["filed_by_you"], false);
+        assert!(theirs.get("description").is_none(), "{theirs}");
+        let history = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_read_task_history",
+            json!({ "task_id": other.id }),
+        )
+        .await;
+        assert_eq!(history["result"]["isError"], true, "{history}");
+
+        let roster = call_as(&bridge, &state, &token, "swarm_list_workers", json!({})).await;
+        let roster = roster["result"]["structuredContent"]["workers"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            roster,
+            [json!({
+                "name": "Petal",
+                "description": "",
+                "workspace": "/workspace/petal",
+            })]
+        );
+
+        let typo = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_create_task",
+            json!({ "title": "Fix it", "repo": "/workspace/petal" }),
+        )
+        .await;
+        assert_eq!(typo["result"]["isError"], true, "{typo}");
+    }
+
+    /// ADR 0126. Queen routes from what the tool said, so her board carries
+    /// it, and the placeholder warning goes once the work has a worker's
+    /// repository.
+    #[tokio::test]
+    async fn queen_reads_what_a_tool_said_when_it_filed() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let state = connected_state(&store);
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude")
+            .expect("a token this Hive signed");
+        let filed = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_create_task",
+            json!({ "title": "Renewal email is late", "recommended_worker": "Petal" }),
+        )
+        .await;
+        let filed_id: TaskId =
+            serde_json::from_value(filed["result"]["structuredContent"]["id"].clone()).unwrap();
+        let queen = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let board_entry = |listing: &Value| {
+            listing["result"]["structuredContent"]["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["id"] == json!(filed_id))
+                .cloned()
+                .unwrap()
+        };
+        let before =
+            board_entry(&call_as(&bridge, &state, &queen, "swarm_list_tasks", json!({})).await);
+        assert_eq!(
+            before["intake"]["recommended_worker"]["name"], "Petal",
+            "{before}"
+        );
+        assert!(
+            before["intake_note"]
+                .as_str()
+                .unwrap()
+                .contains("placeholder")
+        );
+        store.transition_task(filed_id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(filed_id, worker_id).unwrap();
+        let after =
+            board_entry(&call_as(&bridge, &state, &queen, "swarm_list_tasks", json!({})).await);
+        assert_eq!(after["workspace"], "/workspace/petal", "{after}");
+        assert!(
+            !after["intake_note"]
+                .as_str()
+                .unwrap()
+                .contains("placeholder")
+        );
     }
 
     /// Criterion 8. A connection has a worker's surface and no more: approving

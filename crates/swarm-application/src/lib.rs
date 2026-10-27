@@ -53,12 +53,14 @@ pub use released_tasks::{release_carrying_every_commit, release_deployment_refer
 mod support;
 mod support_submission;
 mod task_block;
+mod task_intake;
 pub use ops_tickets::{OpsTicketError, OpsTicketProgress, OpsTicketService};
 pub use queue_snapshot::{
     PendingDecisionOverlap, PendingDecisionOverlapSnapshot, QueenQueueSnapshot,
 };
 pub use support::{SupportService, SupportServiceError};
 pub use support_submission::{HiveSupportService, HiveSupportServiceError, SupportDestination};
+pub use task_intake::IntakeRequest;
 
 /// The durable agent identity resolved before an application command is invoked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3743,6 +3745,11 @@ impl TaskService {
     ) -> Result<Vec<Task>, ApplicationError> {
         if self.reads_the_board(principal) {
             return self.list_tasks();
+        }
+        // An outside tool holds no assignment; what it may read is what it
+        // filed (ADR 0126). Acting still goes through list_visible_tasks.
+        if self.files_by_intake(principal) {
+            return Ok(self.store.list_tasks_filed_by(principal.worker_id)?);
         }
         self.list_visible_tasks(principal)
     }

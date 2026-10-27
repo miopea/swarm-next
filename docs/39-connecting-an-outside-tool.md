@@ -89,7 +89,7 @@ Two details are load-bearing and easy to lose:
 | Question | Answer |
 | --- | --- |
 | **Identity** | Its own client principal — minted and revoked per tool, named in board writes. Not the operator token, not a worker's credential. |
-| **Surface** | Same as a worker: file, transition its own work, record deployments, read. It **cannot** approve or assign — those stay Queen's. |
+| **Surface** | Same as a worker: file, transition its own work, record deployments, read. It **cannot** approve or assign — those stay Queen's. Extended 2026-10-27 by ADR 0126: it files by intake, with the repository optional, and reads the tasks it filed. |
 | **Minting** | Settings → Connections. Operator: *"Yes, setting connections. that way it stays in the clients"* — the credential lives in the client, Swarm holds the registration. |
 | **Presence** | Separate from the roster. No session, no autostart, and it **must not** count toward resource admission or the live-worker count. |
 

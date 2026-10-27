@@ -143,7 +143,7 @@ impl ProfileStartup {
 /// real one borrowed for the shape — if anything ever did try to route here it
 /// would fail immediately and visibly, where a borrowed real path would quietly
 /// do something plausible and wrong.
-const CONNECTION_WORKSPACE: &str = "/outside-tool";
+pub(crate) const CONNECTION_WORKSPACE: &str = "/outside-tool";
 
 /// An outside tool that has connected to this Hive.
 #[derive(Debug, Clone)]

@@ -42,6 +42,8 @@ pub use hive_usage::StoredHiveUsage;
 mod check_gate;
 pub use check_gate::{CheckGateSetting, CiCandidate};
 mod reported_conversations;
+mod task_intake;
+pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod worker_model;
 mod worker_remote_control;
 pub use worker_model::WorkerModelSetting;
@@ -214,6 +216,7 @@ pub use queen_review::{
     MAX_UNASKED_STILL_SECONDS, RepeatedReview, UnaskedStalledWork, UnroutedReadyWork,
 };
 pub use worker_recovery::WorkerRecoveryCircuit;
+use workers::CONNECTION_WORKSPACE;
 pub use workers::{
     ActiveWorkerSession, ConnectionProfile, GeometryContention, ScoutRoutingFacts,
     WorkerProfileEdit,
@@ -416,7 +419,9 @@ const EMAIL_REPLY_OUTCOMES_SCHEMA_MARKER: i64 = 208;
 const WORKER_REMOTE_CONTROL_SCHEMA_MARKER: i64 = 209;
 /// The conversations each worker's own Claude reported (ADR 0124).
 const REPORTED_CONVERSATIONS_SCHEMA_MARKER: i64 = 210;
-const CURRENT_SCHEMA_VERSION: i64 = REPORTED_CONVERSATIONS_SCHEMA_MARKER;
+/// What an outside tool said about the work it filed (ADR 0126).
+const TASK_INTAKE_SCHEMA_MARKER: i64 = 211;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_INTAKE_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1733,34 +1738,18 @@ impl TaskStore {
         workspace: &str,
         actor: &TaskActivityActor,
     ) -> Result<Task, TaskStoreError> {
-        let title = title.trim();
-        let description = description.trim();
-        let workspace = workspace.trim();
-        validate_text(title, workspace)?;
-        validate_description(description)?;
-        let id = TaskId::new();
         let hive_id = self.local_hive_identity()?.hive.id;
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        transaction.execute(
-            "INSERT INTO tasks (id, hive_id, title, description, priority, workspace, state, position)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'draft',
-                     COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
-            params![
-                id.to_string(),
-                hive_id.to_string(),
-                title,
-                description,
-                priority.to_string(),
-                workspace
-            ],
+        let id = insert_draft(
+            &transaction,
+            hive_id,
+            title,
+            description,
+            priority,
+            workspace,
+            actor,
         )?;
-        transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, to_state, actor_kind, actor_id)
-             VALUES (?1, 'created', 'draft', ?2, ?3)",
-            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
-        )?;
-        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -4857,6 +4846,9 @@ fn migrate_fleet_health_schema_steps(
             REPORTED_CONVERSATIONS_SCHEMA_MARKER,
         )?;
     }
+    if schema_version < TASK_INTAKE_SCHEMA_MARKER {
+        crate::task_intake::migrate_task_intake(transaction, TASK_INTAKE_SCHEMA_MARKER)?;
+    }
     Ok(())
 }
 
@@ -7047,6 +7039,44 @@ fn reportable_task_state(
         }
     })?;
     TaskState::from_str(&current).map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+}
+
+/// Writes a validated draft and the activity row naming who created it.
+fn insert_draft(
+    transaction: &rusqlite::Transaction<'_>,
+    hive_id: HiveId,
+    title: &str,
+    description: &str,
+    priority: TaskPriority,
+    workspace: &str,
+    actor: &TaskActivityActor,
+) -> Result<TaskId, TaskStoreError> {
+    let title = title.trim();
+    let description = description.trim();
+    let workspace = workspace.trim();
+    validate_text(title, workspace)?;
+    validate_description(description)?;
+    let id = TaskId::new();
+    transaction.execute(
+        "INSERT INTO tasks (id, hive_id, title, description, priority, workspace, state, position)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'draft',
+                 COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
+        params![
+            id.to_string(),
+            hive_id.to_string(),
+            title,
+            description,
+            priority.to_string(),
+            workspace
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO task_activity (task_id, kind, to_state, actor_kind, actor_id)
+         VALUES (?1, 'created', 'draft', ?2, ?3)",
+        params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
+    )?;
+    insert_control_room_event(transaction, ControlRoomEventKind::TasksChanged)?;
+    Ok(id)
 }
 
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
@@ -10951,6 +10981,14 @@ mod tests {
             undo_sql: "DROP TABLE worker_reported_conversations;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'worker_reported_conversations'",
+        },
+        // What an outside tool said about the work it filed (ADR 0126).
+        SchemaStep {
+            table: "task_intake",
+            artifact: "",
+            undo_sql: "DROP TABLE task_intake;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'task_intake'",
         },
     ];
 
