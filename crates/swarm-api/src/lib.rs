@@ -12830,40 +12830,111 @@ mod tests {
 
     #[test]
     fn coordinator_start_admission_uses_strongest_evidence_and_requires_the_engine() {
-        use runtime::{CoordinatorStartAdmission, combine_coordinator_start_admission};
+        use ResourcePressure::{Advisory, Critical, Normal, Unavailable};
+        use runtime::{
+            CoordinatorStartAdmission, PressureSource, combine_coordinator_start_admission,
+        };
 
         assert_eq!(
-            combine_coordinator_start_admission(ResourcePressure::Normal, ResourcePressure::Normal),
+            combine_coordinator_start_admission(Normal, Normal, Normal),
             CoordinatorStartAdmission::Allowed
         );
         assert_eq!(
-            combine_coordinator_start_admission(
-                ResourcePressure::Unavailable,
-                ResourcePressure::Normal
-            ),
+            combine_coordinator_start_admission(Unavailable, Unavailable, Normal),
             CoordinatorStartAdmission::Allowed
         );
         assert_eq!(
-            combine_coordinator_start_admission(
-                ResourcePressure::Normal,
-                ResourcePressure::Advisory
-            ),
-            CoordinatorStartAdmission::DeferredAdvisory
+            combine_coordinator_start_admission(Normal, Normal, Advisory),
+            CoordinatorStartAdmission::DeferredAdvisory(PressureSource::Memory)
         );
         assert_eq!(
-            combine_coordinator_start_admission(
-                ResourcePressure::Critical,
-                ResourcePressure::Normal
-            ),
-            CoordinatorStartAdmission::DeferredCritical
+            combine_coordinator_start_admission(Critical, Normal, Normal),
+            CoordinatorStartAdmission::DeferredCritical(PressureSource::Memory)
         );
         assert_eq!(
-            combine_coordinator_start_admission(
-                ResourcePressure::Normal,
-                ResourcePressure::Unavailable
-            ),
+            combine_coordinator_start_admission(Normal, Normal, Unavailable),
             CoordinatorStartAdmission::DeferredUnavailable
         );
+    }
+
+    /// A held start names the reading that reached the verdict's level. On
+    /// 2026-10-27 load 20 on eight cores held D365 Solutions back with memory
+    /// at 70% and no stall, and the card said the machine was short of memory.
+    ///
+    /// ABLATION: have `source` ignore `cpu` and the CPU rows fail.
+    #[test]
+    fn a_held_start_names_cpu_memory_or_both() {
+        use ResourcePressure::{Advisory, Critical, Normal};
+        use runtime::CoordinatorStartAdmission::{DeferredAdvisory, DeferredCritical};
+        use runtime::PressureSource::{Cpu, CpuAndMemory, Memory};
+        use runtime::combine_coordinator_start_admission as combine;
+
+        for (memory, cpu, engine, expected) in [
+            (Normal, Critical, Normal, DeferredCritical(Cpu)),
+            (Advisory, Critical, Normal, DeferredCritical(Cpu)),
+            (Critical, Critical, Normal, DeferredCritical(CpuAndMemory)),
+            (Critical, Advisory, Critical, DeferredCritical(Memory)),
+            (Normal, Advisory, Normal, DeferredAdvisory(Cpu)),
+            (Advisory, Advisory, Advisory, DeferredAdvisory(CpuAndMemory)),
+            (Advisory, Normal, Normal, DeferredAdvisory(Memory)),
+        ] {
+            assert_eq!(
+                combine(memory, cpu, engine),
+                expected,
+                "memory {memory:?}, cpu {cpu:?}, worker engine {engine:?}"
+            );
+        }
+    }
+
+    /// The status page reads the verdict as one of four words. Carrying the
+    /// source must not change the word it reads.
+    #[test]
+    fn the_status_page_reads_the_same_word_whatever_the_source() {
+        use runtime::CoordinatorStartAdmission::{DeferredAdvisory, DeferredCritical};
+        use runtime::PressureSource::{Cpu, CpuAndMemory, Memory};
+
+        for (admission, word) in [
+            (DeferredAdvisory(Memory), "deferred_advisory"),
+            (DeferredAdvisory(Cpu), "deferred_advisory"),
+            (DeferredCritical(Cpu), "deferred_critical"),
+            (DeferredCritical(CpuAndMemory), "deferred_critical"),
+        ] {
+            assert_eq!(serde_json::to_value(admission).unwrap(), word);
+        }
+    }
+
+    /// The coordinator's tick keeps the verdict as a code and the refusal is
+    /// written from that code, so the source has to survive the trip. A code
+    /// it never wrote must not read as admitted.
+    #[test]
+    fn an_admission_code_keeps_its_source_and_a_stray_code_admits_nothing() {
+        use runtime::CoordinatorStartAdmission::{
+            Allowed, DeferredAdvisory, DeferredCritical, DeferredUnavailable,
+        };
+        use runtime::PressureSource::{Cpu, CpuAndMemory, Memory};
+
+        for admission in [
+            Allowed,
+            DeferredAdvisory(Memory),
+            DeferredAdvisory(Cpu),
+            DeferredAdvisory(CpuAndMemory),
+            DeferredCritical(Memory),
+            DeferredCritical(Cpu),
+            DeferredCritical(CpuAndMemory),
+            DeferredUnavailable,
+        ] {
+            assert_eq!(
+                runtime::CoordinatorStartAdmission::from_code(admission.code()),
+                admission
+            );
+        }
+        for stray in [4, 7, 13, 255] {
+            assert_eq!(
+                runtime::CoordinatorStartAdmission::from_code(stray),
+                DeferredUnavailable,
+                "code {stray}"
+            );
+        }
     }
 
     /// The operator watched Queen say she had opened My RCG and RCG Hub while
@@ -12927,7 +12998,9 @@ mod tests {
         AppState::default()
             .run_deterministic_worker_wakes(
                 &store,
-                runtime::CoordinatorStartAdmission::DeferredAdvisory,
+                runtime::CoordinatorStartAdmission::DeferredAdvisory(
+                    runtime::PressureSource::Memory,
+                ),
             )
             .await;
 
@@ -12952,8 +13025,8 @@ mod tests {
             .unwrap();
         let state = AppState::default().with_task_store(store);
         for admission in [
-            CoordinatorStartAdmission::DeferredAdvisory,
-            CoordinatorStartAdmission::DeferredCritical,
+            CoordinatorStartAdmission::DeferredAdvisory(runtime::PressureSource::Memory),
+            CoordinatorStartAdmission::DeferredCritical(runtime::PressureSource::Cpu),
             CoordinatorStartAdmission::DeferredUnavailable,
         ] {
             assert!(!state.try_autostart_recovery(&worker, 10, admission).await);
@@ -13003,7 +13076,9 @@ mod tests {
             .with_task_store(store);
         // This test measures per-pass recovery admission, not the CI host's
         // current memory/CPU pressure. The pressure matrix is tested separately.
-        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::DeferredCritical);
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::DeferredCritical(
+            runtime::PressureSource::Memory,
+        ));
         state.supervise_workers().await;
         assert!(state.worker_recovery_attempts.read().await.is_empty());
         state.test_start_admission = Some(runtime::CoordinatorStartAdmission::Allowed);
@@ -13025,19 +13100,21 @@ mod tests {
     /// Swarm.
     #[tokio::test]
     async fn a_start_refused_for_pressure_tells_the_operator_which_pressure() {
+        use runtime::CoordinatorStartAdmission::{
+            DeferredAdvisory, DeferredCritical, DeferredUnavailable,
+        };
+        use runtime::PressureSource::{Cpu, CpuAndMemory, Memory};
+
         for (admission, expected) in [
+            (DeferredCritical(Memory), "critically short of memory"),
+            (DeferredCritical(Cpu), "processors are overloaded"),
             (
-                runtime::CoordinatorStartAdmission::DeferredCritical,
-                "critically short of memory",
+                DeferredCritical(CpuAndMemory),
+                "short of memory and its processors are overloaded",
             ),
-            (
-                runtime::CoordinatorStartAdmission::DeferredAdvisory,
-                "under memory pressure",
-            ),
-            (
-                runtime::CoordinatorStartAdmission::DeferredUnavailable,
-                "cannot read this machine's resources",
-            ),
+            (DeferredAdvisory(Memory), "under memory pressure"),
+            (DeferredAdvisory(Cpu), "processors are all busy"),
+            (DeferredUnavailable, "cannot read this machine's resources"),
         ] {
             let store = TaskStore::in_memory().unwrap();
             let queen = store.ensure_queen("/workspace/queen").unwrap();
@@ -13075,6 +13152,11 @@ mod tests {
                 refusal.reason
             );
             assert!(refusal.reason.contains(expected), "{}", refusal.reason);
+            // The defect itself: saturated processors were reported as a
+            // memory shortage, which sends the operator to close the wrong thing.
+            if matches!(admission, DeferredCritical(Cpu) | DeferredAdvisory(Cpu)) {
+                assert!(!refusal.reason.contains("memory"), "{}", refusal.reason);
+            }
         }
     }
 
@@ -13115,7 +13197,9 @@ mod tests {
         AppState::default()
             .run_deterministic_worker_wakes(
                 &store,
-                runtime::CoordinatorStartAdmission::DeferredAdvisory,
+                runtime::CoordinatorStartAdmission::DeferredAdvisory(
+                    runtime::PressureSource::Memory,
+                ),
             )
             .await;
         assert_eq!(
@@ -23815,7 +23899,9 @@ mod tests {
             .with_terminal_host(HostClient::new(&socket), "secret")
             .with_task_store(store.clone());
         // Exercise admission explicitly; CI host pressure is not this test's input.
-        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::DeferredCritical);
+        state.test_start_admission = Some(runtime::CoordinatorStartAdmission::DeferredCritical(
+            runtime::PressureSource::Memory,
+        ));
         state.revive_workers_owed_a_return().await;
         assert!(state.worker_errors.read().await.is_empty());
         assert_eq!(store.worker_revival_intents().unwrap().len(), 5);

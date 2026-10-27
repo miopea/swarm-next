@@ -225,30 +225,78 @@ struct ResourcePolicyResponse {
     critical_percent: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// Which reading held a start back.
+///
+/// Kept in the admission so the refusal can name it. Once CPU could raise
+/// Critical (ruling 01a04a38) the refusal still said "short of memory", and
+/// the operator was told to close things on a machine with memory to spare
+/// whose processors were saturated by three test runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PressureSource {
+    Memory,
+    Cpu,
+    CpuAndMemory,
+}
+
+impl PressureSource {
+    const fn index(self) -> u8 {
+        match self {
+            Self::Memory => 0,
+            Self::Cpu => 1,
+            Self::CpuAndMemory => 2,
+        }
+    }
+
+    const fn from_index(index: u8) -> Option<Self> {
+        match index {
+            0 => Some(Self::Memory),
+            1 => Some(Self::Cpu),
+            2 => Some(Self::CpuAndMemory),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CoordinatorStartAdmission {
     Allowed,
-    DeferredAdvisory,
-    DeferredCritical,
+    DeferredAdvisory(PressureSource),
+    DeferredCritical(PressureSource),
     DeferredUnavailable,
 }
 
+/// The status payload carries the verdict alone, as it always has. Which
+/// reading tripped it reaches the operator in the refusal's words.
+impl Serialize for CoordinatorStartAdmission {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            Self::Allowed => "allowed",
+            Self::DeferredAdvisory(_) => "deferred_advisory",
+            Self::DeferredCritical(_) => "deferred_critical",
+            Self::DeferredUnavailable => "deferred_unavailable",
+        })
+    }
+}
+
 impl CoordinatorStartAdmission {
+    /// The verdict in the low two bits, the source above them.
     pub(super) const fn code(self) -> u8 {
         match self {
             Self::Allowed => 0,
-            Self::DeferredAdvisory => 1,
-            Self::DeferredCritical => 2,
+            Self::DeferredAdvisory(source) => 1 | source.index() << 2,
+            Self::DeferredCritical(source) => 2 | source.index() << 2,
             Self::DeferredUnavailable => 3,
         }
     }
 
+    /// Anything unrecognised reads as Unavailable, which admits nothing.
     pub(super) const fn from_code(code: u8) -> Self {
-        match code {
-            0 => Self::Allowed,
-            1 => Self::DeferredAdvisory,
-            2 => Self::DeferredCritical,
+        if code == 0 {
+            return Self::Allowed;
+        }
+        match (code & 0b11, PressureSource::from_index(code >> 2)) {
+            (1, Some(source)) => Self::DeferredAdvisory(source),
+            (2, Some(source)) => Self::DeferredCritical(source),
             _ => Self::DeferredUnavailable,
         }
     }
@@ -277,11 +325,23 @@ impl CoordinatorStartAdmission {
             // Not a refusal at all; present so the match stays total if a
             // caller ever asks about an admitted start.
             Self::Allowed => "this Hive is admitted to start workers",
-            Self::DeferredAdvisory => {
+            Self::DeferredAdvisory(PressureSource::Memory) => {
                 "this machine is under memory pressure, so Swarm is not starting more workers until it eases"
             }
-            Self::DeferredCritical => {
+            Self::DeferredAdvisory(PressureSource::Cpu) => {
+                "this machine's processors are all busy, so Swarm is not starting more workers until the load eases"
+            }
+            Self::DeferredAdvisory(PressureSource::CpuAndMemory) => {
+                "this machine is under memory pressure and its processors are all busy, so Swarm is not starting more workers until both ease"
+            }
+            Self::DeferredCritical(PressureSource::Memory) => {
                 "this machine is critically short of memory, so Swarm has stopped starting workers to avoid taking the machine down"
+            }
+            Self::DeferredCritical(PressureSource::Cpu) => {
+                "this machine's processors are overloaded, with twice as much work waiting as it has cores, so Swarm has stopped starting workers until the load falls"
+            }
+            Self::DeferredCritical(PressureSource::CpuAndMemory) => {
+                "this machine is critically short of memory and its processors are overloaded, so Swarm has stopped starting workers to avoid taking the machine down"
             }
             Self::DeferredUnavailable => {
                 "Swarm cannot read this machine's resources, so it will not start more workers while it cannot tell whether that is safe"
@@ -852,7 +912,13 @@ pub(super) async fn coordinator_start_admission(state: &AppState) -> Coordinator
     } else {
         ResourcePressure::Unavailable
     };
-    combine_coordinator_start_admission(machine.pressure, terminal_host)
+    // The two halves of `machine.pressure`, from the readings it was built on,
+    // so the refusal names what the verdict actually saw.
+    combine_coordinator_start_admission(
+        machine.memory_pressure,
+        cpu_pressure(machine.load_average, machine.logical_cpus),
+        terminal_host,
+    )
 }
 
 /// Whether the terminal host is the reason a machine is struggling.
@@ -878,18 +944,24 @@ pub(super) fn coordinator_process_pressure(
     layer_pressure(bytes, machine)
 }
 
-pub(super) const fn combine_coordinator_start_admission(
-    machine: ResourcePressure,
+pub(super) fn combine_coordinator_start_admission(
+    memory: ResourcePressure,
+    cpu: ResourcePressure,
     terminal_host: ResourcePressure,
 ) -> CoordinatorStartAdmission {
-    if matches!(machine, ResourcePressure::Critical)
-        || matches!(terminal_host, ResourcePressure::Critical)
-    {
-        CoordinatorStartAdmission::DeferredCritical
-    } else if matches!(machine, ResourcePressure::Advisory)
-        || matches!(terminal_host, ResourcePressure::Advisory)
-    {
-        CoordinatorStartAdmission::DeferredAdvisory
+    let reached = |level| memory == level || cpu == level || terminal_host == level;
+    // The worker engine's verdict is its share of the machine's memory, and
+    // it only reaches a level the machine's memory has reached, so it is
+    // memory when it is named at all.
+    let source = |level| match (memory == level || terminal_host == level, cpu == level) {
+        (true, true) => PressureSource::CpuAndMemory,
+        (false, true) => PressureSource::Cpu,
+        _ => PressureSource::Memory,
+    };
+    if reached(ResourcePressure::Critical) {
+        CoordinatorStartAdmission::DeferredCritical(source(ResourcePressure::Critical))
+    } else if reached(ResourcePressure::Advisory) {
+        CoordinatorStartAdmission::DeferredAdvisory(source(ResourcePressure::Advisory))
     } else if matches!(terminal_host, ResourcePressure::Unavailable) {
         // The worker engine must be reachable before an automatic start can be
         // safely claimed. Machine evidence is Linux-only, so a healthy engine
@@ -1331,8 +1403,12 @@ mod tests {
             ResourcePressure::Normal
         );
         assert_eq!(
-            super::combine_coordinator_start_admission(observed.pressure, ResourcePressure::Normal),
-            super::CoordinatorStartAdmission::DeferredCritical
+            super::combine_coordinator_start_admission(
+                observed.memory_pressure,
+                observed.pressure,
+                ResourcePressure::Normal
+            ),
+            super::CoordinatorStartAdmission::DeferredCritical(super::PressureSource::Cpu)
         );
     }
 
