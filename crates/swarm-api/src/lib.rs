@@ -9351,16 +9351,31 @@ async fn revise_email_reply_draft(
     let task = store
         .get_task(task_id)
         .map_err(|error| task_store_error(&error))?;
-    let reply = store
+    let Some(reply) = store
         .email_reply_for_task(task_id)
         .map_err(|error| task_store_error(&error))?
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::NOT_FOUND,
-                "email_reply_not_found",
-                "there is no draft reply on this task to revise",
-            )
-        })?;
+    else {
+        // Nothing written yet, so the instruction asks for the first reply.
+        // Refusing left work gated to analysis only with nobody to write one.
+        let history = store
+            .list_task_activity(task_id, swarm_persistence::MAX_TASK_ACTIVITY_PAGE)
+            .map_err(|error| task_store_error(&error))?;
+        let context = email_reply_ai::first_reply_context(&task.description, &history.events);
+        let written = email_reply_ai::write_first_reply(&context, &request.instruction)
+            .await
+            .map_err(|error| {
+                ApiError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "email_reply_revision_failed",
+                    error.to_string(),
+                )
+            })?;
+        return Ok((
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(serde_json::json!({ "body": written })),
+        )
+            .into_response());
+    };
     // The original message travels with the draft. Without it "match their
     // length" and "answer what they actually asked" cannot be expressed, and
     // length is the complaint this path exists to serve. The description is
