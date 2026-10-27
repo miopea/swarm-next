@@ -110,12 +110,33 @@ impl NativeInterviewObservation {
             clauses.push(format!("\"{question}\"=\"{answer}\""));
         }
         let joined = clauses.join(", ");
-        let expected = format!(
-            "Your questions have been answered: {joined}. You can now continue with these answers in mind."
-        );
-        call.response.as_str() == Some(expected.as_str())
+        let Some(response) = call.response.as_str() else {
+            return false;
+        };
+        ANSWERED_WORDINGS
+            .iter()
+            .any(|(lead, tail)| response == format!("{lead}{joined}{tail}"))
     }
 }
+
+/// Claude Code's two wordings of an answered interview, as the text before the
+/// answers and the text after them. Each is still matched exactly.
+///
+/// Only the first was accepted, and the second is not rare: RCG Networks'
+/// transcripts carry it from 2.1.257 to 2.1.311, interleaved with the first in
+/// the same session. Every answer it carried was refused at finalize, which
+/// records nothing, so the item stayed up with nothing to say. On 2026-10-27
+/// that was an approval the operator had answered in the terminal.
+const ANSWERED_WORDINGS: [(&str, &str); 2] = [
+    (
+        "Your questions have been answered: ",
+        ". You can now continue with these answers in mind.",
+    ),
+    (
+        "The user answered: ",
+        ". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.",
+    ),
+];
 
 #[derive(Deserialize)]
 struct FinalBatch {
@@ -432,6 +453,47 @@ mod tests {
         event["hook_event_name"] = json!("PreToolUse");
         event.as_object_mut().unwrap().remove("tool_response");
         assert!(!read(&event).unwrap().matches_final_batch(bytes));
+    }
+
+    /// The second wording completes an interview as the first does, and is
+    /// matched just as exactly: a different answer, the other wording's tail,
+    /// or a cut-off tail is still not a match.
+    ///
+    /// ABLATION: drop the second entry of `ANSWERED_WORDINGS` and the first
+    /// assertion fails; match on the lead alone and the loop fails.
+    #[test]
+    fn both_wordings_of_an_answered_interview_complete_it_and_nothing_looser_does() {
+        let bytes = include_bytes!("../fixtures/claude-2.1.267-final-interview-batch.json");
+        let batch: Value = serde_json::from_slice(bytes).unwrap();
+        let completed = read(&json!({
+            "hook_event_name":"PostToolUse", "session_id":batch["session_id"],
+            "tool_use_id":batch["tool_calls"][0]["tool_use_id"], "tool_name":"AskUserQuestion",
+            "tool_input":batch["tool_calls"][0]["tool_input"],
+            "tool_response":{"questions":batch["tool_calls"][0]["tool_input"]["questions"],
+                "answers":{"Which fictional jar?":"Blue"}}
+        }))
+        .unwrap();
+        let worded = |response: &str| {
+            let mut changed = batch.clone();
+            changed["tool_calls"][0]["tool_response"] = json!(response);
+            serde_json::to_vec(&changed).unwrap()
+        };
+        let careful = ". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.";
+
+        assert!(completed.matches_final_batch(&worded(&format!(
+            "The user answered: \"Which fictional jar?\"=\"Blue\"{careful}"
+        ))));
+        for response in [
+            format!("The user answered: \"Which fictional jar?\"=\"Amber\"{careful}"),
+            "The user answered: \"Which fictional jar?\"=\"Blue\". You can now continue with these answers in mind.".to_owned(),
+            "The user answered: \"Which fictional jar?\"=\"Blue\".".to_owned(),
+            format!("Your questions have been answered: \"Which fictional jar?\"=\"Blue\"{careful}"),
+        ] {
+            assert!(
+                !completed.matches_final_batch(&worded(&response)),
+                "{response}"
+            );
+        }
     }
 
     #[test]
