@@ -10980,6 +10980,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "worker_to_worker_message_refused",
             error.to_string(),
         ),
+        TaskStoreError::WorkerMessageNotOnOwnTask => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "worker_message_not_on_own_task",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidDecisionSummary => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_decision_summary",

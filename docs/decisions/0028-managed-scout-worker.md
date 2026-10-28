@@ -77,3 +77,29 @@ continued provider/description configuration. Admission tests prove ordinary
 questions cannot be rerouted to peers and exercise every managed-Scout refusal
 before the available path. API and browser tests expose and render the managed
 role without treating it as Queen.
+
+### Scout answers the second opinion it was asked (2026-10-27)
+
+The send leg admitted Scout on work it does not own, and the answer leg did
+not. `swarm_message_queen` accepted only the task's assignee, so on 2026-10-27
+Queen asked Scout about an unassigned draft, the question was delivered, and
+all three ways Scout tried to answer were refused with words about review
+replies.
+
+The answer leg now admits the managed Scout on a task where a message from
+Queen to Scout has been delivered. A reply id, when given, must be that
+message. The answer is a message to Queen and nothing more: it moves no review
+marker and cannot answer for the assignee. Scout gains no notes, transitions
+or other writes on that task. A question still waiting for delivery has not
+been asked, and no other worker Queen has messaged is covered, a former
+assignee included. Messages do not record their purpose, so the rule reads any
+delivered Queen message to Scout on the task, which also covers Scout as a
+former assignee; that answer still moves nothing. Every other non-assignee is
+refused with words naming the rule, not review replies, and a task that does
+not exist is refused the same way, so the refusal reveals nothing about which
+tasks exist.
+
+The alternative, refusing a second opinion at send time, would have removed
+the capability this ADR accepted. Persistence tests cover the admitted answer,
+the undelivered, former-assignee, bystander, wrong-reply-id and missing-task
+refusals, and that the draft's state does not move.
