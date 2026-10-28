@@ -12,6 +12,34 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.7
+
+Six database updates (208 to 213). Your Hive backs its database up first, by itself, and your workers are not stopped. Several changes below take effect only after the worker engine update, which does stop running workers. The worker engine card says when one is waiting.
+
+### New features
+- When a worker asks to run a command that its permission checks refused, the request shows the exact command, and any script it runs with that script's fingerprint, with one button to allow it. Pressing it lets that worker run that exact command once, straight away, in the conversation that asked. There is no restart and no permission setting to edit. Any other answer tells the worker plainly that nothing was allowed. (after the worker engine update)
+- Email reply cards have two new ways out of Needs you. Don't send closes the reply with nothing sent. Save as draft in Outlook puts the reply in your Outlook Drafts. Saving a draft needs permission to write to that mailbox; if Microsoft refuses it, the card offers "Reconnect for drafts", a sign-in that asks for it.
+- Tools connected from outside, such as Claude through the Swarm connector, can file work without naming a repository and suggest which worker should take it. They can also list the workers, read back what they filed, and search open tasks for duplicates. A misspelled worker name gets the closest names suggested. Queen still assigns everything they file.
+- Swarm moves a resting Claude worker onto a newly installed Claude release in place, where Claude allows it, instead of stopping and starting it. A new setting, Settings > Workers > Remote Control, lets each Claude worker also appear in the Claude app and at claude.ai/code. It starts off. While it is on, Swarm cannot move a connected worker this way. (after the worker engine update)
+- Claude now tells Swarm when a worker's turn starts and ends, as well as Swarm reading the screen. A worker mid-turn reads as working even when its screen looks idle. A turn stopped by an API error shows Blocked with the reason. If Claude drops a worker's Swarm tools, Swarm reconnects them. (after the worker engine update)
+
+### Fixes
+- Answering a worker's question in its terminal now closes the matching Needs you card whichever way Claude words the answer, and keeps any note you typed beside your choice. (after the worker engine update)
+- "Ask Claude to change it" on an email with no reply yet now writes the first reply instead of failing.
+- An email reply whose delivery Microsoft never confirmed now shows its text and offers Retry the send. Rewriting a reply that had already reached some people no longer sends them a second copy.
+- A worker start held back because the machine is busy now says whether CPU or memory was the reason, instead of always blaming memory.
+- Queen's task listing fits in one reply again. On a long-lived board it had grown big enough to disconnect her Swarm tools.
+- Connecting Claude to your Hive's public address while you are signed in now reaches the approval page instead of being refused.
+- A worker is no longer flagged for "Newer conversation history" because of other Claude conversations in its folder.
+- An auto-mode refusal on the roster clears once the worker carries on and runs something else. (after the worker engine update)
+- Swarm no longer types /restart into workers whose Claude does not have it. (after the worker engine update)
+- A worker resting with nothing running no longer reads "Buzzing · N monitors".
+- A refused tool call no longer tells the worker that the database is damaged.
+- A worker engine update held back by running workers now says so and points at the worker engine card, instead of counting workers mid-turn.
+- Scout can now answer a second opinion Queen asked it on work it does not own.
+- Searching Settings for "resolve" or "approve" finds the Jira setting "Ask me before resolving tickets".
+- Push notifications are now signed without a cryptography library that had a security advisory. Your Hive's push key and the browsers subscribed to it carry over unchanged.
+
 ## 1.17.6
 
 One database update (207). Your Hive backs its database up first, by itself, and your workers are not stopped.
