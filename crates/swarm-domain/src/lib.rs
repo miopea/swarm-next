@@ -786,6 +786,11 @@ pub struct DecisionRequest {
     /// Defaulted for records written before the column existed.
     #[serde(default)]
     pub requested_command: Option<String>,
+    /// The local script `requested_command` runs, as hashed when the request
+    /// was filed. A grant binds to this hash and is refused once the file has
+    /// changed (ADR 0129).
+    #[serde(default)]
+    pub requested_script: Option<RequestedScript>,
     pub deadline: Option<i64>,
     pub state: DecisionRequestState,
     #[serde(default)]
@@ -852,6 +857,16 @@ pub struct DecisionRequest {
     /// `None` until the decision resolves — an unanswered question authorises
     /// nothing, so there is no act to discharge.
     pub discharge: Option<DecisionDischarge>,
+}
+
+/// A local script a requested command runs, and its content when the request
+/// was filed (ADR 0129).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RequestedScript {
+    /// Absolute path, as the worker named it.
+    pub path: String,
+    /// Lowercase hex sha256 of the file's bytes.
+    pub sha256: String,
 }
 
 impl DecisionRequest {

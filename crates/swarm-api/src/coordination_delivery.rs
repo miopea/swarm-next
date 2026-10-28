@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use futures_util::future::join_all;
 use swarm_domain::{ProviderKind, WorkerSessionId};
 use swarm_persistence::{
-    DecisionDispatch, OperatorBroadcastDispatch, QueenAutomationDelivery, TaskDispatch,
-    TaskMessageDispatch, TaskOutcomeDispatch, TaskStore,
+    CommandGrantOutcome, DecisionDispatch, OperatorBroadcastDispatch, QueenAutomationDelivery,
+    TaskDispatch, TaskMessageDispatch, TaskOutcomeDispatch, TaskStore,
 };
 use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, snapshot_plain_text};
 use tokio::time::sleep;
@@ -398,6 +398,7 @@ mod clarification_tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
@@ -1397,11 +1398,50 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Coordina
         cadence: Cadence::Immediate,
         busy: BusyPolicy::Wait,
         bytes: format!(
-            "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
-            delivery.decision_id, outcome, note,
+            "[Swarm decision {} resolved] {}{} Operator note: {} Use swarm_list_decisions for the full request context.\r",
+            delivery.decision_id,
+            outcome,
+            command_grant_sentence(delivery),
+            note,
         )
         .into_bytes(),
         marker: delivery_marker(delivery.decision_id),
+    }
+}
+
+/// Tells the worker plainly whether this resolution lets a command run
+/// (ADR 0129).
+///
+/// ⚠️ AN APPROVAL WITH NO GRANT READ AS PERMISSION. 25 of the 29 requests
+/// carrying a command on the operator's Hive (measured 2026-10-28) were
+/// resolved on a button the worker wrote. The resolution named only that
+/// button, so nothing told the worker its command was still not allowed.
+fn command_grant_sentence(delivery: &DecisionDispatch) -> String {
+    match &delivery.command {
+        CommandGrantOutcome::Granted { command } => format!(
+            " Granted: you may now run {} once, exactly as written; any other text is not covered. The grant ends when it is used, when the task leaves the board, or when this session ends. If it is still denied, do not retry it or ask again: move the task to Blocked and quote the denial.",
+            named_command(command)
+        ),
+        CommandGrantOutcome::NotGranted { command } => format!(
+            " No grant was made: {} is still not approved, so do not run it or retry it. If the operator's words below tell you to run it anyway, ask once more with the same command field so they can press the grant.",
+            named_command(command)
+        ),
+        CommandGrantOutcome::NotRequested if delivery.approval => " This answer granted no command. If a permission check blocks a command you now need, ask with swarm_request_decision and its command field; only Swarm's grant button lets a command run.".to_owned(),
+        CommandGrantOutcome::NotRequested => String::new(),
+    }
+}
+
+/// The command as the worker must run it, named in the line it reads.
+///
+/// One that spans lines cannot be typed into a terminal intact, and a
+/// flattened copy is not the command the operator approved, so that one is
+/// pointed to rather than shown.
+fn named_command(command: &str) -> String {
+    if command.contains(['\n', '\r']) {
+        "the command in this request (it spans lines: read it exactly with swarm_list_decisions)"
+            .to_owned()
+    } else {
+        format!("this exact command: `{}`", terminal_safe_text(command))
     }
 }
 
@@ -3802,6 +3842,8 @@ mod tests {
                     action: "Release the hold".to_owned(),
                     note: String::new(),
                     answers: std::collections::BTreeMap::default(),
+                    command: CommandGrantOutcome::NotRequested,
+                    approval: false,
                 })
                 .cadence,
             ),
@@ -3920,6 +3962,8 @@ mod tests {
                     action: "Release the hold".to_owned(),
                     note: String::new(),
                     answers: std::collections::BTreeMap::default(),
+                    command: CommandGrantOutcome::NotRequested,
+                    approval: false,
                 }),
             ),
             (

@@ -1036,6 +1036,7 @@ fn start_claude_session(
         || workspace_conversations(workspace),
     );
     let settings = claude_settings_for(mcp_config);
+    let grant_mod = claude_grant_mod_for(mcp_config);
     let model = worker_model_beside(mcp_config);
     let command = ClaudeCodeAdapter
         .command_for_with_configuration(
@@ -1043,6 +1044,7 @@ fn start_claude_session(
             selection.conversation,
             mcp_config,
             settings.as_deref(),
+            grant_mod.as_deref(),
             model.as_deref(),
         )
         .map_err(|error| error.to_string())?;
@@ -1055,6 +1057,7 @@ fn start_claude_session(
                 },
                 mcp_config,
                 settings.as_deref(),
+                grant_mod.as_deref(),
                 // The recovery launch too: a fallback that quietly ran a
                 // different model from the session it replaces would make the
                 // cost control depend on whether a resume happened to succeed.
@@ -1879,19 +1882,20 @@ mod tests {
 
 /// The settings file a Claude worker starts with.
 ///
-/// THE PER-WORKER FILE IS DERIVED, NOT SENT. Swarm writes the commands an
-/// operator approved to `<worker>.settings.json`, beside the `<worker>.json`
+/// THE PER-WORKER FILE IS DERIVED, NOT SENT. Swarm writes the allow rules of
+/// the worker's system access level to `<worker>.settings.json`, beside the `<worker>.json`
 /// MCP config this request already carries. Deriving it means no new field on
 /// `StartClaude`, and therefore no protocol bump -- which matters because
 /// `swarm-package` refuses to install a protocol change outright, so a new
 /// field would have made this unshippable rather than merely awkward.
 ///
-/// MERGED, NOT SUBSTITUTED. The generated file holds only grants; the
-/// operator's own settings must still apply, or a worker with one approved
-/// command would lose every permission it normally has. Claude reads one
-/// `--settings` path, so the merge happens here.
+/// MERGED, NOT SUBSTITUTED. The generated file holds only those rules; the
+/// operator's own settings must still apply, or a worker with one extra rule
+/// would lose every permission it normally has. Claude reads one `--settings`
+/// path, so the merge happens here. Approved commands are not among the rules:
+/// the grant mod spends each one as it runs (ADR 0129).
 ///
-/// Every failure falls back to the operator's global settings alone. A grant
+/// Every failure falls back to the operator's global settings alone. A rule
 /// that cannot be applied leaves the worker denied exactly as it is today,
 /// which is the safe direction; refusing to start the worker would not be.
 fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
@@ -1902,7 +1906,7 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
         Some(grants) => match merged_settings(global.as_deref(), &grants) {
             Ok(merged) => Some(merged),
             Err(error) => {
-                eprintln!("swarm-terminal-host: could not apply approved-command grants: {error}");
+                eprintln!("swarm-terminal-host: could not apply the worker's allow rules: {error}");
                 global
             }
         },
@@ -1948,6 +1952,28 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
     }
 }
 
+/// Swarm's grant mod for this worker, which lets it run a command the operator
+/// granted in the session that asked (ADR 0129).
+///
+/// A worker that cannot have it still starts: its commands then go through
+/// its permission checks exactly as they would with no grant, which is the
+/// safe direction, and the failure is said rather than left silent.
+fn claude_grant_mod_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
+    let mcp_config = mcp_config?;
+    let written = std::env::current_exe()
+        .map_err(|_| "helper executable unavailable".to_owned())
+        .and_then(|executable| provider_settings::grant_mod(mcp_config, &executable));
+    match written {
+        Ok(folder) => Some(folder),
+        Err(error) => {
+            eprintln!(
+                "swarm-terminal-host: grant mod unavailable ({error}); this worker's approved commands will not be granted"
+            );
+            None
+        }
+    }
+}
+
 /// The model this worker was assigned, if any, from the file the API writes.
 ///
 /// ⚠️ THE HOST DOES NOT KNOW A QUEEN FROM A REPOSITORY WORKER, and should not
@@ -1957,8 +1983,8 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
 /// argument. No protocol change, which matters because `swarm-package` refuses
 /// a protocol bump outright and one here would have made this unshippable.
 ///
-/// Read from the same file the grants come from, but read SEPARATELY: the grant
-/// merge refuses a file that lists no commands, and a file carrying only a model
+/// Read from the same file the allow rules come from, but read SEPARATELY: the
+/// merge refuses a file that lists no rules, and a file carrying only a model
 /// lists none. Folding this into that path would have inherited the exact
 /// discard that made the first attempt fail silently.
 fn worker_model_beside(mcp_config: Option<&Path>) -> Option<String> {
@@ -1971,8 +1997,8 @@ fn worker_model_beside(mcp_config: Option<&Path>) -> Option<String> {
 /// Whether this worker connects to Remote Control, from the file the API writes
 /// (ADR 0122).
 ///
-/// Read separately for the reason `worker_model_beside` is: the grant merge
-/// refuses a file that lists no commands, and most workers list none. Absent
+/// Read separately for the reason `worker_model_beside` is: the merge refuses
+/// a file that lists no rules, and most workers list none. Absent
 /// when an older API wrote no choice, which leaves Claude's own default alone.
 fn worker_remote_control_beside(mcp_config: Option<&Path>) -> Option<bool> {
     let settings = mcp_config.and_then(worker_settings_beside)?;
@@ -1987,7 +2013,8 @@ fn worker_settings_beside(mcp_config: &Path) -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-/// Writes one file holding the operator's settings with the grants folded in.
+/// Writes one file holding the operator's settings with the worker's allow
+/// rules folded in.
 fn merged_settings(global: Option<&Path>, grants: &Path) -> Result<PathBuf, String> {
     let mut document = match global {
         Some(path) => provider_settings::read_settings(path)?,
@@ -2001,11 +2028,11 @@ fn merged_settings(global: Option<&Path>, grants: &Path) -> Result<PathBuf, Stri
         .cloned()
         .unwrap_or_default();
     if extra.is_empty() {
-        return Err("the grant file lists no commands".into());
+        return Err("the worker's settings list no allow rules".into());
     }
     // APPENDED TO allow, and nothing else is touched. A deny rule the operator
-    // wrote still denies: this widens one list by the exact commands they
-    // approved and leaves every other decision they made alone.
+    // wrote still denies: this widens one list by the rules of the level they
+    // chose and leaves every other decision they made alone.
     let permissions = document
         .as_object_mut()
         .ok_or("settings are not an object")?
@@ -2126,6 +2153,7 @@ mod worker_model_tests {
                 Path::new("/workspace"),
                 ClaudeConversationStart::Continue,
                 Some(&config),
+                None,
                 None,
                 model.as_deref(),
             )
@@ -2309,6 +2337,7 @@ mod conversation_oracle_tests {
                 start.conversation,
                 Some(Path::new("/state/worker.json")),
                 Some(Path::new("/state/settings.json")),
+                None,
                 None,
             )
             .unwrap();

@@ -408,6 +408,7 @@ impl ApiaryService {
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         }) {
             tracing::warn!(message = %error, %hive, fault = condition.key(), "a Hive fault could not be raised");
         }
@@ -508,6 +509,7 @@ impl ApiaryService {
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         }) {
             tracing::warn!(
                 message = %error,
@@ -4467,6 +4469,43 @@ impl TaskService {
         Ok(decisions)
     }
 
+    /// Spends the grant that lets this worker run exactly `command` once, if
+    /// the operator granted it and the script it runs is unchanged (ADR 0129).
+    ///
+    /// `cwd` is the directory the worker's shell is in, which lets a granted
+    /// `cd <cwd> && <command>` match, as `granted_forms` explains.
+    ///
+    /// `current_sha256` hashes the named script as it is now; `None` means it
+    /// could not be read. A script that changed, or vanished, since the request
+    /// was filed is not what the operator approved, so the grant is not spent
+    /// and the command goes through the worker's permission checks as before.
+    ///
+    /// # Errors
+    /// Returns a store error.
+    pub fn use_command_grant(
+        &self,
+        worker_id: WorkerId,
+        command: &str,
+        cwd: Option<&str>,
+        current_sha256: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<DecisionRequestId>, ApplicationError> {
+        for form in granted_forms(command, cwd) {
+            let Some(grant) = self.store.live_command_grant(worker_id, &form)? else {
+                continue;
+            };
+            if let Some(script) = &grant.script
+                && current_sha256(&script.path).as_deref() != Some(script.sha256.as_str())
+            {
+                return Ok(None);
+            }
+            return Ok(self
+                .store
+                .spend_command_grant(grant.decision_id)?
+                .then_some(grant.decision_id));
+        }
+        Ok(None)
+    }
+
     /// Creates a typed request for operator judgment using the authenticated agent identity.
     ///
     /// # Errors
@@ -4509,6 +4548,7 @@ impl TaskService {
             questions: &input.questions,
             deadline: input.deadline,
             requested_command: input.requested_command.as_deref(),
+            requested_script: input.requested_script.as_ref(),
         })?;
         // ADR 0119 Decision 5. A worker that asks about its own Active task is
         // waiting on the answer, and Active work that is waiting holds its
@@ -4709,6 +4749,7 @@ impl TaskService {
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         }) {
             tracing::warn!(
                 message = %error,
@@ -4769,6 +4810,40 @@ impl TaskService {
             .map_err(Into::into)
     }
 }
+/// The whole texts a grant may hold for `command` run in `cwd` (ADR 0129).
+///
+/// ⚠️ CLAUDE REWRITES THE COMMAND BEFORE ITS PERMISSION CHECK. When the shell is
+/// already in `<dir>`, a leading `cd <dir> &&` is dropped. A worker that ran the
+/// granted `cd /srv/app && ./release` once is then in `/srv/app`, and the same
+/// command typed again reaches the check as `./release`. Seen on 2026-10-28 in
+/// an isolated Hive: the granted text was denied by the classifier after the
+/// worker's shell moved into the script's folder.
+///
+/// Running `./release` in `/srv/app` is exactly what `cd /srv/app && ./release`
+/// runs, so those texts are tried as well, each compared whole by equality.
+/// A form is only offered when it parses as a `cd` into that very directory: an
+/// absolute path, unquoted only when it holds no character the shell would
+/// split or expand, and quoted only when the quotes keep it literal.
+fn granted_forms(command: &str, cwd: Option<&str>) -> Vec<String> {
+    let mut forms = vec![command.to_owned()];
+    let Some(cwd) = cwd.filter(|cwd| cwd.starts_with('/')) else {
+        return forms;
+    };
+    if cwd
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "/._-+@:,=".contains(character))
+    {
+        forms.push(format!("cd {cwd} && {command}"));
+    }
+    if !cwd.contains(['\'', '\n', '\r']) {
+        forms.push(format!("cd '{cwd}' && {command}"));
+    }
+    if !cwd.contains(['"', '$', '`', '\\', '!', '\n', '\r']) {
+        forms.push(format!("cd \"{cwd}\" && {command}"));
+    }
+    forms
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionRequestInput {
     pub task_id: Option<TaskId>,
@@ -4800,6 +4875,9 @@ pub struct DecisionRequestInput {
     /// `GRANT_COMMAND_ACTION` for why a worker choosing that label would be
     /// checking a string it chose.
     pub requested_command: Option<String>,
+    /// The local script the command runs, hashed by the caller when the
+    /// request is filed (ADR 0129).
+    pub requested_script: Option<swarm_domain::RequestedScript>,
     /// A worker asking about its own Active task blocks that task on the
     /// answer unless this is set (ADR 0119). Ignored for Queen and for work
     /// that is not Active.
@@ -5028,6 +5106,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         service
@@ -5113,6 +5192,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         service
@@ -6014,6 +6094,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         service
@@ -6092,6 +6173,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         assert!(
@@ -7058,8 +7140,165 @@ mod tests {
             questions: Vec::new(),
             deadline: None,
             requested_command: None,
+            requested_script: None,
             keep_working: false,
         }
+    }
+
+    /// ADR 0129: a grant whose script changed since the request was filed is
+    /// not spent and does not run; the unchanged script runs it, once.
+    #[test]
+    fn a_grant_runs_only_while_its_script_still_hashes_as_approved() {
+        let (service, queen, _worker) = setup();
+        service
+            .store
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let principal = AgentPrincipal::from(&queen);
+        let task = service
+            .store
+            .create_task("Run one script", "/workspace/petal")
+            .unwrap();
+        let approved = "ab".repeat(32);
+        let mut input = decision_input(
+            Some(task.id),
+            DecisionRequestKind::Approval,
+            "Run the release script",
+            &["unused"],
+        );
+        input.suggested_action = String::new();
+        input.allowed_actions = Vec::new();
+        input.requested_command = Some("/srv/app/release.sh --slot staging".into());
+        input.requested_script = Some(swarm_domain::RequestedScript {
+            path: "/srv/app/release.sh".into(),
+            sha256: approved.clone(),
+        });
+        let decision = service.create_decision(principal, &input).unwrap();
+        service
+            .resolve_operator_decision(decision.id, &decision.allowed_actions[0], "", "test")
+            .unwrap();
+        let command = "/srv/app/release.sh --slot staging";
+
+        let changed = |_: &str| Some("cd".repeat(32));
+        assert_eq!(
+            service
+                .use_command_grant(queen.id, command, None, changed)
+                .unwrap(),
+            None
+        );
+        let unreadable = |_: &str| None;
+        assert_eq!(
+            service
+                .use_command_grant(queen.id, command, None, unreadable)
+                .unwrap(),
+            None
+        );
+        let asked = std::cell::RefCell::new(None);
+        let unchanged = |path: &str| {
+            asked.replace(Some(path.to_owned()));
+            Some(approved.clone())
+        };
+        assert_eq!(
+            service
+                .use_command_grant(queen.id, command, None, unchanged)
+                .unwrap(),
+            Some(decision.id),
+            "a refused check left the grant live"
+        );
+        assert_eq!(asked.into_inner().as_deref(), Some("/srv/app/release.sh"));
+        assert_eq!(
+            service
+                .use_command_grant(queen.id, command, None, |_| Some(approved.clone()))
+                .unwrap(),
+            None,
+            "and it runs once"
+        );
+    }
+
+    /// ADR 0129: Claude drops `cd <dir> &&` from a command when its shell is
+    /// already in `<dir>`, so the granted `cd /srv/app && ./release` reaches the
+    /// check as `./release`. It matches only when the shell is in that very
+    /// directory, and still only once.
+    #[test]
+    fn a_grant_matches_the_command_claude_checks_after_dropping_a_cd_into_its_folder() {
+        let (service, queen, _worker) = setup();
+        service
+            .store
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = service
+            .store
+            .create_task("Run one release", "/workspace/petal")
+            .unwrap();
+        let mut input = decision_input(
+            Some(task.id),
+            DecisionRequestKind::Approval,
+            "Run the release",
+            &["unused"],
+        );
+        input.suggested_action = String::new();
+        input.allowed_actions = Vec::new();
+        input.requested_command = Some("cd /srv/app && ./release --slot staging".into());
+        let decision = service
+            .create_decision(AgentPrincipal::from(&queen), &input)
+            .unwrap();
+        service
+            .resolve_operator_decision(decision.id, &decision.allowed_actions[0], "", "test")
+            .unwrap();
+        let checked = "./release --slot staging";
+        let unhashed = |_: &str| None;
+
+        for elsewhere in [None, Some("/srv/other"), Some("/srv/app/"), Some("srv/app")] {
+            assert_eq!(
+                service
+                    .use_command_grant(queen.id, checked, elsewhere, unhashed)
+                    .unwrap(),
+                None,
+                "not run from {elsewhere:?}"
+            );
+        }
+        assert_eq!(
+            service
+                .use_command_grant(queen.id, checked, Some("/srv/app"), unhashed)
+                .unwrap(),
+            Some(decision.id)
+        );
+        assert_eq!(
+            service
+                .use_command_grant(
+                    queen.id,
+                    "cd /srv/app && ./release --slot staging",
+                    None,
+                    unhashed
+                )
+                .unwrap(),
+            None,
+            "and once, whichever form spends it"
+        );
+    }
+
+    #[test]
+    fn only_a_cd_into_the_shell_folder_itself_is_an_equivalent_form() {
+        assert_eq!(granted_forms("x", None), vec!["x"]);
+        assert_eq!(
+            granted_forms("x", Some("srv/app")),
+            vec!["x"],
+            "never a relative folder"
+        );
+        assert_eq!(
+            granted_forms("x", Some("/srv/my app")),
+            vec!["x", "cd '/srv/my app' && x", "cd \"/srv/my app\" && x"],
+            "a folder the shell would split is only ever quoted"
+        );
+        assert_eq!(
+            granted_forms("x", Some("/srv/$HOME")),
+            vec!["x", "cd '/srv/$HOME' && x"],
+            "and never in double quotes when they would expand it"
+        );
+        assert_eq!(
+            granted_forms("x", Some("/srv/it's")),
+            vec!["x", "cd \"/srv/it's\" && x"]
+        );
     }
 
     #[test]
@@ -7088,6 +7327,8 @@ mod tests {
             &["Hold"],
         );
         command.requested_command = Some("fictional-command --fixture".into());
+        command.suggested_action = String::new();
+        command.allowed_actions = Vec::new();
         let second = service.create_decision(principal, &command).unwrap();
         let before = service.store.list_decision_requests().unwrap();
         assert!(matches!(
@@ -7325,6 +7566,7 @@ mod tests {
                     questions: Vec::new(),
                     deadline: None,
                     requested_command: None,
+                    requested_script: None,
                     keep_working: false,
                 },
             ),

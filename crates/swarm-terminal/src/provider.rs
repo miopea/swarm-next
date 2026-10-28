@@ -108,6 +108,7 @@ impl ClaudeCodeAdapter {
         conversation: ClaudeConversationStart,
         mcp_config: Option<&Path>,
         settings: Option<&Path>,
+        plugin_dir: Option<&Path>,
         model: Option<&str>,
     ) -> Result<ProviderCommand, ProviderCommandError> {
         let mut command = self.command_for_with_mcp(workspace, conversation, mcp_config)?;
@@ -117,6 +118,15 @@ impl ClaudeCodeAdapter {
                 .ok_or(ProviderCommandError::ClaudeSettingsNotUtf8)?;
             command.arguments.push("--settings".into());
             command.arguments.push(settings.into());
+        }
+        // Swarm's grant mod (ADR 0129). A folder Claude loads for this session
+        // alone, so it never touches the operator's own plugins or settings.
+        if let Some(plugin_dir) = plugin_dir {
+            let plugin_dir = plugin_dir
+                .to_str()
+                .ok_or(ProviderCommandError::ClaudeSettingsNotUtf8)?;
+            command.arguments.push("--plugin-dir".into());
+            command.arguments.push(plugin_dir.into());
         }
         // ⚠️ AN ARGUMENT, NOT A SETTINGS KEY, and that is the whole point of the
         // rebuild. The first attempt wrote `model` into the per-worker settings
@@ -592,6 +602,7 @@ mod tests {
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
                 Some(Path::new("/home/operator/.claude/settings.json")),
+                None,
                 Some("sonnet"),
             )
             .unwrap();
@@ -604,6 +615,30 @@ mod tests {
         assert_eq!(command.arguments[position + 1], "sonnet");
     }
 
+    /// ADR 0129: Swarm's grant mod is loaded into the worker's session.
+    #[test]
+    fn a_grant_mod_folder_reaches_the_launched_command() {
+        let command = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                absolute_workspace(),
+                ClaudeConversationStart::Continue,
+                Some(Path::new("/state/swarm/agents/worker.json")),
+                None,
+                Some(Path::new("/state/swarm/agents/worker.grant-mod")),
+                None,
+            )
+            .unwrap();
+        let position = command
+            .arguments
+            .iter()
+            .position(|argument| argument == "--plugin-dir")
+            .expect("the command must load the grant mod");
+        assert_eq!(
+            command.arguments[position + 1],
+            "/state/swarm/agents/worker.grant-mod"
+        );
+    }
+
     /// A worker with no model of its own is launched exactly as before, so this
     /// cannot become a fleet-wide downgrade nobody asked for.
     #[test]
@@ -614,6 +649,7 @@ mod tests {
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
                 None,
+                None,
                 Some("sonnet"),
             )
             .unwrap();
@@ -622,6 +658,7 @@ mod tests {
                 absolute_workspace(),
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
+                None,
                 None,
                 None,
             )
@@ -635,6 +672,7 @@ mod tests {
                 absolute_workspace(),
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
+                None,
                 None,
                 Some("   "),
             )
@@ -651,6 +689,7 @@ mod tests {
                 ClaudeConversationStart::Continue,
                 Some(Path::new("/state/swarm/agents/worker.json")),
                 Some(Path::new("/home/operator/.claude/settings.json")),
+                None,
                 None,
             )
             .unwrap();

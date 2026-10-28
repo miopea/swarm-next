@@ -401,10 +401,18 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       <div className="decision-command">
                         <p className="eyebrow">Command this would allow</p>
                         <pre><code>{decision.requested_command}</code></pre>
+                        {decision.requested_script ? (
+                          <dl className="decision-command-script">
+                            <div><dt>Script it runs</dt><dd><code>{decision.requested_script.path}</code></dd></div>
+                            <div><dt>sha256 when asked</dt><dd><code>{decision.requested_script.sha256}</code></dd></div>
+                          </dl>
+                        ) : null}
                         <small>
-                          Grants permission for this exact command, once, for this worker only.
-                          The worker still needs to run it. Permission expires when the task leaves
-                          the board. Any other command is still refused.
+                          Grants permission for this exact command, once, for this worker only, in
+                          the session that asked. The worker still needs to run it. Permission
+                          expires when the task leaves the board
+                          {decision.requested_script ? " or the script changes" : ""}. Any other
+                          command still goes through the worker's normal permission checks.
                         </small>
                       </div>
                     ) : null}

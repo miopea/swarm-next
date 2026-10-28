@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -190,13 +190,7 @@ pub(super) fn startup_settings(
     executable: &Path,
     remote_control: Option<bool>,
 ) -> Result<PathBuf, String> {
-    // A running process can outlive its unlinked binary. Never publish the
-    // resulting `current_exe()` path (including a Linux " (deleted)" suffix)
-    // as a callback command or silently substitute another release's helper.
-    let helper = fs::metadata(executable).map_err(|_| "helper executable unavailable")?;
-    if !executable.is_absolute() || !helper.is_file() || helper.permissions().mode() & 0o111 == 0 {
-        return Err("helper executable unavailable".into());
-    }
+    usable_helper(executable)?;
     let mut document = if let Some(base) = base {
         read_settings(base)?
     } else {
@@ -230,6 +224,82 @@ pub(super) fn startup_settings(
     }
     result.map_err(|_| "startup settings unavailable")?;
     Ok(target)
+}
+
+/// A running process can outlive its unlinked binary. Never publish the
+/// resulting `current_exe()` path (including a Linux " (deleted)" suffix) as a
+/// callback command or silently substitute another release's helper.
+fn usable_helper(executable: &Path) -> Result<(), String> {
+    let helper = fs::metadata(executable).map_err(|_| "helper executable unavailable")?;
+    if !executable.is_absolute() || !helper.is_file() || helper.permissions().mode() & 0o111 == 0 {
+        return Err("helper executable unavailable".into());
+    }
+    Ok(())
+}
+
+/// The hooks module of Swarm's grant mod, with the helper and the worker's
+/// MCP config left as placeholders.
+const GRANT_MOD_MODULE: &str = include_str!("grant_mod/register.ts");
+
+/// Writes Swarm's grant mod for one worker and returns its folder, which
+/// Claude loads with `--plugin-dir` (ADR 0129).
+///
+/// The mod's `tool.check` asks this engine's `provider-grant` subcommand
+/// whether the operator granted the exact command, so the worker's credential
+/// stays in its MCP config and never enters the mod. Rewritten at every start,
+/// so it always names this release's helper.
+pub(super) fn grant_mod(mcp_config: &Path, executable: &Path) -> Result<PathBuf, String> {
+    usable_helper(executable)?;
+    let literal = |path: &Path| {
+        path.to_str()
+            .ok_or_else(|| "grant mod path is not UTF-8".to_owned())
+            .and_then(|path| serde_json::to_string(path).map_err(|error| error.to_string()))
+    };
+    let module = GRANT_MOD_MODULE
+        .replace("__SWARM_HOST__", &literal(executable)?)
+        .replace("__SWARM_MCP_CONFIG__", &literal(mcp_config)?);
+    let manifest = json!({
+        "name": "swarm-command-grant",
+        "version": env!("CARGO_PKG_VERSION"),
+        "description": "Lets this worker run a command the operator granted in Swarm, exactly and once."
+    })
+    .to_string();
+    let root = mcp_config.with_extension("grant-mod");
+    for (relative, contents) in [
+        (".claude-plugin/plugin.json", manifest.as_str()),
+        ("hooks/hooks.json", r#"{"modules":["./register.ts"]}"#),
+        ("hooks/register.ts", module.as_str()),
+    ] {
+        write_private(&root.join(relative), contents.as_bytes())
+            .map_err(|_| "grant mod unavailable")?;
+    }
+    Ok(root)
+}
+
+/// Replaces one file atomically, readable only by this user, in folders
+/// only this user can enter.
+fn write_private(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
+    }
+    let temporary = target.with_extension(format!("{}.tmp", swarm_domain::WorkerSessionId::new()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -271,6 +341,55 @@ mod tests {
                 "the hook must subscribe to {source:?}, or the gate never sees it: {matcher:?}"
             );
         }
+    }
+
+    /// ADR 0129: the grant mod names this release's helper and this worker's
+    /// MCP config, as quoted literals, and nothing else is left to fill in.
+    #[test]
+    fn the_grant_mod_names_this_helper_and_this_worker_and_is_private() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("it's worker.json");
+        let executable = std::env::current_exe().unwrap();
+
+        let folder = grant_mod(&config, &executable).unwrap();
+
+        assert_eq!(folder, directory.path().join("it's worker.grant-mod"));
+        let module = fs::read_to_string(folder.join("hooks/register.ts")).unwrap();
+        assert!(!module.contains("__SWARM_"), "{module}");
+        assert!(module.contains(&format!(
+            "const HOST: string = {}",
+            serde_json::to_string(executable.to_str().unwrap()).unwrap()
+        )));
+        assert!(module.contains(&format!(
+            "const CONFIG: string = {}",
+            serde_json::to_string(config.to_str().unwrap()).unwrap()
+        )));
+        assert!(module.contains("'provider-grant'"));
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(folder.join(".claude-plugin/plugin.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["name"], "swarm-command-grant");
+        let hooks: Value =
+            serde_json::from_str(&fs::read_to_string(folder.join("hooks/hooks.json")).unwrap())
+                .unwrap();
+        assert_eq!(hooks, json!({"modules": ["./register.ts"]}));
+        for file in [
+            ".claude-plugin/plugin.json",
+            "hooks/hooks.json",
+            "hooks/register.ts",
+        ] {
+            let mode = fs::metadata(folder.join(file))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "{file} is readable by others: {mode:o}");
+        }
+
+        assert!(
+            grant_mod(&config, Path::new("relative/host")).is_err(),
+            "a helper that cannot be run is never named"
+        );
     }
 
     /// The interview hooks are installed, and BOTH of them.

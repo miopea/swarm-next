@@ -12,6 +12,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod mcp_proxy;
+mod provider_grant;
 mod provider_session_start;
 
 #[tokio::main]
@@ -29,6 +30,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if env::args().nth(1).as_deref() == Some("provider-resume-end") {
         return provider_session_start::run(true).await.map_err(Into::into);
+    }
+    if env::args().nth(1).as_deref() == Some("provider-grant") {
+        provider_grant::run(env::args().nth(2).as_deref()).await;
+        return Ok(());
     }
     if env::args().nth(1).as_deref() == Some("mcp-proxy") {
         return mcp_proxy::run().await.map_err(Into::into);

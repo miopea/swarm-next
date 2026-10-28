@@ -1221,6 +1221,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
 
@@ -1365,6 +1366,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
 
@@ -1506,6 +1508,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
 
