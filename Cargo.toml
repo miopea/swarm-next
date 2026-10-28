@@ -26,6 +26,9 @@ base64ct = { version = "1.8", features = ["alloc"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10.4"
 ed25519-dalek = "2.2"
+aes-gcm = "0.10"
+hkdf = "0.12"
+p256 = { version = "0.14", default-features = false, features = ["ecdh", "ecdsa"] }
 rmcp = { version = "3.1.2", default-features = false, features = ["server", "transport-streamable-http-server"] }
 getrandom = "0.3"
 nix = { version = "0.28", features = ["user", "fs"] }
@@ -45,7 +48,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v7"] }
 url = "2"
 vt100 = "0.16.2"
-web-push-native = { version = "0.5.0", default-features = false, features = ["vapid"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
