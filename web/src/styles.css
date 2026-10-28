@@ -3322,6 +3322,18 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   font-size: .72rem;
   line-height: 1.45;
 }
+.decision-command-script {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.decision-command-script dt {
+  color: var(--muted);
+  font-size: .72rem;
+}
+.decision-command-script dd {
+  margin: 0;
+}
 
 /* Briefings queued and waiting their turn.
    Quiet on purpose: this is status, not a fault. It sits below the attention

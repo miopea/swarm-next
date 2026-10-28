@@ -466,6 +466,7 @@ mod tests {
                     questions: std::slice::from_ref(question),
                     deadline: None,
                     requested_command: None,
+                    requested_script: None,
                 })
                 .unwrap()
                 .id
@@ -733,6 +734,7 @@ mod tests {
                 }],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store.record_native_interview(&source, 100).unwrap();

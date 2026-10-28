@@ -228,6 +228,10 @@ pub const MAX_DECISION_RESULTS: i64 = MAX_PENDING_DECISIONS;
 const MAX_TITLE_BYTES: usize = 240;
 const MAX_DETAIL_BYTES: usize = 10_000;
 const MAX_ACTION_BYTES: usize = 80;
+/// The tool schema's `maxLength` for `command`, held here in bytes.
+const MAX_COMMAND_BYTES: usize = 4_000;
+/// Linux's `PATH_MAX`.
+const MAX_SCRIPT_PATH_BYTES: usize = 4_096;
 const MAX_RESOLUTION_SURFACE_BYTES: usize = 40;
 const MAX_ACTIONS: usize = 6;
 pub const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
@@ -266,6 +270,46 @@ pub struct DecisionDispatch {
     /// The operator's answers when this was an interview, keyed by question
     /// header. Empty for a ruling.
     pub answers: BTreeMap<String, Vec<String>>,
+    /// What this resolution did about a command the request asked to run.
+    pub command: CommandGrantOutcome,
+    /// Whether the request was filed as an approval.
+    pub approval: bool,
+}
+
+/// A grant that is unspent, whose task is still on the board, and whose
+/// asking session is still running, written against the alias `g` for
+/// `decision_command_grants`.
+///
+/// The session is checked here rather than by spending grants wherever a
+/// session ends, because sessions end in several places (a stand-down, a
+/// restart, a crash, an engine update) and a grant missed by any one of them
+/// would pass to the next session.
+const LIVE_GRANT: &str = "g.consumed_at IS NULL AND EXISTS (
+    SELECT 1 FROM tasks t WHERE t.id = g.task_id
+      AND t.removed_at IS NULL AND t.state NOT IN ('completed','abandoned'))
+  AND EXISTS (SELECT 1 FROM worker_sessions s
+              WHERE s.session_id = g.session_id AND s.ended_at IS NULL)";
+
+/// A grant the operator pressed and the worker has not yet used (ADR 0129).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveCommandGrant {
+    pub decision_id: DecisionRequestId,
+    /// The script the command runs and its hash when the request was filed.
+    pub script: Option<swarm_domain::RequestedScript>,
+}
+
+/// What a resolution did about a command, read from the grant table rather
+/// than from the action, so the worker is told exactly what was recorded.
+///
+/// Each carries the exact command, so the line the worker reads names it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CommandGrantOutcome {
+    /// The request named no command.
+    NotRequested,
+    /// The operator pressed the grant and a grant was recorded.
+    Granted { command: String },
+    /// The request named a command and the resolution recorded no grant.
+    NotGranted { command: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -307,6 +351,9 @@ pub struct NewDecisionRequest<'a> {
     /// compiled to a permission pattern would trade a visible block for an
     /// invisible grant.
     pub requested_command: Option<&'a str>,
+    /// The local script the command runs, hashed when the request is filed.
+    /// A grant binds to the hash and is refused once the file changes.
+    pub requested_script: Option<&'a swarm_domain::RequestedScript>,
 }
 
 /// The one action that turns an approval into a runnable grant.
@@ -470,9 +517,15 @@ impl TaskStore {
             "INSERT INTO decision_requests (
                 id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
                 risk, evidence, suggested_action, allowed_actions, deadline, questions,
-                summary, requested_command, operator_action_labels
+                summary, requested_command, operator_action_labels,
+                requested_script_path, requested_script_sha256, requested_session_id
              )
-             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                    ?17, ?18,
+                    CASE WHEN ?15 IS NOT NULL THEN (
+                        SELECT s.session_id FROM worker_sessions s
+                        WHERE s.worker_id = w.id AND s.ended_at IS NULL
+                    ) END
              FROM worker_profiles w
              JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
              WHERE w.id = ?2
@@ -496,6 +549,8 @@ impl TaskStore {
                 request.summary,
                 request.requested_command,
                 operator_actions,
+                request.requested_script.map(|script| script.path.as_str()),
+                request.requested_script.map(|script| script.sha256.as_str()),
             ],
         )?;
         if inserted == 0 {
@@ -992,11 +1047,29 @@ impl TaskStore {
             //
             // A decision with no task grants nothing: a grant dies with its
             // task, and one with nothing to die with is a standing rule.
+            //
+            // Nor does one whose task has left the board, or whose asking
+            // session has ended: the grant is for that task and the session
+            // that asked (ADR 0129), and a later session would inherit a
+            // permission it never requested. Either way the resolution is
+            // delivered as "no grant was made", rather than as a grant that
+            // could never run.
             transaction.execute(
-                "INSERT INTO decision_command_grants (decision_id, task_id, worker_id, command)
-                 SELECT d.id, d.task_id, d.requesting_worker_id, d.requested_command
+                "INSERT INTO decision_command_grants (
+                     decision_id, task_id, worker_id, command, script_path, script_sha256,
+                     session_id
+                 )
+                 SELECT d.id, d.task_id, d.requesting_worker_id, d.requested_command,
+                        d.requested_script_path, d.requested_script_sha256,
+                        d.requested_session_id
                  FROM decision_requests d
-                 WHERE d.id = ?1 AND d.task_id IS NOT NULL",
+                 WHERE d.id = ?1
+                   AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = d.task_id
+                                 AND t.removed_at IS NULL
+                                 AND t.state NOT IN ('completed','abandoned'))
+                   AND EXISTS (SELECT 1 FROM worker_sessions s
+                               WHERE s.session_id = d.requested_session_id
+                                 AND s.ended_at IS NULL)",
                 [id.to_string()],
             )?;
         }
@@ -1028,50 +1101,75 @@ impl TaskStore {
         self.get_decision_request(id)
     }
 
-    /// The commands this worker may run because the operator approved them.
+    /// The live grant that would let this worker run exactly `command`.
     ///
-    /// Unconsumed grants only, and only while the task they were created for is
-    /// still on the board — a grant that outlives its task is the standing rule
-    /// the operator explicitly refused, wearing a costume.
+    /// Read, not spent: the caller checks the script against its hash first and
+    /// then spends it with `spend_command_grant` (ADR 0129). `None` means no
+    /// live grant has this exact text, and the command goes through the
+    /// worker's permission checks as before.
+    ///
+    /// ⚠️ THE TEXT MUST BE IDENTICAL, byte for byte. A settings rule was the
+    /// first carrier and it was not exact: Claude reads a `*` in a rule as a
+    /// wildcard, so granting `rm build/*` allowed every command starting
+    /// `rm build/`. Equality in SQL has no such reading.
+    ///
+    /// Live means unspent, with its task still on the board, in the session
+    /// that asked: a grant that outlives either is the standing rule the
+    /// operator refused.
     ///
     /// # Errors
     /// Returns an error when the query fails.
-    pub fn live_command_grants(&self, worker_id: WorkerId) -> Result<Vec<String>, TaskStoreError> {
+    pub fn live_command_grant(
+        &self,
+        worker_id: WorkerId,
+        command: &str,
+    ) -> Result<Option<LiveCommandGrant>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT g.command
-             FROM decision_command_grants g
-             JOIN tasks t ON t.id = g.task_id
-             WHERE g.worker_id = ?1
-               AND g.consumed_at IS NULL
-               AND t.removed_at IS NULL
-               AND t.state NOT IN ('completed','abandoned')
-             ORDER BY g.created_at",
-        )?;
-        let commands = statement
-            .query_map([worker_id.to_string()], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(commands)
+        let grant = connection
+            .query_row(
+                &format!(
+                    "SELECT g.decision_id, g.script_path, g.script_sha256
+                     FROM decision_command_grants g
+                     WHERE g.worker_id = ?1 AND g.command = ?2 AND {LIVE_GRANT}
+                     ORDER BY g.created_at, g.decision_id
+                     LIMIT 1"
+                ),
+                params![worker_id.to_string(), command],
+                |row| {
+                    let decision_id = parse_id(&row.get::<_, String>(0)?)?;
+                    let script = row
+                        .get::<_, Option<String>>(1)?
+                        .zip(row.get::<_, Option<String>>(2)?)
+                        .map(|(path, sha256)| swarm_domain::RequestedScript { path, sha256 });
+                    Ok(LiveCommandGrant {
+                        decision_id,
+                        script,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(grant)
     }
 
-    /// Marks every live grant for a worker as spent.
-    ///
-    /// Called when the session those grants were written into ends. This is what
-    /// "one use" can honestly mean here: the classifier reads a settings file at
-    /// process start and reports nothing back, so exactly-once cannot be enforced
-    /// AT the classifier. What is enforced is that a grant is offered to one
-    /// session and never a second.
+    /// Spends one grant, if it is still live. False means another use spent
+    /// it first, or its task or session ended meanwhile, so a grant can never
+    /// run twice.
     ///
     /// # Errors
     /// Returns an error when the update fails.
-    pub fn consume_command_grants(&self, worker_id: WorkerId) -> Result<usize, TaskStoreError> {
+    pub fn spend_command_grant(
+        &self,
+        decision_id: DecisionRequestId,
+    ) -> Result<bool, TaskStoreError> {
         let connection = self.connection()?;
         let spent = connection.execute(
-            "UPDATE decision_command_grants SET consumed_at = unixepoch()
-             WHERE worker_id = ?1 AND consumed_at IS NULL",
-            [worker_id.to_string()],
+            &format!(
+                "UPDATE decision_command_grants AS g SET consumed_at = unixepoch()
+                 WHERE g.decision_id = ?1 AND {LIVE_GRANT}"
+            ),
+            [decision_id.to_string()],
         )?;
-        Ok(spent)
+        Ok(spent == 1)
     }
 
     /// Atomically claims a bounded batch whose worker is running and not operator-engaged.
@@ -1087,7 +1185,11 @@ impl TaskStore {
         let candidates = {
             let mut statement = transaction.prepare(
                 "SELECT dd.decision_id, dd.worker_id, ws.session_id,
-                        d.resolution_action, d.resolution_note, d.resolution_answers
+                        d.resolution_action, d.resolution_note, d.resolution_answers,
+                        d.requested_command,
+                        EXISTS (SELECT 1 FROM decision_command_grants g
+                                WHERE g.decision_id = d.id),
+                        d.kind = 'approval'
                  FROM decision_deliveries dd
                  JOIN decision_requests d ON d.id = dd.decision_id
                  JOIN worker_sessions ws ON ws.worker_id = dd.worker_id AND ws.ended_at IS NULL
@@ -1109,6 +1211,12 @@ impl TaskStore {
                         note: row.get(4)?,
                         answers: serde_json::from_str(&row.get::<_, String>(5)?)
                             .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        command: match (row.get::<_, Option<String>>(6)?, row.get::<_, bool>(7)?) {
+                            (None, _) => CommandGrantOutcome::NotRequested,
+                            (Some(command), true) => CommandGrantOutcome::Granted { command },
+                            (Some(command), false) => CommandGrantOutcome::NotGranted { command },
+                        },
+                        approval: row.get(8)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?
@@ -1331,6 +1439,12 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     {
         return Err(TaskStoreError::InvalidDecisionContent);
     }
+    if let Some(command) = request.requested_command {
+        return validate_command_request(request, command);
+    }
+    if request.requested_script.is_some() {
+        return Err(TaskStoreError::InvalidCommandDecision);
+    }
     // A record is either a ruling or an interview, never both. Permitting both
     // invites a record whose button says one thing and whose answers say
     // another, with no defined precedence between them.
@@ -1361,6 +1475,68 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
         return Err(TaskStoreError::InvalidDecisionActions);
     }
     Ok(())
+}
+
+/// A request to run a command offers one affirmative answer: Swarm's grant.
+///
+/// ⚠️ WORKER-WRITTEN BUTTONS ARE WHY APPROVALS GRANTED NOTHING. A ruling had to
+/// offer at least one action, so a worker asking for a command wrote its own
+/// "Grant permission to run it" beside Swarm's grant. Measured on the operator's
+/// Hive on 2026-10-28: of 29 requests carrying a command, 25 were resolved by
+/// pressing a button the worker wrote and one was an interview answered in
+/// words. Neither records a grant. One grant was ever recorded.
+///
+/// So such a request carries no buttons, no questions and no worker
+/// recommendation other than the grant itself. The operator can grant, decline
+/// or answer in their own words; only the grant lets the command run, and the
+/// worker is told which happened. It also needs a task, because a grant ends
+/// when its task leaves the board and one with no task would never end.
+///
+/// The command must read exactly as it runs, so control and invisible
+/// characters that make the card show different text are refused. A script it
+/// runs is named by an absolute path, on one line, beside the lowercase hex
+/// sha256 Swarm took of it.
+fn validate_command_request(
+    request: &NewDecisionRequest<'_>,
+    command: &str,
+) -> Result<(), TaskStoreError> {
+    let readable = !command.trim().is_empty()
+        && command.len() <= MAX_COMMAND_BYTES
+        && !command.chars().any(hides_command_text)
+        && request.requested_script.is_none_or(|script| {
+            script.path.starts_with('/')
+                && script.path.len() <= MAX_SCRIPT_PATH_BYTES
+                && !script
+                    .path
+                    .chars()
+                    .any(|character| character == '\n' || hides_command_text(character))
+                && script.sha256.len() == 64
+                && script
+                    .sha256
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        });
+    let grant_only = request.allowed_actions.is_empty()
+        && request.operator_actions.is_empty()
+        && request.questions.is_empty()
+        && (request.suggested_action.is_empty()
+            || request.suggested_action == GRANT_COMMAND_ACTION);
+    if readable && grant_only && request.task_id.is_some() {
+        Ok(())
+    } else {
+        Err(TaskStoreError::InvalidCommandDecision)
+    }
+}
+
+/// Characters that would make the command the operator reads differ from the
+/// one that runs: terminal controls, and the zero-width and bidirectional
+/// marks that hide or reorder text. Newlines and tabs are shown as they are.
+fn hides_command_text(character: char) -> bool {
+    (character.is_control() && !matches!(character, '\n' | '\t'))
+        || matches!(
+            character,
+            '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
 }
 
 /// Park the linked task when the operator's chosen action is one they marked as
@@ -1779,7 +1955,8 @@ const DECISION_COLUMNS: &str =
                       SELECT EXISTS(SELECT 1 FROM decision_requests t
                           WHERE t.id = (SELECT node FROM chain WHERE node IS NOT NULL
                                          ORDER BY depth DESC LIMIT 1)
-                            AND t.state = 'resolved'))";
+                            AND t.state = 'resolved')),
+                     d.requested_script_path, d.requested_script_sha256";
 
 pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let linked_tasks: Vec<swarm_domain::TaskDecisionLink> =
@@ -1872,6 +2049,10 @@ pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dec
             .map(|value| parse_id(&value))
             .transpose()?,
         supersession_effective: row.get::<_, Option<bool>>(38)?.unwrap_or(false),
+        requested_script: row
+            .get::<_, Option<String>>(39)?
+            .zip(row.get::<_, Option<String>>(40)?)
+            .map(|(path, sha256)| swarm_domain::RequestedScript { path, sha256 }),
         discharge: row
             .get::<_, Option<String>>(26)?
             .map(|value| match value.as_str() {
@@ -1912,6 +2093,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         if resolve {
@@ -2127,6 +2309,49 @@ mod tests {
         );
     }
 
+    /// A request for a command, shaped as the store now requires (ADR 0129).
+    fn command_request(
+        worker_id: WorkerId,
+        task_id: TaskId,
+        command: &str,
+    ) -> NewDecisionRequest<'_> {
+        NewDecisionRequest {
+            requesting_worker_id: worker_id,
+            task_id: Some(task_id),
+            kind: DecisionRequestKind::Approval,
+            urgency: DecisionUrgency::Normal,
+            title: "Create one formula column?",
+            summary: "One metadata POST against contact.",
+            reason: "The permission check denied it.",
+            risk: "",
+            evidence: "",
+            suggested_action: "",
+            allowed_actions: &[],
+            operator_actions: &[],
+            questions: &[],
+            deadline: None,
+            requested_command: Some(command),
+            requested_script: None,
+        }
+    }
+
+    /// Looks up and spends a grant, as the permission hook's endpoint does for
+    /// a command that runs no named script.
+    fn use_grant(
+        store: &TaskStore,
+        worker_id: WorkerId,
+        command: &str,
+    ) -> Option<DecisionRequestId> {
+        let grant = store.live_command_grant(worker_id, command).unwrap()?;
+        store
+            .spend_command_grant(grant.decision_id)
+            .unwrap()
+            .then_some(grant.decision_id)
+    }
+
+    const FORMULA_COLUMN: &str =
+        "curl -sS -X POST https://example.crm.dynamics.com/api/data/v9.2/AttributeMetadata";
+
     /// A grant exists only when the operator pressed the button naming the command.
     ///
     /// The whole safety of this rests on an EQUALITY check rather than a reading
@@ -2142,40 +2367,22 @@ mod tests {
     fn a_command_grant_needs_the_operator_to_press_the_button_that_names_it() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
         let task = store
             .create_task("Create the formula column", "/workspace/d365")
             .unwrap();
-        let command =
-            "curl -sS -X POST https://example.crm.dynamics.com/api/data/v9.2/AttributeMetadata";
-        let refusals = vec!["Do not run it".to_owned()];
+        let command = FORMULA_COLUMN;
 
-        // Refused: the operator picked something else.
+        // Declined: the operator dismissed it.
         let refused = store
-            .create_decision_request(&NewDecisionRequest {
-                requesting_worker_id: queen.id,
-                task_id: Some(task.id),
-                kind: DecisionRequestKind::Approval,
-                urgency: DecisionUrgency::Normal,
-                title: "Create one formula column?",
-                summary: "One metadata POST against contact.",
-                reason: "The classifier denied it and the operator approved the action.",
-                risk: "",
-                evidence: "",
-                suggested_action: "Do not run it",
-                allowed_actions: &refusals,
-                operator_actions: &[],
-                questions: &[],
-                deadline: None,
-                requested_command: Some(command),
-            })
+            .create_decision_request(&command_request(queen.id, task.id, command))
             .unwrap();
-        assert!(
-            refused
-                .allowed_actions
-                .iter()
-                .any(|action| action == GRANT_COMMAND_ACTION),
-            "swarm offers the grant button itself: {:?}",
-            refused.allowed_actions
+        assert_eq!(
+            refused.allowed_actions,
+            vec![GRANT_COMMAND_ACTION.to_owned()],
+            "swarm's grant is the only button a command request offers"
         );
         // THE BUTTON IS ONLY SAFE IF THE COMMAND COMES BACK WITH IT. It was
         // stored and never read, so the operator would have seen "Allow the
@@ -2206,47 +2413,378 @@ mod tests {
             "and in the inbox listing, which is where it is actually rendered"
         );
         store
-            .resolve_decision_request(refused.id, "Do not run it", "", "inbox")
+            .resolve_decision_request(refused.id, OPERATOR_DISMISS_ACTION, "Not now", "inbox")
             .unwrap();
-        assert!(
-            store.live_command_grants(queen.id).unwrap().is_empty(),
+        assert_eq!(
+            use_grant(&store, queen.id, command),
+            None,
             "a refusal grants nothing"
         );
 
         // Approved by pressing the button that names the command.
         let approved = store
-            .create_decision_request(&NewDecisionRequest {
-                requesting_worker_id: queen.id,
-                task_id: Some(task.id),
-                kind: DecisionRequestKind::Approval,
-                urgency: DecisionUrgency::Normal,
-                title: "Create one formula column?",
-                summary: "One metadata POST against contact.",
-                reason: "The classifier denied it and the operator approved the action.",
-                risk: "",
-                evidence: "",
-                suggested_action: "Do not run it",
-                allowed_actions: &refusals,
-                operator_actions: &[],
-                questions: &[],
-                deadline: None,
-                requested_command: Some(command),
-            })
+            .create_decision_request(&command_request(queen.id, task.id, command))
             .unwrap();
         store
             .resolve_decision_request(approved.id, GRANT_COMMAND_ACTION, "", "inbox")
             .unwrap();
         assert_eq!(
-            store.live_command_grants(queen.id).unwrap(),
-            vec![command.to_owned()],
-            "the approved command, and only that command"
+            use_grant(&store, queen.id, &format!("{command} --verbose")),
+            None,
+            "a different command is not covered, even one that starts the same"
+        );
+        assert_eq!(
+            use_grant(&store, queen.id, command),
+            Some(approved.id),
+            "the approved command, exactly"
+        );
+        assert_eq!(use_grant(&store, queen.id, command), None, "and only once");
+    }
+
+    /// ⚠️ THE BUTTONS A WORKER WROTE ARE WHY 25 OF 29 APPROVALS GRANTED NOTHING.
+    /// A request for a command is refused unless Swarm's grant is the only
+    /// affirmative answer it offers, and unless it has a task to end with.
+    #[test]
+    fn a_command_request_cannot_offer_an_approval_that_grants_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let task = store
+            .create_task("Run one command", "/workspace/d365")
+            .unwrap();
+        let look_alike = vec!["Grant permission to run it".to_owned()];
+        let questions = vec![DecisionQuestion {
+            header: "Run it?".into(),
+            question: "May I run the command?".into(),
+            options: vec!["Yes".into(), "No".into()],
+            option_descriptions: BTreeMap::new(),
+            multi_select: false,
+        }];
+        let base = command_request(queen.id, task.id, FORMULA_COLUMN);
+        let refused = [
+            NewDecisionRequest {
+                allowed_actions: &look_alike,
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                allowed_actions: &look_alike,
+                operator_actions: &look_alike,
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                questions: &questions,
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                suggested_action: "Grant permission to run it",
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                task_id: None,
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                requested_command: Some("   "),
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                requested_command: Some("echo safe\r rm -rf ~"),
+                ..base.clone()
+            },
+            NewDecisionRequest {
+                requested_command: Some("echo \u{202E}fe.sa"),
+                ..base.clone()
+            },
+        ];
+        for request in &refused {
+            assert!(
+                matches!(
+                    store.create_decision_request(request),
+                    Err(TaskStoreError::InvalidCommandDecision)
+                ),
+                "refused: {request:?}"
+            );
+        }
+        let too_long = "x".repeat(MAX_COMMAND_BYTES + 1);
+        assert!(matches!(
+            store.create_decision_request(&NewDecisionRequest {
+                requested_command: Some(&too_long),
+                ..base.clone()
+            }),
+            Err(TaskStoreError::InvalidCommandDecision)
+        ));
+
+        for suggested in ["", GRANT_COMMAND_ACTION] {
+            let created = store
+                .create_decision_request(&NewDecisionRequest {
+                    suggested_action: suggested,
+                    requested_command: Some("cargo test --workspace\n\techo done"),
+                    ..base.clone()
+                })
+                .unwrap();
+            assert_eq!(
+                created.allowed_actions,
+                vec![GRANT_COMMAND_ACTION.to_owned()]
+            );
+        }
+    }
+
+    /// A grant ends with its task or with the session that asked, and is spent
+    /// only by the worker it was granted to.
+    #[test]
+    fn a_grant_ends_with_its_task_or_its_session_and_belongs_to_one_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let other = store
+            .create_worker(
+                "Other",
+                ProviderKind::ClaudeCode,
+                "/workspace/other",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(other.id, WorkerSessionId::new())
+            .unwrap();
+        let asking = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, asking).unwrap();
+        let file = |task_id: TaskId| {
+            store
+                .create_decision_request(&command_request(queen.id, task_id, FORMULA_COLUMN))
+                .unwrap()
+                .id
+        };
+        let press = |decision: DecisionRequestId| {
+            store
+                .resolve_decision_request(decision, GRANT_COMMAND_ACTION, "", "inbox")
+                .unwrap();
+        };
+
+        let task = store
+            .create_task("Leaves the board", "/workspace/d365")
+            .unwrap();
+        press(file(task.id));
+        assert_eq!(
+            use_grant(&store, other.id, FORMULA_COLUMN),
+            None,
+            "another worker cannot spend it"
+        );
+        let late = file(task.id);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET state = 'completed' WHERE id = ?1",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            use_grant(&store, queen.id, FORMULA_COLUMN),
+            None,
+            "a grant dies with its task"
+        );
+        press(late);
+        let deliveries = store.claim_decision_deliveries(100).unwrap();
+        assert_eq!(
+            deliveries
+                .iter()
+                .find(|delivery| delivery.decision_id == late)
+                .map(|delivery| delivery.command.clone()),
+            Some(CommandGrantOutcome::NotGranted {
+                command: FORMULA_COLUMN.to_owned()
+            }),
+            "one pressed after its task left the board is not a grant, and the worker is told so"
         );
 
-        // And it dies with the work rather than standing.
-        store.consume_command_grants(queen.id).unwrap();
+        // However the session ends, a stand-down, a restart or a crash, the
+        // next one does not inherit the grant.
+        let task = store
+            .create_task("Stays on the board", "/workspace/d365")
+            .unwrap();
+        press(file(task.id));
+        let unpressed = file(task.id);
+        store.release_worker_session(asking).unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        assert_eq!(
+            use_grant(&store, queen.id, FORMULA_COLUMN),
+            None,
+            "a second session does not inherit a grant made for the first"
+        );
+        press(unpressed);
+        assert_eq!(
+            use_grant(&store, queen.id, FORMULA_COLUMN),
+            None,
+            "nor one pressed after the session that asked had ended"
+        );
+        let deliveries = store.claim_decision_deliveries(100).unwrap();
+        assert_eq!(
+            deliveries
+                .iter()
+                .find(|delivery| delivery.decision_id == unpressed)
+                .map(|delivery| delivery.command.clone()),
+            Some(CommandGrantOutcome::NotGranted {
+                command: FORMULA_COLUMN.to_owned()
+            }),
+            "and the worker is told no grant was made, so it asks again"
+        );
+        press(file(task.id));
         assert!(
-            store.live_command_grants(queen.id).unwrap().is_empty(),
-            "a spent grant is not offered to a second session"
+            use_grant(&store, queen.id, FORMULA_COLUMN).is_some(),
+            "the new session can ask for its own"
+        );
+    }
+
+    /// A command request can name the script it runs and the hash Swarm took
+    /// of it; the operator reads both on the card and the grant carries both,
+    /// so the check at run time has something to compare (ADR 0129).
+    #[test]
+    fn a_grant_carries_the_script_and_hash_it_was_filed_with() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Run one script", "/workspace/d365")
+            .unwrap();
+        let script = swarm_domain::RequestedScript {
+            path: "/srv/app/release.sh".into(),
+            sha256: "ab".repeat(32),
+        };
+        let base = command_request(queen.id, task.id, "/srv/app/release.sh --slot staging");
+        for refused in [
+            swarm_domain::RequestedScript {
+                path: "release.sh".into(),
+                ..script.clone()
+            },
+            swarm_domain::RequestedScript {
+                path: "/srv/app/release.sh\n/srv/app/other.sh".into(),
+                ..script.clone()
+            },
+            swarm_domain::RequestedScript {
+                sha256: "AB".repeat(32),
+                ..script.clone()
+            },
+            swarm_domain::RequestedScript {
+                sha256: "ab".repeat(31),
+                ..script.clone()
+            },
+        ] {
+            assert!(
+                matches!(
+                    store.create_decision_request(&NewDecisionRequest {
+                        requested_script: Some(&refused),
+                        ..base.clone()
+                    }),
+                    Err(TaskStoreError::InvalidCommandDecision)
+                ),
+                "refused: {refused:?}"
+            );
+        }
+        let actions = vec!["Go".to_owned()];
+        assert!(
+            matches!(
+                store.create_decision_request(&NewDecisionRequest {
+                    requested_script: Some(&script),
+                    ..request(queen.id, &actions)
+                }),
+                Err(TaskStoreError::InvalidCommandDecision)
+            ),
+            "a script means nothing without the command that runs it"
+        );
+
+        let decision = store
+            .create_decision_request(&NewDecisionRequest {
+                requested_script: Some(&script),
+                ..base.clone()
+            })
+            .unwrap();
+        assert_eq!(decision.requested_script.as_ref(), Some(&script));
+        assert_eq!(
+            store
+                .get_decision_request(decision.id)
+                .unwrap()
+                .requested_script
+                .as_ref(),
+            Some(&script),
+            "and on a re-read, which is what the card shows"
+        );
+        store
+            .resolve_decision_request(decision.id, GRANT_COMMAND_ACTION, "", "inbox")
+            .unwrap();
+        assert_eq!(
+            store
+                .live_command_grant(queen.id, "/srv/app/release.sh --slot staging")
+                .unwrap(),
+            Some(LiveCommandGrant {
+                decision_id: decision.id,
+                script: Some(script),
+            })
+        );
+    }
+
+    /// The worker is told from the grant table, not the button label, whether
+    /// its command may run.
+    #[test]
+    fn the_delivery_says_whether_a_command_was_granted() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Run one command", "/workspace/d365")
+            .unwrap();
+        let granted = store
+            .create_decision_request(&command_request(queen.id, task.id, FORMULA_COLUMN))
+            .unwrap();
+        store
+            .resolve_decision_request(granted.id, GRANT_COMMAND_ACTION, "", "inbox")
+            .unwrap();
+        let declined = store
+            .create_decision_request(&command_request(queen.id, task.id, FORMULA_COLUMN))
+            .unwrap();
+        store
+            .resolve_decision_request(declined.id, OPERATOR_DISMISS_ACTION, "No", "inbox")
+            .unwrap();
+        let actions = vec!["Merge it".to_owned()];
+        let approval = store
+            .create_decision_request(&NewDecisionRequest {
+                kind: DecisionRequestKind::Approval,
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(approval.id, "Merge it", "", "inbox")
+            .unwrap();
+
+        let deliveries = store.claim_decision_deliveries(100).unwrap();
+        let outcome = |id: DecisionRequestId| {
+            deliveries
+                .iter()
+                .find(|delivery| delivery.decision_id == id)
+                .map(|delivery| (delivery.command.clone(), delivery.approval))
+                .unwrap()
+        };
+        let command = FORMULA_COLUMN.to_owned();
+        assert_eq!(
+            outcome(granted.id),
+            (
+                CommandGrantOutcome::Granted {
+                    command: command.clone()
+                },
+                true
+            )
+        );
+        assert_eq!(
+            outcome(declined.id),
+            (CommandGrantOutcome::NotGranted { command }, true)
+        );
+        assert_eq!(
+            outcome(approval.id),
+            (CommandGrantOutcome::NotRequested, true)
         );
     }
 
@@ -2280,6 +2818,7 @@ mod tests {
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         }
     }
 
@@ -4308,6 +4847,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         // The delivery carries the answer, so it exists once the decision is
@@ -4422,6 +4962,39 @@ pub(super) fn migrate_refused_native_answers(
         "user_version",
         crate::REFUSED_NATIVE_ANSWER_SCHEMA_VERSION,
     )
+}
+
+/// Binds a command grant to the session that asked and the script it runs
+/// (ADR 0129).
+///
+/// A command request records the session that filed it, and the script it
+/// names with the hash Swarm took of it. The grant copies all three, so it is
+/// live only in that session and only while the script still has that hash.
+/// Absent on every earlier request: none of those ran a named script, and
+/// their grants, minted for the session-long rules this replaces, are never
+/// live again.
+pub(super) fn migrate_command_grant_scripts(
+    tx: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    for (table, column) in [
+        ("decision_requests", "requested_session_id"),
+        ("decision_requests", "requested_script_path"),
+        ("decision_requests", "requested_script_sha256"),
+        ("decision_command_grants", "session_id"),
+        ("decision_command_grants", "script_path"),
+        ("decision_command_grants", "script_sha256"),
+    ] {
+        let present: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+            [table, column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT;"))?;
+        }
+    }
+    tx.pragma_update(None, "user_version", version)
 }
 
 /// Lets a refusal say the question was asked and never answered.

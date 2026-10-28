@@ -700,6 +700,28 @@ export const SURFACES: Surface[] = [
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "needs-you-command-grant",
+    title: "Command grant with its script",
+    why: "Invented command and script hash: the operator reads exactly what one press allows (ADR 0129)",
+    render: () => <DecisionInbox decisions={[{
+      ...demoDecision,
+      title: "Allow the staging release command for the export task",
+      summary: "The auto-mode classifier denied the release script. It deploys the export service to staging only.",
+      questions: [],
+      suggested_action: "",
+      allowed_actions: ["Allow the command shown in this request"],
+      requested_command: "cd /srv/orchard && ./scripts/release.sh --service export --slot staging --wait 300 && echo released",
+      requested_script: { path: "/srv/orchard/scripts/release.sh", sha256: "4f1c9a7be2d03865c1f0e9a4b7d26c58e13a90f4d2b6c7e8a5f3019d4c2b7e61" },
+    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} />,
+  },
+  {
+    id: "needs-you-command-grant-phone",
+    title: "Command grant at phone width",
+    why: "A 390px frame tests that a long command and hash wrap instead of overflowing",
+    render: () => <iframe title="Command grant phone preview" src="/harness.html?surface=needs-you-command-grant"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "needs-you-withdrawn",
     title: "Withdrawn request history",
     why: "An obsolete request is quiet and never represented as operator approval",

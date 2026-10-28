@@ -1259,6 +1259,11 @@ export type DecisionRequest = {
    * read is worse than no grant mechanism at all.
    */
   requested_command?: string | null;
+  /**
+   * The local script the command runs, hashed when the request was filed. The
+   * grant lets the command run only while the file still has this hash.
+   */
+  requested_script?: { path: string; sha256: string } | null;
   /** Non-empty makes this an interview: answered by answering, not by a button. */
   questions?: DecisionQuestion[];
   deadline: number | null;

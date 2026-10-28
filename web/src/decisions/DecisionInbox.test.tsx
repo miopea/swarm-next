@@ -851,8 +851,8 @@ test("reserves nothing when the queue is empty", () => {
 });
 
 test("a decision that would grant a command shows the operator that command", () => {
-  // THE SAFETY PROPERTY OF THE WHOLE GRANT MECHANISM. One of these buttons
-  // turns the approval into a permission rule the classifier obeys. Approving
+  // THE SAFETY PROPERTY OF THE WHOLE GRANT MECHANISM. The one button lets
+  // the worker run this text in its running session (ADR 0129). Approving
   // "Allow the command shown in this request" with no command shown is
   // approving something you cannot read, which is worse than the block it
   // removes — so the command renders, in full, beside the button.
@@ -864,7 +864,7 @@ test("a decision that would grant a command shows the operator that command", ()
     kind: "approval",
     questions: [],
     requested_command: command,
-    allowed_actions: ["Do not run it", "Allow the command shown in this request"],
+    allowed_actions: ["Allow the command shown in this request"],
   };
   render(<DecisionInbox decisions={[granting]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
 
@@ -873,8 +873,30 @@ test("a decision that would grant a command shows the operator that command", ()
   // of a command has not read what they are allowing.
   expect(screen.getByText(command)).toBeInTheDocument();
   expect(
-    screen.getByText(/Grants permission for this exact command, once, for this worker only/),
+    screen.getByText(/Grants permission for this exact command, once, for this worker only, in\s+the session that asked/),
   ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Allow the command shown in this request" })).toBeInTheDocument();
+  expect(screen.queryByText("Script it runs")).not.toBeInTheDocument();
+});
+
+test("a command that runs a script shows the script and the hash it was approved at", () => {
+  // ADR 0129: the grant binds to these bytes, so the operator reads which
+  // file and which version of it they are allowing.
+  const granting: DecisionRequest = {
+    ...pending,
+    id: "decision-script",
+    kind: "approval",
+    questions: [],
+    requested_command: "/srv/app/release.sh --slot staging",
+    requested_script: { path: "/srv/app/release.sh", sha256: "7c88abc2f5b12572370a09eb9619bed4e7581fdfbe721fbecb68de19eea7cf73" },
+    allowed_actions: ["Allow the command shown in this request"],
+  };
+  render(<DecisionInbox decisions={[granting]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText("Script it runs")).toBeInTheDocument();
+  expect(screen.getByText("/srv/app/release.sh")).toBeInTheDocument();
+  expect(screen.getByText("7c88abc2f5b12572370a09eb9619bed4e7581fdfbe721fbecb68de19eea7cf73")).toBeInTheDocument();
+  expect(screen.getByText(/expires when the task leaves the board or the script changes/)).toBeInTheDocument();
 });
 
 test("an ordinary decision shows no command block", () => {

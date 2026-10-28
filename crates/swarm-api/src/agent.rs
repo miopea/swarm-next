@@ -93,7 +93,7 @@ impl AgentBridge {
         self
     }
 
-    /// The settings file carrying the commands this worker was granted.
+    /// The settings file carrying this worker's system access rules.
     ///
     /// Written as a SIBLING of the per-worker MCP config, and that placement is
     /// the mechanism rather than tidiness. The terminal host already receives
@@ -101,33 +101,30 @@ impl AgentBridge {
     /// new protocol field — and a new field would mean a protocol bump, which
     /// `swarm-package` refuses to install outright.
     ///
-    /// REMOVED WHEN THERE IS NOTHING TO GRANT. A stale file is a standing rule
-    /// nobody decided to keep, so the absence of grants has to erase it rather
+    /// ⚠️ NO COMMAND GRANTS (ADR 0129). They were written here as `Bash(...)`
+    /// rules, which Claude reads only when a session starts, allows for the
+    /// whole session rather than once, and reads as a wildcard when the command
+    /// holds a `*`. The worker's permission hook now spends each grant as it
+    /// runs, through `use_command_grant`.
+    ///
+    /// REMOVED WHEN THERE IS NOTHING TO ALLOW. A stale file is a standing rule
+    /// nobody decided to keep, so the absence of rules has to erase it rather
     /// than merely stop refreshing it.
     ///
     /// # Errors
-    /// Returns an error when the grants cannot be read or the file cannot be
-    /// written privately.
+    /// Returns an error when the file cannot be written privately.
     pub fn ensure_worker_settings(
         &self,
         worker_id: WorkerId,
     ) -> Result<Option<PathBuf>, AgentBridgeError> {
         let path = self.worker_settings_path(worker_id);
-        let granted = self.tasks.store().live_command_grants(worker_id)?;
-        // A command spanning lines is refused rather than flattened. The rule is
-        // an exact match on the text, so anything that changes the text changes
-        // what runs, and the operator approved the text they read.
-        let mut allow: Vec<String> = granted
-            .iter()
-            .filter(|command| !command.contains(['\n', '\r']))
-            .map(|command| format!("Bash({command})"))
-            .collect();
+        let mut allow: Vec<String> = Vec::new();
         // ⚠️ READ FROM THE PROFILE AT EVERY START, never carried in memory. This
         // is the line that turns an operator's stored choice into what a worker
         // may actually run, and a level lowered while the worker slept must take
         // effect the moment it wakes. A failure to read the profile leaves the
-        // list as the grants alone -- fewer permissions, never more, which is
-        // the only direction this may fail in.
+        // list empty -- fewer permissions, never more, which is the only
+        // direction this may fail in.
         let level = self
             .tasks
             .store()
@@ -155,9 +152,9 @@ impl AgentBridge {
         // fourth distinct cause in this one feature, and the third that a test
         // of a mechanism against itself could not see.
         //
-        // So each writer now owns its own KEY rather than the file: grants
-        // touch `permissions`, the model default touches `model`, and the file
-        // goes away only when nothing is left in it.
+        // So each writer now owns its own KEY rather than the file: system
+        // access touches `permissions`, the model default touches `model`, and
+        // the file goes away only when nothing is left in it.
         let mut document = match std::fs::read_to_string(&path) {
             Ok(contents) => {
                 serde_json::from_str::<serde_json::Value>(&contents).unwrap_or_else(|_| json!({}))
@@ -455,6 +452,58 @@ impl AgentBridge {
             .map(AgentPrincipal::from)
             .ok_or(AgentBridgeError::Unauthorized)
     }
+
+    /// Answers a worker's permission hook: spends a live grant for exactly this
+    /// command and says so, or says no grant matched (ADR 0129).
+    ///
+    /// Only a worker's own agent credential is accepted, so a grant is spent
+    /// only by the worker the operator granted it to. An outside tool's token
+    /// is refused, since it is not a worker and holds no grants.
+    ///
+    /// Every failure answers without a grant, and the hook then stays silent,
+    /// so the worker's permission checks decide exactly as they would have.
+    pub fn use_command_grant(&self, headers: &HeaderMap, body: &[u8]) -> Response {
+        let principal = match self.authenticate(headers) {
+            Ok(principal) => principal,
+            Err(AgentBridgeError::Unauthorized) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(error) => {
+                tracing::error!(message = %error, "command grant authentication failed");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        };
+        let Ok(request) = serde_json::from_slice::<CommandGrantRequest>(body) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        match self.tasks.use_command_grant(
+            principal.worker_id,
+            &request.command,
+            request.cwd.as_deref(),
+            script_sha256,
+        ) {
+            Ok(Some(decision_id)) => {
+                tracing::info!(
+                    worker_id = %principal.worker_id,
+                    %decision_id,
+                    "a worker ran a command the operator granted"
+                );
+                axum::Json(json!({ "granted": true, "decision_id": decision_id })).into_response()
+            }
+            Ok(None) => axum::Json(json!({ "granted": false })).into_response(),
+            Err(error) => {
+                tracing::error!(message = %error, "command grant could not be read");
+                StatusCode::SERVICE_UNAVAILABLE.into_response()
+            }
+        }
+    }
+}
+
+/// What a worker's permission hook sends: the command it is about to run, and
+/// the directory its shell is in.
+#[derive(Deserialize)]
+struct CommandGrantRequest {
+    command: String,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 pub async fn handle(
@@ -631,7 +680,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 34;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 35;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -650,7 +699,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 34;
 /// no fingerprint change means the wording moved; a fingerprint change always
 /// means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "a7f8c94d5199cef4b750501be425672cee27dca28eb5afd728b627a58007c5b3";
+    "184ad343e1527afecefb0d43000056c511bb1e05048e28e3f90f3ef389731c1b";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1518,7 +1567,10 @@ impl ServerHandler for AgentMcp {
                                     "An unattended review must create one decision per concrete task. Do not group unrelated tasks into one approval.".into(),
                                 ));
                         }
-                        if input.questions.is_empty()
+                        // A command request's only button is Swarm's grant,
+                        // and the store checks its recommendation itself.
+                        if input.command.is_none()
+                            && input.questions.is_empty()
                             && !input.suggested_action.is_empty()
                             && !input
                                 .allowed_actions
@@ -1536,6 +1588,20 @@ impl ServerHandler for AgentMcp {
                         .map(TaskId::from_str)
                         .transpose()
                         .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
+                    // Hashed now, so the operator approves these bytes and a
+                    // file changed afterwards is never granted (ADR 0129).
+                    let requested_script = input
+                        .script
+                        .map(|path| {
+                            script_sha256(&path)
+                                .map(|sha256| swarm_domain::RequestedScript { path: path.clone(), sha256 })
+                                .ok_or_else(|| {
+                                    ApplicationError::Refused(format!(
+                                        "Swarm could not read the script at {path:?} to hash it. Name the local file the command runs by its absolute path, as a readable file of at most 64 MiB, or leave script out when the command runs no local file."
+                                    ))
+                                })
+                        })
+                        .transpose()?;
                     self.tasks
                         .create_decision(
                             self.principal,
@@ -1553,6 +1619,7 @@ impl ServerHandler for AgentMcp {
                                 operator_actions: input.operator_actions,
                                 questions: input.questions,
                                 requested_command: input.command,
+                                requested_script,
                                 deadline: input.deadline,
                                 keep_working: input.keep_working,
                             },
@@ -3950,6 +4017,9 @@ struct RequestDecisionInput {
     /// keeps filing ordinary decisions rather than failing to file at all.
     #[serde(default)]
     command: Option<String>,
+    /// The absolute path of the local script `command` runs, if it runs one.
+    #[serde(default)]
+    script: Option<String>,
     kind: DecisionRequestKind,
     #[serde(default)]
     urgency: DecisionUrgency,
@@ -4069,7 +4139,7 @@ fn list_decisions_tool() -> Tool {
 fn request_decision_tool() -> Tool {
     tool(
         "swarm_request_decision",
-        "Request one concrete operator judgment without interrupting another terminal. Missing facts are not automatically missing operator authority: first obtain task-scoped evidence through the owning worker when existing access and authority permit it. Do not ask the operator to approve an already-authorized investigation just to prepare the real decision. If access, permission, scope or judgment is genuinely missing, name that exact boundary and why the evidence cannot be gathered without it. During Queen automation, create a separate request for each task; never combine a fleet review or unrelated tasks into one approval. Button actions must describe only that linked task, with one unambiguous outcome per button rather than combining operator execution and worker authorization.",
+        "Request one concrete operator judgment without interrupting another terminal. Missing facts are not automatically missing operator authority: first obtain task-scoped evidence through the owning worker when existing access and authority permit it. Do not ask the operator to approve an already-authorized investigation just to prepare the real decision. If access, permission, scope or judgment is genuinely missing, name that exact boundary and why the evidence cannot be gathered without it. During Queen automation, create a separate request for each task; never combine a fleet review or unrelated tasks into one approval. Button actions must describe only that linked task, with one unambiguous outcome per button rather than combining operator execution and worker authorization. IF A PERMISSION CHECK OR THE AUTO-MODE CLASSIFIER DENIED A COMMAND YOU NEED, ask with `command`: that is the only way an approval lets a command run, and a button you write never grants anything.",
         &json!({
             "type": "object",
             "properties": {
@@ -4084,10 +4154,11 @@ fn request_decision_tool() -> Tool {
                 "evidence": { "type": "string", "maxLength": 10000, "default": "" },
                 "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label, or an empty string to explicitly report No preference when there is no meaningful basis to favor an answer. Do not invent a recommendation or add a No preference answer button. During Queen automation a nonempty recommendation must exactly match one allowed_actions value." },
                 "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "option_descriptions": { "type": "object", "maxProperties": 4, "description": "Exact explanatory text keyed by an offered option label. Preserve conditions and scope; unknown option labels are rejected.", "additionalProperties": { "type": "string", "maxLength": 4096 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
-                "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+                "allowed_actions": { "type": "array", "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices, 1 to 6 of them. Do not encode actions for other tasks. Leave this empty when you send `command`.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "operator_actions": { "type": "array", "maxItems": 6, "uniqueItems": true, "description": "The subset of allowed_actions that the OPERATOR carries out themselves rather than authorising you to proceed. Mark an option here when answering it leaves THEM owing the action -- filing something in a console, setting a credential, pressing something only they can reach. Picking one parks this task and shows it under Needs you / Parked, still assigned to you, until they clear it; without the mark the task returns to you the moment they answer, and goes stale because you cannot act. Marking is an offer, not an authority: the park fires on their choice, never on this list, so it cannot be used to park your own work. Every entry must exactly match an allowed_actions value.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] },
-                "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you are asking to be allowed to run, verbatim and complete. Supplying it adds a separate grant button to the request; approving THAT button, and only that button, lets you run this command. The grant is scoped to you, dies when the task leaves the board, and is offered to one session. Send the command you will actually run, not a pattern and not a shortened version: the operator reads this exact text before allowing it, and a command that does not match what you run is a request for something nobody approved. Omit this for an ordinary approval that authorises no execution." }
+                "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you need the operator to allow, verbatim and complete. Send it whenever a permission check or the auto-mode classifier denied a command you need. Swarm offers the operator its own grant button for it; pressing that button lets you run exactly this text once, straight away in this session, while the task is on the board. With a command, give task_id and leave allowed_actions, operator_actions and questions empty and suggested_action an empty string: a button you write could never grant it, so one is refused. Send the command you will actually run, not a pattern or a shortened version: the operator reads this exact text, and any other text is not covered. Omit this for an ordinary approval that authorises no execution." },
+                "script": { "type": ["string", "null"], "maxLength": 4096, "description": "When command runs a local script or program file (./deploy.sh, /srv/app/release), its absolute path. Swarm hashes the file now and shows the hash to the operator; the grant then lets the command run only while the file is unchanged. Omit it when the command runs no local file, such as gh pr merge 689." }
             },
             "required": ["kind", "title", "summary", "reason", "suggested_action"],
             "additionalProperties": false
@@ -5137,6 +5208,43 @@ fn tool(name: &'static str, description: &'static str, schema: &Value, read_only
             .destructive(false)
             .open_world(false),
     )
+}
+
+/// The largest script Swarm hashes for a command grant.
+const MAX_GRANTED_SCRIPT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Lowercase hex sha256 of a script a command grant names, or `None` when it
+/// is not an absolute path to a file that can be read whole (ADR 0129).
+///
+/// Opened without blocking: a worker names this path, and opening a FIFO to
+/// read waits for a writer, which would hold an API thread indefinitely.
+fn script_sha256(path: &str) -> Option<String> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    if !Path::new(path).is_absolute() {
+        return None;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    let read = std::io::copy(
+        &mut std::io::Read::take(file, MAX_GRANTED_SCRIPT_BYTES + 1),
+        &mut hasher,
+    )
+    .ok()?;
+    if read > MAX_GRANTED_SCRIPT_BYTES {
+        return None;
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut hex, "{byte:02x}").expect("writing to an in-memory String cannot fail");
+    }
+    Some(hex)
 }
 
 fn token_digest(token: &str) -> [u8; 32] {
@@ -6467,6 +6575,258 @@ mod tests {
         token_from_config(&config).unwrap()
     }
 
+    /// Starts a session for the worker unless it has one, files a command
+    /// request on `task_id` from it, and presses the request's only button.
+    fn grant_command(store: &TaskStore, worker_id: WorkerId, task_id: TaskId, command: &str) {
+        if store
+            .get_worker_profile(worker_id)
+            .unwrap()
+            .active_session_id
+            .is_none()
+        {
+            store
+                .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+                .unwrap();
+        }
+        let decision = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: worker_id,
+                task_id: Some(task_id),
+                kind: DecisionRequestKind::Approval,
+                urgency: DecisionUrgency::Normal,
+                title: "Run one command",
+                summary: "The classifier denied it.",
+                reason: "Needed for the task.",
+                risk: "",
+                evidence: "",
+                suggested_action: "",
+                allowed_actions: &[],
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: Some(command),
+                requested_script: None,
+            })
+            .unwrap();
+        assert_eq!(
+            decision.allowed_actions.len(),
+            1,
+            "the grant is the only button"
+        );
+        store
+            .resolve_decision_request(decision.id, &decision.allowed_actions[0], "", "inbox")
+            .unwrap();
+    }
+
+    /// ADR 0129: the worker's permission hook spends a grant through the real
+    /// route, exactly once, with the worker's own credential only.
+    #[tokio::test]
+    async fn the_permission_hook_spends_a_grant_once_through_the_route() {
+        let (bridge, store, queen_id, worker_id, directory) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let task = store
+            .create_task("Run one command", "/workspace/petal")
+            .unwrap();
+        let command = "cd /srv/app && ./release --slot 'staging*' && echo released";
+        grant_command(&store, worker_id, task.id, command);
+        let app = crate::router(
+            crate::AppState::default()
+                .with_task_store(store.clone())
+                .with_agent_configuration(
+                    directory.path().to_path_buf(),
+                    "http://127.0.0.1:8876/mcp",
+                ),
+        );
+        let ask = |token: Option<&str>, body: String| {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(format!("/mcp{}", swarm_terminal::COMMAND_GRANT_PATH_SUFFIX))
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(token) = token {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            app.clone().oneshot(request.body(Body::from(body)).unwrap())
+        };
+        let asking = |text: &str| json!({ "command": text }).to_string();
+
+        let response = ask(None, asking(command)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = ask(Some(&worker_token), "not json".into()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let granted = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            response_json(response).await["granted"].as_bool().unwrap()
+        };
+        assert!(
+            !granted(ask(Some(&queen_token), asking(command)).await.unwrap()).await,
+            "another worker's credential cannot spend it"
+        );
+        assert!(
+            !granted(
+                ask(
+                    Some(&worker_token),
+                    asking("cd /srv/app && ./release --slot production")
+                )
+                .await
+                .unwrap()
+            )
+            .await,
+            "the `*` is text, not a wildcard"
+        );
+        assert!(
+            granted(ask(Some(&worker_token), asking(command)).await.unwrap()).await,
+            "the exact command, by the worker it was granted to"
+        );
+        assert!(
+            !granted(ask(Some(&worker_token), asking(command)).await.unwrap()).await,
+            "and only once"
+        );
+
+        // Claude drops `cd /srv/app &&` once the shell is in /srv/app.
+        grant_command(&store, worker_id, task.id, command);
+        let checked = |cwd: &str| {
+            json!({ "command": "./release --slot 'staging*' && echo released", "cwd": cwd })
+                .to_string()
+        };
+        assert!(
+            !granted(
+                ask(Some(&worker_token), checked("/srv/elsewhere"))
+                    .await
+                    .unwrap()
+            )
+            .await,
+            "the shorter text matches only from the folder the grant changes into"
+        );
+        assert!(
+            granted(ask(Some(&worker_token), checked("/srv/app")).await.unwrap()).await,
+            "where it is exactly what the granted command runs"
+        );
+    }
+
+    /// A worker names the script, so a FIFO there must be refused at once
+    /// rather than hold the API thread waiting for a writer. Run on its own
+    /// thread so a regression fails here instead of hanging the suite.
+    #[test]
+    fn a_script_that_is_not_a_regular_file_is_refused_without_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("release");
+        std::fs::write(&script, "#!/bin/sh\necho released\n").unwrap();
+        let fifo = directory.path().join("release.fifo");
+        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let paths = [script, fifo].map(|path| path.to_str().unwrap().to_owned());
+        std::thread::spawn(move || {
+            let hashes = paths.map(|path| script_sha256(&path));
+            let _ = sender.send(hashes);
+        });
+        let [script, fifo] = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("hashing a FIFO must not wait for a writer");
+        assert_eq!(
+            script.as_deref(),
+            Some("4da189d90e07cff2e187998d545d201d8cb7fe95efac557c72f1b545b7b2c9b9")
+        );
+        assert_eq!(fifo, None);
+        assert_eq!(script_sha256("relative/release"), None);
+    }
+
+    /// ADR 0129: a grant is never written as a settings rule, which Claude
+    /// would read for a whole session and as a wildcard where it holds a `*`.
+    #[test]
+    fn a_grant_is_never_written_as_a_session_rule() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let task = store
+            .create_task("Run one command", "/workspace/petal")
+            .unwrap();
+        grant_command(&store, worker_id, task.id, "rm -rf build/*");
+        assert!(
+            store
+                .live_command_grant(worker_id, "rm -rf build/*")
+                .unwrap()
+                .is_some(),
+            "a live grant exists, so its absence below is the settings writer's doing"
+        );
+
+        bridge.ensure_worker_settings(worker_id).unwrap();
+
+        let written = written_settings(&bridge, worker_id);
+        assert!(
+            !written.contains("rm -rf"),
+            "the grant is spent by the hook, never allowed by a rule: {written}"
+        );
+    }
+
+    /// ADR 0129: over the real tool, a request for a command that also offers
+    /// the worker's own button is refused with what to send instead, and one
+    /// with the command alone offers only Swarm's grant.
+    #[tokio::test]
+    async fn a_worker_asking_for_a_command_is_told_to_send_it_alone() {
+        let (bridge, store, queen_id, _worker_id, directory) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let task = store
+            .create_task("Run one command", "/workspace/petal")
+            .unwrap();
+        let ask = |extra: Value| {
+            let mut arguments = json!({
+                "task_id": task.id.to_string(),
+                "keep_working": true,
+                "kind": "approval",
+                "title": "Run one command",
+                "summary": "The classifier denied it.",
+                "reason": "Needed for the task.",
+                "suggested_action": "",
+                "command": "cargo test --workspace && echo ok",
+            });
+            arguments
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            call_review_test_tool(bridge.clone(), &token, "swarm_request_decision", arguments)
+        };
+
+        let refused = ask(json!({
+            "allowed_actions": ["Grant permission to run it"],
+            "suggested_action": "Grant permission to run it",
+        }))
+        .await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("Leave allowed_actions, operator_actions and questions empty"),
+            "the refusal says what to send instead: {refused}"
+        );
+
+        let created = ask(json!({})).await;
+        assert_eq!(
+            created["result"]["structuredContent"]["allowed_actions"],
+            json!(["Allow the command shown in this request"]),
+            "{created}"
+        );
+
+        // The script is hashed as it is filed, so the card shows what the
+        // operator is approving and the grant can refuse a changed file.
+        let script = directory.path().join("release.sh");
+        std::fs::write(&script, "#!/bin/sh\necho staging\n").unwrap();
+        let hashed = ask(json!({ "script": script.to_str().unwrap() })).await;
+        assert_eq!(
+            hashed["result"]["structuredContent"]["requested_script"],
+            json!({
+                "path": script.to_str().unwrap(),
+                "sha256": "7c88abc2f5b12572370a09eb9619bed4e7581fdfbe721fbecb68de19eea7cf73",
+            }),
+            "{hashed}"
+        );
+        let missing = ask(json!({ "script": "/nonexistent/release.sh" })).await;
+        assert_eq!(missing["result"]["isError"], true, "{missing}");
+        assert!(
+            missing.to_string().contains("could not read the script"),
+            "{missing}"
+        );
+    }
+
     fn mcp_request(token: Option<&str>, method: &str, params: &Value) -> Request<Body> {
         let mut builder = Request::builder()
             .method("POST")
@@ -6512,6 +6872,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap()
     }
@@ -10239,6 +10600,7 @@ mod tests {
                     questions: &[],
                     deadline: None,
                     requested_command: None,
+                    requested_script: None,
                 })
                 .unwrap();
         }
@@ -10449,6 +10811,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
@@ -10529,6 +10892,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
 
@@ -10591,6 +10955,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
@@ -10678,6 +11043,7 @@ mod tests {
                     questions: &[],
                     deadline: None,
                     requested_command: None,
+                    requested_script: None,
                 })
                 .unwrap();
         }
@@ -10733,6 +11099,7 @@ mod tests {
                     questions: &[],
                     deadline: None,
                     requested_command: None,
+                    requested_script: None,
                 })
                 .unwrap();
             // Admission and the page share the pending bound. History can
@@ -10886,6 +11253,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
 

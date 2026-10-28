@@ -18,6 +18,10 @@ mod provider_turn;
 /// agent. The relay compares it across responses and tells Claude when it
 /// moves, so a running worker refetches its tools (ADR 0123).
 pub const AGENT_TOOL_SURFACE_HEADER: &str = "x-swarm-tool-surface";
+/// Appended to a worker's MCP URL to reach the endpoint its permission hook
+/// asks before each shell command, to spend a grant the operator pressed
+/// (ADR 0129).
+pub const COMMAND_GRANT_PATH_SUFFIX: &str = "/command-grant";
 mod resources;
 mod startup_failure;
 mod state;

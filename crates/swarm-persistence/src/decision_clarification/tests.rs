@@ -149,6 +149,7 @@ fn clarification_attention_counts_beyond_detail_cap_without_private_text() {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
@@ -817,6 +818,7 @@ fn clarification_batch_is_bounded_and_rechecks_session_before_dispatch() {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
@@ -908,6 +910,7 @@ fn setup_in(store: TaskStore) -> (TaskStore, DecisionRequestId, WorkerId, Worker
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         })
         .unwrap();
     (store, request.id, queen.id, session)
@@ -1177,6 +1180,7 @@ fn clarification_global_capacity_and_closed_history_retention_are_explicit() {
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         })
         .unwrap();
     store
@@ -1241,10 +1245,13 @@ fn clarification_migration_and_reopen_preserve_parent_and_exact_exchange() {
 #[test]
 fn clarification_of_a_command_request_cannot_mint_a_command_grant() {
     let (store, _, worker, session) = setup();
+    let task = store
+        .create_task("Fictional command task", "/workspace/fictional")
+        .unwrap();
     let decision = store
         .create_decision_request(&NewDecisionRequest {
             requesting_worker_id: worker,
-            task_id: None,
+            task_id: Some(task.id),
             kind: DecisionRequestKind::Approval,
             urgency: DecisionUrgency::Normal,
             title: "Fictional command approval",
@@ -1252,12 +1259,13 @@ fn clarification_of_a_command_request_cannot_mint_a_command_grant() {
             reason: "Needs review",
             risk: "Fictional",
             evidence: "No command executes in this test",
-            suggested_action: "Wait",
-            allowed_actions: &["Wait".into()],
+            suggested_action: "",
+            allowed_actions: &[],
             operator_actions: &[],
             questions: &[],
             deadline: None,
             requested_command: Some("cargo test"),
+            requested_script: None,
         })
         .unwrap();
     let id = DecisionClarificationId::new();

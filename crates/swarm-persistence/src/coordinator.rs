@@ -3746,6 +3746,7 @@ mod tests {
                 // actually happens to one.
                 deadline: Some(unix_now(store) + 3_600),
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
@@ -5227,6 +5228,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
 
@@ -5304,6 +5306,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         assert!(

@@ -164,7 +164,10 @@ mod night_watch;
 pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
 mod passkeys;
 mod presence;
-pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
+pub use decisions::{
+    CommandGrantOutcome, DecisionDeliveryFailure, DecisionDispatch, LiveCommandGrant,
+    NewDecisionRequest,
+};
 pub use email::{
     EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
     EmailReplyFailure, EmailReplyState, EmailReplyTarget, EmailReplyTargetDispatch,
@@ -424,7 +427,9 @@ const REPORTED_CONVERSATIONS_SCHEMA_MARKER: i64 = 210;
 const TASK_INTAKE_SCHEMA_MARKER: i64 = 211;
 /// A card can say its question was asked in a terminal and never answered.
 const NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER: i64 = 212;
-const CURRENT_SCHEMA_VERSION: i64 = NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER;
+/// A command grant is bound to the script it runs (ADR 0129).
+const COMMAND_GRANT_SCRIPT_SCHEMA_MARKER: i64 = 213;
+const CURRENT_SCHEMA_VERSION: i64 = COMMAND_GRANT_SCRIPT_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -638,6 +643,10 @@ pub enum TaskStoreError {
     InvalidDecisionSummary,
     #[error("decision request must offer 1 to 6 unique actions")]
     InvalidDecisionActions,
+    #[error(
+        "a request to run a command names its task_id and carries the exact command (at most 4000 bytes, with no control or invisible characters besides newlines and tabs), and offers no buttons or questions of its own: Swarm adds the one button that grants the command, and only that button lets it run. Leave allowed_actions, operator_actions and questions empty, and set suggested_action to an empty string or \"Allow the command shown in this request\". Ask anything else in a separate request"
+    )]
+    InvalidCommandDecision,
     #[error(
         "an interview asks at most 4 questions, each with 2 to 4 unique options and a unique header, and offers no actions"
     )]
@@ -4109,11 +4118,9 @@ fn migrate_task_amendments(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
 /// compiled to a permission pattern would trade a visible block for an invisible
 /// grant — worse than the gap being closed.
 ///
-/// `consumed_at` is honest about what it can enforce. The classifier reads a
-/// settings file at process start and reports nothing back, so exactly-once
-/// cannot be enforced AT THE CLASSIFIER. What is enforced is that the grant
-/// appears in one session's settings, is marked consumed when that session ends,
-/// and dies with the task regardless.
+/// `consumed_at` marks a grant used once by the worker's permission hook, or
+/// spent unused when the worker is stood down; either way it never runs again
+/// (ADR 0129). A grant also dies with its task.
 fn migrate_decision_command_grants(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -4862,6 +4869,12 @@ fn migrate_fleet_health_schema_steps(
         crate::decisions::migrate_never_completed_refusals(
             transaction,
             NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < COMMAND_GRANT_SCRIPT_SCHEMA_MARKER {
+        crate::decisions::migrate_command_grant_scripts(
+            transaction,
+            COMMAND_GRANT_SCRIPT_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -11020,6 +11033,21 @@ mod tests {
                  )",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'decision_native_answer_refusals' AND sql LIKE '%never_completed%'",
+        },
+        SchemaStep {
+            table: "decision_command_grants",
+            artifact: "the session and script a command grant is bound to",
+            undo_sql: "ALTER TABLE decision_requests DROP COLUMN requested_session_id;
+                       ALTER TABLE decision_requests DROP COLUMN requested_script_path;
+                       ALTER TABLE decision_requests DROP COLUMN requested_script_sha256;
+                       ALTER TABLE decision_command_grants DROP COLUMN session_id;
+                       ALTER TABLE decision_command_grants DROP COLUMN script_path;
+                       ALTER TABLE decision_command_grants DROP COLUMN script_sha256;",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('decision_requests')
+                                 WHERE name IN ('requested_session_id','requested_script_path',
+                                                'requested_script_sha256'))
+                             + (SELECT COUNT(*) FROM pragma_table_info('decision_command_grants')
+                                 WHERE name IN ('session_id','script_path','script_sha256')) = 6",
         },
     ];
 

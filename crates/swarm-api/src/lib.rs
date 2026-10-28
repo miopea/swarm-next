@@ -4368,6 +4368,10 @@ fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
         .route("/mcp/ops", post(ops_mcp::handle))
+        .route(
+            &format!("/mcp{}", swarm_terminal::COMMAND_GRANT_PATH_SUFFIX),
+            post(command_grant).layer(DefaultBodyLimit::max(MAX_COMMAND_GRANT_BODY_BYTES)),
+        )
         // Discovery for an outside tool. PUBLIC, and deliberately so: these are
         // the documents a client reads to find out how to authenticate, and
         // putting them behind the credential they exist to obtain is a loop.
@@ -5411,6 +5415,22 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     state.deliver_coordination().await;
     response
 }
+/// Large enough for any command a request may carry, which the store caps at
+/// 4,000 bytes, with room for JSON escaping.
+const MAX_COMMAND_GRANT_BODY_BYTES: usize = 64 * 1024;
+
+/// A worker's permission hook asking whether this exact command was granted.
+async fn command_grant(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(bridge) = state.agent_bridge.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    bridge.use_command_grant(&headers, &body)
+}
+
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let mut degraded = state.degraded_subsystems().to_vec();
     if state.support_sender_failed() {
@@ -11296,6 +11316,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         ),
         TaskStoreError::InvalidDecisionContent
         | TaskStoreError::InvalidDecisionActions
+        | TaskStoreError::InvalidCommandDecision
         | TaskStoreError::InvalidDecisionDeadline
         | TaskStoreError::InvalidDecisionResolution => ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -11895,12 +11916,92 @@ mod tests {
             action: "ship\nnow".into(),
             note: "green\u{1b}[31m\rchecks".into(),
             answers: std::collections::BTreeMap::new(),
+            command: swarm_persistence::CommandGrantOutcome::NotRequested,
+            approval: false,
         };
         let message = decision_delivery_message(&delivery).bytes;
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
         assert!(String::from_utf8_lossy(&message).contains("ship now"));
+    }
+
+    /// ADR 0129: the worker is told plainly whether its command may now run,
+    /// so a resolution that granted nothing is never read as permission.
+    #[test]
+    fn a_resolution_says_whether_a_command_was_granted() {
+        use swarm_persistence::CommandGrantOutcome;
+        let say = |command: CommandGrantOutcome, approval: bool| {
+            let delivery = DecisionDispatch {
+                decision_id: DecisionRequestId::new(),
+                worker_id: WorkerId::new(),
+                session_id: WorkerSessionId::new(),
+                action: "Yes, run it".into(),
+                note: String::new(),
+                answers: std::collections::BTreeMap::new(),
+                command,
+                approval,
+            };
+            String::from_utf8(decision_delivery_message(&delivery).bytes).unwrap()
+        };
+
+        let command = "cd /srv/app && ./release --slot staging";
+        let granted = say(
+            CommandGrantOutcome::Granted {
+                command: command.into(),
+            },
+            true,
+        );
+        assert!(
+            granted.contains(
+                "Granted: you may now run this exact command: `cd /srv/app && ./release --slot staging` once"
+            ),
+            "the line names the command it allows: {granted}"
+        );
+        assert!(!granted.contains("No grant was made"));
+
+        let declined = say(
+            CommandGrantOutcome::NotGranted {
+                command: command.into(),
+            },
+            true,
+        );
+        assert!(
+            declined.contains(
+                "No grant was made: this exact command: `cd /srv/app && ./release --slot staging` is still not approved"
+            ),
+            "{declined}"
+        );
+        assert!(declined.contains("do not run it or retry it"), "{declined}");
+        assert!(!declined.contains("Granted:"));
+
+        let script = say(
+            CommandGrantOutcome::Granted {
+                command: "set -e\n./release".into(),
+            },
+            true,
+        );
+        assert!(
+            script.contains("it spans lines") && !script.contains("set -e"),
+            "a command a terminal line cannot carry intact is pointed to, not flattened: {script}"
+        );
+
+        let approval = say(CommandGrantOutcome::NotRequested, true);
+        assert!(
+            approval.contains("This answer granted no command"),
+            "{approval}"
+        );
+        assert!(approval.contains("command field"), "{approval}");
+
+        let ruling = say(CommandGrantOutcome::NotRequested, false);
+        assert!(
+            !ruling.contains("grant"),
+            "an ordinary ruling says nothing about commands: {ruling}"
+        );
+        for message in [granted, declined, script, approval, ruling] {
+            assert!(message.ends_with('\r'));
+            assert!(!message[..message.len() - 1].contains(['\n', '\r']));
+        }
     }
 
     #[test]
@@ -11921,6 +12022,8 @@ mod tests {
             action: "answered".into(),
             note: String::new(),
             answers,
+            command: swarm_persistence::CommandGrantOutcome::NotRequested,
+            approval: false,
         };
 
         let message = decision_delivery_message(&delivery).bytes;
@@ -22406,6 +22509,7 @@ mod tests {
             questions: &[],
             deadline: None,
             requested_command: None,
+            requested_script: None,
         };
         let decision = store
             .create_decision_request(&fixture(
@@ -22512,6 +22616,7 @@ mod tests {
                 questions: &questions,
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         let app = router(
@@ -22660,6 +22765,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         // An explicit answer must reach this resting PTY even when its initial
@@ -22806,6 +22912,7 @@ mod tests {
                 questions: &[],
                 deadline: None,
                 requested_command: None,
+                requested_script: None,
             })
             .unwrap();
         store
