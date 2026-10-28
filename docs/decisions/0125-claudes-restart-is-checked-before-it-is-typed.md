@@ -61,5 +61,26 @@ command Claude did not have.
 - The flag's name is Claude's internal name and can change in any release. The
   backstop is what keeps a rename from turning back into repeated asks.
 - When the command is switched back on, the next read finds it and workers move
-  in place again. A release the backstop already marked waits for the next
-  release or an API restart.
+  in place again, whatever the backstop marked (see below).
+
+## The flag outranks the screen (2026-10-27)
+
+The operator asked why the Real Truth worker had `/restart`. Claude had switched
+the flag on for the account: `~/.claude.json` read `true`. But Swarm's mark on
+2.1.312, which nothing but an API restart clears, still counted the workers
+behind it as needing stopping.
+
+A second after each API start, at 22:25:13Z and 23:41:21Z, Swarm marked
+2.1.312 from an "Unknown command" a worker still showed. So an API restart did
+not clear the mark, as the consequence above promised: each restart re-read the
+old answer. The flag did not read `false` then, or Swarm would not have looked.
+Whether it was unreadable or already `true` is not recorded. Either way, the
+mark held after the flag read `true`, because the code let it overrule the flag.
+
+Decision 3 already calls the backstop the answer to a missing or renamed flag.
+It now acts only then. A flag Swarm can read decides alone: `false` stops the
+asking, and `true` asks once per worker per release, whatever the screen shows.
+
+If Claude ever answers "Unknown command" while its cached flag reads `true`,
+each worker is asked once for that release. Restart then asks it once more per
+press. That is the ADR 0122 one-ask bound, not the backstop.

@@ -85,17 +85,17 @@ impl ProviderUpdates {
     }
 
     /// Whether workers behind `release` can be moved onto it with `/restart`
-    /// (ADR 0125): not while Claude's cached flag says the command is off, and
-    /// not once a worker has answered that it has no such command. Otherwise
-    /// they take the stop-and-start every other provider gets.
+    /// (ADR 0125). Claude's cached flag decides when Swarm can read it. When it
+    /// cannot, a worker's answer that Claude has no such command stands in for
+    /// it. Otherwise they take the stop-and-start every other provider gets.
     pub(super) fn moves_in_place(&self, release: &ProviderRelease, restart: Option<bool>) -> bool {
-        restart != Some(false)
-            && self
-                .unknown_on
+        restart.unwrap_or_else(|| {
+            self.unknown_on
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_deref()
                 != Some(release.resolved_path.as_str())
+        })
     }
 
     /// Whether Swarm moves this session onto `release` itself (ADR 0122, 0125):
@@ -288,16 +288,24 @@ fn carry_on_message(version: Option<&str>) -> CoordinationMessage {
 }
 
 /// The installed Claude release, and whether this pass may type `/restart`
-/// onto it (ADR 0125). A worker's answer that Claude has no such command is
-/// recorded for the release here, so the Updates view and the Restart button
-/// read it too.
+/// onto it (ADR 0125). While Claude's flag cannot be read, a worker's answer
+/// that Claude has no such command is recorded for the release here, so the
+/// Updates view and the Restart button read it too.
+///
+/// A flag that can be read is never overruled by the screen. Measured
+/// 2026-10-27: a second after each API start Swarm marked 2.1.312 from an
+/// answer already on a worker's screen, and the mark held after the flag
+/// switched on.
 async fn restart_target(
     state: &AppState,
     executables: &HashMap<WorkerSessionId, Option<String>>,
     observed: &HashMap<WorkerSessionId, ProviderSignals>,
 ) -> Option<(ProviderRelease, bool)> {
     let (release, restart) = installed_claude(state).await?;
-    if !state.provider_updates.moves_in_place(&release, restart) {
+    if let Some(on) = restart {
+        return Some((release, on));
+    }
+    if !state.provider_updates.moves_in_place(&release, None) {
         return Some((release, false));
     }
     if !claude_answered_unknown(state, &release, executables, observed).await {
@@ -653,6 +661,20 @@ mod tests {
         Refuses,
         /// Has no such command, as while its flag is off (ADR 0125).
         Unknown,
+        /// Moves, though the screen still shows the answer Claude gave while
+        /// its flag was off.
+        MovesPastAnOldAnswer,
+    }
+
+    #[cfg(unix)]
+    impl Reply {
+        /// What the worker's screen shows before Swarm asks it anything.
+        fn screen_before(self) -> &'static str {
+            match self {
+                Self::MovesPastAnOldAnswer => "● Unknown command: /restart\r\n● Done.\r\n",
+                Self::Moves | Self::Refuses | Self::Unknown => "● Done.\r\n",
+            }
+        }
     }
 
     /// A fake terminal host holding one Claude session, which answers
@@ -682,7 +704,7 @@ mod tests {
                 JournalLimits::new(64 * 1024, 64),
                 TerminalSize::new(30, 240),
             );
-            let mut transcript = String::from("● Done.\r\n");
+            let mut transcript = String::from(reply.screen_before());
             let mut typed = String::new();
             let mut running = OLDER.to_owned();
             let redraw = |terminal: &mut CanonicalTerminalState, transcript: &str, typed: &str| {
@@ -741,7 +763,7 @@ mod tests {
                             let _ = write!(transcript, "\r\n❯ {typed}\r\n");
                             if typed == "/restart" {
                                 match reply {
-                                    Reply::Moves => {
+                                    Reply::Moves | Reply::MovesPastAnOldAnswer => {
                                         running = INSTALLED.to_owned();
                                         transcript.push_str("  ⎿  Successfully updated from 2.1.309 to version 2.1.310\r\n");
                                     }
@@ -897,6 +919,34 @@ mod tests {
             installed_at: Some(2_000),
         };
         assert!(state.provider_updates.moves_in_place(&newer, None));
+
+        // And the flag, once Swarm can read it again, outranks the answer.
+        assert!(
+            state
+                .provider_updates
+                .moves_in_place(&release(), Some(true))
+        );
+    }
+
+    /// Measured 2026-10-27: a second after each API start Swarm marked 2.1.312
+    /// from an answer already on a worker's screen, and the mark held after
+    /// Claude's flag switched on. A flag Swarm can read is never overruled by
+    /// what a screen still shows.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_flag_that_reads_on_outranks_an_old_answer_on_screen() {
+        let session = WorkerSessionId::new();
+        let (_directory, client, submitted) =
+            fake_host(session, Reply::MovesPastAnOldAnswer, Some(true));
+        let (state, observed) = hive_with_working_worker(client, session);
+
+        assert_eq!(advance(&state, &observed).await, 1);
+        assert_eq!(submitted.lock().unwrap()[0], "/restart");
+        assert!(
+            state
+                .provider_updates
+                .moves_in_place(&release(), Some(true))
+        );
     }
 
     /// An API restart forgets every ask. The worker still shows Claude's answer
