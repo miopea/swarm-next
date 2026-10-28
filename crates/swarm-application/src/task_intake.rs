@@ -8,7 +8,8 @@
 
 use swarm_domain::{
     IntakeSource, MAX_TASK_SEARCH_HITS, RoutingCandidate, Task, TaskActivityActor, TaskPriority,
-    TaskSearchHit, WorkerProfile, WorkerRole, task_search_score, task_search_words,
+    TaskSearchHit, WorkerId, WorkerProfile, WorkerRole, closest_worker_names, task_search_score,
+    task_search_words,
 };
 use swarm_persistence::IntakeFiling;
 
@@ -58,26 +59,12 @@ impl TaskService {
             request.requested_by,
         )
         .map_err(ApplicationError::Refused)?;
-        let recommended_worker = match request
+        let recommended_worker = request
             .recommended_worker
             .map(str::trim)
             .filter(|name| !name.is_empty())
-        {
-            None => None,
-            Some(name) => Some(
-                self.routable_workers()?
-                    .into_iter()
-                    .find(|worker| worker.name.eq_ignore_ascii_case(name))
-                    .map(|worker| worker.id)
-                    .ok_or_else(|| {
-                        ApplicationError::Refused(format!(
-                            "No worker is named \"{name}\". swarm_list_workers lists the names \
-                             work can be routed to. Leave recommended_worker out and Queen \
-                             routes from the description."
-                        ))
-                    })?,
-            ),
-        };
+            .map(|name| self.routable_worker_named(name))
+            .transpose()?;
         Ok(self.store.file_intake_task_as(
             &IntakeFiling {
                 title: request.title,
@@ -170,6 +157,34 @@ impl TaskService {
             .filter(|worker| worker.role == WorkerRole::Worker && !worker.ephemeral)
             .collect())
     }
+
+    fn routable_worker_named(&self, name: &str) -> Result<WorkerId, ApplicationError> {
+        let workers = self.routable_workers()?;
+        workers
+            .iter()
+            .find(|worker| worker.name.eq_ignore_ascii_case(name))
+            .map(|worker| worker.id)
+            .ok_or_else(|| ApplicationError::Refused(no_worker_is_named(name, &workers)))
+    }
+}
+
+/// The refusal for a recommended worker no worker answers to. It names the
+/// workers the name most resembles, so a typo is corrected in one retry rather
+/// than by reading the whole roster again.
+fn no_worker_is_named(name: &str, workers: &[WorkerProfile]) -> String {
+    let quoted = closest_worker_names(name, workers.iter().map(|worker| worker.name.as_str()))
+        .into_iter()
+        .map(|worker| format!("\"{worker}\""))
+        .collect::<Vec<_>>();
+    let guess = match quoted.split_last() {
+        None => String::new(),
+        Some((only, [])) => format!(" Did you mean {only}?"),
+        Some((last, rest)) => format!(" Did you mean {} or {last}?", rest.join(", ")),
+    };
+    format!(
+        "No worker is named \"{name}\".{guess} swarm_list_workers lists the names work can be \
+         routed to. Leave recommended_worker out and Queen routes from the description."
+    )
 }
 
 #[cfg(test)]
@@ -297,6 +312,52 @@ mod tests {
             ),
             Err(ApplicationError::Refused(_))
         ));
+    }
+
+    /// A near miss is refused like any unknown name and files nothing, but
+    /// names the workers it was close to. A name nothing resembles gets no
+    /// guess.
+    #[test]
+    fn a_refused_recommendation_names_the_closest_workers_and_files_nothing() {
+        let hive = hive();
+        let store = hive.service.store();
+        for (position, name) in [(2, "BFG Solutions"), (3, "D365 Solutions")] {
+            store
+                .create_worker(
+                    name,
+                    ProviderKind::ClaudeCode,
+                    "/workspace/x",
+                    false,
+                    position,
+                )
+                .unwrap();
+        }
+        let refusal = |name| match hive.service.file_intake_task(
+            hive.tool,
+            &IntakeRequest {
+                recommended_worker: Some(name),
+                ..request("Fix it")
+            },
+        ) {
+            Err(ApplicationError::Refused(text)) => text,
+            other => panic!("{name} was not refused: {:?}", other.map(|task| task.id)),
+        };
+        let rest = " swarm_list_workers lists the names work can be routed to.";
+
+        assert!(refusal("D365 Solution").starts_with(&format!(
+            "No worker is named \"D365 Solution\". Did you mean \"D365 Solutions\"?{rest}"
+        )));
+        assert!(refusal("solutions").starts_with(&format!(
+            "No worker is named \"solutions\". Did you mean \"BFG Solutions\" or \"D365 \
+             Solutions\"?{rest}"
+        )));
+        assert!(refusal("Nonexistent Worker 9000").starts_with(&format!(
+            "No worker is named \"Nonexistent Worker 9000\".{rest}"
+        )));
+        assert!(
+            store.list_tasks().unwrap().is_empty(),
+            "a refusal files nothing"
+        );
     }
 
     #[test]
