@@ -26,6 +26,10 @@ const MAX_TASK_SEARCH_WORDS: usize = 12;
 const SEARCH_STOP_WORDS: [&str; 9] = [
     "the", "and", "for", "with", "from", "this", "that", "into", "not",
 ];
+/// The most worker names one refusal suggests.
+pub const MAX_WORKER_SUGGESTIONS: usize = 3;
+/// The most characters a name may have wrong and still be a typo of a worker.
+const MAX_WORKER_NAME_TYPOS: usize = 3;
 
 /// Where filed work came from, as the tool that filed it said.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -203,9 +207,180 @@ pub fn task_search_score(title: &str, jira_key: Option<&str>, words: &[String]) 
         .count()
 }
 
+/// The workers a name that matched none was probably meant to be, closest
+/// first and at most three.
+///
+/// A worker is close when the name is a typo of its name, at most one
+/// character wrong in four and never more than three, or when every word of
+/// the name begins a word of its name, as "public web" begins "Public
+/// Website". Case, spacing and punctuation never count. A name nothing
+/// resembles gets nothing, so a refusal never offers a guess as a correction.
+#[must_use]
+pub fn closest_worker_names<'a>(
+    name: &str,
+    workers: impl IntoIterator<Item = &'a str>,
+) -> Vec<&'a str> {
+    let typed = name_words(name);
+    let typed_chars = typed.join(" ").chars().collect::<Vec<_>>();
+    if typed_chars.is_empty() {
+        return Vec::new();
+    }
+    let typos = (typed_chars.len() / 4).clamp(1, MAX_WORKER_NAME_TYPOS);
+    let mut close = workers
+        .into_iter()
+        .filter_map(|worker| {
+            let words = name_words(worker);
+            // A word match ranks below every typo, which names the worker closer.
+            within_typos(&typed_chars, &words.join(" "), typos)
+                .or_else(|| begins_its_words(&typed, &words).then_some(typos + 1))
+                .map(|rank| (rank, worker))
+        })
+        .collect::<Vec<_>>();
+    // Stable, so equally close workers keep the roster's order.
+    close.sort_by_key(|(rank, _)| *rank);
+    close
+        .into_iter()
+        .take(MAX_WORKER_SUGGESTIONS)
+        .map(|(_, worker)| worker)
+        .collect()
+}
+
+/// A name's words, lower-cased, with everything but letters and digits as a
+/// break between them.
+fn name_words(name: &str) -> Vec<String> {
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// How many characters turn one name into the other, when that is at most
+/// `limit`. Two swapped neighbours are one typo, not two.
+///
+/// Names further apart in length than the limit are never compared, so a long
+/// name costs no more than a short one.
+fn within_typos(typed: &[char], worker: &str, limit: usize) -> Option<usize> {
+    let worker = worker.chars().collect::<Vec<_>>();
+    if typed.len().abs_diff(worker.len()) > limit {
+        return None;
+    }
+    let mut before = Vec::new();
+    let mut previous = (0..=worker.len()).collect::<Vec<_>>();
+    for (row, &typed_char) in typed.iter().enumerate() {
+        let mut current = vec![row + 1; worker.len() + 1];
+        for (column, &worker_char) in worker.iter().enumerate() {
+            let mut cost = (previous[column] + usize::from(typed_char != worker_char))
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+            if row > 0
+                && column > 0
+                && typed_char == worker[column - 1]
+                && typed[row - 1] == worker_char
+            {
+                cost = cost.min(before[column - 1] + 1);
+            }
+            current[column + 1] = cost;
+        }
+        before = std::mem::replace(&mut previous, current);
+    }
+    let distance = previous[worker.len()];
+    (distance <= limit).then_some(distance)
+}
+
+/// Whether every typed word of three or more characters begins a word of the
+/// worker's name. A name with more words than the worker's is not a shorter
+/// form of it, and a name of only short words says too little to match on.
+fn begins_its_words(typed: &[String], worker: &[String]) -> bool {
+    if typed.len() > worker.len() {
+        return false;
+    }
+    let meaningful = typed
+        .iter()
+        .filter(|word| word.chars().count() >= 3)
+        .collect::<Vec<_>>();
+    !meaningful.is_empty()
+        && meaningful
+            .iter()
+            .all(|word| worker.iter().any(|own| own.starts_with(word.as_str())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ROSTER: [&str; 6] = [
+        "BFG Solutions",
+        "D365 Solutions",
+        "Public Website",
+        "RCG Networks",
+        "Swarm Next",
+        "Aria",
+    ];
+
+    /// ABLATION: count a swap as two typos and "Aira" suggests nothing.
+    #[test]
+    fn a_typo_suggests_the_worker_it_misspells() {
+        assert_eq!(
+            closest_worker_names("D365 Solution", ROSTER),
+            ["D365 Solutions"]
+        );
+        assert_eq!(closest_worker_names("swarm-nxet", ROSTER), ["Swarm Next"]);
+        assert_eq!(closest_worker_names("Aira", ROSTER), ["Aria"]);
+        assert_eq!(closest_worker_names("Ari", ROSTER), ["Aria"]);
+    }
+
+    #[test]
+    fn the_words_that_begin_a_name_suggest_it() {
+        assert_eq!(
+            closest_worker_names("public web", ROSTER),
+            ["Public Website"]
+        );
+        assert_eq!(closest_worker_names("networks", ROSTER), ["RCG Networks"]);
+        assert_eq!(
+            closest_worker_names("Solutions", ROSTER),
+            ["BFG Solutions", "D365 Solutions"]
+        );
+    }
+
+    #[test]
+    fn a_typo_ranks_above_a_word_match() {
+        let roster = ["Probe Runner", "Prob"];
+        assert_eq!(
+            closest_worker_names("Probe", roster),
+            ["Prob", "Probe Runner"]
+        );
+    }
+
+    /// No suggestion is better than a wrong one: a name nothing resembles, one
+    /// of only short words, and one with more words than any worker's name get
+    /// none.
+    #[test]
+    fn a_name_nothing_resembles_suggests_nothing() {
+        for name in [
+            "Nonexistent Worker 9000",
+            "Nobody",
+            "a b",
+            "--",
+            "",
+            "public website team lead",
+        ] {
+            assert!(
+                closest_worker_names(name, ROSTER).is_empty(),
+                "{name} resembles no worker"
+            );
+        }
+        let long = "solutions ".repeat(10_000);
+        assert!(closest_worker_names(&long, ROSTER).is_empty());
+    }
+
+    #[test]
+    fn suggestions_are_bounded() {
+        let roster = ["Probe 1", "Probe 2", "Probe 3", "Probe 4", "Probe 5"];
+        assert_eq!(
+            closest_worker_names("probe", roster),
+            ["Probe 1", "Probe 2", "Probe 3"]
+        );
+    }
 
     #[test]
     fn a_source_is_trimmed_and_its_jira_key_upper_cased() {
