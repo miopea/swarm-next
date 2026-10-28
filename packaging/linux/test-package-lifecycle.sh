@@ -750,15 +750,33 @@ restore_pending_engine_change() {
   ln -sfn "$diverged_host_link" "$SWARM_INSTALL_ROOT/host-current"
 }
 
-# 1. MID-TURN DEFERS. Sessions exist AND one is working.
+# 1. A MID-TURN WORKER DEFERS, AND THE REASON GIVEN IS THE ONE THAT HOLDS.
+#    Waiting for it to finish would not help: the gate below refuses it at
+#    rest too. Saying "mid-turn" here read as "wait", 518 times in a row.
 restore_pending_engine_change
 printf '3\n' > "$HOME/running-sessions"
 printf '1\n' > "$HOME/busy-sessions"
 printf '0\n' > "$HOME/unreadable-sessions"
 : > "$HOME/swarmctl.log"
 reconcile_out=$("$package" reconcile-host-if-idle 2>&1)
-printf '%s' "$reconcile_out" | grep -q 'mid-turn' \
-  || { echo "a mid-turn worker did not defer the reconcile: $reconcile_out" >&2; exit 1; }
+printf '%s' "$reconcile_out" | grep -q 'deferred; it cannot apply itself while workers are loaded (3 are).*worker engine card' \
+  || { echo "a loaded worker did not defer the reconcile with the real reason: $reconcile_out" >&2; exit 1; }
+! printf '%s' "$reconcile_out" | grep -q 'mid-turn' \
+  || { echo "the timer blamed busy workers for a gate that holds them at rest too: $reconcile_out" >&2; exit 1; }
+
+# 1b. The host counts busy and loaded sessions at different moments, so a busy
+#     one can end in between. Either reading is a loaded worker, and the timer
+#     defers rather than failing.
+restore_pending_engine_change
+printf '0\n' > "$HOME/running-sessions"
+printf '1\n' > "$HOME/busy-sessions"
+race_out=$("$package" reconcile-host-if-idle 2>&1) \
+  || { echo "a busy session that ended mid-status failed the timer: $race_out" >&2; exit 1; }
+printf '%s' "$race_out" | grep -q 'deferred; it cannot apply itself while workers are loaded (1 are)' \
+  || { echo "the race was not deferred with the real reason: $race_out" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
+  || { echo "the race swapped the engine" >&2; exit 1; }
+printf '3\n' > "$HOME/running-sessions"
 grep -q '^cancel-drain$' "$HOME/swarmctl.log" \
   || { echo "a deferred reconcile left the host drained" >&2; exit 1; }
 
@@ -774,7 +792,7 @@ quiet_out=$("$package" reconcile-host-if-idle 2>&1)
 [ ! -s "$HOME/return-record.log" ]
 ! grep -q 'restart swarm-terminal-host.service' "$HOME/systemctl.log"
 # The explicit compatibility reason must distinguish refusal from success.
-printf '%s' "$quiet_out" | grep -q 'deferred.*no atomic maintenance admission' \
+printf '%s' "$quiet_out" | grep -q 'deferred; it cannot apply itself while workers are loaded.*ADR 0085' \
   || { echo "screen census was treated as maintenance admission: $quiet_out" >&2; exit 1; }
 
 # Required mode also cannot replace loaded sessions based on a census.
@@ -807,21 +825,30 @@ restore_pending_engine_change
 printf '0\n' > "$HOME/busy-sessions"
 printf '2\n' > "$HOME/unreadable-sessions"
 unreadable_out=$("$package" reconcile-host-if-idle 2>&1)
-printf '%s' "$unreadable_out" | grep -q 'deferred.*cannot read' \
+printf '%s' "$unreadable_out" | grep -q 'deferred; it cannot apply itself while workers are loaded' \
   || { echo "an unreadable provider did not defer: $unreadable_out" >&2; exit 1; }
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
   || { echo "an unreadable provider swapped the engine anyway" >&2; exit 1; }
+# By hand it still names the provider, since that is what a person can act on.
+unreadable_required=$("$package" reconcile-host 2>&1) \
+  && { echo "required mode swapped over an unreadable provider" >&2; exit 1; }
+printf '%s' "$unreadable_required" | grep -q 'deferred.*cannot read' \
+  || { echo "an unreadable provider was not named: $unreadable_required" >&2; exit 1; }
+restore_pending_engine_change
 
 # 3b. A HOST TOO OLD TO ANSWER omits the keys entirely. THIS IS THE CASE THAT
 #     COST 12 LIVE SESSIONS: on the first release that adds the field, the
 #     running host is ALWAYS the old one, so this fires with certainty.
+#     With workers loaded the gate already holds it, so this is the empty host.
 restore_pending_engine_change
 : > "$HOME/host-cannot-report-busy"
+printf '0\n' > "$HOME/running-sessions"
 skew_out=$("$package" reconcile-host-if-idle 2>&1)
 printf '%s' "$skew_out" | grep -q 'deferred.*cannot report which sessions are busy' \
   || { echo "an unanswerable host was treated as idle: $skew_out" >&2; exit 1; }
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
   || { echo "an unanswerable host had its engine swapped underneath it" >&2; exit 1; }
+printf '3\n' > "$HOME/running-sessions"
 
 # 3c. AND THE OPERATOR'S DELIBERATE ROUTE STILL WORKS while it cannot check —
 #     otherwise deferring would strand the upgrade instead of scheduling it.

@@ -237,6 +237,25 @@ note_deferral() {
 
 clear_deferrals() { rm -f "$(deferral_file "$1")" 2>/dev/null || true; }
 
+# WHY THE TIMER CANNOT LAND AN ENGINE CHANGE WHILE ANY WORKER IS LOADED.
+#
+# The ADR 0085 gate refuses every loaded session, busy or resting, until the
+# engine can stop them safely itself, and autostart keeps sessions loaded. So
+# on a working Hive waiting never lands one. The timer said "N of M sessions
+# are mid-turn" instead, which reads as "wait and it will apply": on 2026-10-27
+# the warning had reached "deferred 518 times in a row", nearly all of them
+# that way. Every unattended deferral with a loaded worker gives this reason.
+#
+# Loaded is the larger of the two readings: the host counts busy sessions and
+# running ones at different moments, so a busy one can end in between.
+loaded_workers_hold() {
+  loaded=$1
+  [ -n "$2" ] && [ "$2" -gt "$loaded" ] && loaded=$2
+  [ "$loaded" -gt 0 ] || return 1
+  printf 'it cannot apply itself while workers are loaded (%s are), because the running engine cannot yet stop them safely on its own (ADR 0085)' "$loaded"
+}
+engine_card_route='Apply it from the worker engine card, which stops the workers and tries to bring them back'
+
 # WHAT IS BUSY AND WHAT COULD NOT BE READ, from one status payload.
 #
 # Both values may come back EMPTY, and empty is not zero: a host too old to
@@ -1786,16 +1805,17 @@ reconcile_host() {
   # could not check.
   read_session_activity "$status"
 
+  if [ "$reconcile_mode" = "if-idle" ] \
+    && reconcile_blocked=$(loaded_workers_hold "$running" "$busy"); then
+    SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+      "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+    drain_release=
+    printf 'Terminal host update deferred; %s. %s.\n' "$reconcile_blocked" "$engine_card_route"
+    note_deferral host-reconcile "the worker engine update" "$reconcile_blocked. $engine_card_route"
+    return
+  fi
+
   if [ -n "$busy" ] && [ "$busy" -ne 0 ]; then
-    if [ "$reconcile_mode" = "if-idle" ]; then
-      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
-        "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
-      drain_release=
-      printf 'Terminal host update deferred; %s of %s sessions are mid-turn\n' \
-        "$busy" "$running"
-      note_deferral host-reconcile "the worker engine update" "$busy sessions are still mid-turn"
-      return
-    fi
     die "terminal host update deferred; $busy sessions are mid-turn"
   fi
 
@@ -1873,11 +1893,6 @@ reconcile_host() {
     reconcile_blocked="the running engine has no atomic maintenance admission; $running loaded sessions were left running"
     SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
     drain_release=
-    if [ "$reconcile_mode" = "if-idle" ]; then
-      printf 'Terminal host update deferred; %s. Use the warned worker engine maintenance action for this compatibility update.\n' "$reconcile_blocked"
-      note_deferral host-reconcile "the worker engine update" "$reconcile_blocked"
-      return
-    fi
     die "terminal host update deferred; $reconcile_blocked"
   fi
   clear_deferrals host-reconcile
@@ -2099,7 +2114,10 @@ migrate_protocol() {
   # Proceed-on-unknown where there is no human route out; defer-on-unknown
   # where there is.
   migration_blocked=
-  if [ -z "$busy" ]; then
+  if [ "$migrate_mode" = "if-idle" ] \
+    && migration_blocked=$(loaded_workers_hold "$running" "$busy"); then
+    :
+  elif [ -z "$busy" ]; then
     migration_blocked="this host cannot report which sessions are busy, so it was NOT checked"
   elif [ "$busy" -ne 0 ]; then
     migration_blocked="$busy of $running sessions are mid-turn"
@@ -2127,8 +2145,8 @@ migrate_protocol() {
       # download, and a Hive that defers overnight would have nothing to
       # activate from in the morning.
       printf '%s\n' "$new_release" > "$state_root/protocol-migration.pending"
-      printf 'Protocol migration to %s is prepared and deferred; %s. It can apply automatically after sessions end, or through the warned worker engine maintenance action.\n' \
-        "$version" "$migration_blocked"
+      printf 'Protocol migration to %s is prepared and deferred; %s. %s.\n' \
+        "$version" "$migration_blocked" "$engine_card_route"
       return
     fi
     die "protocol migration deferred; $migration_blocked"
@@ -2165,7 +2183,10 @@ complete_protocol_migration() {
   # so "operator-initiated, therefore attended" is reasoning about the wrong
   # half of this command. Same arms as migrate_protocol above.
   completion_blocked=
-  if [ -z "$busy" ]; then
+  if [ "$complete_mode" = "if-idle" ] \
+    && completion_blocked=$(loaded_workers_hold "$running" "$busy"); then
+    :
+  elif [ -z "$busy" ]; then
     completion_blocked="this host cannot report which sessions are busy, so it was NOT checked"
   elif [ "$busy" -ne 0 ]; then
     completion_blocked="$busy of $running sessions are mid-turn"
@@ -2179,7 +2200,7 @@ complete_protocol_migration() {
       SWARM_TERMINAL_SOCKET=$(terminal_socket) \
         "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
       drain_release=
-      printf 'Protocol migration remains deferred; %s\n' "$completion_blocked"
+      printf 'Protocol migration remains deferred; %s. %s.\n' "$completion_blocked" "$engine_card_route"
       # "It will apply itself when they are idle" is a PROMISE. A deferral that
       # repeats forever quietly makes it false, which is precisely how the
       # previous fix here turned a visible failure into an invisible one.
