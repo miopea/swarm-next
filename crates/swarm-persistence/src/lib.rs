@@ -912,6 +912,12 @@ pub enum TaskStoreError {
         "a task-scoped worker question must go to that task's current assignee; assign the work first, or explicitly request a managed Scout second opinion"
     )]
     QueenMessageRecipientNotAssigned,
+    /// The other leg of the rule above: a worker messages Queen on its own
+    /// assignment, and the managed Scout also on a task Queen asked it about.
+    #[error(
+        "you can message Queen only on a task assigned to you, or as Scout on a task Queen asked you about, and this task is neither"
+    )]
+    WorkerMessageNotOnOwnTask,
     #[error("a second opinion may be requested only from this Hive's managed Scout")]
     ScoutSecondOpinionRequiresManagedScout,
     #[error("Scout has no open session; do not wake Scout solely for a second opinion")]

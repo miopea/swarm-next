@@ -12,6 +12,30 @@ pub struct ReturnedReviewRequest {
     pub status: &'static str,
 }
 
+/// Whether Queen has asked this worker, as the managed Scout, for a second
+/// opinion on this task: a message from her to it there has been delivered.
+/// With a reply id, that message must be the one being answered.
+///
+/// This is the answering half of the one cross-worker exception Queen's send
+/// admits (ADR 0028). Without it Scout could be asked and had no way to reply.
+fn second_opinion_asked(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    worker_id: WorkerId,
+    reply_to: Option<&str>,
+) -> Result<bool, TaskStoreError> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_messages m
+         JOIN worker_profiles scout ON scout.id = m.recipient_worker_id
+         WHERE m.task_id = ?1 AND m.sender = 'queen' AND m.recipient = 'worker'
+           AND m.recipient_worker_id = ?2 AND m.delivered_at IS NOT NULL
+           AND scout.system_role = 'scout' AND scout.archived_at IS NULL
+           AND (?3 IS NULL OR m.id = ?3))",
+        params![task_id.to_string(), worker_id.to_string(), reply_to],
+        |row| row.get(0),
+    )?)
+}
+
 /// Fence automatic no-deployment settlement against an unanswered current request.
 pub(super) fn ensure_no_pending_request(
     tx: &rusqlite::Transaction<'_>,
@@ -136,7 +160,8 @@ impl TaskStore {
             .map_err(TaskStoreError::from)
     }
 
-    /// Saves a scoped worker message and explicitly correlated review answer.
+    /// Saves a scoped worker message and explicitly correlated review answer,
+    /// or the managed Scout's answer to a second opinion Queen asked of it.
     ///
     /// # Errors
     /// Refuses other workers, stale/conflicting reply identities, invalid text,
@@ -158,11 +183,33 @@ impl TaskStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
+        // A task that does not exist is refused exactly as one that is not
+        // yours, so the refusal cannot be used to find out which tasks exist.
+        let not_yours = if reply_to.is_some() {
+            TaskStoreError::InvalidReviewReply
+        } else {
+            TaskStoreError::WorkerMessageNotOnOwnTask
+        };
         let Some((state, assigned)) = task else {
-            return Err(TaskStoreError::InvalidReviewReply);
+            return Err(not_yours);
         };
         if assigned.as_deref() != Some(worker_id.to_string().as_str()) {
-            return Err(TaskStoreError::InvalidReviewReply);
+            if !second_opinion_asked(&tx, task_id, worker_id, reply_to)? {
+                return Err(not_yours);
+            }
+            // An answer to a second opinion is a message and nothing more: it
+            // moves no review marker, so it cannot answer for the assignee.
+            let message = Self::insert_task_message(
+                &tx,
+                task_id,
+                MessageEnd::worker(worker_id),
+                MessageEnd::queen(),
+                body,
+                now,
+            )?;
+            insert_control_room_event(&tx, ControlRoomEventKind::TasksChanged)?;
+            tx.commit()?;
+            return Ok(message);
         }
         if let Some(request_id) = reply_to {
             let marker: Option<(Option<String>, Option<i64>)> = tx
@@ -218,7 +265,9 @@ impl TaskStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{NextMoveOwner, ProviderKind, TaskState, WorkerSessionId};
+    use swarm_domain::{
+        NextMoveOwner, ProviderKind, TaskState, WorkerMessagePurpose, WorkerSessionId,
+    };
 
     fn fixture() -> (TaskStore, TaskId, WorkerId, String) {
         let store = TaskStore::in_memory().unwrap();
@@ -602,5 +651,128 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// SCOUT CAN ANSWER THE SECOND OPINION QUEEN ASKED OF IT, AND NOTHING WIDER.
+    ///
+    /// Queen may ask the managed Scout about work it does not own (ADR 0028),
+    /// but the answer leg admitted only the assignee. On 2026-10-27 Scout was
+    /// asked on an unassigned draft, tried three ways to answer, and was told
+    /// each time about review replies. The question was delivered and the
+    /// answer had nowhere to go.
+    ///
+    /// ABLATION: drop the second-opinion admission and Scout's plain answer is
+    /// refused; drop its delivered check and the early answer is admitted.
+    #[test]
+    fn scout_answers_the_second_opinion_it_was_asked_and_no_one_else_can() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let bystander = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        store
+            .create_worker(
+                "Project Root",
+                ProviderKind::ClaudeCode,
+                "/projects",
+                false,
+                2,
+            )
+            .unwrap();
+        let scout = store
+            .promote_project_root_to_scout("/projects")
+            .unwrap()
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(scout.id, session).unwrap();
+        let draft = store.create_task("Someone's draft", "/workspace").unwrap();
+        let refused = |sender, body, reply_to| {
+            store.message_queen_from_worker(draft.id, sender, body, reply_to, 20)
+        };
+
+        assert!(matches!(
+            refused(scout.id, "Unasked", None),
+            Err(TaskStoreError::WorkerMessageNotOnOwnTask)
+        ));
+        let asked = store
+            .send_queen_worker_message(
+                draft.id,
+                scout.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Is the builder exported?",
+                10,
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                refused(scout.id, "Early", None),
+                Err(TaskStoreError::WorkerMessageNotOnOwnTask)
+            ),
+            "a question still waiting to be delivered has not been asked"
+        );
+        store
+            .mark_task_message_delivered(&asked.id, session, 11)
+            .unwrap();
+
+        // Both ways Scout tried: with no reply id, and with the question's own.
+        store
+            .message_queen_from_worker(draft.id, scout.id, "Not exported.", None, 12)
+            .unwrap();
+        store
+            .message_queen_from_worker(draft.id, scout.id, "Rule 6 says ui.", Some(&asked.id), 13)
+            .unwrap();
+        assert!(matches!(
+            refused(scout.id, "Some other id", Some("not-the-question")),
+            Err(TaskStoreError::InvalidReviewReply)
+        ));
+        assert!(matches!(
+            refused(bystander.id, "Me too", None),
+            Err(TaskStoreError::WorkerMessageNotOnOwnTask)
+        ));
+        assert!(
+            matches!(
+                store.message_queen_from_worker(TaskId::new(), scout.id, "Lost", None, 20),
+                Err(TaskStoreError::WorkerMessageNotOnOwnTask)
+            ),
+            "a task that does not exist is refused as one that is not yours"
+        );
+
+        let messages = store.task_messages(draft.id).unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.body.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Is the builder exported?",
+                "Not exported.",
+                "Rule 6 says ui."
+            ]
+        );
+        assert!(
+            messages[1..]
+                .iter()
+                .all(|message| message.recipient == crate::MessageParty::Queen),
+            "Scout's answers go to Queen and nowhere else"
+        );
+        assert_eq!(store.get_task(draft.id).unwrap().state, TaskState::Draft);
+    }
+
+    /// The rule is Scout's alone: a worker Queen messaged while it owned the
+    /// task has no standing on it once the work moves to someone else.
+    #[test]
+    fn a_former_assignee_is_not_a_second_opinion() {
+        let (store, task, worker, request) = fixture();
+        store
+            .mark_task_message_delivered(&request, WorkerSessionId::new(), 101)
+            .unwrap();
+        let other = store
+            .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace/b", false, 2)
+            .unwrap();
+        store.assign_task_to_worker(task, other.id).unwrap();
+        assert!(matches!(
+            store.message_queen_from_worker(task, worker, "Still mine?", None, 102),
+            Err(TaskStoreError::WorkerMessageNotOnOwnTask)
+        ));
     }
 }
