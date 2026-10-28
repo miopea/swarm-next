@@ -1834,7 +1834,7 @@ impl SessionRegistry {
                 tracing::warn!(
                     %session_id,
                     revision = selection.revision,
-                    "native interview refused: finalize rejected the batch (no pending observation, revision moved, or the final batch did not match)"
+                    "native interview not confirmed: no answer was pending, or the final batch did not match it and the answer was handed on unconfirmed"
                 );
             }
             return Ok(finalized);
@@ -1921,7 +1921,7 @@ impl SessionRegistry {
         }
         let mut capture = lock(&self.native_interviews)?;
         let Some(observation) = observation else {
-            capture.invalidate_pending(session_id);
+            capture.refuse_unreadable(session_id, payload);
             tracing::warn!(%session_id, "native interview refused: payload is not a readable Claude interview");
             return Ok(T::default());
         };

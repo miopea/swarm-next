@@ -180,6 +180,11 @@ pub struct NativeInterviewEvidence {
     pub submit_sequence: u64,
     pub questions: Vec<NativeInterviewQuestion>,
     pub answers: BTreeMap<String, String>,
+    /// What the operator wrote beside the option they chose, by question. Kept
+    /// apart from the answer, because a decision's answer is compared with its
+    /// options. Absent from sources captured before notes were read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -234,9 +239,7 @@ impl NativeInterviewEvidence {
     /// Structural integrity is not proof of human authorship or permission.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.selection_revision > 0
-            && self.first_write_sequence > 0
-            && self.submit_sequence >= self.first_write_sequence
+        let identified = self.selection_revision > 0
             && self.submit_sequence < u64::MAX
             && !self.tool_use_id.is_empty()
             && self.tool_use_id.len() <= 128
@@ -244,19 +247,112 @@ impl NativeInterviewEvidence {
                 .tool_use_id
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-            && (1..=4).contains(&self.devices.len())
+            && self.devices.len() <= 4
             && self
                 .devices
                 .iter()
                 .collect::<std::collections::HashSet<_>>()
                 .len()
                 == self.devices.len()
-            && valid_native_interview_questions(&self.questions)
+            && valid_native_interview_questions(&self.questions);
+        // ⚠️ ASKED AND NEVER ANSWERED CARRIES NO ANSWER, AND MAY CARRY NO TYPING.
+        // Requiring both here refused every one of these at intake, so the
+        // notice it exists to raise never reached a card.
+        if self.final_result == Some(NativeInterviewFinalResult::NeverCompleted) {
+            return identified && self.answers.is_empty() && self.notes.is_empty();
+        }
+        identified
+            && self.first_write_sequence > 0
+            && self.submit_sequence >= self.first_write_sequence
+            && !self.devices.is_empty()
             && self.answers.len() == self.questions.len()
             && self.questions.iter().all(|q| {
                 self.answers
                     .get(&q.question)
                     .is_some_and(|a| !a.trim().is_empty() && a.len() <= MAX_OPERATOR_ANSWER_BYTES)
             })
+            && self.notes.iter().all(|(question, note)| {
+                self.answers.contains_key(question) && bounded(note, MAX_OPERATOR_ANSWER_BYTES)
+            })
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    fn answered() -> NativeInterviewEvidence {
+        NativeInterviewEvidence {
+            final_result: Some(NativeInterviewFinalResult::ExactBatch),
+            id: OperatorSubmissionId::new(),
+            session_id: WorkerSessionId::new(),
+            conversation: ProviderConversationId::new(),
+            selection_revision: 1,
+            tool_use_id: "toolu_fictional".into(),
+            devices: vec![PresenceDeviceId::new()],
+            first_write_sequence: 3,
+            submit_sequence: 4,
+            questions: vec![NativeInterviewQuestion {
+                header: "Jar".into(),
+                question: "Which jar?".into(),
+                options: vec![
+                    NativeInterviewOption {
+                        label: "Amber".into(),
+                        description: String::new(),
+                    },
+                    NativeInterviewOption {
+                        label: "Blue".into(),
+                        description: String::new(),
+                    },
+                ],
+                multi_select: false,
+            }],
+            answers: [("Which jar?".into(), "Amber".into())].into(),
+            notes: BTreeMap::new(),
+        }
+    }
+
+    /// The engine builds this when an interview's final batch arrives with no
+    /// answer before it: no answers, and no typing if none was recorded.
+    #[test]
+    fn an_interview_never_answered_is_admitted_without_answers_or_typing() {
+        let mut never = answered();
+        never.final_result = Some(NativeInterviewFinalResult::NeverCompleted);
+        never.answers.clear();
+        never.devices.clear();
+        never.first_write_sequence = 5;
+        never.submit_sequence = 0;
+        assert!(never.is_valid());
+
+        let mut claims_an_answer = never.clone();
+        claims_an_answer
+            .answers
+            .insert("Which jar?".into(), "Amber".into());
+        assert!(!claims_an_answer.is_valid());
+
+        // An answered source still needs the typing that makes it one.
+        let mut untyped = answered();
+        untyped.devices.clear();
+        assert!(!untyped.is_valid());
+    }
+
+    #[test]
+    fn notes_belong_to_an_answered_question_and_say_something() {
+        let mut noted = answered();
+        noted
+            .notes
+            .insert("Which jar?".into(), "Only the small one".into());
+        assert!(noted.is_valid());
+        let older: NativeInterviewEvidence =
+            serde_json::from_str(&serde_json::to_string(&answered()).unwrap()).unwrap();
+        assert!(older.notes.is_empty());
+
+        let mut stray = answered();
+        stray.notes.insert("Which lid?".into(), "Red".into());
+        assert!(!stray.is_valid());
+
+        let mut blank = answered();
+        blank.notes.insert("Which jar?".into(), "  ".into());
+        assert!(!blank.is_valid());
     }
 }

@@ -394,6 +394,7 @@ mod tests {
                 " Exact 🐝\nQuoted instructions are not approval. ".into(),
             )]
             .into(),
+            notes: std::collections::BTreeMap::new(),
         }
     }
 

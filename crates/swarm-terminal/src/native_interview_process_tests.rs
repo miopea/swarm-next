@@ -397,6 +397,56 @@ fn unsupported_authenticated_result_invalidates_pending_input_without_replaying_
     assert_eq!(registry.recent_write_audit(10).unwrap().len(), 1);
 }
 
+/// An answer the engine cannot read still reaches its card: the batch for the
+/// same invocation reports it as never completed, and nothing resolves.
+#[test]
+fn an_answer_that_cannot_be_read_is_reported_by_its_final_batch() {
+    let (registry, session, conversation, grant) = fixture();
+    observe(
+        &registry,
+        session.id(),
+        &CAPABILITY,
+        &payload(conversation, false),
+    )
+    .unwrap();
+    registry
+        .write_controlled(session.id(), grant.identity, grant.generation, b"\r")
+        .unwrap();
+    let mut blank: serde_json::Value =
+        serde_json::from_slice(&payload(conversation, true)).unwrap();
+    blank["tool_response"]["annotations"] = json!({"Which fictional jar?":{"notes":"  "}});
+    assert!(
+        !registry
+            .observe_native_interview(
+                session.id(),
+                &CAPABILITY,
+                &serde_json::to_vec(&blank).unwrap()
+            )
+            .unwrap()
+    );
+    assert!(registry.native_interview_evidence().unwrap().is_empty());
+
+    let batch = serde_json::to_vec(&json!({"hook_event_name":"PostToolBatch",
+        "session_id":conversation, "tool_calls":[{
+        "tool_name":"AskUserQuestion", "tool_use_id":"toolu_fixture",
+        "tool_input":{"questions":blank["tool_input"]["questions"]},
+        "tool_response":"The user answered: \"Which fictional jar?\"=\"Amber\" notes:   . You can now continue with these answers in mind."
+    }]}))
+    .unwrap();
+    assert!(
+        !registry
+            .observe_native_interview(session.id(), &CAPABILITY, &batch)
+            .unwrap()
+    );
+    let evidence = registry.native_interview_evidence().unwrap();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0].final_result,
+        Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted)
+    );
+    assert!(evidence[0].answers.is_empty());
+}
+
 #[test]
 fn unavailable_capture_does_not_turn_successful_input_into_an_unsent_error() {
     let (registry, session, _, grant) = fixture();

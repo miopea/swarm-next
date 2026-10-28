@@ -230,7 +230,7 @@ const MAX_DETAIL_BYTES: usize = 10_000;
 const MAX_ACTION_BYTES: usize = 80;
 const MAX_RESOLUTION_SURFACE_BYTES: usize = 40;
 const MAX_ACTIONS: usize = 6;
-const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
+pub const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
 const MAX_DELIVERY_CLAIMS: i64 = 16;
 const MAX_DELIVERY_ATTEMPTS: i64 = 3;
 const OPERATOR_DISMISS_ACTION: &str = "dismissed";
@@ -4422,6 +4422,70 @@ pub(super) fn migrate_refused_native_answers(
         "user_version",
         crate::REFUSED_NATIVE_ANSWER_SCHEMA_VERSION,
     )
+}
+
+/// Lets a refusal say the question was asked and never answered.
+///
+/// 790e64aa taught the engine and the domain that reason on 2026-09-13 and left
+/// this table's CHECK at the four reasons before it, so recording one failed.
+/// A CHECK cannot be widened in place; the table is small and has no
+/// dependants, so it is rebuilt with its rows.
+pub(super) fn migrate_never_completed_refusals(
+    tx: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE decision_native_answer_refusals_next (
+             decision_id TEXT PRIMARY KEY
+                 REFERENCES decision_requests(id) ON DELETE CASCADE,
+             reason TEXT NOT NULL CHECK (reason IN
+                 ('unverified','ambiguous','no_longer_applicable','conflicting',
+                  'never_completed')),
+             seen_at INTEGER NOT NULL CHECK (seen_at >= 0)
+         );
+         INSERT INTO decision_native_answer_refusals_next (decision_id, reason, seen_at)
+             SELECT decision_id, reason, seen_at FROM decision_native_answer_refusals;
+         DROP TABLE decision_native_answer_refusals;
+         ALTER TABLE decision_native_answer_refusals_next
+             RENAME TO decision_native_answer_refusals;",
+    )?;
+    tx.pragma_update(None, "user_version", version)
+}
+
+#[cfg(test)]
+mod never_completed_refusal_migration {
+    /// The rebuild keeps every refusal already recorded, and only then
+    /// accepts the reason it exists to add.
+    #[test]
+    fn widening_the_reasons_keeps_the_refusals_already_recorded() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute_batch(
+            "CREATE TABLE decision_requests (id TEXT PRIMARY KEY);
+             INSERT INTO decision_requests VALUES ('asked'), ('next');",
+        )
+        .unwrap();
+        super::migrate_refused_native_answers(&tx).unwrap();
+        tx.execute(
+            "INSERT INTO decision_native_answer_refusals VALUES ('asked', 'ambiguous', 7)",
+            [],
+        )
+        .unwrap();
+        let never_completed =
+            "INSERT INTO decision_native_answer_refusals VALUES ('next', 'never_completed', 8)";
+        assert!(tx.execute(never_completed, []).is_err());
+
+        super::migrate_never_completed_refusals(&tx, 212).unwrap();
+        let kept: (String, String, i64) = tx
+            .query_row(
+                "SELECT decision_id, reason, seen_at FROM decision_native_answer_refusals",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, ("asked".to_owned(), "ambiguous".to_owned(), 7));
+        tx.execute(never_completed, []).unwrap();
+    }
 }
 
 impl TaskStore {

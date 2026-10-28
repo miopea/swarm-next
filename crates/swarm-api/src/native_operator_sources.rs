@@ -249,6 +249,7 @@ mod tests {
                 multi_select: false,
             }],
             answers: [("Which jar?".into(), "Amber".into())].into(),
+            notes: std::collections::BTreeMap::new(),
         }
     }
 

@@ -10,6 +10,10 @@ pub use swarm_domain::{NativeInterviewOption, NativeInterviewQuestion};
 
 const MAX_TOOL_USE_ID_BYTES: usize = 128;
 
+/// What Claude Code records as the answer when the operator wrote notes and
+/// chose no option. The notes are then the answer.
+const NOTES_ONLY: &str = "(notes only)";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeInterviewPhase {
     Requested,
@@ -27,6 +31,8 @@ pub struct NativeInterviewObservation {
     pub phase: NativeInterviewPhase,
     questions: Vec<NativeInterviewQuestion>,
     answers: BTreeMap<String, String>,
+    /// Notes the operator wrote, by question, as Claude Code reported them.
+    notes: BTreeMap<String, String>,
 }
 
 impl NativeInterviewObservation {
@@ -38,6 +44,37 @@ impl NativeInterviewObservation {
     #[must_use]
     pub fn answers(&self) -> &BTreeMap<String, String> {
         &self.answers
+    }
+
+    /// The answer to record for each question: the option chosen, or the
+    /// operator's notes where they chose none.
+    #[must_use]
+    pub fn recorded_answers(&self) -> BTreeMap<String, String> {
+        self.answers
+            .iter()
+            .map(|(question, answer)| {
+                let recorded = match self.notes.get(question) {
+                    Some(notes) if answer == NOTES_ONLY => notes,
+                    _ => answer,
+                };
+                (question.clone(), recorded.clone())
+            })
+            .collect()
+    }
+
+    /// Notes written beside a chosen option. Notes that stand in for an answer
+    /// are recorded as the answer instead, so they are not repeated here.
+    #[must_use]
+    pub fn recorded_notes(&self) -> BTreeMap<String, String> {
+        self.notes
+            .iter()
+            .filter(|(question, _)| {
+                self.answers
+                    .get(*question)
+                    .is_some_and(|answer| answer != NOTES_ONLY)
+            })
+            .map(|(question, notes)| (question.clone(), notes.clone()))
+            .collect()
     }
 
     /// Compares provider invocation and the complete supported question shape,
@@ -98,16 +135,37 @@ impl NativeInterviewObservation {
             let Some(answer) = self.answers.get(question) else {
                 return false;
             };
+            let notes = self.notes.get(question);
             // Unescaped separators cannot prove how text was distributed
             // between answers. These cases need a structured final result.
             if self.questions.len() > 1
-                && answer
-                    .chars()
-                    .any(|value| value == '"' || value == '\\' || value.is_control())
+                && std::iter::once(answer).chain(notes).any(|text| {
+                    text.chars()
+                        .any(|value| value == '"' || value == '\\' || value.is_control())
+                })
             {
                 return false;
             }
-            clauses.push(format!("\"{question}\"=\"{answer}\""));
+            // A quote can move the line between an answer and its notes:
+            // `"Blue" notes: x"` is Blue noted `x"`, or `Blue" notes: x` alone.
+            // Words with more than one reading confirm neither.
+            if answer != NOTES_ONLY {
+                let body = notes.map_or_else(
+                    || format!("{answer}\""),
+                    |notes| format!("{answer}\" notes: {notes}"),
+                );
+                if usize::from(body.ends_with('"')) + body.matches("\" notes: ").count() > 1 {
+                    return false;
+                }
+            }
+            clauses.push(match (answer == NOTES_ONLY, notes) {
+                (true, Some(notes)) => {
+                    format!("\"{question}\"=(no option selected) notes: {notes}")
+                }
+                (true, None) => return false,
+                (false, Some(notes)) => format!("\"{question}\"=\"{answer}\" notes: {notes}"),
+                (false, None) => format!("\"{question}\"=\"{answer}\""),
+            });
         }
         let joined = clauses.join(", ");
         let Some(response) = call.response.as_str() else {
@@ -189,6 +247,36 @@ pub(crate) fn final_batch_answers_invocation(
             .any(|call| call.invocation == invocation && call.name == "AskUserQuestion")
 }
 
+/// Whether a payload that could not be read as an interview is nonetheless the
+/// answer to this invocation: a main-session `PostToolUse` for `AskUserQuestion`
+/// naming it. Anything else is other traffic — a subagent's batch reaches the
+/// same hook — and must not be taken for a refused answer.
+pub(crate) fn completion_names_invocation(
+    bytes: &[u8],
+    conversation: ProviderConversationId,
+    invocation: &str,
+) -> bool {
+    #[derive(Deserialize)]
+    struct Named {
+        hook_event_name: String,
+        session_id: String,
+        tool_name: String,
+        tool_use_id: String,
+        #[serde(default)]
+        agent_id: Option<serde::de::IgnoredAny>,
+    }
+    if bytes.len() > crate::MAX_PROVIDER_LIFECYCLE_BYTES {
+        return false;
+    }
+    serde_json::from_slice::<Named>(bytes).is_ok_and(|named| {
+        named.hook_event_name == "PostToolUse"
+            && named.agent_id.is_none()
+            && named.tool_name == "AskUserQuestion"
+            && named.tool_use_id == invocation
+            && named.session_id.parse::<ProviderConversationId>().ok() == Some(conversation)
+    })
+}
+
 #[derive(Deserialize)]
 struct FinalBatchCall {
     #[serde(rename = "tool_use_id")]
@@ -219,7 +307,16 @@ struct InterviewInput {
     #[serde(default, deserialize_with = "unique_answers")]
     answers: BTreeMap<String, String>,
     #[serde(default)]
-    annotations: BTreeMap<String, serde_json::Value>,
+    annotations: BTreeMap<String, InterviewAnnotation>,
+}
+
+/// What the operator added to one answer. Only notes are read: a preview
+/// annotation belongs to an option preview, which questions here cannot carry,
+/// and anything newer fails closed rather than disappearing from the record.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InterviewAnnotation {
+    notes: String,
 }
 
 fn unique_answers<'de, D: serde::Deserializer<'de>>(
@@ -341,14 +438,20 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
         );
         return None;
     }
-    let (phase, answers) = match hook.hook_event_name.as_str() {
-        "PreToolUse" if hook.tool_response.is_none() => {
-            (NativeInterviewPhase::Requested, BTreeMap::new())
-        }
+    let (phase, answers, notes) = match hook.hook_event_name.as_str() {
+        "PreToolUse" if hook.tool_response.is_none() => (
+            NativeInterviewPhase::Requested,
+            BTreeMap::new(),
+            BTreeMap::new(),
+        ),
         "PostToolUse" => {
             let response = hook.tool_response?;
+            let notes = response
+                .annotations
+                .into_iter()
+                .map(|(question, annotation)| (question, annotation.notes))
+                .collect::<BTreeMap<_, _>>();
             if response.questions != hook.tool_input.questions
-                || !response.annotations.is_empty()
                 || response.answers.len() != response.questions.len()
                 || !response.questions.iter().all(|question| {
                     response
@@ -357,11 +460,19 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
                         .is_some_and(|answer| {
                             !answer.trim().is_empty() && answer.len() <= MAX_OPERATOR_ANSWER_BYTES
                         })
+                        && answered_with_notes(
+                            question,
+                            &response.answers[&question.question],
+                            notes.get(&question.question),
+                        )
                 })
+                || !notes
+                    .keys()
+                    .all(|question| response.answers.contains_key(question))
             {
                 return None;
             }
-            (NativeInterviewPhase::Completed, response.answers)
+            (NativeInterviewPhase::Completed, response.answers, notes)
         }
         _ => return None,
     };
@@ -371,7 +482,29 @@ pub fn read_claude_interview(input: &[u8]) -> Option<NativeInterviewObservation>
         phase,
         questions: hook.tool_input.questions,
         answers,
+        notes,
     })
+}
+
+/// Whether an answer and its notes are a shape Swarm can record without
+/// guessing. Notes must say something. "(notes only)" is Claude's word for
+/// notes with no option chosen, so it needs notes, and it cannot be read that
+/// way when an option carries that very label.
+fn answered_with_notes(
+    question: &NativeInterviewQuestion,
+    answer: &str,
+    notes: Option<&String>,
+) -> bool {
+    if notes.is_some_and(|notes| notes.trim().is_empty() || notes.len() > MAX_OPERATOR_ANSWER_BYTES)
+    {
+        return false;
+    }
+    answer != NOTES_ONLY
+        || (notes.is_some()
+            && !question
+                .options
+                .iter()
+                .any(|option| option.label == NOTES_ONLY))
 }
 
 #[cfg(test)]
@@ -494,6 +627,159 @@ mod tests {
                 "{response}"
             );
         }
+    }
+
+    #[test]
+    fn a_quote_that_moves_the_line_between_answer_and_notes_confirms_neither() {
+        let bytes = include_bytes!("../fixtures/claude-2.1.267-final-interview-batch.json");
+        let batch: Value = serde_json::from_slice(bytes).unwrap();
+        let answered = |answer: &str, annotations: Value| {
+            read(&json!({
+                "hook_event_name":"PostToolUse", "session_id":batch["session_id"],
+                "tool_use_id":batch["tool_calls"][0]["tool_use_id"], "tool_name":"AskUserQuestion",
+                "tool_input":batch["tool_calls"][0]["tool_input"],
+                "tool_response":{"questions":batch["tool_calls"][0]["tool_input"]["questions"],
+                    "answers":{"Which fictional jar?":answer}, "annotations":annotations}
+            }))
+            .unwrap()
+        };
+        let worded = |clause: &str| {
+            let mut changed = batch.clone();
+            changed["tool_calls"][0]["tool_response"] = json!(format!(
+                "The user answered: \"Which fictional jar?\"={clause}. Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say."
+            ));
+            serde_json::to_vec(&changed).unwrap()
+        };
+
+        // Blue noted `the "small" one"`, or the answer `Blue" notes: the "small" one`:
+        // the same words, so neither reading is taken.
+        let both = r#""Blue" notes: the "small" one""#;
+        for observed in [
+            answered(
+                "Blue",
+                json!({"Which fictional jar?":{"notes":"the \"small\" one\""}}),
+            ),
+            answered("Blue\" notes: the \"small\" one", json!({})),
+        ] {
+            assert!(!observed.matches_final_batch(&worded(both)));
+        }
+
+        // A quote that leaves one reading is kept.
+        let inner = answered(
+            "Blue",
+            json!({"Which fictional jar?":{"notes":"the \"small\" one"}}),
+        );
+        assert!(inner.matches_final_batch(&worded(r#""Blue" notes: the "small" one"#)));
+    }
+
+    /// Notes beside an answer, in the shapes Claude Code wrote into this Hive's
+    /// transcripts (2.1.250 to 2.1.302, read 2026-10-27): after the chosen option, or in its
+    /// place. The answer recorded is still the option; the notes travel apart.
+    #[test]
+    fn notes_beside_an_answer_complete_it_and_are_kept_apart_from_it() {
+        let bytes = include_bytes!("../fixtures/claude-2.1.267-final-interview-batch.json");
+        let batch: Value = serde_json::from_slice(bytes).unwrap();
+        let answered = |answer: &str, annotations: Value| {
+            read(&json!({
+                "hook_event_name":"PostToolUse", "session_id":batch["session_id"],
+                "tool_use_id":batch["tool_calls"][0]["tool_use_id"], "tool_name":"AskUserQuestion",
+                "tool_input":batch["tool_calls"][0]["tool_input"],
+                "tool_response":{"questions":batch["tool_calls"][0]["tool_input"]["questions"],
+                    "answers":{"Which fictional jar?":answer}, "annotations":annotations}
+            }))
+        };
+        let worded = |response: String| {
+            let mut changed = batch.clone();
+            changed["tool_calls"][0]["tool_response"] = json!(response);
+            serde_json::to_vec(&changed).unwrap()
+        };
+        let careful = ". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.";
+
+        let noted = answered(
+            "Blue",
+            json!({"Which fictional jar?":{"notes":"only the small one, after lunch"}}),
+        )
+        .unwrap();
+        assert_eq!(noted.recorded_answers()["Which fictional jar?"], "Blue");
+        assert_eq!(
+            noted.recorded_notes()["Which fictional jar?"],
+            "only the small one, after lunch"
+        );
+        assert!(noted.matches_final_batch(&worded(format!(
+            "The user answered: \"Which fictional jar?\"=\"Blue\" notes: only the small one, after lunch{careful}"
+        ))));
+        for response in [
+            format!("The user answered: \"Which fictional jar?\"=\"Blue\"{careful}"),
+            format!(
+                "The user answered: \"Which fictional jar?\"=\"Blue\" notes: only the small one{careful}"
+            ),
+            format!(
+                "The user answered: \"Which fictional jar?\"=(no option selected) notes: only the small one, after lunch{careful}"
+            ),
+        ] {
+            assert!(
+                !noted.matches_final_batch(&worded(response.clone())),
+                "{response}"
+            );
+        }
+
+        // Notes and no option: the notes are the answer, and are not repeated.
+        let notes_only = answered(
+            "(notes only)",
+            json!({"Which fictional jar?":{"notes":"neither, leave the shelf alone"}}),
+        )
+        .unwrap();
+        assert_eq!(
+            notes_only.recorded_answers()["Which fictional jar?"],
+            "neither, leave the shelf alone"
+        );
+        assert!(notes_only.recorded_notes().is_empty());
+        assert!(notes_only.matches_final_batch(&worded(format!(
+            "The user answered: \"Which fictional jar?\"=(no option selected) notes: neither, leave the shelf alone{careful}"
+        ))));
+
+        // What cannot be read without guessing is refused.
+        assert!(answered("(notes only)", json!({})).is_none());
+        assert!(answered("Blue", json!({"Which fictional jar?":{"notes":"  "}})).is_none());
+        assert!(answered("Blue", json!({"Which fictional lid?":{"notes":"red"}})).is_none());
+        assert!(
+            answered(
+                "Blue",
+                json!({"Which fictional jar?":{"preview":"Blue jar"}})
+            )
+            .is_none()
+        );
+    }
+
+    /// Several answers with notes match only while no note could carry a
+    /// separator, the same rule answers already follow.
+    #[test]
+    fn notes_across_several_questions_match_only_when_unambiguous() {
+        let mut event = payload(true);
+        event["tool_response"]["answers"] =
+            json!({"Which fictional fruit?":"Pear", "Which fictional jar?":"(notes only)"});
+        event["tool_response"]["annotations"] = json!({
+            "Which fictional fruit?":{"notes":"ripe ones"},
+            "Which fictional jar?":{"notes":"go ahead and create, we need an IT vault"}});
+        let completed = read(&event).unwrap();
+        let input = event["tool_input"].clone();
+        let batch = |response: &str| {
+            serde_json::to_vec(&json!({"hook_event_name":"PostToolBatch",
+                "session_id":"00000000-0000-0000-0000-000000000001",
+                "tool_calls":[{"tool_name":"AskUserQuestion", "tool_use_id":"toolu_example",
+                    "tool_input":input, "tool_response":response}]}))
+            .unwrap()
+        };
+        assert!(completed.matches_final_batch(&batch(
+            "Your questions have been answered: \"Which fictional fruit?\"=\"Pear\" notes: ripe ones, \"Which fictional jar?\"=(no option selected) notes: go ahead and create, we need an IT vault. You can now continue with these answers in mind."
+        )));
+
+        event["tool_response"]["annotations"]["Which fictional fruit?"]["notes"] =
+            json!("ripe ones\", \"Which fictional jar?\"=\"Amber");
+        let quoted = read(&event).unwrap();
+        assert!(!quoted.matches_final_batch(&batch(
+            "Your questions have been answered: \"Which fictional fruit?\"=\"Pear\" notes: ripe ones\", \"Which fictional jar?\"=\"Amber, \"Which fictional jar?\"=(no option selected) notes: go ahead and create, we need an IT vault. You can now continue with these answers in mind."
+        )));
     }
 
     #[test]

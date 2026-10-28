@@ -100,6 +100,7 @@ mod tests {
                 multi_select: false,
             }],
             answers: [("Which jar?".into(), "Amber".into())].into(),
+            notes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -175,6 +176,96 @@ mod tests {
                 .link_native_answer(source.id, decision, 102)
                 .unwrap(),
             NativeAnswerLink::AlreadyLinked
+        );
+    }
+
+    /// A note longer than a resolution holds still resolves, cut on a character
+    /// and saying so. Uncut, the store refuses it and the card stays lit.
+    #[test]
+    fn a_note_too_long_for_the_card_is_cut_and_still_resolves() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        source.notes.insert("Which jar?".into(), "é".repeat(3_000));
+        let service = TaskService::new(store.clone());
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+        let decision = pending_decision(&store, &source);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Resolved
+        );
+        let note = store
+            .get_decision_request(decision)
+            .unwrap()
+            .resolution_note;
+        assert!(note.len() <= swarm_persistence::MAX_RESOLUTION_NOTE_BYTES);
+        assert!(note.starts_with("éé"));
+        assert!(note.ends_with("(cut to fit; the worker received all of it)"));
+    }
+
+    /// Notes written beside a terminal answer reach the decision as its note,
+    /// and the answer stays the option chosen, which is what its readers compare.
+    #[test]
+    fn notes_written_in_the_terminal_reach_the_decision_beside_its_answer() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        source
+            .notes
+            .insert("Which jar?".into(), "only after lunch".into());
+        let service = TaskService::new(store.clone());
+        let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+        let decision = pending_decision(&store, &source);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::Resolved
+        );
+        let resolved = store.get_decision_request(decision).unwrap();
+        assert_eq!(resolved.resolution_answers["Jar"], vec!["Amber".to_owned()]);
+        assert_eq!(resolved.resolution_note, "only after lunch");
+        assert_eq!(resolved.resolution_surface, "verified_terminal");
+    }
+
+    /// An interview asked and never answered reaches the card it was about.
+    ///
+    /// The engine built these from 2026-09-13, and intake refused every one:
+    /// it carries no answer and may carry no typing, and validity demanded
+    /// both. So the notice it exists for was never shown.
+    #[test]
+    fn an_interview_never_answered_reaches_its_card() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut source = fixture(&store);
+        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted);
+        source.answers.clear();
+        source.devices.clear();
+        source.first_write_sequence = 0;
+        source.submit_sequence = 0;
+        let service = TaskService::new(store.clone());
+        assert_eq!(
+            service
+                .retain_native_sources(std::slice::from_ref(&source), 100)
+                .newly_stored,
+            1
+        );
+        let decision = pending_decision(&store, &source);
+
+        assert_eq!(
+            service
+                .resolve_decision_from_native_answer(source.id, 101)
+                .unwrap(),
+            NativeAnswerLink::NeverCompleted
+        );
+        let card = store.get_decision_request(decision).unwrap();
+        assert_eq!(card.state, swarm_domain::DecisionRequestState::Pending);
+        assert_eq!(
+            card.refused_native_answer.map(|refused| refused.reason),
+            Some(swarm_domain::NativeAnswerRefusal::NeverCompleted)
         );
     }
 
@@ -846,10 +937,13 @@ impl TaskService {
             }
         }
 
-        match self
-            .store
-            .resolve_operator_statement_interview(decision_id, worker, session, &ids)
-        {
+        match self.store.resolve_operator_statement_interview(
+            decision_id,
+            worker,
+            session,
+            &ids,
+            &terminal_answer_note(&stored.source),
+        ) {
             Ok(true) => Ok(NativeAnswerLink::Resolved),
             Ok(false) => Ok(NativeAnswerLink::AlreadyLinked),
             Err(swarm_persistence::OperatorStatementError::Conflict) => {
@@ -861,6 +955,36 @@ impl TaskService {
             Err(_) => Ok(NativeAnswerLink::Incomplete),
         }
     }
+}
+
+/// What the operator wrote beside their choices, as the decision's note.
+///
+/// One question needs no label; with several, each line names its question,
+/// in the order asked. A note longer than a resolution holds is cut, and says
+/// so: the worker already received every word in its terminal.
+fn terminal_answer_note(source: &NativeInterviewEvidence) -> String {
+    const CUT: &str = " … (cut to fit; the worker received all of it)";
+    let note = source
+        .questions
+        .iter()
+        .filter_map(|question| {
+            let notes = source.notes.get(&question.question)?;
+            Some(if source.questions.len() == 1 {
+                notes.clone()
+            } else {
+                format!("{}: {notes}", question.header)
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if note.len() <= swarm_persistence::MAX_RESOLUTION_NOTE_BYTES {
+        return note;
+    }
+    let mut end = swarm_persistence::MAX_RESOLUTION_NOTE_BYTES - CUT.len();
+    while !note.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{CUT}", &note[..end])
 }
 
 /// The exact target a statement must bind to.

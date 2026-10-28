@@ -199,8 +199,10 @@ impl TaskStore {
         worker: WorkerId,
         session: WorkerSessionId,
         ids: &[OperatorStatementId],
+        note: &str,
     ) -> Result<bool, OperatorStatementError> {
-        if ids.is_empty()
+        if note.len() > crate::MAX_RESOLUTION_NOTE_BYTES
+            || ids.is_empty()
             || ids.len() > MAX_DECISION_QUESTIONS
             || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
         {
@@ -277,7 +279,7 @@ impl TaskStore {
             &tx,
             decision,
             &answers,
-            "",
+            note,
             "verified_terminal",
             Some((worker, session)),
         )?;
@@ -452,6 +454,7 @@ mod tests {
                 target.worker_id,
                 target.session_id,
                 &[id],
+                "",
             )
         };
         let receipt = store.verified_operator_statement(id).unwrap().unwrap();
@@ -502,7 +505,8 @@ mod tests {
                     target.decision_id,
                     target.worker_id,
                     target.session_id,
-                    &[]
+                    &[],
+                    "",
                 )
                 .is_err()
         );
@@ -512,7 +516,8 @@ mod tests {
                     target.decision_id,
                     target.worker_id,
                     target.session_id,
-                    &[id, id]
+                    &[id, id],
+                    "",
                 )
                 .is_err()
         );
@@ -527,7 +532,8 @@ mod tests {
                     target.decision_id,
                     target.worker_id,
                     target.session_id,
-                    &[id]
+                    &[id],
+                    "",
                 )
                 .is_err()
         );
@@ -594,7 +600,8 @@ mod tests {
                     target.decision_id,
                     worker.id,
                     session,
-                    &[first_id]
+                    &[first_id],
+                    "",
                 )
                 .is_err()
         );
@@ -614,7 +621,8 @@ mod tests {
                     target.decision_id,
                     worker.id,
                     session,
-                    &[second_id, first_id]
+                    &[second_id, first_id],
+                    "",
                 )
                 .unwrap()
         );
@@ -624,7 +632,8 @@ mod tests {
                     target.decision_id,
                     worker.id,
                     session,
-                    &[first_id, second_id]
+                    &[first_id, second_id],
+                    "",
                 )
                 .unwrap()
         );
@@ -647,7 +656,8 @@ mod tests {
                     target.decision_id,
                     target.worker_id,
                     target.session_id,
-                    &[id]
+                    &[id],
+                    "",
                 )
                 .is_err()
         );
@@ -665,7 +675,8 @@ mod tests {
                     target.decision_id,
                     target.worker_id,
                     target.session_id,
-                    &[id]
+                    &[id],
+                    "",
                 )
                 .unwrap()
         );

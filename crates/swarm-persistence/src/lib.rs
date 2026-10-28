@@ -204,7 +204,8 @@ pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
 pub use apiary_policy::PolicyConvergence;
 pub use decisions::{
-    HeldForAnswer, INTERVIEW_ANSWERED_ACTION, MAX_DECISION_RESULTS, OPERATOR_ANSWER_HEADER,
+    HeldForAnswer, INTERVIEW_ANSWERED_ACTION, MAX_DECISION_RESULTS, MAX_RESOLUTION_NOTE_BYTES,
+    OPERATOR_ANSWER_HEADER,
 };
 use events::insert_control_room_event;
 #[cfg(test)]
@@ -421,7 +422,9 @@ const WORKER_REMOTE_CONTROL_SCHEMA_MARKER: i64 = 209;
 const REPORTED_CONVERSATIONS_SCHEMA_MARKER: i64 = 210;
 /// What an outside tool said about the work it filed (ADR 0126).
 const TASK_INTAKE_SCHEMA_MARKER: i64 = 211;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_INTAKE_SCHEMA_MARKER;
+/// A card can say its question was asked in a terminal and never answered.
+const NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER: i64 = 212;
+const CURRENT_SCHEMA_VERSION: i64 = NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4854,6 +4857,12 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < TASK_INTAKE_SCHEMA_MARKER {
         crate::task_intake::migrate_task_intake(transaction, TASK_INTAKE_SCHEMA_MARKER)?;
+    }
+    if schema_version < NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER {
+        crate::decisions::migrate_never_completed_refusals(
+            transaction,
+            NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -10995,6 +11004,22 @@ mod tests {
             undo_sql: "DROP TABLE task_intake;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'task_intake'",
+        },
+        // A CHECK widened rather than a table or a column: the undo restores
+        // the four-reason table, so the rebuild has something real to widen.
+        SchemaStep {
+            table: "decision_native_answer_refusals",
+            artifact: "the never_completed reason",
+            undo_sql: "DROP TABLE decision_native_answer_refusals;
+                 CREATE TABLE decision_native_answer_refusals (
+                     decision_id TEXT PRIMARY KEY
+                         REFERENCES decision_requests(id) ON DELETE CASCADE,
+                     reason TEXT NOT NULL CHECK (reason IN
+                         ('unverified','ambiguous','no_longer_applicable','conflicting')),
+                     seen_at INTEGER NOT NULL CHECK (seen_at >= 0)
+                 )",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'decision_native_answer_refusals' AND sql LIKE '%never_completed%'",
         },
     ];
 

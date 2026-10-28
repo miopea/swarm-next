@@ -152,7 +152,7 @@ impl NativeInterviewCapture {
             if observation.phase == NativeInterviewPhase::Completed {
                 return source.selection_revision == selection_revision && earlier == &observation;
             }
-            self.awaiting_final.remove(&session_id);
+            self.hand_on_unconfirmed(session_id);
         }
         if let Some(existing) = self.ready.iter().find(|entry| {
             entry.session_id == session_id
@@ -162,7 +162,8 @@ impl NativeInterviewCapture {
             return observation.phase == NativeInterviewPhase::Completed
                 && existing.selection_revision == selection_revision
                 && existing.questions == observation.questions()
-                && existing.answers == *observation.answers();
+                && existing.answers == observation.recorded_answers()
+                && existing.notes == observation.recorded_notes();
         }
         match observation.phase {
             NativeInterviewPhase::Requested => {
@@ -219,7 +220,7 @@ impl NativeInterviewCapture {
         // person, on a real device, typed and submitted this answer — so a
         // silent false here is indistinguishable from the feature being
         // unwired, which is precisely how 2026-09-12 was spent.
-        let Some(pending) = self.pending.get(&session_id) else {
+        let Some(pending) = self.pending.get_mut(&session_id) else {
             tracing::warn!(%session_id, "interview completion refused: no pending request for this session");
             return false;
         };
@@ -230,10 +231,10 @@ impl NativeInterviewCapture {
             tracing::warn!(%session_id, "interview completion refused: answers a different invocation than the pending request");
             return false;
         }
-        let pending = self
-            .pending
-            .remove(&session_id)
-            .expect("pending invocation exists");
+        // ⚠️ A REFUSED ANSWER LEAVES ITS REQUEST IN PLACE, TAINTED, so it can
+        // never complete and its final batch reports it as never completed.
+        // Removing the request here left that batch nothing to report, and the
+        // card lit and silent.
         let (Some(first_write_sequence), Some(submit_sequence)) =
             (pending.first_write_sequence, pending.submit_sequence)
         else {
@@ -244,12 +245,15 @@ impl NativeInterviewCapture {
                 devices = pending.devices.len(),
                 "interview completion refused: no recorded typing — a device must have written to the terminal and submitted"
             );
+            pending.tainted = true;
             return false;
         };
         let refusal = if pending.selection_revision != selection_revision {
             Some("the terminal selection moved between request and answer")
         } else if pending.tainted {
-            Some("the pending request was tainted by a changed question")
+            Some(
+                "the pending request was tainted: a changed question, uncertain input, or an earlier refusal",
+            )
         } else if pending.devices.is_empty() {
             Some("no device is recorded as having written the answer")
         } else if pending.last_write_sequence != Some(submit_sequence) {
@@ -265,8 +269,13 @@ impl NativeInterviewCapture {
         };
         if let Some(reason) = refusal {
             tracing::warn!(%session_id, reason, "interview completion refused");
+            pending.tainted = true;
             return false;
         }
+        let pending = self
+            .pending
+            .remove(&session_id)
+            .expect("pending invocation exists");
         let source = NativeInterviewEvidence {
             final_result: None,
             id: OperatorSubmissionId::new(),
@@ -278,7 +287,8 @@ impl NativeInterviewCapture {
             first_write_sequence,
             submit_sequence,
             questions: observation.questions().to_vec(),
-            answers: observation.answers().clone(),
+            answers: observation.recorded_answers(),
+            notes: observation.recorded_notes(),
         };
         self.awaiting_final
             .insert(session_id, (source, observation.clone()));
@@ -311,15 +321,21 @@ impl NativeInterviewCapture {
             self.report_never_completed(session, revision, payload);
             return false;
         };
-        if source.selection_revision != revision
-            || self.ready.len() == MAX_READY
-            || !observation.matches_final_batch(payload)
-        {
+        if self.ready.len() == MAX_READY {
             return false;
         }
-        source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        // ⚠️ AN ANSWER THE FINAL BATCH DOES NOT CONFIRM IS HANDED ON
+        // UNCONFIRMED, NOT DROPPED. Dropping it was silent: the operator had
+        // answered, and the card neither closed nor said why. Without
+        // ExactBatch it can never resolve anything. It lets the card say an
+        // answer was seen and could not be confirmed.
+        let confirmed =
+            source.selection_revision == revision && observation.matches_final_batch(payload);
+        if confirmed {
+            source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+        }
         self.ready.push_back(source);
-        true
+        confirmed
     }
 
     /// Retains evidence that an interview was asked and never answered.
@@ -332,20 +348,22 @@ impl NativeInterviewCapture {
         let Some(pending) = self.pending.get(&session) else {
             return;
         };
-        if pending.selection_revision != revision
-            || self.ready.len() == MAX_READY
-            || !crate::provider_interview::final_batch_answers_invocation(
-                payload,
-                pending.observation.conversation,
-                &pending.observation.tool_use_id,
-            )
-        {
+        if !crate::provider_interview::final_batch_answers_invocation(
+            payload,
+            pending.observation.conversation,
+            &pending.observation.tool_use_id,
+        ) {
             return;
         }
+        // Its batch has arrived, so the request is over whether or not it can
+        // be reported. Kept, a refused request outlived its interview.
         let pending = self
             .pending
             .remove(&session)
             .expect("pending invocation exists");
+        if pending.selection_revision != revision || self.ready.len() == MAX_READY {
+            return;
+        }
         self.ready.push_back(NativeInterviewEvidence {
             final_result: Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted),
             id: OperatorSubmissionId::new(),
@@ -358,6 +376,7 @@ impl NativeInterviewCapture {
             submit_sequence: pending.submit_sequence.unwrap_or_default(),
             questions: pending.observation.questions().to_vec(),
             answers: std::collections::BTreeMap::new(),
+            notes: std::collections::BTreeMap::new(),
         });
     }
 
@@ -380,7 +399,7 @@ impl NativeInterviewCapture {
     /// `controlled` is supplied only by the registry's successful v4 input path,
     /// never from wire provenance or an agent-provided actor label.
     pub fn record_write(&mut self, entry: &TerminalWriteAuditEntry, controlled: bool) {
-        self.awaiting_final.remove(&entry.session_id);
+        self.hand_on_unconfirmed(entry.session_id);
         if let Some(prepared) = self.prepared.get_mut(&entry.session_id) {
             prepared.input_changed = true;
         }
@@ -423,9 +442,51 @@ impl NativeInterviewCapture {
     }
 
     pub fn invalidate_pending(&mut self, session: WorkerSessionId) {
-        self.awaiting_final.remove(&session);
+        self.hand_on_unconfirmed(session);
         self.prepared.remove(&session);
         self.pending.remove(&session);
+    }
+
+    /// A payload for this session could not be read as an interview.
+    ///
+    /// ⚠️ THE ANSWER TO THE PENDING REQUEST IS TAINTED, NOT FORGOTTEN. Tainted,
+    /// it can never complete, which is all forgetting it achieved. Kept, the
+    /// final batch for the same invocation reports it as never completed, so
+    /// the card says Swarm captured nothing. Forgotten, an answer Swarm could
+    /// not read left the card lit and silent.
+    ///
+    /// Only that answer. Anything else unreadable, such as a subagent's batch,
+    /// says nothing about the request, so it is invalidated as before rather
+    /// than reported as an answer that failed.
+    pub fn refuse_unreadable(&mut self, session: WorkerSessionId, payload: &[u8]) {
+        let answers_pending = self.pending.get(&session).is_some_and(|pending| {
+            crate::provider_interview::completion_names_invocation(
+                payload,
+                pending.observation.conversation,
+                &pending.observation.tool_use_id,
+            )
+        });
+        if !answers_pending {
+            self.invalidate_pending(session);
+            return;
+        }
+        self.prepared.remove(&session);
+        if let Some(pending) = self.pending.get_mut(&session) {
+            pending.tainted = true;
+        }
+    }
+
+    /// An answer cut off from its final batch is passed on unconfirmed.
+    ///
+    /// Without `ExactBatch` it can never resolve anything. It lets the card say
+    /// an answer was seen and could not be confirmed, where dropping it left
+    /// the card lit and silent.
+    fn hand_on_unconfirmed(&mut self, session: WorkerSessionId) {
+        if let Some((source, _)) = self.awaiting_final.remove(&session)
+            && self.ready.len() < MAX_READY
+        {
+            self.ready.push_back(source);
+        }
     }
 
     pub fn retained(&self) -> Vec<NativeInterviewEvidence> {
@@ -534,9 +595,11 @@ mod tests {
         );
     }
 
+    /// Only the exact final batch confirms an answer. Every other ending hands
+    /// it on unconfirmed, so the card can say so; none of them resolves anything.
     #[test]
-    fn earlier_result_is_not_retained_until_final_output_matches() {
-        for mode in 0..4 {
+    fn an_answer_is_confirmed_only_by_its_exact_final_output() {
+        for mode in 0..6 {
             let mut capture = NativeInterviewCapture::default();
             let session = WorkerSessionId::new();
             capture.observe_at_revision(session, 1, observation(false, "toolu_one"));
@@ -546,25 +609,127 @@ mod tests {
             assert!(capture.observe_at_revision(session, 1, completed));
             assert!(capture.retained().is_empty());
             match mode {
+                // The batch disagrees with the answer.
                 1 => {
                     batch = String::from_utf8(batch)
                         .unwrap()
                         .replace("Amber", "Blue")
                         .into_bytes();
                 }
+                // Input, a lost session, a payload it cannot read, or the next
+                // question arrives before the batch does.
                 2 => capture.record_write(&input(session, 2), true),
                 3 => capture.invalidate_pending(session),
+                4 => capture.refuse_unreadable(session, b"unsupported"),
+                5 => {
+                    capture.observe_at_revision(session, 1, observation(false, "toolu_two"));
+                }
                 _ => {}
             }
             assert_eq!(capture.finalize(session, 1, &batch), mode == 0);
-            assert_eq!(capture.retained().len(), usize::from(mode == 0));
-            if mode == 0 {
-                assert_eq!(
-                    capture.retained()[0].final_result,
-                    Some(swarm_domain::NativeInterviewFinalResult::ExactBatch)
-                );
-            }
+            let retained = capture.retained();
+            assert_eq!(retained.len(), 1, "mode {mode}");
+            assert_eq!(
+                retained[0].final_result,
+                (mode == 0).then_some(swarm_domain::NativeInterviewFinalResult::ExactBatch),
+                "mode {mode}"
+            );
+            assert_eq!(retained[0].answers["Which fictional jar?"], "Amber");
         }
+    }
+
+    /// A refused answer still reaches its card. Its request stays, tainted, so
+    /// it can never complete, and the batch for the same invocation reports it
+    /// as never completed.
+    #[test]
+    fn a_refused_answer_is_reported_by_its_final_batch() {
+        for mode in 0..3 {
+            let mut capture = NativeInterviewCapture::default();
+            let session = WorkerSessionId::new();
+            capture.observe_at_revision(session, 1, observation(false, "toolu_one"));
+            match mode {
+                // Nothing typed.
+                0 => {}
+                // Typed after the submit.
+                1 => {
+                    capture.record_write(&input(session, 1), true);
+                    let mut navigation = input(session, 2);
+                    navigation.input_kind = TerminalInputKind::Navigation;
+                    capture.record_write(&navigation, true);
+                }
+                // A completion that could not be read.
+                _ => {
+                    capture.record_write(&input(session, 1), true);
+                    capture.refuse_unreadable(session, &unreadable_answer("toolu_one"));
+                }
+            }
+            let completed = observation(true, "toolu_one");
+            let batch = final_batch(&completed);
+            assert!(!capture.observe_at_revision(session, 1, completed.clone()));
+            // Typing afterwards cannot make a retry of it complete.
+            capture.record_write(&input(session, 9), true);
+            assert!(
+                !capture.observe_at_revision(session, 1, completed),
+                "mode {mode}: a retry cannot complete it"
+            );
+
+            assert!(!capture.finalize(session, 1, &batch));
+            let retained = capture.retained();
+            assert_eq!(retained.len(), 1, "mode {mode}");
+            assert_eq!(
+                retained[0].final_result,
+                Some(swarm_domain::NativeInterviewFinalResult::NeverCompleted)
+            );
+            assert!(retained[0].answers.is_empty());
+            assert!(retained[0].is_valid(), "mode {mode}: intake must admit it");
+        }
+    }
+
+    /// ⚠️ ONLY THE ANSWER ITSELF COUNTS AS A REFUSED ANSWER. A subagent's batch
+    /// reaches the same hook and cannot be read as an interview; taken for a
+    /// refusal, it would tell the operator an answer failed when none had.
+    #[test]
+    fn other_traffic_it_cannot_read_reports_no_failed_answer() {
+        for other in [
+            br#"{"hook_event_name":"PostToolBatch","session_id":"00000000-0000-0000-0000-000000000001","agent_id":"agent_1","tool_calls":[]}"#.to_vec(),
+            unreadable_answer("toolu_other"),
+        ] {
+            let mut capture = NativeInterviewCapture::default();
+            let session = WorkerSessionId::new();
+            capture.observe_at_revision(session, 1, observation(false, "toolu_one"));
+            capture.record_write(&input(session, 1), true);
+            capture.refuse_unreadable(session, &other);
+
+            let batch = final_batch(&observation(true, "toolu_one"));
+            assert!(!capture.finalize(session, 1, &batch));
+            assert!(capture.retained().is_empty());
+        }
+    }
+
+    /// Its batch ends a request even when it cannot be reported, so a refused
+    /// request never outlives its interview.
+    #[test]
+    fn a_batch_ends_its_request_even_when_it_cannot_report_it() {
+        let mut capture = NativeInterviewCapture::default();
+        let session = WorkerSessionId::new();
+        capture.observe_at_revision(session, 1, observation(false, "toolu_one"));
+        assert!(!capture.observe_at_revision(session, 1, observation(true, "toolu_one")));
+        let batch = final_batch(&observation(true, "toolu_one"));
+        assert!(!capture.finalize(session, 2, &batch));
+        assert!(
+            capture.retained().is_empty(),
+            "a moved selection must not report"
+        );
+        assert!(capture.pending.is_empty());
+    }
+
+    /// An answer to `id` carrying an annotation the parser refuses.
+    fn unreadable_answer(id: &str) -> Vec<u8> {
+        let mut event = interview_event(true, id, "Jar");
+        event["tool_response"]["annotations"] = json!({"Which fictional jar?":{"notes":"  "}});
+        let bytes = serde_json::to_vec(&event).unwrap();
+        assert!(read_claude_interview(&bytes).is_none());
+        bytes
     }
 
     fn observation(completed: bool, id: &str) -> NativeInterviewObservation {
@@ -576,6 +741,11 @@ mod tests {
         id: &str,
         header: &str,
     ) -> NativeInterviewObservation {
+        let event = interview_event(completed, id, header);
+        read_claude_interview(&serde_json::to_vec(&event).unwrap()).unwrap()
+    }
+
+    fn interview_event(completed: bool, id: &str, header: &str) -> serde_json::Value {
         let questions = json!([{"question":"Which fictional jar?","header":header,
             "options":[{"label":"Amber"},{"label":"Blue"}]}]);
         let mut event = json!({"session_id":"00000000-0000-0000-0000-000000000001",
@@ -585,7 +755,7 @@ mod tests {
             event["tool_response"] = json!({"questions":questions,
             "answers":{"Which fictional jar?":"Amber"}});
         }
-        read_claude_interview(&serde_json::to_vec(&event).unwrap()).unwrap()
+        event
     }
 
     fn input(session_id: WorkerSessionId, sequence: u64) -> TerminalWriteAuditEntry {
