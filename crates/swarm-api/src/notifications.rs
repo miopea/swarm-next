@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use p256::PublicKey;
 use serde::{Deserialize, Serialize};
 use swarm_domain::{DecisionUrgency, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId};
 use swarm_persistence::{
@@ -14,13 +15,11 @@ use swarm_persistence::{
     TaskStore,
 };
 use tokio::sync::Mutex;
-use web_push_native::{
-    Auth, WebPushBuilder,
-    jwt_simple::algorithms::ES256KeyPair,
-    p256::{PublicKey, elliptic_curve::sec1::ToEncodedPoint},
-};
 
-use super::{ApiError, AppState, authorize, task_store, task_store_error};
+use super::{
+    ApiError, AppState, authorize, task_store, task_store_error,
+    web_push::{self, VapidKey},
+};
 
 const PUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const PUSH_TTL: Duration = Duration::from_secs(60 * 60);
@@ -30,7 +29,7 @@ const MAX_PUSH_PAYLOAD_BYTES: usize = 512;
 pub struct NotificationSender {
     store: TaskStore,
     client: reqwest::Client,
-    key_pair: Arc<ES256KeyPair>,
+    vapid: Arc<VapidKey>,
     public_key: Arc<str>,
     subject: Arc<str>,
     delivery_lock: Arc<Mutex<()>>,
@@ -42,21 +41,12 @@ impl NotificationSender {
     /// # Errors
     /// Returns key, storage, or HTTPS client initialization failures.
     pub fn initialize(store: TaskStore, subject: impl Into<Arc<str>>) -> Result<Self, String> {
-        let generated = ES256KeyPair::generate();
-        let private_key = generated.to_bytes();
-        let compressed_public_key = generated.public_key().to_bytes();
-        let public_key = PublicKey::from_sec1_bytes(&compressed_public_key)
-            .map_err(|_| "generated notification public key is invalid".to_owned())?
-            .to_encoded_point(false);
+        let generated = VapidKey::generate()?;
         let material = store
-            .ensure_vapid_key(&private_key, public_key.as_bytes())
+            .ensure_vapid_key(&generated.to_bytes(), &generated.public_key())
             .map_err(|error| error.to_string())?;
-        let key_pair =
-            ES256KeyPair::from_bytes(&material.private_key).map_err(|error| error.to_string())?;
-        let restored_public_key = PublicKey::from_sec1_bytes(&key_pair.public_key().to_bytes())
-            .map_err(|_| "stored notification public key is invalid".to_owned())?
-            .to_encoded_point(false);
-        if restored_public_key.as_bytes() != material.public_key {
+        let vapid = VapidKey::from_bytes(&material.private_key)?;
+        if vapid.public_key() != material.public_key {
             return Err("stored notification key pair does not match".to_owned());
         }
         let public_key = Base64UrlUnpadded::encode_string(&material.public_key);
@@ -68,7 +58,7 @@ impl NotificationSender {
         Ok(Self {
             store,
             client,
-            key_pair: Arc::new(key_pair),
+            vapid: Arc::new(vapid),
             public_key: public_key.into(),
             subject: subject.into(),
             delivery_lock: Arc::new(Mutex::new(())),
@@ -115,27 +105,27 @@ impl NotificationSender {
     ) -> Result<(), NotificationDeliveryFailure> {
         validate_push_endpoint(&delivery.endpoint)
             .map_err(|_| NotificationDeliveryFailure::Permanent)?;
-        let endpoint = delivery
-            .endpoint
-            .parse()
+        let endpoint = reqwest::Url::parse(&delivery.endpoint)
             .map_err(|_| NotificationDeliveryFailure::Permanent)?;
         let public_key = PublicKey::from_sec1_bytes(&delivery.p256dh)
             .map_err(|_| NotificationDeliveryFailure::Permanent)?;
-        let auth = Auth::clone_from_slice(&delivery.auth);
         let payload = notification_payload(delivery);
         if payload.len() > MAX_PUSH_PAYLOAD_BYTES {
             return Err(NotificationDeliveryFailure::Permanent);
         }
-        let request = WebPushBuilder::new(endpoint, public_key, auth)
-            .with_valid_duration(PUSH_TTL)
-            .with_vapid(&self.key_pair, &self.subject)
-            .build(payload)
+        let body = web_push::encrypt(&payload, &public_key, &delivery.auth)
             .map_err(|_| NotificationDeliveryFailure::Permanent)?;
-        let (parts, body) = request.into_parts();
+        let authorization = self
+            .vapid
+            .authorization(&endpoint, &self.subject, PUSH_TTL, unix_timestamp())
+            .map_err(|_| NotificationDeliveryFailure::Permanent)?;
         let response = self
             .client
-            .request(parts.method, parts.uri.to_string())
-            .headers(parts.headers)
+            .post(endpoint)
+            .header("TTL", PUSH_TTL.as_secs())
+            .header(header::CONTENT_ENCODING, "aes128gcm")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(header::AUTHORIZATION, authorization)
             .body(body)
             .send()
             .await

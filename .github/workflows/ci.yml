@@ -81,12 +81,10 @@ jobs:
       # action's build fails, `cargo install cargo-audit --locked` installs
       # 0.22.2 and scans 400 crate dependencies clean.
       - run: cargo install cargo-audit --locked --version 0.22.2
-      # web-push-native's VAPID feature pulls jwt-simple's optional RSA
-      # implementation into Cargo.lock, but Swarm constructs only ES256 keys.
-      # RUSTSEC-2023-0071 has no patched rsa release and applies to observable
-      # RSA private-key operations, which this binary never performs. Keep the
-      # exception visible and scoped to this one ID.
-      - run: cargo audit --ignore RUSTSEC-2023-0071
+      # No exceptions. RUSTSEC-2023-0071 was ignored here while web-push-native
+      # pulled jwt-simple's rsa into Cargo.lock; Swarm now signs and encrypts
+      # Web Push itself (ADR 0127) and rsa is gone.
+      - run: cargo audit
 
   linux-package:
     runs-on: ubuntu-latest

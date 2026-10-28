@@ -80,6 +80,7 @@ mod terminal_socket;
 mod tool_reconnects;
 mod tunnel;
 mod unprompted_engine_updates;
+mod web_push;
 mod worker_description_ai;
 mod worker_model_routes;
 mod worker_runtime;
