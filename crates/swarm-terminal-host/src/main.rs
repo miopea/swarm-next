@@ -35,6 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         provider_grant::run(env::args().nth(2).as_deref()).await;
         return Ok(());
     }
+    if env::args().nth(1).as_deref() == Some("provider-refused") {
+        provider_grant::run_refused(env::args().nth(2).as_deref()).await;
+        return Ok(());
+    }
     if env::args().nth(1).as_deref() == Some("mcp-proxy") {
         return mcp_proxy::run().await.map_err(Into::into);
     }

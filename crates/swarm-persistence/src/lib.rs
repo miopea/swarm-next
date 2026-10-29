@@ -165,8 +165,9 @@ pub use dogfood_evidence::{EvidenceError, EvidenceWrite};
 mod passkeys;
 mod presence;
 pub use decisions::{
-    CommandGrantOutcome, DecisionDeliveryFailure, DecisionDispatch, LiveCommandGrant,
-    NewDecisionRequest,
+    CommandGrantOutcome, DecisionDeliveryFailure, DecisionDispatch, FollowedApproval,
+    LiveCommandGrant, MAX_PENDING_REFUSED_COMMANDS, NewDecisionRequest, RefusalWording,
+    RefusedCommand, RefusedCommandFiling,
 };
 pub use email::{
     EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
@@ -429,7 +430,9 @@ const TASK_INTAKE_SCHEMA_MARKER: i64 = 211;
 const NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER: i64 = 212;
 /// A command grant is bound to the script it runs (ADR 0129).
 const COMMAND_GRANT_SCRIPT_SCHEMA_MARKER: i64 = 213;
-const CURRENT_SCHEMA_VERSION: i64 = COMMAND_GRANT_SCRIPT_SCHEMA_MARKER;
+/// A command request Swarm filed after Claude refused the command (ADR 0130).
+const COMMAND_REFUSAL_SCHEMA_MARKER: i64 = 214;
+const CURRENT_SCHEMA_VERSION: i64 = COMMAND_REFUSAL_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4876,6 +4879,9 @@ fn migrate_fleet_health_schema_steps(
             transaction,
             COMMAND_GRANT_SCRIPT_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < COMMAND_REFUSAL_SCHEMA_MARKER {
+        crate::decisions::migrate_command_refusals(transaction, COMMAND_REFUSAL_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11048,6 +11054,14 @@ mod tests {
                                                 'requested_script_sha256'))
                              + (SELECT COUNT(*) FROM pragma_table_info('decision_command_grants')
                                  WHERE name IN ('session_id','script_path','script_sha256')) = 6",
+        },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "why Swarm filed a command request itself",
+            undo_sql: "ALTER TABLE decision_requests DROP COLUMN refusal_reason;
+                       ALTER TABLE decision_requests DROP COLUMN refusal_follows_decision_id;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM pragma_table_info('decision_requests')
+                         WHERE name IN ('refusal_reason','refusal_follows_decision_id')",
         },
     ];
 

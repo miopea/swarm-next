@@ -29,7 +29,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use swarm_application::{
     AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, IntakeRequest,
-    TaskService,
+    NotAskedBecause, RefusalOutcome, TaskService,
 };
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
@@ -38,8 +38,8 @@ use swarm_domain::{
     WorkerRole, launch_model_change,
 };
 use swarm_persistence::{
-    CompletionEvidence, JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish,
-    TaskStore, TaskStoreError,
+    CompletionEvidence, JiraIssueSnapshot, MAX_PENDING_REFUSED_COMMANDS,
+    MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish, TaskStore, TaskStoreError,
 };
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -495,6 +495,115 @@ impl AgentBridge {
             }
         }
     }
+
+    /// Hears from a worker's grant mod that Claude's auto mode refused a
+    /// command, and puts Swarm's grant button up for it when the operator has
+    /// approved something on the worker's task (ADR 0130).
+    ///
+    /// The answer carries the words the worker reads beside the refusal, so
+    /// it waits for the operator rather than handing them a command to type.
+    /// When Swarm asks nothing the answer carries no words, and the refusal
+    /// reads exactly as it would have.
+    pub fn report_refused_command(&self, headers: &HeaderMap, body: &[u8]) -> Response {
+        let principal = match self.authenticate(headers) {
+            Ok(principal) => principal,
+            Err(AgentBridgeError::Unauthorized) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(error) => {
+                tracing::error!(message = %error, "command refusal authentication failed");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+        };
+        let Ok(request) = serde_json::from_slice::<CommandRefusedRequest>(body) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let outcome = self.tasks.report_refused_command(
+            principal,
+            &request.command,
+            request.cwd.as_deref(),
+            request.reason.as_deref().unwrap_or_default(),
+        );
+        // Every report is logged, asked or not, so a refusal Swarm stayed
+        // silent about is still evidence that the worker's mod reported it.
+        match &outcome {
+            Ok(RefusalOutcome::Asked {
+                decision_id, new, ..
+            }) => tracing::info!(
+                worker_id = %principal.worker_id,
+                %decision_id,
+                new,
+                "auto mode refused a worker's command; Swarm asked the operator"
+            ),
+            Ok(RefusalOutcome::NotAsked(because)) => tracing::info!(
+                worker_id = %principal.worker_id,
+                because = ?because,
+                "auto mode refused a worker's command; Swarm asked nothing"
+            ),
+            Err(_) => {}
+        }
+        match outcome {
+            Ok(RefusalOutcome::Asked {
+                decision_id,
+                command,
+                approval_action,
+                new,
+            }) => {
+                if new {
+                    self.changed.notify_waiters();
+                }
+                axum::Json(json!({
+                    "asked": true,
+                    "decision_id": decision_id,
+                    "note": refusal_note(decision_id, &command, &approval_action, new),
+                }))
+                .into_response()
+            }
+            Ok(RefusalOutcome::NotAsked(NotAskedBecause::TooMany)) => axum::Json(json!({
+                "asked": false,
+                "note": format!(
+                    "[Swarm] Swarm did not ask the operator about this command: \
+                     {MAX_PENDING_REFUSED_COMMANDS} of your refused commands are already \
+                     waiting for an answer."
+                ),
+            }))
+            .into_response(),
+            Ok(RefusalOutcome::NotAsked(_)) | Err(ApplicationError::WorkerNotRunning) => {
+                axum::Json(json!({ "asked": false })).into_response()
+            }
+            Err(error) => {
+                tracing::error!(message = %error, "command refusal could not be recorded");
+                StatusCode::SERVICE_UNAVAILABLE.into_response()
+            }
+        }
+    }
+}
+
+/// What the worker reads beside Claude's refusal once Swarm has asked.
+///
+/// It names the one way forward that does not launder the refusal: wait for
+/// the operator's answer in Swarm, then run exactly what they allowed.
+fn refusal_note(
+    decision_id: DecisionRequestId,
+    command: &str,
+    approval_action: &str,
+    new: bool,
+) -> String {
+    let asked = if new {
+        format!(
+            "Swarm has asked the operator to allow exactly this command once, in this session: \
+             decision {decision_id}, after their approval \"{approval_action}\" on this task."
+        )
+    } else {
+        format!(
+            "Swarm already asked the operator to allow exactly this command once, in this \
+             session: decision {decision_id}."
+        )
+    };
+    format!(
+        "[Swarm] {asked} Do not ask them to type it, run it another way, or change \
+         permissions. Carry on with anything that does not need it, or move the task to \
+         Blocked on decision {decision_id}. When they answer, Swarm tells you; if they allow \
+         it, run exactly: {command}"
+    )
 }
 
 /// What a worker's permission hook sends: the command it is about to run, and
@@ -504,6 +613,17 @@ struct CommandGrantRequest {
     command: String,
     #[serde(default)]
     cwd: Option<String>,
+}
+
+/// What a worker's grant mod sends when auto mode refused a command: the
+/// command, the directory its shell is in, and Claude's reason.
+#[derive(Deserialize)]
+struct CommandRefusedRequest {
+    command: String,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 pub async fn handle(
@@ -6702,6 +6822,165 @@ mod tests {
         assert!(
             granted(ask(Some(&worker_token), checked("/srv/app")).await.unwrap()).await,
             "where it is exactly what the granted command runs"
+        );
+    }
+
+    /// ADR 0130: a refusal reported through the real route puts Swarm's grant
+    /// button up once the operator has approved something on the worker's
+    /// task, and the worker is told to wait for it rather than hand it on.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_refusal_after_an_approval_puts_the_grant_button_up_through_the_route() {
+        let (bridge, store, queen_id, worker_id, directory) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Swap the staging slot", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let app = crate::router(
+            crate::AppState::default()
+                .with_task_store(store.clone())
+                .with_agent_configuration(
+                    directory.path().to_path_buf(),
+                    "http://127.0.0.1:8876/mcp",
+                ),
+        );
+        let report = |token: Option<&str>, body: String| {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/mcp{}",
+                    swarm_terminal::COMMAND_REFUSED_PATH_SUFFIX
+                ))
+                .header(header::CONTENT_TYPE, "application/json");
+            if let Some(token) = token {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+            }
+            app.clone().oneshot(request.body(Body::from(body)).unwrap())
+        };
+        let refused = |command: &str| {
+            json!({ "command": command, "cwd": "/srv/app", "reason": "[Production Deploy]" })
+                .to_string()
+        };
+        let answer = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            response_json(response).await
+        };
+
+        let response = report(None, refused("./swap")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response = report(Some(&worker_token), "not json".into())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            answer(
+                report(Some(&worker_token), refused("./swap"))
+                    .await
+                    .unwrap()
+            )
+            .await,
+            json!({ "asked": false }),
+            "with nothing approved the refusal reads as it would have"
+        );
+
+        let actions = vec!["Swap the slot".to_owned()];
+        let approval = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: Some(task.id),
+                kind: DecisionRequestKind::Approval,
+                urgency: DecisionUrgency::Normal,
+                title: "Swap the slot?",
+                summary: "Staging is verified.",
+                reason: "The release needs it.",
+                risk: "",
+                evidence: "",
+                suggested_action: "",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(approval.id, "Swap the slot", "", "inbox")
+            .unwrap();
+
+        let asked = answer(
+            report(Some(&worker_token), refused("./swap"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(asked["asked"], json!(true));
+        let decision_id = asked["decision_id"].as_str().unwrap().to_owned();
+        let note = asked["note"].as_str().unwrap();
+        assert!(
+            note.starts_with("[Swarm] Swarm has asked the operator"),
+            "{note}"
+        );
+        assert!(note.contains(&format!("decision {decision_id}")), "{note}");
+        assert!(note.contains("\"Swap the slot\""), "{note}");
+        assert!(note.contains("Do not ask them to type it"), "{note}");
+        assert!(
+            note.ends_with("run exactly: cd /srv/app && ./swap"),
+            "{note}"
+        );
+        let filed = store
+            .get_decision_request(decision_id.parse().unwrap())
+            .unwrap();
+        assert_eq!(
+            filed.requested_command.as_deref(),
+            Some("cd /srv/app && ./swap")
+        );
+        assert_eq!(filed.requesting_worker_id, worker_id);
+
+        let again = answer(
+            report(Some(&worker_token), refused("./swap"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(again["decision_id"].as_str(), Some(decision_id.as_str()));
+        assert!(
+            again["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("[Swarm] Swarm already asked the operator"),
+            "the same refusal again points at the card already up"
+        );
+        assert_eq!(
+            answer(report(Some(&queen_token), refused("./swap")).await.unwrap()).await,
+            json!({ "asked": false }),
+            "a credential with no running session asks nothing"
+        );
+
+        for command in ["./second", "./third"] {
+            let filed = answer(report(Some(&worker_token), refused(command)).await.unwrap()).await;
+            assert_eq!(filed["asked"], json!(true), "{command}");
+        }
+        let full = answer(
+            report(Some(&worker_token), refused("./fourth"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(full["asked"], json!(false));
+        assert!(
+            full["note"]
+                .as_str()
+                .unwrap()
+                .contains("3 of your refused commands are already waiting"),
+            "{full}"
         );
     }
 

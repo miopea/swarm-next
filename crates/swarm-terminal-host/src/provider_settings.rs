@@ -245,9 +245,10 @@ const GRANT_MOD_MODULE: &str = include_str!("grant_mod/register.ts");
 /// Claude loads with `--plugin-dir` (ADR 0129).
 ///
 /// The mod's `tool.check` asks this engine's `provider-grant` subcommand
-/// whether the operator granted the exact command, so the worker's credential
-/// stays in its MCP config and never enters the mod. Rewritten at every start,
-/// so it always names this release's helper.
+/// whether the operator granted the exact command, and its refusal hooks tell
+/// `provider-refused` what auto mode refused (ADR 0130), so the worker's
+/// credential stays in its MCP config and never enters the mod. Rewritten at
+/// every start, so it always names this release's helper.
 pub(super) fn grant_mod(mcp_config: &Path, executable: &Path) -> Result<PathBuf, String> {
     usable_helper(executable)?;
     let literal = |path: &Path| {
@@ -365,6 +366,7 @@ mod tests {
             serde_json::to_string(config.to_str().unwrap()).unwrap()
         )));
         assert!(module.contains("'provider-grant'"));
+        assert!(module.contains("'provider-refused'"));
         let manifest: Value = serde_json::from_str(
             &fs::read_to_string(folder.join(".claude-plugin/plugin.json")).unwrap(),
         )

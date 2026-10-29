@@ -22,6 +22,9 @@ pub const AGENT_TOOL_SURFACE_HEADER: &str = "x-swarm-tool-surface";
 /// asks before each shell command, to spend a grant the operator pressed
 /// (ADR 0129).
 pub const COMMAND_GRANT_PATH_SUFFIX: &str = "/command-grant";
+/// Appended to a worker's MCP URL to reach the endpoint its grant mod tells
+/// when Claude's auto mode has refused a command (ADR 0130).
+pub const COMMAND_REFUSED_PATH_SUFFIX: &str = "/command-refused";
 mod resources;
 mod startup_failure;
 mod state;

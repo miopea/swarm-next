@@ -370,6 +370,60 @@ pub struct NewDecisionRequest<'a> {
 /// button binds to the record rather than to a copy of the text.
 pub const GRANT_COMMAND_ACTION: &str = "Allow the command shown in this request";
 
+/// The most commands one worker may have waiting at once because Claude
+/// refused them (ADR 0130). Each is a card in the operator's inbox, so a
+/// worker that keeps being refused must not be able to fill it.
+pub const MAX_PENDING_REFUSED_COMMANDS: i64 = 3;
+
+/// A command Claude's auto mode refused, as the worker's Claude reported it
+/// (ADR 0130).
+#[derive(Clone, Debug)]
+pub struct RefusedCommand<'a> {
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    /// The refused text, bound to the folder it was refused in.
+    pub command: &'a str,
+    /// Claude's own reason, such as `[Production Deploy]`.
+    pub reason: &'a str,
+}
+
+/// The operator approval a refused command followed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FollowedApproval {
+    pub decision_id: DecisionRequestId,
+    pub task_id: TaskId,
+    /// The action the operator pressed.
+    pub action: String,
+}
+
+/// Everything the operator reads on a request Swarm files for a refusal.
+#[derive(Clone, Debug)]
+pub struct RefusalWording {
+    pub title: String,
+    pub summary: String,
+    pub reason: String,
+    pub risk: String,
+    pub evidence: String,
+}
+
+/// What became of a refused command (ADR 0130).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RefusedCommandFiling {
+    /// A request for exactly this command is waiting for the operator: filed
+    /// now when `new`, or already waiting in this session.
+    Asked {
+        decision_id: DecisionRequestId,
+        approval: FollowedApproval,
+        new: bool,
+    },
+    /// The worker holds no task on the board in this session.
+    NoTask,
+    /// The operator approved nothing on the worker's task.
+    NoApproval,
+    /// `MAX_PENDING_REFUSED_COMMANDS` of this worker's are already waiting.
+    TooMany,
+}
+
 impl TaskStore {
     /// Returns the workers with an unresolved explicit operator decision.
     ///
@@ -480,92 +534,113 @@ impl TaskStore {
         request: &NewDecisionRequest<'_>,
     ) -> Result<DecisionRequest, TaskStoreError> {
         validate_new_request(request)?;
-        let questions = serde_json::to_string(request.questions)
-            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
-        let operator_actions = serde_json::to_string(request.operator_actions)
-            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
-        // SWARM APPENDS THE GRANT BUTTON, never the caller. If a worker could
-        // supply the label that mints a grant, the exact-match check below would
-        // be checking a string the worker chose — which is not a check.
-        let mut offered = request.allowed_actions.to_vec();
-        if request.requested_command.is_some() {
-            let label = GRANT_COMMAND_ACTION.to_owned();
-            if !offered.contains(&label) {
-                offered.push(label);
-            }
-        }
-        let actions = serde_json::to_string(&offered)
-            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         let id = DecisionRequestId::new();
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let now: i64 = transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
-        if request.deadline.is_some_and(|deadline| deadline <= now) {
-            return Err(TaskStoreError::InvalidDecisionDeadline);
-        }
-        let pending: i64 = transaction.query_row(
-            "SELECT COUNT(*) FROM decision_requests d
-             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
-             WHERE d.state = 'pending'",
-            [],
-            |row| row.get(0),
-        )?;
-        if pending >= MAX_PENDING_DECISIONS {
-            return Err(TaskStoreError::DecisionInboxFull);
-        }
-        let inserted = transaction.execute(
-            "INSERT INTO decision_requests (
-                id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
-                risk, evidence, suggested_action, allowed_actions, deadline, questions,
-                summary, requested_command, operator_action_labels,
-                requested_script_path, requested_script_sha256, requested_session_id
-             )
-             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                    ?17, ?18,
-                    CASE WHEN ?15 IS NOT NULL THEN (
-                        SELECT s.session_id FROM worker_sessions s
-                        WHERE s.worker_id = w.id AND s.ended_at IS NULL
-                    ) END
-             FROM worker_profiles w
-             JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
-             WHERE w.id = ?2
-               AND (?3 IS NULL OR EXISTS (
-                   SELECT 1 FROM tasks t WHERE t.id = ?3 AND t.hive_id = w.hive_id
-               ))",
-            params![
-                id.to_string(),
-                request.requesting_worker_id.to_string(),
-                request.task_id.map(|value| value.to_string()),
-                request.kind.to_string(),
-                request.urgency.to_string(),
-                request.title,
-                request.reason,
-                request.risk,
-                request.evidence,
-                request.suggested_action,
-                actions,
-                request.deadline,
-                questions,
-                request.summary,
-                request.requested_command,
-                operator_actions,
-                request.requested_script.map(|script| script.path.as_str()),
-                request.requested_script.map(|script| script.sha256.as_str()),
-            ],
-        )?;
-        if inserted == 0 {
-            return Err(TaskStoreError::WorkerNotFound);
-        }
-        insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
-        super::notifications::enqueue_decision_notifications(
-            &transaction,
-            id,
-            request.urgency,
-            now,
-        )?;
+        insert_decision_request(&transaction, request, id)?;
         transaction.commit()?;
         drop(connection);
         self.get_decision_request(id)
+    }
+
+    /// Puts Swarm's grant button up for a command Claude's auto mode refused,
+    /// when the operator approved something on the worker's task (ADR 0130).
+    ///
+    /// The request is Swarm's, not the worker's: `wording` writes every word
+    /// the operator reads, the command is the one Claude reported, and the
+    /// grant button is the only answer offered. It is bound like any command
+    /// request: to this worker, this session and this task.
+    ///
+    /// One transaction decides it all, so two reports of the same refusal
+    /// cannot both file: a request already waiting for exactly this command in
+    /// this session is reused, and a worker with
+    /// `MAX_PENDING_REFUSED_COMMANDS` of these waiting is not given another.
+    ///
+    /// # Errors
+    /// Returns a validation, capacity, identity, integrity, or database error.
+    pub fn file_refused_command(
+        &self,
+        refused: &RefusedCommand<'_>,
+        wording: impl FnOnce(&FollowedApproval) -> RefusalWording,
+    ) -> Result<RefusedCommandFiling, TaskStoreError> {
+        let worker = refused.worker_id.to_string();
+        let session = refused.session_id.to_string();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let approval = match followed_approval(&transaction, &worker, &session)? {
+            Ok(approval) => approval,
+            Err(silent) => return Ok(silent),
+        };
+        if let Some(waiting) = transaction
+            .query_row(
+                "SELECT id FROM decision_requests
+                 WHERE state = 'pending' AND requesting_worker_id = ?1
+                   AND requested_session_id = ?2 AND requested_command = ?3
+                 ORDER BY created_at, id
+                 LIMIT 1",
+                params![worker, session, refused.command],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            return Ok(RefusedCommandFiling::Asked {
+                decision_id: parse_id(&waiting)?,
+                approval,
+                new: false,
+            });
+        }
+        let waiting: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM decision_requests
+             WHERE state = 'pending' AND requesting_worker_id = ?1
+               AND refusal_reason IS NOT NULL",
+            [&worker],
+            |row| row.get(0),
+        )?;
+        if waiting >= MAX_PENDING_REFUSED_COMMANDS {
+            return Ok(RefusedCommandFiling::TooMany);
+        }
+        let words = wording(&approval);
+        let request = NewDecisionRequest {
+            requesting_worker_id: refused.worker_id,
+            task_id: Some(approval.task_id),
+            kind: DecisionRequestKind::Approval,
+            urgency: DecisionUrgency::Normal,
+            title: &words.title,
+            summary: &words.summary,
+            reason: &words.reason,
+            risk: &words.risk,
+            evidence: &words.evidence,
+            suggested_action: "",
+            allowed_actions: &[],
+            operator_actions: &[],
+            questions: &[],
+            deadline: None,
+            requested_command: Some(refused.command),
+            requested_script: None,
+        };
+        validate_new_request(&request)?;
+        let id = DecisionRequestId::new();
+        insert_decision_request(&transaction, &request, id)?;
+        // The session is the one that was refused, already checked above as
+        // this worker's and running, rather than whichever the insert found.
+        transaction.execute(
+            "UPDATE decision_requests
+             SET refusal_reason = ?2, refusal_follows_decision_id = ?3,
+                 requested_session_id = ?4
+             WHERE id = ?1",
+            params![
+                id.to_string(),
+                refused.reason,
+                approval.decision_id.to_string(),
+                session
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(RefusedCommandFiling::Asked {
+            decision_id: id,
+            approval,
+            new: true,
+        })
     }
 
     /// Returns a decision request by its durable identity.
@@ -1477,6 +1552,92 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     Ok(())
 }
 
+/// Writes one validated request, its inbox event and its notifications.
+fn insert_decision_request(
+    transaction: &rusqlite::Transaction<'_>,
+    request: &NewDecisionRequest<'_>,
+    id: DecisionRequestId,
+) -> Result<(), TaskStoreError> {
+    let questions = serde_json::to_string(request.questions)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    let operator_actions = serde_json::to_string(request.operator_actions)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    // SWARM APPENDS THE GRANT BUTTON, never the caller. If a worker could
+    // supply the label that mints a grant, the exact-match check below would
+    // be checking a string the worker chose — which is not a check.
+    let mut offered = request.allowed_actions.to_vec();
+    if request.requested_command.is_some() {
+        let label = GRANT_COMMAND_ACTION.to_owned();
+        if !offered.contains(&label) {
+            offered.push(label);
+        }
+    }
+    let actions = serde_json::to_string(&offered)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    let now: i64 = transaction.query_row("SELECT unixepoch()", [], |row| row.get(0))?;
+    if request.deadline.is_some_and(|deadline| deadline <= now) {
+        return Err(TaskStoreError::InvalidDecisionDeadline);
+    }
+    let pending: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM decision_requests d
+         JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+         WHERE d.state = 'pending'",
+        [],
+        |row| row.get(0),
+    )?;
+    if pending >= MAX_PENDING_DECISIONS {
+        return Err(TaskStoreError::DecisionInboxFull);
+    }
+    let inserted = transaction.execute(
+        "INSERT INTO decision_requests (
+            id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
+            risk, evidence, suggested_action, allowed_actions, deadline, questions,
+            summary, requested_command, operator_action_labels,
+            requested_script_path, requested_script_sha256, requested_session_id
+         )
+         SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18,
+                CASE WHEN ?15 IS NOT NULL THEN (
+                    SELECT s.session_id FROM worker_sessions s
+                    WHERE s.worker_id = w.id AND s.ended_at IS NULL
+                ) END
+         FROM worker_profiles w
+         JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
+         WHERE w.id = ?2
+           AND (?3 IS NULL OR EXISTS (
+               SELECT 1 FROM tasks t WHERE t.id = ?3 AND t.hive_id = w.hive_id
+           ))",
+        params![
+            id.to_string(),
+            request.requesting_worker_id.to_string(),
+            request.task_id.map(|value| value.to_string()),
+            request.kind.to_string(),
+            request.urgency.to_string(),
+            request.title,
+            request.reason,
+            request.risk,
+            request.evidence,
+            request.suggested_action,
+            actions,
+            request.deadline,
+            questions,
+            request.summary,
+            request.requested_command,
+            operator_actions,
+            request.requested_script.map(|script| script.path.as_str()),
+            request
+                .requested_script
+                .map(|script| script.sha256.as_str()),
+        ],
+    )?;
+    if inserted == 0 {
+        return Err(TaskStoreError::WorkerNotFound);
+    }
+    insert_control_room_event(transaction, ControlRoomEventKind::DecisionsChanged)?;
+    super::notifications::enqueue_decision_notifications(transaction, id, request.urgency, now)?;
+    Ok(())
+}
+
 /// A request to run a command offers one affirmative answer: Swarm's grant.
 ///
 /// ⚠️ WORKER-WRITTEN BUTTONS ARE WHY APPROVALS GRANTED NOTHING. A ruling had to
@@ -1956,7 +2117,76 @@ const DECISION_COLUMNS: &str =
                           WHERE t.id = (SELECT node FROM chain WHERE node IS NOT NULL
                                          ORDER BY depth DESC LIMIT 1)
                             AND t.state = 'resolved')),
-                     d.requested_script_path, d.requested_script_sha256";
+                     d.requested_script_path, d.requested_script_sha256,
+                     d.refusal_reason, d.refusal_follows_decision_id";
+
+/// The approval a refused command follows: the latest action the operator
+/// pressed on the worker's task in the refused session, or why there is none
+/// (ADR 0130).
+fn followed_approval(
+    transaction: &rusqlite::Transaction<'_>,
+    worker: &str,
+    session: &str,
+) -> Result<Result<FollowedApproval, RefusedCommandFiling>, TaskStoreError> {
+    let Some(task) = transaction
+        .query_row(
+            "SELECT t.id FROM tasks t
+             JOIN task_assignments a ON a.task_id = t.id AND a.released_at IS NULL
+             JOIN worker_sessions s ON s.session_id = a.worker_session_id
+                                   AND s.worker_id = t.assigned_worker_id
+                                   AND s.ended_at IS NULL
+             WHERE t.assigned_worker_id = ?1 AND a.worker_session_id = ?2
+               AND t.removed_at IS NULL AND t.state NOT IN ('completed', 'abandoned')
+             ORDER BY t.state = 'active' DESC, t.updated_at DESC, t.id
+             LIMIT 1",
+            [worker, session],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(Err(RefusedCommandFiling::NoTask));
+    };
+    // An approval is a ruling the operator gave by pressing one of the
+    // actions offered. A dismissal approves nothing, an answer in words
+    // may say no, and a command request's own grant is not a ruling on
+    // the work.
+    let Some((approval_id, action)) = transaction
+        .query_row(
+            "SELECT d.id, d.resolution_action FROM decision_requests d
+             WHERE d.task_id = ?1 AND d.state = 'resolved' AND d.kind = 'approval'
+               AND d.requested_command IS NULL
+               AND d.resolution_action IS NOT NULL
+               AND d.resolution_action NOT IN (?2, ?3)
+             ORDER BY d.resolved_at DESC, d.id DESC
+             LIMIT 1",
+            params![task, OPERATOR_DISMISS_ACTION, INTERVIEW_ANSWERED_ACTION],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(Err(RefusedCommandFiling::NoApproval));
+    };
+    Ok(Ok(FollowedApproval {
+        decision_id: parse_id(&approval_id)?,
+        task_id: parse_id(&task)?,
+        action,
+    }))
+}
+
+/// Why Swarm filed a command request itself, when it did (ADR 0130).
+fn command_refusal_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Option<swarm_domain::CommandRefusal>> {
+    row.get::<_, Option<String>>(41)?
+        .zip(row.get::<_, Option<String>>(42)?)
+        .map(|(reason, follows)| {
+            Ok(swarm_domain::CommandRefusal {
+                reason,
+                follows_decision_id: parse_id(&follows)?,
+            })
+        })
+        .transpose()
+}
 
 pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRequest> {
     let linked_tasks: Vec<swarm_domain::TaskDecisionLink> =
@@ -2053,6 +2283,7 @@ pub(super) fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dec
             .get::<_, Option<String>>(39)?
             .zip(row.get::<_, Option<String>>(40)?)
             .map(|(path, sha256)| swarm_domain::RequestedScript { path, sha256 }),
+        command_refusal: command_refusal_from_row(row)?,
         discharge: row
             .get::<_, Option<String>>(26)?
             .map(|value| match value.as_str() {
@@ -2785,6 +3016,246 @@ mod tests {
         assert_eq!(
             outcome(approval.id),
             (CommandGrantOutcome::NotRequested, true)
+        );
+    }
+
+    /// A worker holding an Active task in a running session, which is where
+    /// a refusal is reported from (ADR 0130).
+    fn refusal_fixture(store: &TaskStore) -> (WorkerId, WorkerSessionId, TaskId) {
+        let worker = store
+            .create_worker(
+                "Refused",
+                ProviderKind::ClaudeCode,
+                "/workspace/refused",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Swap the staging slot", "/workspace/refused")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &crate::TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        (worker.id, session, task.id)
+    }
+
+    fn refusal_wording(approval: &FollowedApproval) -> RefusalWording {
+        RefusalWording {
+            title: "Allow the command auto mode refused?".into(),
+            summary: format!("Refused after you approved \"{}\".", approval.action),
+            reason: "Swarm filed this when the worker's Claude reported the refusal.".into(),
+            risk: "Runs exactly this command once.".into(),
+            evidence: format!("The approval it followed: {}.", approval.decision_id),
+        }
+    }
+
+    fn file_refusal(
+        store: &TaskStore,
+        worker_id: WorkerId,
+        session_id: WorkerSessionId,
+        command: &str,
+    ) -> RefusedCommandFiling {
+        store
+            .file_refused_command(
+                &RefusedCommand {
+                    worker_id,
+                    session_id,
+                    command,
+                    reason: "[Production Deploy]",
+                },
+                refusal_wording,
+            )
+            .unwrap()
+    }
+
+    /// An approval on the worker's task as the operator pressed it.
+    fn approve(
+        store: &TaskStore,
+        worker_id: WorkerId,
+        task_id: TaskId,
+        action: &str,
+    ) -> DecisionRequestId {
+        let actions = vec![action.to_owned()];
+        let approval = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task_id),
+                kind: DecisionRequestKind::Approval,
+                ..request(worker_id, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(approval.id, action, "", "inbox")
+            .unwrap();
+        approval.id
+    }
+
+    const SLOT_SWAP: &str =
+        "cd /workspace/refused && az webapp deployment slot swap --slot staging";
+
+    /// ⚠️ SWARM ASKS ONLY AFTER THE OPERATOR APPROVED SOMETHING ON THE TASK.
+    /// A dismissal approves nothing, a ruling on a question is not an
+    /// approval, and a command request's own grant is not a ruling on the
+    /// work, so none of them lets a refusal reach the operator as a card.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_refusal_is_asked_about_only_after_an_approval_on_the_workers_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let idle = store
+            .create_worker(
+                "Idle",
+                ProviderKind::ClaudeCode,
+                "/workspace/idle",
+                false,
+                1,
+            )
+            .unwrap();
+        let idle_session = WorkerSessionId::new();
+        store.bind_worker_session(idle.id, idle_session).unwrap();
+        assert_eq!(
+            file_refusal(&store, idle.id, idle_session, SLOT_SWAP),
+            RefusedCommandFiling::NoTask
+        );
+
+        let (worker, session, task) = refusal_fixture(&store);
+        assert_eq!(
+            file_refusal(&store, worker, session, SLOT_SWAP),
+            RefusedCommandFiling::NoApproval,
+            "nothing approved yet"
+        );
+        let actions = vec!["Swap the slot".to_owned()];
+        let dismissed = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task),
+                kind: DecisionRequestKind::Approval,
+                ..request(worker, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(dismissed.id, OPERATOR_DISMISS_ACTION, "No", "inbox")
+            .unwrap();
+        let input = store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task),
+                ..request(worker, &actions)
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(input.id, "Swap the slot", "", "inbox")
+            .unwrap();
+        let granted = store
+            .create_decision_request(&command_request(worker, task, "./other-command"))
+            .unwrap();
+        store
+            .resolve_decision_request(granted.id, GRANT_COMMAND_ACTION, "", "inbox")
+            .unwrap();
+        store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(task),
+                kind: DecisionRequestKind::Approval,
+                ..request(worker, &actions)
+            })
+            .unwrap();
+        assert_eq!(
+            file_refusal(&store, worker, session, SLOT_SWAP),
+            RefusedCommandFiling::NoApproval,
+            "a dismissal, an answered input, a command grant and a pending approval approve nothing"
+        );
+
+        let approval = approve(&store, worker, task, "Swap the slot");
+        let RefusedCommandFiling::Asked {
+            decision_id,
+            approval: followed,
+            new: true,
+        } = file_refusal(&store, worker, session, SLOT_SWAP)
+        else {
+            panic!("an approval on the task lets Swarm ask");
+        };
+        assert_eq!(
+            followed,
+            FollowedApproval {
+                decision_id: approval,
+                task_id: task,
+                action: "Swap the slot".to_owned()
+            }
+        );
+        let filed = store.get_decision_request(decision_id).unwrap();
+        assert_eq!(filed.requesting_worker_id, worker);
+        assert_eq!(filed.task_id, Some(task));
+        assert_eq!(filed.requested_command.as_deref(), Some(SLOT_SWAP));
+        assert_eq!(
+            filed.allowed_actions,
+            vec![GRANT_COMMAND_ACTION.to_owned()],
+            "Swarm's grant is the only button, and the worker wrote none"
+        );
+        assert_eq!(filed.title, "Allow the command auto mode refused?");
+        assert_eq!(
+            filed.command_refusal,
+            Some(swarm_domain::CommandRefusal {
+                reason: "[Production Deploy]".to_owned(),
+                follows_decision_id: approval
+            })
+        );
+
+        store
+            .resolve_decision_request(decision_id, GRANT_COMMAND_ACTION, "", "inbox")
+            .unwrap();
+        assert_eq!(
+            use_grant(&store, worker, SLOT_SWAP),
+            Some(decision_id),
+            "pressing it is the same grant a worker's own request makes"
+        );
+        assert_eq!(use_grant(&store, worker, SLOT_SWAP), None, "once");
+    }
+
+    /// A refused command is asked about once while it waits, and a worker
+    /// has at most a few waiting, so a loop of refusals cannot flood the
+    /// inbox. A worker's own command requests do not count against it.
+    #[test]
+    fn a_refused_command_is_asked_about_once_and_few_wait_per_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, session, task) = refusal_fixture(&store);
+        store
+            .create_decision_request(&command_request(worker, task, "./its-own-request"))
+            .unwrap();
+        approve(&store, worker, task, "Swap the slot");
+        let asked = |command: &str| match file_refusal(&store, worker, session, command) {
+            RefusedCommandFiling::Asked {
+                decision_id, new, ..
+            } => Some((decision_id, new)),
+            _ => None,
+        };
+
+        let (first, new) = asked(SLOT_SWAP).unwrap();
+        assert!(new);
+        assert_eq!(
+            asked(SLOT_SWAP),
+            Some((first, false)),
+            "the same command again points at the card already up"
+        );
+        assert!(asked("cd /workspace/refused && ./second").unwrap().1);
+        assert!(asked("cd /workspace/refused && ./third").unwrap().1);
+        assert_eq!(
+            file_refusal(&store, worker, session, "cd /workspace/refused && ./fourth"),
+            RefusedCommandFiling::TooMany
+        );
+        assert_eq!(
+            asked(SLOT_SWAP),
+            Some((first, false)),
+            "a waiting card is still pointed at when the worker is at its bound"
+        );
+
+        store
+            .resolve_decision_request(first, OPERATOR_DISMISS_ACTION, "Not now", "inbox")
+            .unwrap();
+        let (again, new) = asked(SLOT_SWAP).unwrap();
+        assert!(
+            new && again != first,
+            "once answered, a new refusal is a new question"
         );
     }
 
@@ -4992,6 +5463,29 @@ pub(super) fn migrate_command_grant_scripts(
         )?;
         if !present {
             tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT;"))?;
+        }
+    }
+    tx.pragma_update(None, "user_version", version)
+}
+
+/// Records why Swarm filed a command request itself (ADR 0130): Claude's
+/// reason for refusing the command, and the operator approval it followed.
+///
+/// Absent on every earlier request, all of which a worker or Queen filed.
+pub(super) fn migrate_command_refusals(
+    tx: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    for column in ["refusal_reason", "refusal_follows_decision_id"] {
+        let present: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('decision_requests') WHERE name = ?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            tx.execute_batch(&format!(
+                "ALTER TABLE decision_requests ADD COLUMN {column} TEXT;"
+            ))?;
         }
     }
     tx.pragma_update(None, "user_version", version)

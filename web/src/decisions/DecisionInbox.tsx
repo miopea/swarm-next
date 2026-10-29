@@ -399,7 +399,16 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       // Not truncated and not styled down: this is the part of
                       // the card that carries the consequence.
                       <div className="decision-command">
-                        <p className="eyebrow">Command this would allow</p>
+                        <p className="eyebrow">{decision.command_refusal ? "Command auto mode refused" : "Command this would allow"}</p>
+                        {decision.command_refusal ? (
+                          // Read from a field only Swarm writes, so a worker's
+                          // own request cannot borrow this line.
+                          <p className="decision-command-origin">
+                            Swarm filed this, not the worker, when Claude's auto mode refused it
+                            {decision.command_refusal.reason ? ` ${decision.command_refusal.reason}` : ""} after
+                            your approval on this task.
+                          </p>
+                        ) : null}
                         <pre><code>{decision.requested_command}</code></pre>
                         {decision.requested_script ? (
                           <dl className="decision-command-script">
