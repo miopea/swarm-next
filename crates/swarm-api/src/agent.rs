@@ -538,6 +538,12 @@ impl AgentBridge {
                 because = ?because,
                 "auto mode refused a worker's command; Swarm asked nothing"
             ),
+            Err(ApplicationError::WorkerNotRunning) => tracing::info!(
+                worker_id = %principal.worker_id,
+                because = "WorkerNotRunning",
+                "auto mode refused a worker's command; Swarm asked nothing"
+            ),
+            // Any other error is logged with the answer below.
             Err(_) => {}
         }
         match outcome {
@@ -6982,6 +6988,59 @@ mod tests {
                 .contains("3 of your refused commands are already waiting"),
             "{full}"
         );
+    }
+
+    /// What a test's tracing subscriber wrote.
+    #[derive(Clone, Default)]
+    struct CapturedLog(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLog {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A refusal from a worker Swarm does not count as running is logged
+    /// like any other, so a quiet log means the worker's mod reported nothing.
+    #[tokio::test]
+    async fn a_refusal_from_a_worker_with_no_running_session_is_still_logged() {
+        let (bridge, _store, _queen_id, worker_id, _directory) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        let body =
+            json!({ "command": "./swap", "cwd": "/srv/app", "reason": "[Production Deploy]" })
+                .to_string();
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .with_ansi(false)
+            .finish();
+
+        let response = tracing::subscriber::with_default(subscriber, || {
+            bridge.report_refused_command(&headers, body.as_bytes())
+        });
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await, json!({ "asked": false }));
+        let logged = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logged.contains("auto mode refused a worker's command; Swarm asked nothing"),
+            "{logged}"
+        );
+        assert!(logged.contains("WorkerNotRunning"), "{logged}");
+        assert!(logged.contains(&worker_id.to_string()), "{logged}");
     }
 
     /// A worker names the script, so a FIFO there must be refused at once
