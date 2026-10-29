@@ -1264,6 +1264,12 @@ export type DecisionRequest = {
    * grant lets the command run only while the file still has this hash.
    */
   requested_script?: { path: string; sha256: string } | null;
+  /**
+   * Present only when Swarm filed this itself, because Claude's auto mode
+   * refused the command after the operator approved something on the task
+   * (ADR 0130). A worker cannot set it, so the card can say who asked.
+   */
+  command_refusal?: { reason: string; follows_decision_id: string } | null;
   /** Non-empty makes this an interview: answered by answering, not by a button. */
   questions?: DecisionQuestion[];
   deadline: number | null;

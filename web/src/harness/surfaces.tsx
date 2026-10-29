@@ -722,6 +722,32 @@ export const SURFACES: Surface[] = [
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
+    id: "needs-you-refused-command",
+    title: "Command Swarm asked about after a refusal",
+    why: "Invented command and approval: Swarm, not the worker, filed this after auto mode refused it (ADR 0130)",
+    render: () => <DecisionInbox decisions={[{
+      ...demoDecision,
+      kind: "approval",
+      title: "Allow the command Claude refused after your approval?",
+      summary: "Claude's auto mode refused this exact command [Production Deploy] after you approved \"Swap the export slot\" on this task. Allowing it lets this worker run it once, in this session.",
+      reason: "Swarm filed this when the worker's Claude reported the refusal. The worker wrote none of this request.",
+      risk: "Allowing it runs exactly the command shown, once. Whether it is what you approved is yours to judge.",
+      evidence: "Claude's reason: [Production Deploy]. The approval it followed: \"Swap the export slot\".",
+      questions: [],
+      suggested_action: "",
+      allowed_actions: ["Allow the command shown in this request"],
+      requested_command: "cd /srv/orchard && az webapp deployment slot swap --resource-group orchard --name orchard-export --slot staging --target-slot production",
+      command_refusal: { reason: "[Production Deploy]", follows_decision_id: "fixture-approval" },
+    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} />,
+  },
+  {
+    id: "needs-you-refused-command-phone",
+    title: "Refused command at phone width",
+    why: "A 390px frame tests that the refusal line and a long command wrap instead of overflowing",
+    render: () => <iframe title="Refused command phone preview" src="/harness.html?surface=needs-you-refused-command"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
     id: "needs-you-withdrawn",
     title: "Withdrawn request history",
     why: "An obsolete request is quiet and never represented as operator approval",

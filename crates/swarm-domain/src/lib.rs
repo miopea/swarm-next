@@ -791,6 +791,12 @@ pub struct DecisionRequest {
     /// changed (ADR 0129).
     #[serde(default)]
     pub requested_script: Option<RequestedScript>,
+    /// Present when Swarm filed this request itself, because the worker's
+    /// Claude reported that auto mode refused `requested_command` after the
+    /// operator approved something on the task (ADR 0130). The worker wrote
+    /// none of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_refusal: Option<CommandRefusal>,
     pub deadline: Option<i64>,
     pub state: DecisionRequestState,
     #[serde(default)]
@@ -867,6 +873,15 @@ pub struct RequestedScript {
     pub path: String,
     /// Lowercase hex sha256 of the file's bytes.
     pub sha256: String,
+}
+
+/// Why Swarm filed a command request on a worker's behalf (ADR 0130).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CommandRefusal {
+    /// Claude's own reason for the refusal, such as `[Production Deploy]`.
+    pub reason: String,
+    /// The operator approval on the task that the refused command followed.
+    pub follows_decision_id: DecisionRequestId,
 }
 
 impl DecisionRequest {

@@ -3322,6 +3322,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   font-size: .72rem;
   line-height: 1.45;
 }
+.decision-command-origin {
+  margin: 0;
+  font-size: .78rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
 .decision-command-script {
   display: grid;
   gap: 4px;

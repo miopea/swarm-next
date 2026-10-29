@@ -4372,6 +4372,10 @@ fn api_router(state: AppState) -> Router {
             &format!("/mcp{}", swarm_terminal::COMMAND_GRANT_PATH_SUFFIX),
             post(command_grant).layer(DefaultBodyLimit::max(MAX_COMMAND_GRANT_BODY_BYTES)),
         )
+        .route(
+            &format!("/mcp{}", swarm_terminal::COMMAND_REFUSED_PATH_SUFFIX),
+            post(command_refused).layer(DefaultBodyLimit::max(MAX_COMMAND_GRANT_BODY_BYTES)),
+        )
         // Discovery for an outside tool. PUBLIC, and deliberately so: these are
         // the documents a client reads to find out how to authenticate, and
         // putting them behind the credential they exist to obtain is a loop.
@@ -5429,6 +5433,18 @@ async fn command_grant(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     bridge.use_command_grant(&headers, &body)
+}
+
+/// A worker's grant mod saying auto mode refused a command (ADR 0130).
+async fn command_refused(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(bridge) = state.agent_bridge.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    bridge.report_refused_command(&headers, &body)
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {

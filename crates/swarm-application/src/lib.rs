@@ -35,7 +35,10 @@ use swarm_domain::{
     Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
     WorkerSessionId,
 };
-use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
+use swarm_persistence::{
+    FollowedApproval, NewDecisionRequest, RefusalWording, RefusedCommand, RefusedCommandFiling,
+    TaskStore, TaskStoreError,
+};
 use thiserror::Error;
 
 mod decision_clarification;
@@ -4506,6 +4509,80 @@ impl TaskService {
         Ok(None)
     }
 
+    /// Puts Swarm's grant button up for a command Claude's auto mode refused
+    /// this worker, when the operator approved something on its task
+    /// (ADR 0130).
+    ///
+    /// `command` is the text Claude checked and `cwd` the folder its shell was
+    /// in. The request names both as one command, `cd <cwd> && <command>`, so
+    /// a relative command is granted only where it was refused: `./release`
+    /// means a different script in another folder. That is also a text
+    /// `granted_forms` recognises, so the grant matches the command run again
+    /// in that folder, with or without the `cd`. A command that already
+    /// starts with a `cd` into an absolute folder runs the same anywhere, and
+    /// is filed as Claude checked it rather than behind a second `cd`.
+    ///
+    /// Swarm writes every word of the request; the worker writes none.
+    ///
+    /// # Errors
+    /// Returns a store error, or `WorkerNotRunning` for a worker with no session.
+    pub fn report_refused_command(
+        &self,
+        principal: AgentPrincipal,
+        command: &str,
+        cwd: Option<&str>,
+        reason: &str,
+    ) -> Result<RefusalOutcome, ApplicationError> {
+        let session_id = principal
+            .active_session_id
+            .ok_or(ApplicationError::WorkerNotRunning)?;
+        let bound = if changes_into_an_absolute_folder(command) {
+            Some(command.to_owned())
+        } else {
+            cwd.and_then(|cwd| granted_forms(command, Some(cwd)).into_iter().nth(1))
+        };
+        let Some(bound) = bound else {
+            return Ok(RefusalOutcome::NotAsked(NotAskedBecause::Unreadable));
+        };
+        let reason: String = reason
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(MAX_REFUSAL_REASON_CHARS)
+            .collect();
+        let filing = self.store.file_refused_command(
+            &RefusedCommand {
+                worker_id: principal.worker_id,
+                session_id,
+                command: &bound,
+                reason: &reason,
+            },
+            |approval| refusal_wording(approval, &reason),
+        );
+        Ok(match filing {
+            Ok(RefusedCommandFiling::Asked {
+                decision_id,
+                approval,
+                new,
+            }) => RefusalOutcome::Asked {
+                decision_id,
+                command: bound,
+                approval_action: approval.action,
+                new,
+            },
+            Ok(RefusedCommandFiling::NoTask) => RefusalOutcome::NotAsked(NotAskedBecause::NoTask),
+            Ok(RefusedCommandFiling::NoApproval) => {
+                RefusalOutcome::NotAsked(NotAskedBecause::NoApproval)
+            }
+            Ok(RefusedCommandFiling::TooMany) => RefusalOutcome::NotAsked(NotAskedBecause::TooMany),
+            // Longer than a request may carry, or with characters that would
+            // make the card read differently from what runs.
+            Err(TaskStoreError::InvalidCommandDecision) => {
+                RefusalOutcome::NotAsked(NotAskedBecause::Unreadable)
+            }
+            Err(error) => return Err(error.into()),
+        })
+    }
+
     /// Creates a typed request for operator judgment using the authenticated agent identity.
     ///
     /// # Errors
@@ -4810,6 +4887,77 @@ impl TaskService {
             .map_err(Into::into)
     }
 }
+/// Claude's reasons are short labels such as `[Production Deploy]`.
+const MAX_REFUSAL_REASON_CHARS: usize = 160;
+
+/// What became of a command Claude's auto mode refused (ADR 0130).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RefusalOutcome {
+    /// Swarm's grant button is up for `command`: filed now when `new`, or
+    /// already waiting in this session.
+    Asked {
+        decision_id: DecisionRequestId,
+        /// The refused text bound to its folder, as the grant will hold it.
+        command: String,
+        /// The action the operator pressed on the approval it followed.
+        approval_action: String,
+        new: bool,
+    },
+    NotAsked(NotAskedBecause),
+}
+
+/// Why Swarm asked the operator nothing about a refused command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NotAskedBecause {
+    /// The worker holds no task on the board in this session.
+    NoTask,
+    /// The operator approved nothing on the worker's task.
+    NoApproval,
+    /// This worker already has the most refused commands waiting.
+    TooMany,
+    /// The command cannot be shown exactly, or its folder is unknown.
+    Unreadable,
+}
+
+/// What the operator reads on a request Swarm files for a refusal (ADR 0130).
+///
+/// Every word is Swarm's. The approval is quoted so the operator can set the
+/// command beside what they approved: the approval was in words, and this is
+/// the command the worker reached for to carry it out.
+fn refusal_wording(approval: &FollowedApproval, reason: &str) -> RefusalWording {
+    let summary = format!(
+        "Claude's auto mode refused this exact command {reason} after you approved \"{}\" on \
+         this task. Allowing it lets this worker run it once, in this session.",
+        approval.action
+    );
+    let summary = if summary.len() <= swarm_domain::MAX_DECISION_SUMMARY_BYTES {
+        summary
+    } else {
+        format!(
+            "Claude's auto mode refused this exact command after you approved \"{}\" on this \
+             task. Allowing it lets this worker run it once, in this session.",
+            approval.action
+        )
+    };
+    RefusalWording {
+        title: "Allow the command Claude refused after your approval?".to_owned(),
+        summary,
+        reason: "Swarm filed this request when the worker's Claude reported that auto mode \
+                 refused the command, after your approval on this task. The worker wrote none \
+                 of it. The command is shown as Claude checked it, inside the folder it was \
+                 refused in unless it already changes into one."
+            .to_owned(),
+        risk: "Allowing it runs exactly the command shown, once, in the session that was \
+               refused. Every other command still goes through the worker's normal checks. \
+               Whether this command is what your approval meant is yours to judge."
+            .to_owned(),
+        evidence: format!(
+            "Claude's reason: {reason}. The approval it followed: \"{}\" (decision {}).",
+            approval.action, approval.decision_id
+        ),
+    }
+}
+
 /// The whole texts a grant may hold for `command` run in `cwd` (ADR 0129).
 ///
 /// ⚠️ CLAUDE REWRITES THE COMMAND BEFORE ITS PERMISSION CHECK. When the shell is
@@ -4842,6 +4990,30 @@ fn granted_forms(command: &str, cwd: Option<&str>) -> Vec<String> {
         forms.push(format!("cd \"{cwd}\" && {command}"));
     }
     forms
+}
+
+/// Whether `command` starts with a `cd` into an absolute folder, written as
+/// `granted_forms` writes one, so it runs the same whichever folder the shell
+/// is in (ADR 0130). Anything less certain reads as not, and is then bound
+/// to the shell's folder.
+fn changes_into_an_absolute_folder(command: &str) -> bool {
+    command
+        .strip_prefix("cd ")
+        .and_then(|tail| tail.split_once(" && "))
+        .is_some_and(|(target, rest)| {
+            let folder = target
+                .strip_prefix('\'')
+                .and_then(|quoted| quoted.strip_suffix('\''))
+                .or_else(|| {
+                    target
+                        .strip_prefix('"')
+                        .and_then(|quoted| quoted.strip_suffix('"'))
+                })
+                .unwrap_or(target);
+            granted_forms(rest, Some(folder))
+                .iter()
+                .any(|form| form == command)
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -7275,6 +7447,154 @@ mod tests {
             None,
             "and once, whichever form spends it"
         );
+    }
+
+    /// ADR 0130: Swarm files a refused command bound to the folder it was
+    /// refused in, so the grant runs it there again, with or without the
+    /// `cd`, and nowhere else.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_refused_command_is_granted_only_in_the_folder_it_was_refused_in() {
+        let (service, _queen, worker) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        let principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: worker.role,
+            active_session_id: Some(session),
+        };
+        let task = service
+            .store
+            .create_task("Release the app", "/workspace/petal")
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker(task.id, worker.id)
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Active)
+            .unwrap();
+        let refused = "./release --slot staging";
+        let report = |cwd: Option<&str>, reason: &str| {
+            service
+                .report_refused_command(principal, refused, cwd, reason)
+                .unwrap()
+        };
+        assert_eq!(
+            report(Some("/srv/app"), "[Production Deploy]"),
+            RefusalOutcome::NotAsked(NotAskedBecause::NoApproval)
+        );
+
+        let approval = service
+            .create_decision(
+                principal,
+                &decision_input(
+                    Some(task.id),
+                    DecisionRequestKind::Approval,
+                    "Release it?",
+                    &["Release it"],
+                ),
+            )
+            .unwrap();
+        service
+            .resolve_operator_decision(approval.id, "Release it", "", "test")
+            .unwrap();
+        assert_eq!(
+            report(None, "[Production Deploy]"),
+            RefusalOutcome::NotAsked(NotAskedBecause::Unreadable),
+            "a folder Claude did not give is never guessed"
+        );
+        let RefusalOutcome::Asked {
+            decision_id,
+            command,
+            approval_action,
+            new: true,
+        } = report(Some("/srv/app"), "[Production\u{7} Deploy]")
+        else {
+            panic!("an approval on the task lets Swarm ask");
+        };
+        assert_eq!(command, "cd /srv/app && ./release --slot staging");
+        assert_eq!(approval_action, "Release it");
+        let filed = service.store.get_decision_request(decision_id).unwrap();
+        assert_eq!(
+            filed.command_refusal.map(|refusal| refusal.reason),
+            Some("[Production Deploy]".to_owned()),
+            "the reason is kept without its control characters"
+        );
+        assert!(
+            filed.summary.contains("\"Release it\""),
+            "{}",
+            filed.summary
+        );
+
+        service
+            .resolve_operator_decision(decision_id, &filed.allowed_actions[0], "", "test")
+            .unwrap();
+        let unhashed = |_: &str| None;
+        assert_eq!(
+            service
+                .use_command_grant(worker.id, refused, Some("/srv/other"), unhashed)
+                .unwrap(),
+            None,
+            "not in another folder"
+        );
+        assert_eq!(
+            service
+                .use_command_grant(worker.id, refused, Some("/srv/app"), unhashed)
+                .unwrap(),
+            Some(decision_id),
+            "the command Claude checks after dropping the cd is the one granted"
+        );
+
+        // A command that already changes into an absolute folder runs the
+        // same from anywhere, so it is filed as Claude checked it.
+        let RefusalOutcome::Asked { command, .. } = service
+            .report_refused_command(
+                principal,
+                "cd /srv/app && ./release --slot production",
+                Some("/workspace/petal"),
+                "[Production Deploy]",
+            )
+            .unwrap()
+        else {
+            panic!("an approval on the task lets Swarm ask");
+        };
+        assert_eq!(command, "cd /srv/app && ./release --slot production");
+    }
+
+    /// ADR 0130: only a `cd` into an absolute folder, written exactly as a
+    /// grant form, makes a command independent of the shell's folder.
+    #[test]
+    fn a_command_that_changes_into_an_absolute_folder_needs_no_other() {
+        for command in [
+            "cd /srv/app && ./release",
+            "cd /srv/app && ./release && echo released",
+            "cd '/srv/my app' && ./release",
+            "cd \"/srv/my app\" && ./release",
+        ] {
+            assert!(changes_into_an_absolute_folder(command), "{command}");
+        }
+        for command in [
+            "./release",
+            "cd srv/app && ./release",
+            "cd ../app && ./release",
+            "cd /srv/app; ./release",
+            "cd /srv/app&&./release",
+            "cd '/srv/my app && ./release",
+            "cd /srv/$HOME && ./release",
+            "cd \"/srv/$HOME\" && ./release",
+            "cd && ./release",
+        ] {
+            assert!(!changes_into_an_absolute_folder(command), "{command}");
+        }
     }
 
     #[test]

@@ -1,14 +1,18 @@
-//! Asks Swarm whether the operator granted this exact command (ADR 0129).
+//! Asks Swarm about a command for the grant mod (ADR 0129, ADR 0130).
 //!
-//! Run by the grant mod's `tool.check` hook as
-//! `swarm-terminal-host provider-grant <worker MCP config>` with
-//! `{"command": "...", "cwd": "..."}` on standard input, `cwd` being the
-//! directory the worker's shell is in. It prints `granted` only when Swarm
-//! spent a live grant for exactly that command there, and `not granted`
-//! otherwise.
+//! `swarm-terminal-host provider-grant <worker MCP config>` is run by the
+//! mod's `tool.check` hook with `{"command": "...", "cwd": "..."}` on standard
+//! input, `cwd` being the directory the worker's shell is in. It prints
+//! `granted` only when Swarm spent a live grant for exactly that command
+//! there, and `not granted` otherwise. Every failure reads as `not granted`,
+//! so the worker's permission checks decide exactly as they would have
+//! without a grant.
 //!
-//! Every failure reads as `not granted`, so the worker's permission checks
-//! decide exactly as they would have without a grant.
+//! `swarm-terminal-host provider-refused <worker MCP config>` is run when
+//! Claude's auto mode has refused a command, with `"reason"` added to that
+//! input. Swarm may put its grant button up for it; this prints what Swarm
+//! says the worker should read beside the refusal, and nothing when Swarm
+//! says nothing or cannot be reached.
 use std::{path::Path, time::Duration};
 
 use reqwest::{Client, header};
@@ -22,6 +26,21 @@ const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 /// Every shell command waits on this answer, so a stalled API costs at most
 /// this much before the worker's own checks decide.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) async fn run_refused(config: Option<&str>) {
+    let note = match config {
+        Some(config) => match read_input().await {
+            Ok(input) => report(Path::new(config), &input).await,
+            Err(error) => Err(error),
+        },
+        None => Err("usage: swarm-terminal-host provider-refused <worker MCP config>".into()),
+    };
+    match note {
+        Ok(Some(note)) => println!("{note}"),
+        Ok(None) => {}
+        Err(error) => eprintln!("swarm-terminal-host provider-refused: {error}"),
+    }
+}
 
 pub(crate) async fn run(config: Option<&str>) {
     let granted = match config {
@@ -52,15 +71,46 @@ async fn read_input() -> Result<Vec<u8>, String> {
 }
 
 async fn ask(config: &Path, input: &[u8]) -> Result<bool, String> {
+    let (command, cwd, _) = command_input(input)?;
+    let answer = post(
+        config,
+        swarm_terminal::COMMAND_GRANT_PATH_SUFFIX,
+        &json!({ "command": command, "cwd": cwd }),
+    )
+    .await?;
+    Ok(answer.get("granted").and_then(Value::as_bool) == Some(true))
+}
+
+/// Tells Swarm that auto mode refused this command, and returns what Swarm
+/// says the worker should read beside the refusal.
+async fn report(config: &Path, input: &[u8]) -> Result<Option<String>, String> {
+    let (command, cwd, reason) = command_input(input)?;
+    let answer = post(
+        config,
+        swarm_terminal::COMMAND_REFUSED_PATH_SUFFIX,
+        &json!({ "command": command, "cwd": cwd, "reason": reason }),
+    )
+    .await?;
+    Ok(answer
+        .get("note")
+        .and_then(Value::as_str)
+        .filter(|note| !note.trim().is_empty())
+        .map(str::to_owned))
+}
+
+/// The command, the shell's directory and any refusal reason from the mod.
+fn command_input(input: &[u8]) -> Result<(String, Option<String>, Option<String>), String> {
     if input.len() as u64 > MAX_INPUT_BYTES {
         return Err("the command is longer than any grant can carry".into());
     }
     let input = serde_json::from_slice::<Value>(input).map_err(|_| "the input is not JSON")?;
-    let command = input
-        .get("command")
-        .and_then(Value::as_str)
-        .ok_or("the input names no command")?;
-    let cwd = input.get("cwd").and_then(Value::as_str);
+    let text = |field: &str| input.get(field).and_then(Value::as_str).map(str::to_owned);
+    let command = text("command").ok_or("the input names no command")?;
+    Ok((command, text("cwd"), text("reason")))
+}
+
+/// Posts to one of Swarm's worker endpoints with the worker's own credential.
+async fn post(config: &Path, suffix: &str, body: &Value) -> Result<Value, String> {
     let mut config_bytes = Vec::new();
     tokio::fs::File::open(config)
         .await
@@ -69,7 +119,7 @@ async fn ask(config: &Path, input: &[u8]) -> Result<bool, String> {
         .read_to_end(&mut config_bytes)
         .await
         .map_err(|error| format!("could not read the worker's MCP config: {error}"))?;
-    let (url, authorization) = endpoint(&config_bytes)?;
+    let (url, authorization) = endpoint(&config_bytes, suffix)?;
     let client = Client::builder()
         .timeout(ANSWER_TIMEOUT)
         .build()
@@ -77,25 +127,24 @@ async fn ask(config: &Path, input: &[u8]) -> Result<bool, String> {
     let response = client
         .post(url)
         .header(header::AUTHORIZATION, authorization)
-        .json(&json!({ "command": command, "cwd": cwd }))
+        .json(body)
         .send()
         .await
         .map_err(|error| format!("Swarm did not answer: {error}"))?;
     if !response.status().is_success() {
         return Err(format!("Swarm answered {}", response.status()));
     }
-    let answer = response
+    response
         .json::<Value>()
         .await
-        .map_err(|error| format!("Swarm's answer was not JSON: {error}"))?;
-    Ok(answer.get("granted").and_then(Value::as_bool) == Some(true))
+        .map_err(|error| format!("Swarm's answer was not JSON: {error}"))
 }
 
-/// The grant endpoint and the worker's own credential, from its MCP config.
+/// A Swarm worker endpoint and the worker's own credential, from its MCP config.
 ///
 /// The config names Swarm's server under whichever name it was written with,
 /// so the server is found by the two variables the MCP proxy itself reads.
-fn endpoint(config: &[u8]) -> Result<(String, String), String> {
+fn endpoint(config: &[u8], suffix: &str) -> Result<(String, String), String> {
     if config.len() as u64 > MAX_CONFIG_BYTES {
         return Err("the worker's MCP config is too large".into());
     }
@@ -112,11 +161,7 @@ fn endpoint(config: &[u8]) -> Result<(String, String), String> {
             let url = env.get("SWARM_MCP_URL")?.as_str()?;
             let authorization = env.get("SWARM_MCP_AUTHORIZATION")?.as_str()?;
             Some((
-                format!(
-                    "{}{}",
-                    url.trim_end_matches('/'),
-                    swarm_terminal::COMMAND_GRANT_PATH_SUFFIX
-                ),
+                format!("{}{suffix}", url.trim_end_matches('/')),
                 authorization.to_owned(),
             ))
         })
@@ -141,15 +186,25 @@ mod tests {
                 }
             }
         });
+        let grant = swarm_terminal::COMMAND_GRANT_PATH_SUFFIX;
         assert_eq!(
-            endpoint(config.to_string().as_bytes()).unwrap(),
+            endpoint(config.to_string().as_bytes(), grant).unwrap(),
             (
                 "http://127.0.0.1:8766/mcp/command-grant".to_owned(),
                 "Bearer worker-token".to_owned()
             )
         );
-        assert!(endpoint(b"{}").is_err());
-        assert!(endpoint(b"not json").is_err());
+        assert_eq!(
+            endpoint(
+                config.to_string().as_bytes(),
+                swarm_terminal::COMMAND_REFUSED_PATH_SUFFIX
+            )
+            .unwrap()
+            .0,
+            "http://127.0.0.1:8766/mcp/command-refused"
+        );
+        assert!(endpoint(b"{}", grant).is_err());
+        assert!(endpoint(b"not json", grant).is_err());
     }
 
     /// Serves one canned HTTP answer and hands back the request it read.
@@ -231,6 +286,58 @@ mod tests {
         let (url, served) = one_answer("401 Unauthorized", "").await;
         let config = config_for(&directory, &url);
         assert!(ask(&config, input.as_bytes()).await.is_err());
+        served.await.unwrap();
+    }
+
+    /// A refusal is reported with the exact text, the folder and Claude's
+    /// reason, and Swarm's words come back for the worker to read. Anything
+    /// else, a failure included, adds nothing to the refusal.
+    #[tokio::test]
+    async fn a_refusal_is_reported_and_only_swarms_note_comes_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = json!({
+            "command": "./release --slot 'a*'",
+            "cwd": "/srv/app",
+            "reason": "[Production Deploy]"
+        })
+        .to_string();
+
+        let (url, served) = one_answer(
+            "200 OK",
+            r#"{"asked":true,"note":"Swarm has asked the operator."}"#,
+        )
+        .await;
+        let config = config_for(&directory, &url);
+        assert_eq!(
+            report(&config, input.as_bytes()).await,
+            Ok(Some("Swarm has asked the operator.".to_owned()))
+        );
+        let request = served.await.unwrap();
+        assert!(
+            request.starts_with("POST /mcp/command-refused "),
+            "{request}"
+        );
+        assert!(
+            request.contains("authorization: Bearer worker-token"),
+            "{request}"
+        );
+        assert!(
+            request.ends_with(
+                r#"{"command":"./release --slot 'a*'","cwd":"/srv/app","reason":"[Production Deploy]"}"#
+            ),
+            "{request}"
+        );
+
+        for body in [r#"{"asked":false}"#, r#"{"asked":true,"note":"  "}"#] {
+            let (url, served) = one_answer("200 OK", body).await;
+            let config = config_for(&directory, &url);
+            assert_eq!(report(&config, input.as_bytes()).await, Ok(None), "{body}");
+            served.await.unwrap();
+        }
+
+        let (url, served) = one_answer("503 Service Unavailable", "").await;
+        let config = config_for(&directory, &url);
+        assert!(report(&config, input.as_bytes()).await.is_err());
         served.await.unwrap();
     }
 

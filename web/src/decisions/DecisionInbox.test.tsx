@@ -899,6 +899,33 @@ test("a command that runs a script shows the script and the hash it was approved
   expect(screen.getByText(/expires when the task leaves the board or the script changes/)).toBeInTheDocument();
 });
 
+test("a command Swarm filed after a refusal says Swarm asked, not the worker", () => {
+  // ADR 0130: only Swarm sets command_refusal, so this line is the one a
+  // worker's own request, however it is worded, cannot show.
+  const refused: DecisionRequest = {
+    ...pending,
+    id: "decision-refused",
+    kind: "approval",
+    questions: [],
+    requested_command: "cd /srv/app && ./swap --slot staging",
+    command_refusal: { reason: "[Production Deploy]", follows_decision_id: "decision-approval" },
+    allowed_actions: ["Allow the command shown in this request"],
+  };
+  const { unmount } = render(<DecisionInbox decisions={[refused]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText("Command auto mode refused")).toBeInTheDocument();
+  expect(screen.queryByText("Command this would allow")).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Swarm filed this, not the worker, when Claude's auto mode refused it \[Production Deploy\] after your approval on this task\./),
+  ).toBeInTheDocument();
+  expect(screen.getByText("cd /srv/app && ./swap --slot staging")).toBeInTheDocument();
+  unmount();
+
+  render(<DecisionInbox decisions={[{ ...refused, command_refusal: null }]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByText("Command this would allow")).toBeInTheDocument();
+  expect(screen.queryByText(/Swarm filed this, not the worker/)).not.toBeInTheDocument();
+});
+
 test("an ordinary decision shows no command block", () => {
   // A grant panel on a decision that grants nothing is noise, and noise is how
   // an operator learns to skip past the one card where it mattered.
