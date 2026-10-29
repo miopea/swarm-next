@@ -468,6 +468,12 @@ fn write_claude_launch_settings(state: &AppState, worker_id: WorkerId, provider:
     if let Err(error) = bridge.apply_worker_remote_control(worker_id) {
         tracing::warn!(%error, "could not write the Remote Control choice for this worker");
     }
+    // Whether Queen's review is enough to release code (ADR 0131). A choice
+    // that cannot be written leaves the worker without the rule, which is where
+    // every worker was before the setting existed.
+    if let Err(error) = bridge.apply_queen_releases(worker_id) {
+        tracing::warn!(%error, "could not write the Queen releases choice for this worker");
+    }
 }
 
 fn provider_start_request(

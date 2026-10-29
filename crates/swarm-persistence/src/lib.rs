@@ -44,6 +44,7 @@ pub use check_gate::{CheckGateSetting, CiCandidate};
 mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
+mod queen_releases;
 mod worker_model;
 mod worker_remote_control;
 pub use worker_model::WorkerModelSetting;
@@ -432,7 +433,9 @@ const NEVER_COMPLETED_REFUSAL_SCHEMA_MARKER: i64 = 212;
 const COMMAND_GRANT_SCRIPT_SCHEMA_MARKER: i64 = 213;
 /// A command request Swarm filed after Claude refused the command (ADR 0130).
 const COMMAND_REFUSAL_SCHEMA_MARKER: i64 = 214;
-const CURRENT_SCHEMA_VERSION: i64 = COMMAND_REFUSAL_SCHEMA_MARKER;
+/// Whether Queen's review is enough to release code (ADR 0131).
+const QUEEN_RELEASES_SCHEMA_MARKER: i64 = 215;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_RELEASES_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4882,6 +4885,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < COMMAND_REFUSAL_SCHEMA_MARKER {
         crate::decisions::migrate_command_refusals(transaction, COMMAND_REFUSAL_SCHEMA_MARKER)?;
+    }
+    if schema_version < QUEEN_RELEASES_SCHEMA_MARKER {
+        crate::queen_releases::migrate_queen_releases(transaction, QUEEN_RELEASES_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11062,6 +11068,14 @@ mod tests {
                        ALTER TABLE decision_requests DROP COLUMN refusal_follows_decision_id;",
             probe_sql: "SELECT COUNT(*) = 2 FROM pragma_table_info('decision_requests')
                          WHERE name IN ('refusal_reason','refusal_follows_decision_id')",
+        },
+        // Whether Queen's review is enough to release code (ADR 0131).
+        SchemaStep {
+            table: "queen_release_settings",
+            artifact: "",
+            undo_sql: "DROP TABLE queen_release_settings;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'queen_release_settings'",
         },
     ];
 

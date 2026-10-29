@@ -12,6 +12,7 @@ import type { LockDetectionState } from "../presence/PresenceController";
 import NightWatchSettings from "./NightWatchSettings";
 import CheckGateSettings from "./CheckGateSettings";
 import WorkerModelSettings from "./WorkerModelSettings";
+import QueenReleasesSettings from "./QueenReleasesSettings";
 import WorkerRemoteControlSettings from "./WorkerRemoteControlSettings";
 import TerminalHistorySettings from "./TerminalHistorySettings";
 import { deviceClass } from "../presence/PresenceController";
@@ -455,6 +456,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
         </section>
       )}
       {shows("settings-check-gate") && operatorToken && <CheckGateSettings operatorToken={operatorToken} />}
+      {shows("settings-queen-releases") && operatorToken && <QueenReleasesSettings operatorToken={operatorToken} />}
       {shows("settings-worker-model") && operatorToken && <WorkerModelSettings operatorToken={operatorToken} />}
       {shows("settings-worker-remote-control") && operatorToken && <WorkerRemoteControlSettings operatorToken={operatorToken} />}
       {shows("settings-notifications") && (

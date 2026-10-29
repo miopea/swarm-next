@@ -11,6 +11,7 @@ import QueenAutonomyLockFixture from "./QueenAutonomyLockFixture";
 import CheckGateSettings from "../settings/CheckGateSettings";
 import WorkerModelSettings from "../settings/WorkerModelSettings";
 import ProviderUpdatesFixture from "./ProviderUpdatesFixture";
+import QueenReleasesSettings from "../settings/QueenReleasesSettings";
 import WorkerRemoteControlSettings from "../settings/WorkerRemoteControlSettings";
 import TerminalHistorySettings from "../settings/TerminalHistorySettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
@@ -300,6 +301,7 @@ export const SURFACES: Surface[] = [
   { id: "terminal-history", title: "Terminal history retention", why: "Fictional 14 days in effect; add ?terminalHistory=locked for a member whose Apiary sets 3 days its host has not taken yet. Nothing is saved.", render: () => <TerminalHistorySettings operatorToken="fixture" /> },
   { id: "worker-model", title: "Worker model", why: "Fictional model with three workers still on another; add ?workerModel=locked for a member whose Apiary sets it. Nothing is saved.", render: () => <WorkerModelSettings operatorToken="fixture" /> },
   { id: "worker-remote-control", title: "Remote Control", why: "Off, as a Hive starts; add ?remoteControl=on for one whose workers connect to it. Nothing is saved.", render: () => <WorkerRemoteControlSettings operatorToken="fixture" /> },
+  { id: "queen-releases", title: "Queen releases", why: "Off, as a Hive starts; add ?queenReleases=on for one where Queen's review releases code. Nothing is saved.", render: () => <QueenReleasesSettings operatorToken="fixture" /> },
   { id: "provider-updates", title: "Claude update", why: "Two workers behind Claude 2.1.310 that Swarm moves itself; ?state=refused for one Claude refused, ?state=mixed for a Codex worker beside them. Nothing is restarted.", render: () => <ProviderUpdatesFixture /> },
   { id: "queen-autonomy-locked", title: "Queen autonomy set by the Apiary", why: "Fictional member whose Keeper sets the Night Watch level; nothing is saved.", render: () => <QueenAutonomyLockFixture /> },
   { id: "night-watch", title: "Night Watch schedule", why: "isolated schedule editor; saves are fixture responses only", render: () => <section className="settings-card"><NightWatchSettings operatorToken="fixture" /></section> },

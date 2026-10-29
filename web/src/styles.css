@@ -3034,12 +3034,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .check-gate-settings .check-gate-set-by-apiary { color: var(--warn-strong); font-size: .73rem; font-weight: 650; }
 .check-gate-settings .check-gate-detail { color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .worker-model-settings, .terminal-history-settings { display: grid; gap: 10px; }
-.worker-remote-control-settings { display: grid; gap: 10px; }
-.worker-remote-control-settings .worker-autostart { align-items: flex-start; }
-.worker-remote-control-settings .worker-autostart > span { display: grid; min-width: 0; flex: 1; gap: 2px; }
-.worker-remote-control-settings .worker-autostart small { color: var(--muted); font-size: .74rem; line-height: 1.4; }
-.worker-remote-control-settings .worker-remote-control-detail { color: var(--muted); font-size: .76rem; line-height: 1.45; }
-.worker-remote-control-settings .worker-remote-control-cost { color: var(--warn-strong); font-size: .76rem; line-height: 1.45; }
+.worker-remote-control-settings, .queen-releases-settings { display: grid; gap: 10px; }
+.worker-remote-control-settings .worker-autostart, .queen-releases-settings .worker-autostart { align-items: flex-start; }
+.worker-remote-control-settings .worker-autostart > span, .queen-releases-settings .worker-autostart > span { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.worker-remote-control-settings .worker-autostart small, .queen-releases-settings .worker-autostart small { color: var(--muted); font-size: .74rem; line-height: 1.4; }
+.worker-remote-control-settings .worker-remote-control-detail, .queen-releases-settings .queen-releases-detail { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.worker-remote-control-settings .worker-remote-control-cost, .queen-releases-settings .queen-releases-cost { color: var(--warn-strong); font-size: .76rem; line-height: 1.45; }
 .worker-model-settings label, .terminal-history-settings label { display: grid; grid-template-columns: 94px minmax(0, 1fr); align-items: center; gap: .65rem; min-width: 0; font-weight: 700; }
 .worker-model-settings select, .terminal-history-settings select { width: 100%; min-width: 0; }
 .worker-model-settings .worker-model-set-by-apiary, .terminal-history-settings .terminal-history-set-by-apiary { color: var(--warn-strong); font-size: .73rem; font-weight: 650; }

@@ -25,6 +25,10 @@ pub const COMMAND_GRANT_PATH_SUFFIX: &str = "/command-grant";
 /// Appended to a worker's MCP URL to reach the endpoint its grant mod tells
 /// when Claude's auto mode has refused a command (ADR 0130).
 pub const COMMAND_REFUSED_PATH_SUFFIX: &str = "/command-refused";
+/// The key in a worker's `<worker>.settings.json` saying the operator turned
+/// on "Queen releases reviewed work" (ADR 0131). The API writes it and the
+/// terminal host reads it at launch.
+pub const QUEEN_RELEASES_SETTING_KEY: &str = "swarmQueenReleases";
 mod resources;
 mod startup_failure;
 mod state;

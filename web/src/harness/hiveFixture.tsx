@@ -101,6 +101,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
   if (path === "/api/v1/runtime/worker-remote-control") {
     return { enabled: new URLSearchParams(window.location.search).get("remoteControl") === "on" };
   }
+  // ?queenReleases=on is a Hive where Queen's review releases code (ADR 0131).
+  if (path === "/api/v1/runtime/queen-releases") {
+    return { enabled: new URLSearchParams(window.location.search).get("queenReleases") === "on" };
+  }
   // ?workerModel=locked is a member whose Apiary sets the worker model (ADR 0116).
   if (path === "/api/v1/runtime/worker-model") {
     const locked = new URLSearchParams(window.location.search).get("workerModel") === "locked";

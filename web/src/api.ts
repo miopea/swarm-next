@@ -2790,6 +2790,23 @@ export async function setWorkerRemoteControl(operatorToken: string, enabled: boo
   return response.json() as Promise<WorkerRemoteControl>;
 }
 
+/** Whether Queen's review is enough to release code on this Hive (ADR 0131). */
+export type QueenReleases = { enabled: boolean };
+
+export async function fetchQueenReleases(operatorToken: string, signal?: AbortSignal): Promise<QueenReleases> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/queen-releases", { signal });
+  return response.json() as Promise<QueenReleases>;
+}
+
+export async function setQueenReleases(operatorToken: string, enabled: boolean): Promise<QueenReleases> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/queen-releases", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<QueenReleases>;
+}
+
 /** Days of terminal history a Hive keeps (ADR 0118). */
 export type HistoryRetentionDays = 1 | 3 | 7 | 14 | 30;
 /** What the terminal host is doing about it: only "in_effect" means it keeps exactly these days. */
