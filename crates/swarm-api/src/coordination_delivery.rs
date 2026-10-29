@@ -1684,6 +1684,12 @@ pub(super) fn queen_review_focus_message(
     let ids = focus.iter().map(ToString::to_string).collect::<Vec<_>>();
     let mut message = queen_automation_message(delivery);
     message.bytes.splice(0..0, "UNRESOLVED INVESTIGATIONS. When a fresh check cannot establish a valid wait or next action, record swarm_record_review_disposition kind insufficient_evidence with the missing fact, checked evidence and source. It never covers the review or clears a blocker; it lets unchecked backlog receive attention. Reuse unchanged saved investigations rather than refreshing their timestamps. Keep seeking the missing fact or real assistance, and advance the other outstanding tasks instead of rereading only the same head items.\n\n".bytes());
+    // A running Queen keeps the brief she connected with, so the operator
+    // turning this on reaches her here, at her next review (ADR 0131).
+    if store.queen_releases()? {
+        let release = format!("{}\n\n", crate::agent::QUEEN_RELEASE_GUIDANCE);
+        message.bytes.splice(0..0, release.bytes());
+    }
     if !ids.is_empty() {
         let focus = format!(
             "CURRENT REVIEW FOCUS: {}. These are this run's reserved rotating focus from the uncovered Queen backlog; retries preserve this batch. Read their current task history and review evidence in this run, alongside any urgent new work. For each, route a verified next action, record a checked external wait or authenticated operator deferral, or state the concrete missing evidence. Do not just repeat assessments of the recent cluster and leave these unread. For an authenticated resolved operator ruling on another task, you may use swarm_set_task_decision_link with a concise explanation of why its ORIGINAL scope also applies here, then reread review evidence and cite that decision for a deferral. Preserve the original wording and answer; this grants no new permission and sends no answer into another terminal. Ask the operator if applicability is uncertain. This focus does not authorize starting reserved drafts, clearing blockers, or expanding an old decision. Recheck current state; a resolved or completed item needs no repeated action. The rest of the full review still matters.\n\n",
@@ -4237,6 +4243,15 @@ mod tests {
             store.get_task(tasks[1].id).unwrap().state,
             swarm_domain::TaskState::Draft
         );
+        assert!(!text.contains(crate::agent::QUEEN_RELEASE_GUIDANCE));
+        // ADR 0131: with the operator's setting on, the same review carries
+        // Queen's release guidance, after the focus that leads it.
+        store.set_queen_releases(true, 200).unwrap();
+        let released =
+            String::from_utf8(queen_review_focus_message(&store, &delivery).unwrap().bytes)
+                .unwrap();
+        assert!(released.starts_with("CURRENT REVIEW FOCUS:"));
+        assert!(released.contains(crate::agent::QUEEN_RELEASE_GUIDANCE));
         let missing = QueenAutomationDelivery {
             worker_id: WorkerId::new(),
             ..delivery

@@ -115,6 +115,16 @@ test("finds the Remote Control setting by its name and by /rc", () => {
   expect(titles("/rc")).toEqual(["Remote Control"]);
 });
 
+/** ADR 0131: an operator whose merges keep being refused looks for it in those words. */
+test("finds the Queen releases setting by merge, deploy and the refusal", () => {
+  const titles = (query: string) => filterSettingsCards(query).map((card) => card.title);
+
+  expect(titles("queen releases")).toEqual(["Queen releases"]);
+  expect(titles("merge")).toEqual(["Queen releases"]);
+  expect(titles("deploy")).toEqual(["Queen releases"]);
+  expect(titles("permission denied")).toEqual(["Queen releases"]);
+});
+
 test("matches the section name too, so browsing by group still works", () => {
   expect(filterSettingsCards("access").map((card) => card.id))
     .toEqual(["settings-access", "settings-remote"]);

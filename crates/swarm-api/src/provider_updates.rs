@@ -435,16 +435,26 @@ pub(super) async fn advance(
     restarted
 }
 
-/// Whether this Hive's Claude workers connect to Remote Control.
+/// An on-or-off operator choice for this Hive's sessions: whether Claude
+/// workers connect to Remote Control, or whether Queen's review is enough to
+/// release code.
 #[derive(Serialize)]
-struct WorkerRemoteControlView {
+struct SessionChoiceView {
     enabled: bool,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SetWorkerRemoteControlRequest {
+pub(super) struct SetSessionChoiceRequest {
     enabled: bool,
+}
+
+fn session_choice(enabled: bool) -> Response {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(SessionChoiceView { enabled }),
+    )
+        .into_response()
 }
 
 pub(super) async fn worker_remote_control(
@@ -455,28 +465,48 @@ pub(super) async fn worker_remote_control(
     let enabled = task_store(&state)?
         .worker_remote_control()
         .map_err(|error| task_store_error(&error))?;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(WorkerRemoteControlView { enabled }),
-    )
-        .into_response())
+    Ok(session_choice(enabled))
 }
 
 pub(super) async fn set_worker_remote_control(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(request): Json<SetWorkerRemoteControlRequest>,
+    Json(request): Json<SetSessionChoiceRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let enabled = task_store(&state)?
         .set_worker_remote_control(request.enabled, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(WorkerRemoteControlView { enabled }),
-    )
-        .into_response())
+    Ok(session_choice(enabled))
+}
+
+/// Whether Queen's review is enough to release code on this Hive (ADR 0131).
+pub(super) async fn queen_releases(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .queen_releases()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(session_choice(enabled))
+}
+
+/// The operator turning Queen's release authority on or off. It needs the
+/// operator's own credential: a loopback request is not enough, because a
+/// worker on this machine could otherwise widen its own authority.
+pub(super) async fn set_queen_releases(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetSessionChoiceRequest>,
+) -> Result<Response, ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .set_queen_releases(request.enabled, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(session_choice(enabled))
 }
 
 #[cfg(test)]

@@ -1932,6 +1932,7 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
         return base;
     };
     let remote_control = worker_remote_control_beside(Some(mcp_config));
+    let queen_releases = queen_releases_beside(mcp_config);
     let result = std::env::current_exe()
         .map_err(|_| "helper executable unavailable".to_owned())
         .and_then(|executable| {
@@ -1940,6 +1941,7 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
                 mcp_config,
                 &executable,
                 remote_control,
+                queen_releases,
             )
         });
     if let Ok(path) = result {
@@ -2004,6 +2006,20 @@ fn worker_remote_control_beside(mcp_config: Option<&Path>) -> Option<bool> {
     let settings = mcp_config.and_then(worker_settings_beside)?;
     let document = provider_settings::read_settings(&settings).ok()?;
     document.get("remoteControlAtStartup")?.as_bool()
+}
+
+/// Whether the operator turned on "Queen releases reviewed work" (ADR 0131),
+/// from the file the API writes. Anything but an explicit `true` is off, so an
+/// older API that wrote nothing leaves the worker as it was.
+fn queen_releases_beside(mcp_config: &Path) -> bool {
+    worker_settings_beside(mcp_config)
+        .and_then(|settings| provider_settings::read_settings(&settings).ok())
+        .and_then(|document| {
+            document
+                .get(swarm_terminal::QUEEN_RELEASES_SETTING_KEY)?
+                .as_bool()
+        })
+        .unwrap_or(false)
 }
 
 /// `<worker>.json` -> `<worker>.settings.json`, when that file exists.
@@ -2237,6 +2253,26 @@ mod worker_model_tests {
         assert_eq!(worker_remote_control_beside(Some(&config)), Some(false));
         std::fs::write(&settings, r#"{"remoteControlAtStartup":true}"#).unwrap();
         assert_eq!(worker_remote_control_beside(Some(&config)), Some(true));
+    }
+
+    /// ADR 0131: only an explicit yes from the API turns the rule on.
+    #[test]
+    fn queen_releases_only_when_the_api_wrote_yes() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("worker.json");
+        std::fs::write(&config, "{}").unwrap();
+        assert!(!queen_releases_beside(&config));
+
+        let settings = directory.path().join("worker.settings.json");
+        for (written, expected) in [
+            (r#"{"model":"sonnet"}"#, false),
+            (r#"{"swarmQueenReleases":"true"}"#, false),
+            (r#"{"swarmQueenReleases":false}"#, false),
+            (r#"{"swarmQueenReleases":true}"#, true),
+        ] {
+            std::fs::write(&settings, written).unwrap();
+            assert_eq!(queen_releases_beside(&config), expected, "{written}");
+        }
     }
 }
 
