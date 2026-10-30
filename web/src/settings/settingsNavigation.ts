@@ -14,13 +14,24 @@
  * not a service you integrate with, it is who this Hive is federated with, so it
  * moved to "Your Hive" beside identity. Once it was gone, "Connections" was the
  * vaguer word for what remained.
+ *
+ * ⚠️ AUTHORITY HOLDS EVERY RULE ABOUT WHAT HAPPENS WITHOUT THE OPERATOR. Queen
+ * autonomy, Queen releases and the check gate sat under Workers below the
+ * roster, Terminal answers sat under Your Hive, and which workers held raised
+ * access could only be read row by row on the roster. Those are the settings
+ * behind a week of refused merges and the Queen releases mix-up, and nothing
+ * showed them together. Your Hive had become personal and device preferences
+ * beside the Hive's identity; the preferences are "You" now. The roster section
+ * stays "Workers" rather than "Crew", the internal name this grouping replaced.
  */
 export const SETTINGS_SECTIONS = [
   ["settings-hive", "Your Hive"],
+  ["settings-you", "You"],
   ["settings-workers", "Workers"],
+  ["settings-authority", "Authority"],
   ["settings-access", "Access"],
   ["settings-connections", "Integrations"],
-  ["settings-updates", "Updates"],
+  ["settings-updates", "Updates & restarts"],
   ["settings-maintenance", "Maintenance"],
   ["settings-dogfood", "Developer Dogfood"],
 ] as const;
@@ -53,23 +64,27 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["developer", "dogfood", "performance", "soak", "evidence", "regression"] },
   { id: "settings-crew", section: "settings-workers", title: "Crew",
     keywords: ["worker", "crew", "add worker", "repository", "workspace", "provider", "claude", "codex", "description", "order", "remove worker"] },
-  { id: "settings-queen", section: "settings-workers", title: "Queen",
+  { id: "settings-queen", section: "settings-authority", title: "Queen",
     keywords: ["queen", "autonomy", "ceiling", "coordinate", "night watch", "review", "automation"] },
-  { id: "settings-check-gate", section: "settings-workers", title: "Check gate",
+  { id: "settings-check-gate", section: "settings-authority", title: "Check gate",
     keywords: ["check gate", "ci", "checks", "github", "actions", "strictness", "require", "passing", "done", "close", "review"] },
-  { id: "settings-queen-releases", section: "settings-workers", title: "Queen releases",
+  { id: "settings-queen-releases", section: "settings-authority", title: "Queen releases",
     keywords: ["queen releases", "release", "merge", "deploy", "ship", "auto mode", "refused", "permission denied"] },
+  // Read-only. Each worker's access is still set in its own editor on the
+  // roster; this is the one place that shows who holds any.
+  { id: "settings-worker-access", section: "settings-authority", title: "Worker access",
+    keywords: ["worker access", "system access", "commands", "sudo", "without asking", "read the whole board", "board", "privilege", "permissions", "audit"] },
   { id: "settings-worker-model", section: "settings-workers", title: "Worker model",
     keywords: ["worker model", "model", "opus", "sonnet", "haiku", "claude", "cost", "cheaper"] },
   { id: "settings-worker-remote-control", section: "settings-workers", title: "Remote Control",
     keywords: ["remote control", "/rc", "claude app", "claude.ai", "follow", "restart", "update", "new version"] },
-  { id: "settings-answers", section: "settings-hive", title: "Terminal answers",
+  { id: "settings-answers", section: "settings-authority", title: "Terminal answers",
     keywords: ["terminal answers", "needs you", "native", "answer", "resolve", "decision", "terminal", "kill switch", "off"] },
-  { id: "settings-presence", section: "settings-hive", title: "Presence",
+  { id: "settings-presence", section: "settings-you", title: "Presence",
     keywords: ["presence", "away", "reachable", "automatic", "at hive", "night watch", "schedule", "daily", "time zone", "starts", "ends", "opening screen", "lock", "screen lock", "asleep"] },
-  { id: "settings-appearance", section: "settings-hive", title: "Appearance",
+  { id: "settings-appearance", section: "settings-you", title: "Appearance",
     keywords: ["appearance", "theme", "dark", "light", "colour", "color", "terminal keys", "keyboard"] },
-  { id: "settings-notifications", section: "settings-hive", title: "Alerts",
+  { id: "settings-notifications", section: "settings-you", title: "Alerts",
     keywords: ["alerts", "notifications", "notify me", "push", "subscribe", "phone", "device", "quiet"] },
   { id: "settings-access", section: "settings-access", title: "Operator access",
     keywords: ["access", "token", "operator token", "passkey", "password", "sign in", "sign out", "rotate", "credential", "webauthn", "unlock", "security"] },
@@ -89,7 +104,7 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["jira", "atlassian", "project", "issue", "board", "ticket", "ask me before resolving tickets", "resolved", "approved", "approval", "confirm"] },
   { id: "settings-email", section: "settings-connections", title: "Email",
     keywords: ["email", "outlook", "microsoft", "mailbox", "reply", "oauth", "inbox"] },
-  { id: "settings-usage", section: "settings-maintenance", title: "Provider usage",
+  { id: "settings-usage", section: "settings-workers", title: "Provider usage",
     keywords: ["usage", "tokens", "token", "spend", "spending", "burn", "cost", "cache", "cached", "context", "budget", "quota", "provider usage"] },
   { id: "settings-runtime", section: "settings-updates", title: "App and API",
     keywords: ["update", "release", "version", "upgrade", "install", "worker engine", "development", "reload", "build", "provider", "restart", "system"] },
@@ -99,7 +114,7 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["backup", "export", "restore", "snapshot", "copy", "carry"] },
   { id: "settings-migration", section: "settings-maintenance", title: "Migration",
     keywords: ["migration", "legacy", "import", "old swarm", "move"] },
-  { id: "settings-shortcuts", section: "settings-hive", title: "Keyboard",
+  { id: "settings-shortcuts", section: "settings-you", title: "Keyboard",
     keywords: ["keyboard", "shortcut", "shortcuts", "alt", "hotkey", "quick navigation"] },
   { id: "settings-diagnostics", section: "settings-maintenance", title: "Diagnostics",
     keywords: ["diagnostics", "logs", "history", "terminal history", "debug", "support"] },
@@ -117,8 +132,6 @@ const SETTINGS_SECTION_IDS = new Set<string>(SETTINGS_SECTIONS.map(([id]) => id)
  */
 const SETTINGS_SECTION_ALIASES = new Map<string, SettingsSection>([
   ...SETTINGS_CARDS.map((card) => [card.id, card.section] as const),
-  ["settings-notifications", "settings-hive"],
-  ["settings-runtime", "settings-updates"],
   ["settings-system", "settings-updates"],
 ]);
 

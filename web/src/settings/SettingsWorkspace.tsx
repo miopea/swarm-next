@@ -38,8 +38,8 @@ import ConnectionsSettings from "./ConnectionsSettings";
 import JiraSettings from "./JiraSettings";
 import LegacyMigrationSettings from "./LegacyMigrationSettings";
 import UsageSettings from "./UsageSettings";
-import WorkerSettings from "./WorkerSettings";
-import { navigateToSettingsSection, readSettingsSection, SETTINGS_SECTIONS } from "./settingsNavigation";
+import WorkerAccessSettings from "./WorkerAccessSettings";
+import WorkerSettings, { workerRowId } from "./WorkerSettings";
 import { compactRuntimeVersion, runtimeVersionIdentity } from "./runtimeVersion";
 
 type Props = {
@@ -101,10 +101,12 @@ type Props = {
   onPrepareDevelopment?: () => Promise<void>;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
   onOpenApiary?: () => void;
+  /** Opens a section the way the rail does, clearing any filter. */
+  onOpenSection: (section: SettingsSection) => void;
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onRestartForSettings, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, onOpenApiary, sharedMachineResources, dogfoodCollection }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onRestartForSettings, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, onOpenApiary, onOpenSection, sharedMachineResources, dogfoodCollection }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -169,6 +171,17 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
   useEffect(() => {
     workspaceRef.current?.scrollTo?.({ top: 0, behavior: "auto" });
   }, [section]);
+  // The roster row Authority's access list asked for. Shown once the roster
+  // is, then forgotten, so returning to Workers later starts at the top.
+  const [shownWorker, setShownWorker] = useState<string>();
+  const rosterShown = shows("settings-crew");
+  useEffect(() => {
+    if (!shownWorker || !rosterShown) return;
+    const row = document.getElementById(workerRowId(shownWorker));
+    row?.scrollIntoView?.({ block: "center" });
+    row?.focus({ preventScroll: true });
+    setShownWorker(undefined);
+  }, [shownWorker, rosterShown]);
   const loadTerminalHost = useCallback(async (signal: AbortSignal) => {
     try {
       const status = await fetchTerminalHostStatus(operatorToken, signal);
@@ -283,9 +296,6 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
       <div className="settings-crew-slot" hidden={!shows("settings-crew")}>
     <WorkerSettings operatorToken={operatorToken} workers={workers} workspaces={workspaces} busy={busy} providers={providers} providerCapabilitiesUnavailable={providerCapabilitiesUnavailable} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onChooseMark={onChooseWorkerMark} onRemove={onRemoveWorker} onDraftDescription={async (workerId) => (await draftWorkerDescription(operatorToken, workerId)).description} onImproveDescription={async (workerId) => (await improveWorkerDescription(operatorToken, workerId)).description} onReorder={onReorderWorkers} />
       </div>
-      {shows("settings-usage") && operatorToken ? (
-        <UsageSettings operatorToken={operatorToken} visible={shows("settings-usage")} />
-      ) : null}
       {shows("settings-terminal-history") && operatorToken && <TerminalHistorySettings operatorToken={operatorToken} />}
       {shows("settings-presence") && (
     <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
@@ -339,7 +349,6 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           {mobile && <p className="mobile-presence-note">Your workstation reports when it is locked. This phone follows that presence and carries notifications when you are away.</p>}
         </section>
       )}
-      {shows("settings-answers") && operatorToken && <NativeAnswerResolution operatorToken={operatorToken} />}
       {shows("settings-queen") && (
     <section id="settings-queen" className="settings-card queen-policy-settings" aria-labelledby="queen-policy-heading">
           <div><p className="eyebrow">Queen autonomy</p><h3 id="queen-policy-heading">Choose how far she may carry work</h3></div>
@@ -457,10 +466,17 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
           <small className="privacy-note">A deployment rule grants only its recorded repository, environment, action, and limits. Anything outside that scope returns to Needs you. Scout and repository workers still perform implementation.</small>
         </section>
       )}
-      {shows("settings-check-gate") && operatorToken && <CheckGateSettings operatorToken={operatorToken} />}
       {shows("settings-queen-releases") && operatorToken && <QueenReleasesSettings operatorToken={operatorToken} />}
+      {shows("settings-check-gate") && operatorToken && <CheckGateSettings operatorToken={operatorToken} />}
+      {shows("settings-answers") && operatorToken && <NativeAnswerResolution operatorToken={operatorToken} />}
+      {shows("settings-worker-access") && (
+        <WorkerAccessSettings workers={workers} onShowWorker={(workerId) => { setShownWorker(workerId); onOpenSection("settings-workers"); }} />
+      )}
       {shows("settings-worker-model") && operatorToken && <WorkerModelSettings operatorToken={operatorToken} />}
       {shows("settings-worker-remote-control") && operatorToken && <WorkerRemoteControlSettings operatorToken={operatorToken} />}
+      {shows("settings-usage") && operatorToken ? (
+        <UsageSettings operatorToken={operatorToken} visible={shows("settings-usage")} />
+      ) : null}
       {shows("settings-notifications") && (
     <section id="settings-notifications" className="settings-card notification-settings" aria-labelledby="notification-heading">
           <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>

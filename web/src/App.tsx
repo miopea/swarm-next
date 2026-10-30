@@ -2840,6 +2840,7 @@ export function App() {
               onPrepareDevelopment={() => reloadDevelopmentBuild(true)}
               onHiveIdentityChange={(next) => { setHiveIdentity(next); if (!federated && next.apiary_context?.mode === "federated") setSurface("apiary"); }}
               onOpenApiary={() => setSurface("apiary")}
+              onOpenSection={(next) => { setSettingsQuery(""); openSettings(next); }}
             />
           </Suspense>
         ) : activeSession ? (
