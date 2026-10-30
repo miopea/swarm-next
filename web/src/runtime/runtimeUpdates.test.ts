@@ -493,7 +493,7 @@ test("names a moved checkout, and never denies a cause it is about to print", ()
 test("names the setting a running worker started before, and offers to restart only those", () => {
   const behind = [{ worker_id: "w1", name: "Admin", settings: ["queen_releases" as const] }];
   const [settings] = nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [], behind) ?? [];
-  expect(settings.kind).toBe("settings");
+  expect(settings.kind).toBe("worker_settings");
   expect(settings.label).toBe("Queen releases needs a restart");
   expect(settings.detail).toBe("Queen releases changed after 1 running worker started: Admin. It keeps the old setting until it restarts.");
   expect(settings.action).toBe("restart_for_settings");
@@ -515,20 +515,31 @@ test("a settings restart sits after the engine and provider and before an App an
   const pending = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"], in_place_worker_ids: [], asked_worker_ids: [] }];
   const behind = [{ worker_id: "w1", name: "Admin", settings: ["worker_model" as const] }];
   const all = nextRuntimeUpdates(undefined, health("new"), host("old"), development({ reload_available: true }), pending, behind);
-  expect(all?.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "settings", "app"]);
+  expect(all?.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "worker_settings", "app"]);
   const withoutProvider = nextRuntimeUpdates(undefined, health("same"), host("same"), development({ reload_available: true }), [], behind);
-  expect(withoutProvider?.map((entry) => entry.kind)).toEqual(["settings", "app"]);
+  expect(withoutProvider?.map((entry) => entry.kind)).toEqual(["worker_settings", "app"]);
 });
 
 test("a settings list that could not be read keeps the notice and offers no restart", () => {
   const behind = [{ worker_id: "w1", name: "Admin", settings: ["queen_releases" as const] }];
   const previous = nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [], behind);
   const unavailable = nextRuntimeUpdates(previous, health("same"), host("same"), development({}), []);
-  expect(unavailable?.map((entry) => entry.kind)).toEqual(["settings"]);
+  expect(unavailable?.map((entry) => entry.kind)).toEqual(["worker_settings"]);
   expect(unavailable?.[0].action).toBeUndefined();
   expect(unavailable?.[0].label).toContain("unavailable");
   // Every endpoint unreadable, as during an API restart: still kept, still no action.
   expect(nextRuntimeUpdates(unavailable, undefined, undefined, undefined)).toEqual(unavailable);
   expect(nextRuntimeUpdates(unavailable, health("same"), host("same"), development({}), [], [])).toEqual([]);
   expect(nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [])).toEqual([]);
+});
+
+test("each update's rail class is its own, not one the rail already styles", () => {
+  // The kind becomes the class runtime-update-<kind>. "settings" collided with
+  // the Details link's runtime-update-settings, so the row lost its border and
+  // padding and its cost line was underlined.
+  const behind = [{ worker_id: "w1", name: "Admin", settings: ["queen_releases" as const] }];
+  const kinds = (nextRuntimeUpdates(undefined, health("new"), host("old"), development({ reload_available: true }), [], behind) ?? [])
+    .map((entry) => entry.kind);
+  expect(kinds).not.toContain("settings");
+  expect(kinds).toContain("worker_settings");
 });

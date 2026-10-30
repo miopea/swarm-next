@@ -1,7 +1,7 @@
 import type { DevelopmentRuntime, Health, RestartBoundSetting, SupersededProvider, TerminalHostStatus, WorkerBehindSettings } from "../api";
 import { ENGINE_RESTART_CONSEQUENCE, workerEngineUpdateRequired } from "./workerEngine";
 
-export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider" | "settings";
+export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider" | "worker_settings";
 
 /** What running this update actually does, when the operator asks for it here. */
 export type RuntimeUpdateAction = "build" | "apply_worker_engine" | "restart_providers" | "restart_for_settings";
@@ -233,7 +233,7 @@ function settingsRestartUpdate(behind: WorkerBehindSettings[]): RuntimeUpdateSum
   const named = settingsBehindNames(behind);
   const single = new Set(behind.flatMap((worker) => worker.settings)).size === 1;
   return {
-    kind: "settings",
+    kind: "worker_settings",
     label: single ? `${named} needs a restart` : "Settings need a restart",
     detail: `${named} changed after ${runningWorkers(count)} started: ${listed(behind.map((worker) => worker.name))}. ${count === 1 ? "It keeps" : "They keep"} the old setting until ${count === 1 ? "it restarts" : "they restart"}.`,
     busy: false,
@@ -382,9 +382,9 @@ export function nextRuntimeUpdates(
   // The same for workers behind a setting: no restart is offered for a list
   // that could not be read.
   const settings = settingsBehind === undefined
-    ? previous?.some((entry) => entry.kind === "settings")
+    ? previous?.some((entry) => entry.kind === "worker_settings")
       ? {
-        kind: "settings" as const,
+        kind: "worker_settings" as const,
         label: "Settings restart status unavailable",
         detail: "Some workers were running with an older setting. Whether they still are could not be checked. Swarm will check again before offering a restart.",
         busy: false,
@@ -392,7 +392,7 @@ export function nextRuntimeUpdates(
       : undefined
     : settingsRestartUpdate(settingsBehind);
   const others = !health && !host && !development
-    ? previous?.filter((entry) => entry.kind !== "provider" && entry.kind !== "settings")
+    ? previous?.filter((entry) => entry.kind !== "provider" && entry.kind !== "worker_settings")
     : runtimeUpdates(health, host, development);
   if (!others && !provider && !settings && superseded === undefined && settingsBehind === undefined) return previous;
   const entries = others ?? [];
