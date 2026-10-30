@@ -152,6 +152,13 @@ impl TaskStore {
             "UPDATE worker_model_launches SET session_id = ?2 WHERE session_id = ?1",
             params![previous.to_string(), successor.to_string()],
         )?;
+        // And on whatever its parent carried of the settings read only at
+        // start, so it is not taken for a session launched after a change
+        // (ADR 0132).
+        tx.execute(
+            "UPDATE worker_launch_choices SET session_id = ?2 WHERE session_id = ?1",
+            params![previous.to_string(), successor.to_string()],
+        )?;
         tx.execute("UPDATE worker_startup_context SET session_id = ?2, status = 'pending',
                     outcome = NULL, selection_revision = 0, selection_suspended = 0 WHERE worker_id = ?1",
             params![worker, successor.to_string()])?;
@@ -533,6 +540,52 @@ mod tests {
             !store
                 .continuation_successor_bound(previous, successor)
                 .unwrap()
+        );
+    }
+
+    /// The successor relaunches from its parent's settings file, so it is
+    /// behind on a setting that changed after the parent started, however
+    /// recently the successor itself began (ADR 0132).
+    #[test]
+    fn a_continuation_successor_keeps_its_parents_launch_record() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let previous = WorkerSessionId::new();
+        let successor = WorkerSessionId::new();
+        let previous_attempt = attempt();
+        store.bind_worker_session(worker.id, previous).unwrap();
+        store
+            .record_worker_launch_choices(
+                worker.id,
+                previous,
+                crate::LaunchChoices {
+                    remote_control: Some(false),
+                    queen_releases: Some(false),
+                    system_access: Some(swarm_domain::SystemAccess::None),
+                },
+                1,
+            )
+            .unwrap();
+        // Changed at time 0, before either session by the clock: only the
+        // record carried across can say the successor is still without it.
+        store.set_queen_releases(true, 0).unwrap();
+        assert!(
+            store
+                .reconcile_continuation_successor(
+                    previous,
+                    previous_attempt,
+                    successor,
+                    fresh_after(previous_attempt)
+                )
+                .unwrap()
+        );
+        let behind = store.workers_behind_settings().unwrap();
+        assert_eq!(behind.len(), 1);
+        assert_eq!(
+            behind[0].settings,
+            vec![swarm_domain::RestartBoundSetting::QueenReleases]
         );
     }
 

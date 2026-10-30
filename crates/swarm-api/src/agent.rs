@@ -274,10 +274,16 @@ impl AgentBridge {
     /// default decides, that default connects workers to Remote Control, and
     /// Claude refuses `/restart` while it is connected.
     ///
+    /// Returns the value the file now carries, or `None` when it is not a
+    /// file Swarm writes into.
+    ///
     /// # Errors
     /// Returns an error when the setting cannot be read or the file cannot be
     /// written privately.
-    pub fn apply_worker_remote_control(&self, worker_id: WorkerId) -> Result<(), AgentBridgeError> {
+    pub fn apply_worker_remote_control(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Option<bool>, AgentBridgeError> {
         let enabled = self.tasks.store().worker_remote_control()?;
         self.write_worker_choice(worker_id, "remoteControlAtStartup", enabled)
     }
@@ -289,12 +295,16 @@ impl AgentBridge {
     ///
     /// This writer owns `swarmQueenReleases` and nothing else, and writes it
     /// either way, so turning the setting off reaches a worker as plainly as
-    /// turning it on.
+    /// turning it on. Returns the value the file now carries, as the Remote
+    /// Control writer does.
     ///
     /// # Errors
     /// Returns an error when the setting cannot be read or the file cannot be
     /// written privately.
-    pub fn apply_queen_releases(&self, worker_id: WorkerId) -> Result<(), AgentBridgeError> {
+    pub fn apply_queen_releases(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Option<bool>, AgentBridgeError> {
         let enabled = self.tasks.store().queen_releases()?;
         self.write_worker_choice(
             worker_id,
@@ -304,13 +314,13 @@ impl AgentBridge {
     }
 
     /// Writes one operator choice into this worker's settings file, leaving
-    /// every other key as it was.
+    /// every other key as it was, and returns the value the file now carries.
     fn write_worker_choice(
         &self,
         worker_id: WorkerId,
         key: &str,
         enabled: bool,
-    ) -> Result<(), AgentBridgeError> {
+    ) -> Result<Option<bool>, AgentBridgeError> {
         let path = self.worker_settings_path(worker_id);
         let mut document = match std::fs::read_to_string(&path) {
             Ok(contents) => serde_json::from_str::<Value>(&contents).unwrap_or_else(|_| json!({})),
@@ -319,10 +329,10 @@ impl AgentBridge {
         // An operator file that is not an object is theirs to fix, as the model
         // writer leaves it.
         let Some(object) = document.as_object_mut() else {
-            return Ok(());
+            return Ok(None);
         };
         if object.get(key).and_then(Value::as_bool) == Some(enabled) {
-            return Ok(());
+            return Ok(Some(enabled));
         }
         object.insert(key.to_owned(), json!(enabled));
         std::fs::create_dir_all(self.config_root.as_ref())?;
@@ -330,7 +340,7 @@ impl AgentBridge {
         let payload = serde_json::to_vec_pretty(&document)
             .map_err(|error| AgentBridgeError::Io(std::io::Error::other(error)))?;
         write_private_atomic(&path, &payload)?;
-        Ok(())
+        Ok(Some(enabled))
     }
 
     /// The model this worker's settings file names, as the terminal host reads
@@ -6674,6 +6684,14 @@ mod tests {
         let off = start(worker_id);
         assert_eq!(off[key], false, "off is written, not left out");
         assert_eq!(off["remoteControlAtStartup"], true);
+
+        // What each writer reports is what the launch is recorded as carrying
+        // (ADR 0132), so a file Swarm does not write into is not reported as
+        // carrying the choice.
+        assert_eq!(bridge.apply_queen_releases(worker_id).unwrap(), Some(false));
+        std::fs::write(bridge.worker_settings_path(worker_id), "[]").unwrap();
+        assert_eq!(bridge.apply_queen_releases(worker_id).unwrap(), None);
+        assert_eq!(bridge.apply_worker_remote_control(worker_id).unwrap(), None);
     }
 
     /// ⚠️ THE OPERATOR'S RULINGS (decision 01a13bc9) AT THE FILE THE HOST

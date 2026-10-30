@@ -1116,6 +1116,9 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/runtime/terminal-host")) {
       return Promise.resolve(ok({ type: "host_status", status: { host_version: "0.1.0", draining: false } }));
     }
+    if (String(url).includes("/api/v1/runtime/settings-restart")) {
+      return Promise.resolve(ok({ workers: [] }));
+    }
     // The header reads machine pressure so a Hive cannot quietly run the box
     // out of memory. Named here for the same reason as every branch around it:
     // the queue below is consumed in call order, and leaving this one unnamed

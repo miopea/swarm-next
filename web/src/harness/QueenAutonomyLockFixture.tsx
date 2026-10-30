@@ -50,6 +50,7 @@ export default function QueenAutonomyLockFixture() {
       onRemoveWorker={resolved}
       onReorderWorkers={resolved}
       onRestartProviders={resolved}
+      onRestartForSettings={resolved}
       onUpdateWorkerEngine={resolved}
       onForceWorkerReload={resolved}
       onReloadDevelopment={resolved}

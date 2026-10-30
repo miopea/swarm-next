@@ -27,6 +27,7 @@ import OperatorAccessSettings from "./OperatorAccessSettings";
 import RemoteAccessSettings from "./RemoteAccessSettings";
 import type { TunnelStatus } from "../api";
 import ProviderReleaseAction from "./ProviderReleaseAction";
+import SettingsRestartAction from "./SettingsRestartAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import type { SharedMachineResources } from "../runtime/machinePressure";
@@ -93,6 +94,7 @@ type Props = {
   onRemoveWorker: (workerId: string) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
   onRestartProviders: () => Promise<void>;
+  onRestartForSettings: () => Promise<void>;
   onUpdateWorkerEngine: (preparedVersion?: string) => Promise<void>;
   onForceWorkerReload: () => Promise<void>;
   onReloadDevelopment: () => Promise<void>;
@@ -102,7 +104,7 @@ type Props = {
 };
 
 export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker,
-  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, onOpenApiary, sharedMachineResources, dogfoodCollection }: Props) {
+  onChooseWorkerMark, onRemoveWorker, onReorderWorkers, onRestartProviders, onRestartForSettings, onUpdateWorkerEngine, onForceWorkerReload, onReloadDevelopment, onPrepareDevelopment, onHiveIdentityChange, onOpenApiary, sharedMachineResources, dogfoodCollection }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -696,6 +698,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
             <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} onPrepare={onPrepareDevelopment} />
             <ReleaseUpdateAction busy={busy} operatorToken={operatorToken} />
             <ProviderReleaseAction superseded={providers?.superseded ?? []} busy={busy} onRestart={onRestartProviders} />
+            <SettingsRestartAction operatorToken={operatorToken} busy={busy} onRestart={onRestartForSettings} />
           </div>
         </section>
       )}

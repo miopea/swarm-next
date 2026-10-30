@@ -58,19 +58,22 @@ fn required_model(connection: &Connection) -> Result<Option<WorkerModel>, TaskSt
 }
 
 /// The model in effect: the Apiary's, where it requires one.
-fn effective_model(connection: &Connection) -> Result<WorkerModel, TaskStoreError> {
+pub(crate) fn effective_model(connection: &Connection) -> Result<WorkerModel, TaskStoreError> {
     Ok(required_model(connection)?.unwrap_or(own_model(connection)?))
 }
 
-/// How many Claude repository workers are running a session that started on
-/// something other than the model in effect. Queen is never counted: she keeps
-/// her own default (decision 01a13bc9).
-fn workers_short_of(connection: &Connection, model: WorkerModel) -> Result<u32, TaskStoreError> {
+/// The Claude repository workers running a session that started on something
+/// other than the model in effect. Queen is never counted: she keeps her own
+/// default (decision 01a13bc9).
+pub(crate) fn workers_short_of(
+    connection: &Connection,
+    model: WorkerModel,
+) -> Result<Vec<WorkerId>, TaskStoreError> {
     if model.alias().is_none() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let mut statement = connection.prepare(
-        "SELECT session.session_id, launch.session_id, launch.launched_with
+        "SELECT session.session_id, launch.session_id, launch.launched_with, session.worker_id
          FROM worker_sessions AS session
          JOIN worker_profiles AS worker ON worker.id = session.worker_id
          LEFT JOIN worker_model_launches AS launch ON launch.worker_id = session.worker_id
@@ -84,15 +87,20 @@ fn workers_short_of(connection: &Connection, model: WorkerModel) -> Result<u32, 
             row.get::<_, String>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
         ))
     })?;
-    let mut short = 0;
+    let mut short = Vec::new();
     for row in rows {
-        let (session, launched_session, launched_with) = row?;
+        let (session, launched_session, launched_with, worker) = row?;
         // A launch recorded for an earlier session says nothing about this one.
         let launched_with = launched_with.filter(|_| launched_session.as_deref() == Some(&session));
         if session_short_of_model(model, launched_with.as_deref()) {
-            short += 1;
+            short.push(
+                WorkerId::from_str(&worker).map_err(|_| {
+                    TaskStoreError::IntegrityFailure("invalid worker identity".into())
+                })?,
+            );
         }
     }
     Ok(short)
@@ -103,7 +111,8 @@ fn setting_from(connection: &Connection) -> Result<WorkerModelSetting, TaskStore
     Ok(WorkerModelSetting {
         model,
         set_by_apiary: required_model(connection)?,
-        workers_short: workers_short_of(connection, model)?,
+        workers_short: u32::try_from(workers_short_of(connection, model)?.len())
+            .unwrap_or(u32::MAX),
     })
 }
 

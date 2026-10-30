@@ -2691,6 +2691,23 @@ export async function restartSupersededWorkers(operatorToken: string): Promise<{
   return response.json() as Promise<{ restarted_workers: number; waiting_workers: number }>;
 }
 
+/** A setting a running worker reads only when it starts (ADR 0132). */
+export type RestartBoundSetting = "worker_model" | "remote_control" | "queen_releases" | "system_access";
+/** A running worker still on an older value of one or more of those settings. */
+export type WorkerBehindSettings = { worker_id: string; name: string; settings: RestartBoundSetting[] };
+export type SettingsRestart = { workers: WorkerBehindSettings[] };
+
+export async function fetchSettingsRestart(operatorToken: string, signal?: AbortSignal): Promise<SettingsRestart> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/settings-restart", { signal });
+  return response.json() as Promise<SettingsRestart>;
+}
+
+/** Restarts the workers still on an older setting, and no others. Swarm reads which ones itself. */
+export async function restartWorkersForSettings(operatorToken: string): Promise<{ restarted_workers: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/settings-restart", { method: "POST" });
+  return response.json() as Promise<{ restarted_workers: number }>;
+}
+
 export async function fetchProviderCapabilities(operatorToken: string, signal?: AbortSignal): Promise<ProviderCapabilities> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/providers", { signal });
   return response.json() as Promise<ProviderCapabilities>;

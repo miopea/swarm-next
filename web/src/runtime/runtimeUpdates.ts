@@ -1,10 +1,10 @@
-import type { DevelopmentRuntime, Health, SupersededProvider, TerminalHostStatus } from "../api";
+import type { DevelopmentRuntime, Health, RestartBoundSetting, SupersededProvider, TerminalHostStatus, WorkerBehindSettings } from "../api";
 import { ENGINE_RESTART_CONSEQUENCE, workerEngineUpdateRequired } from "./workerEngine";
 
-export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider";
+export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider" | "settings";
 
 /** What running this update actually does, when the operator asks for it here. */
-export type RuntimeUpdateAction = "build" | "apply_worker_engine" | "restart_providers";
+export type RuntimeUpdateAction = "build" | "apply_worker_engine" | "restart_providers" | "restart_for_settings";
 
 export type RuntimeUpdateSummary = {
   kind: RuntimeUpdateKind;
@@ -194,6 +194,56 @@ function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary 
   };
 }
 
+// The names the Settings cards use, in the order the API reports them.
+const SETTING_NAME: Record<RestartBoundSetting, string> = {
+  worker_model: "Worker model",
+  remote_control: "Remote Control",
+  queen_releases: "Queen releases",
+  system_access: "System access",
+};
+
+function listed(names: string[]): string {
+  return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/** "Queen releases and Remote Control": the settings any of these workers are behind on. */
+export function settingsBehindNames(behind: WorkerBehindSettings[]): string {
+  const settings = new Set(behind.flatMap((worker) => worker.settings));
+  return listed((Object.keys(SETTING_NAME) as RestartBoundSetting[])
+    .filter((setting) => settings.has(setting))
+    .map((setting) => SETTING_NAME[setting]));
+}
+
+/** "Queen releases": one worker's settings that are waiting on its restart. */
+export function settingNames(settings: RestartBoundSetting[]): string {
+  return listed(settings.map((setting) => SETTING_NAME[setting]));
+}
+
+/**
+ * A setting that reaches a worker only when it next starts, changed while it
+ * was running (ADR 0132). The operator turned on Queen releases moments after
+ * restarting every worker, and nothing said the workers were still without it.
+ *
+ * One line in the rail, like a pending provider update: it waits on the
+ * operator choosing a moment to interrupt workers, not on anything happening.
+ */
+function settingsRestartUpdate(behind: WorkerBehindSettings[]): RuntimeUpdateSummary | undefined {
+  if (behind.length === 0) return undefined;
+  const count = behind.length;
+  const named = settingsBehindNames(behind);
+  const single = new Set(behind.flatMap((worker) => worker.settings)).size === 1;
+  return {
+    kind: "settings",
+    label: single ? `${named} needs a restart` : "Settings need a restart",
+    detail: `${named} changed after ${runningWorkers(count)} started: ${listed(behind.map((worker) => worker.name))}. ${count === 1 ? "It keeps" : "They keep"} the old setting until ${count === 1 ? "it restarts" : "they restart"}.`,
+    busy: false,
+    action: "restart_for_settings",
+    actionLabel: "Restart to apply the change",
+    consequence: `${runningWorkers(count)} ${count === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations with the new settings. Running work is interrupted; unsent terminal input may be lost. Workers already on the current settings are left alone.`,
+    costShort: `Restarts ${runningWorkers(count)}`,
+  };
+}
+
 function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSummary | undefined {
   if (development?.state === "deferred") {
     return {
@@ -315,6 +365,7 @@ export function nextRuntimeUpdates(
   host: TerminalHostStatus | undefined,
   development: DevelopmentRuntime | undefined,
   superseded: SupersededProvider[] | undefined = undefined,
+  settingsBehind: WorkerBehindSettings[] | undefined = undefined,
 ): RuntimeUpdateSummary[] | undefined {
   // A failed provider read is not evidence that its pending update disappeared.
   // Retain only one notice, without an action based on an unverified worker set.
@@ -328,13 +379,29 @@ export function nextRuntimeUpdates(
       }
       : undefined
     : providerUpdate(superseded);
+  // The same for workers behind a setting: no restart is offered for a list
+  // that could not be read.
+  const settings = settingsBehind === undefined
+    ? previous?.some((entry) => entry.kind === "settings")
+      ? {
+        kind: "settings" as const,
+        label: "Settings restart status unavailable",
+        detail: "Some workers were running with an older setting. Whether they still are could not be checked. Swarm will check again before offering a restart.",
+        busy: false,
+      }
+      : undefined
+    : settingsRestartUpdate(settingsBehind);
   const others = !health && !host && !development
-    ? previous?.filter((entry) => entry.kind !== "provider")
+    ? previous?.filter((entry) => entry.kind !== "provider" && entry.kind !== "settings")
     : runtimeUpdates(health, host, development);
-  if (!others && !provider && superseded === undefined) return previous;
+  if (!others && !provider && !settings && superseded === undefined && settingsBehind === undefined) return previous;
   const entries = others ?? [];
   const engineIndex = entries.findIndex((entry) => entry.kind !== "worker_engine");
   if (provider) entries.splice(engineIndex < 0 ? entries.length : engineIndex, 0, provider);
+  // After the engine and the provider, before an App and API release: it
+  // restarts workers, which an App and API release does not.
+  const settingsIndex = entries.findIndex((entry) => entry.kind !== "worker_engine" && entry.kind !== "provider");
+  if (settings) entries.splice(settingsIndex < 0 ? entries.length : settingsIndex, 0, settings);
   return entries;
 }
 

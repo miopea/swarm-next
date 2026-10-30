@@ -489,3 +489,46 @@ test("names a moved checkout, and never denies a cause it is about to print", ()
   // And when there genuinely is no cause, saying so is still right.
   expect(failed("something-nobody-has-added-yet").detail).toContain("did not record why");
 });
+
+test("names the setting a running worker started before, and offers to restart only those", () => {
+  const behind = [{ worker_id: "w1", name: "Admin", settings: ["queen_releases" as const] }];
+  const [settings] = nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [], behind) ?? [];
+  expect(settings.kind).toBe("settings");
+  expect(settings.label).toBe("Queen releases needs a restart");
+  expect(settings.detail).toBe("Queen releases changed after 1 running worker started: Admin. It keeps the old setting until it restarts.");
+  expect(settings.action).toBe("restart_for_settings");
+  expect(settings.costShort).toBe("Restarts 1 running worker");
+  expect(settings.consequence).toContain("Workers already on the current settings are left alone.");
+
+  const several = nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [], [
+    { worker_id: "w1", name: "Admin", settings: ["remote_control", "queen_releases"] },
+    { worker_id: "w2", name: "Hub", settings: ["queen_releases"] },
+    { worker_id: "w3", name: "Swarm Next", settings: ["system_access"] },
+  ]) ?? [];
+  expect(several[0].label).toBe("Settings need a restart");
+  expect(several[0].detail).toBe("Remote Control, Queen releases and System access changed after 3 running workers started: Admin, Hub and Swarm Next. They keep the old setting until they restart.");
+
+  expect(nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [], [])).toEqual([]);
+});
+
+test("a settings restart sits after the engine and provider and before an App and API release", () => {
+  const pending = [{ provider: "claude_code" as const, version: "2.1.0", installed_at: null, worker_ids: ["demo"], in_place_worker_ids: [], asked_worker_ids: [] }];
+  const behind = [{ worker_id: "w1", name: "Admin", settings: ["worker_model" as const] }];
+  const all = nextRuntimeUpdates(undefined, health("new"), host("old"), development({ reload_available: true }), pending, behind);
+  expect(all?.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "settings", "app"]);
+  const withoutProvider = nextRuntimeUpdates(undefined, health("same"), host("same"), development({ reload_available: true }), [], behind);
+  expect(withoutProvider?.map((entry) => entry.kind)).toEqual(["settings", "app"]);
+});
+
+test("a settings list that could not be read keeps the notice and offers no restart", () => {
+  const behind = [{ worker_id: "w1", name: "Admin", settings: ["queen_releases" as const] }];
+  const previous = nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [], behind);
+  const unavailable = nextRuntimeUpdates(previous, health("same"), host("same"), development({}), []);
+  expect(unavailable?.map((entry) => entry.kind)).toEqual(["settings"]);
+  expect(unavailable?.[0].action).toBeUndefined();
+  expect(unavailable?.[0].label).toContain("unavailable");
+  // Every endpoint unreadable, as during an API restart: still kept, still no action.
+  expect(nextRuntimeUpdates(unavailable, undefined, undefined, undefined)).toEqual(unavailable);
+  expect(nextRuntimeUpdates(unavailable, health("same"), host("same"), development({}), [], [])).toEqual([]);
+  expect(nextRuntimeUpdates(undefined, health("same"), host("same"), development({}), [])).toEqual([]);
+});

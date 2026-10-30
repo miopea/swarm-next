@@ -66,7 +66,7 @@ export default function WorkerModelSettings({ operatorToken }: { operatorToken: 
       {setting && <small className="worker-model-detail">{DETAILS[setting.model]}</small>}
       {short > 0 && setting && (
         <small className="worker-model-short" role="status">
-          {short} {short === 1 ? "worker is" : "workers are"} still on another model, and {short === 1 ? "switches" : "switch"} to {WORKER_MODEL_LABELS[setting.model]} when {short === 1 ? "it next starts" : "they next start"}.
+          {short} {short === 1 ? "worker is" : "workers are"} still on another model, and {short === 1 ? "switches" : "switch"} to {WORKER_MODEL_LABELS[setting.model]} when {short === 1 ? "it next starts" : "they next start"}. The left panel lists {short === 1 ? "it" : "them"} and can restart {short === 1 ? "it" : "them"} now.
         </small>
       )}
       {error && <p role="alert">{error}</p>}

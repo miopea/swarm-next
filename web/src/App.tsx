@@ -43,6 +43,7 @@ import {
   prepareEmailReply,
   updateEmailReplyDraft,
   restartSupersededWorkers,
+  restartWorkersForSettings,
   restartAllWorkers,
   runQueenAutomation,
   type UnansweredEmailTask,
@@ -854,6 +855,12 @@ export function App() {
             : Promise.resolve(undefined),
         ]);
         if (signal.aborted) return;
+        // A setting changed, or a worker started or stopped: the rail's
+        // "needs a restart" notice moves with either, so it is not left to the
+        // next tick (ADR 0132).
+        if (runtimeChanged || page.events.some((event) => event.kind === "workers_changed" || event.kind === "sessions_changed")) {
+          void refreshRuntimeUpdate();
+        }
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
@@ -888,7 +895,7 @@ export function App() {
       document.removeEventListener("visibilitychange", syncFeedVisibility);
       feed.stop();
     };
-  }, [operatorToken, presentationDevice]);
+  }, [operatorToken, presentationDevice, refreshRuntimeUpdate]);
 
   async function authenticate(event: FormEvent) {
     event.preventDefault();
@@ -1330,6 +1337,7 @@ export function App() {
     if (update.action === "build") await reloadDevelopmentBuild();
     else if (update.action === "apply_worker_engine") await maintainWorkerEngine();
     else if (update.action === "restart_providers") await restartProviders();
+    else if (update.action === "restart_for_settings") await restartForSettings();
     await refreshRuntimeUpdate();
   }
 
@@ -1497,6 +1505,14 @@ export function App() {
       await restartSupersededWorkers(operatorToken);
       await refreshControlRoom(true);
     }, "Restarting workers on the installed provider release…");
+  }
+
+  async function restartForSettings() {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await restartWorkersForSettings(operatorToken);
+      await refreshControlRoom(true);
+    }, "Restarting workers on the current settings…");
   }
 
   async function maintainWorkerEngine(preparedVersion?: string) {
@@ -2818,7 +2834,7 @@ export function App() {
               onChooseWorkerMark={chooseWorkerMark}
               onRemoveWorker={removeWorkerProfile}
               onReorderWorkers={reorderWorkerProfiles}
-              onRestartProviders={restartProviders} onForceWorkerReload={forceWorkerReload}
+              onRestartProviders={restartProviders} onRestartForSettings={restartForSettings} onForceWorkerReload={forceWorkerReload}
               onUpdateWorkerEngine={maintainWorkerEngine}
               onReloadDevelopment={reloadDevelopmentBuild}
               onPrepareDevelopment={() => reloadDevelopmentBuild(true)}

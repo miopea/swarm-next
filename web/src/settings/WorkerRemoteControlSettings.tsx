@@ -49,7 +49,7 @@ export default function WorkerRemoteControlSettings({ operatorToken }: { operato
       {enabled === false && (
         <small className="worker-remote-control-detail">Off: you follow workers here in Swarm, and Swarm moves each one onto a new Claude version by itself once it is free.</small>
       )}
-      <small className="worker-remote-control-detail">A change reaches each worker the next time it starts. Codex workers are not affected.</small>
+      <small className="worker-remote-control-detail">A change reaches each worker the next time it starts. Until then, the left panel lists the workers still on the old setting and can restart them. Codex workers are not affected.</small>
       {error && <p role="alert">{error}</p>}
     </section>
   );

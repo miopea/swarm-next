@@ -559,7 +559,7 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
                 settings file is read once, when the provider starts, so lowering
                 a level does nothing to a worker already running. A control that
                 implied otherwise would be worse than no control. */}
-            <small className="worker-system-access-timing">Takes effect the next time this worker starts. Restart it if you want the change to bite now.</small>
+            <small className="worker-system-access-timing">Takes effect the next time this worker starts. Until then, the left panel lists it as needing a restart.</small>
             {raisingToFull && (
               <label className="worker-system-access-confirm">
                 <input type="checkbox" checked={understandsFullAccess} onChange={(event) => setUnderstandsFullAccess(event.target.checked)} />

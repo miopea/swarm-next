@@ -1,5 +1,6 @@
 import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 import type { TaskActivityPage } from "../api";
+import { fixtureSettingsRestart } from "./SettingsRestartFixture";
 
 /**
  * Enough of a Hive for the real App to mount against.
@@ -101,6 +102,8 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
   if (path === "/api/v1/runtime/worker-remote-control") {
     return { enabled: new URLSearchParams(window.location.search).get("remoteControl") === "on" };
   }
+  // The workers started before a setting changed (ADR 0132).
+  if (path === "/api/v1/runtime/settings-restart") return fixtureSettingsRestart();
   // ?queenReleases=on is a Hive where Queen's review releases code (ADR 0131).
   if (path === "/api/v1/runtime/queen-releases") {
     return { enabled: new URLSearchParams(window.location.search).get("queenReleases") === "on" };
