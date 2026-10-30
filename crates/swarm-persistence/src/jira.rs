@@ -68,6 +68,16 @@ pub struct HeldJiraResolution {
     pub handoff: Option<String>,
 }
 
+/// Jira's description of a linked issue, edited after the task was taken or
+/// closed and kept beside the task's own rather than written over it (ADR 0133).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JiraDescriptionChange {
+    pub issue_key: String,
+    pub description: String,
+    /// When a sync first read this text from Jira.
+    pub seen_at: i64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JiraTransitionFailure {
     Retryable,
@@ -338,6 +348,8 @@ impl TaskStore {
 
     /// Applies one bounded Jira snapshot atomically. Remote issue identity and mapped
     /// workflow state are canonical; Swarm-owned assignment, notes, and evidence survive.
+    /// A description edited in Jira reaches the task only while nobody holds it
+    /// (ADR 0133); see `sync_issue_description`.
     ///
     /// # Errors
     ///
@@ -496,6 +508,14 @@ impl TaskStore {
                     params![task_id.to_string(), summary, synchronized_state.to_string()],
                 )?;
                 tasks_changed |= changed > 0;
+                tasks_changed |= sync_issue_description(
+                    &transaction,
+                    task_id,
+                    issue_id,
+                    issue_key,
+                    issue.description.trim(),
+                    synchronized_state,
+                )?;
                 if previous_state != synchronized_state {
                     transaction.execute(
                         "INSERT INTO task_activity (
@@ -549,8 +569,9 @@ impl TaskStore {
             transaction.execute(
                 "INSERT INTO jira_issue_links (
                      issue_id, issue_key, binding_id, task_id, jira_status_id, jira_status_name,
-                     jira_assignee_account_id, jira_assignee_name, remote_updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     jira_assignee_account_id, jira_assignee_name, remote_updated_at,
+                     jira_description
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(issue_id) DO UPDATE SET
                      issue_key = excluded.issue_key,
                      binding_id = excluded.binding_id,
@@ -559,6 +580,7 @@ impl TaskStore {
                      jira_assignee_account_id = excluded.jira_assignee_account_id,
                      jira_assignee_name = excluded.jira_assignee_name,
                      remote_updated_at = excluded.remote_updated_at,
+                     jira_description = excluded.jira_description,
                      last_synced_at = unixepoch()",
                 params![
                     issue_id,
@@ -570,6 +592,7 @@ impl TaskStore {
                     issue.assignee_account_id.map(str::trim),
                     issue.assignee_name.map(str::trim),
                     issue.remote_updated_at.trim(),
+                    issue.description.trim(),
                 ],
             )?;
             task_ids.push(task_id);
@@ -624,6 +647,53 @@ impl TaskStore {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Jira's current description for each of these tasks that kept its own
+    /// when Jira was edited under a worker (ADR 0133), in one read.
+    ///
+    /// A task whose description has since been made to match Jira's is left
+    /// out, so editing the brief to adopt the change settles it without
+    /// waiting for another sync.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persistence cannot be read.
+    pub fn unapplied_jira_descriptions(
+        &self,
+        ids: &[TaskId],
+    ) -> Result<HashMap<TaskId, JiraDescriptionChange>, TaskStoreError> {
+        let mut changes = HashMap::new();
+        if ids.is_empty() {
+            return Ok(changes);
+        }
+        let connection = self.connection()?;
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let mut statement = connection.prepare(&format!(
+            "SELECT link.task_id, link.issue_key, link.jira_description,
+                    link.jira_description_unapplied_at
+             FROM jira_issue_links link
+             JOIN tasks task ON task.id = link.task_id
+             WHERE link.task_id IN ({placeholders})
+               AND link.jira_description_unapplied_at IS NOT NULL
+               AND link.jira_description <> task.description"
+        ))?;
+        let bound = ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let rows = statement.query_map(rusqlite::params_from_iter(bound.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                JiraDescriptionChange {
+                    issue_key: row.get(1)?,
+                    description: row.get(2)?,
+                    seen_at: row.get(3)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (task_id, change) = row?;
+            changes.insert(parse_domain_id::<TaskId>(&task_id)?, change);
+        }
+        Ok(changes)
     }
 
     /// Records a Jira transition that completed successfully before the local task moved.
@@ -1518,6 +1588,123 @@ pub(super) fn migrate_resolution_hold(
         )?;
     }
     transaction.pragma_update(None, "user_version", version)
+}
+
+/// Keeps the description each linked issue last had in Jira (ADR 0133), so a
+/// sync can tell Jira being edited apart from the task being edited here.
+///
+/// Backfilled from the task's own description. That is the copy taken at
+/// import, unless someone has edited it on this board since, and either way it
+/// is what the task says now. So an issue edited in Jira after import reads as
+/// changed at the first sync after the upgrade, which is the backlog of stale
+/// briefs this was written to clear.
+pub(super) fn migrate_issue_descriptions(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jira_issue_links')
+                       WHERE name = 'jira_description')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        transaction.execute_batch(
+            "ALTER TABLE jira_issue_links ADD COLUMN jira_description TEXT;
+             ALTER TABLE jira_issue_links ADD COLUMN jira_description_unapplied_at INTEGER;
+             UPDATE jira_issue_links SET jira_description = (
+                 SELECT description FROM tasks WHERE tasks.id = jira_issue_links.task_id
+             );",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", version)
+}
+
+/// Brings a linked task's description up to Jira's (ADR 0133), and says
+/// whether the task changed.
+///
+/// ⚠️ A TASK SOMEBODY HOLDS KEEPS ITS DESCRIPTION. The description governs
+/// what the work is for, and rewriting it under a worker would change the job
+/// without telling anyone. Only a task nobody has taken — Draft or Ready, no
+/// worker — takes Jira's text. Any other task keeps its own, and Jira's is
+/// listed beside it until the task is unrouted, closed or brought into line.
+///
+/// Acts only when Jira's text differs from what the last sync read, so an edit
+/// made on this board survives every sync until Jira itself is edited again,
+/// the same way a re-ranked priority does. A change kept back from a worker is
+/// applied once the task is unrouted, without waiting for another Jira edit.
+fn sync_issue_description(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    issue_id: &str,
+    issue_key: &str,
+    remote: &str,
+    state: TaskState,
+) -> rusqlite::Result<bool> {
+    let (description, worker, last_read, unapplied) = transaction.query_row(
+        "SELECT task.description, task.assigned_worker_id, link.jira_description,
+                link.jira_description_unapplied_at
+         FROM jira_issue_links link
+         JOIN tasks task ON task.id = link.task_id
+         WHERE link.issue_id = ?1",
+        [issue_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        },
+    )?;
+    let edited_in_jira = last_read.as_deref() != Some(remote);
+    if !edited_in_jira && unapplied.is_none() {
+        return Ok(false);
+    }
+    let unrouted = worker.is_none() && matches!(state, TaskState::Draft | TaskState::Ready);
+    if unrouted || description == remote {
+        let refreshed = transaction.execute(
+            "UPDATE tasks SET description = ?2, updated_at = unixepoch()
+             WHERE id = ?1 AND description <> ?2",
+            params![task_id.to_string(), remote],
+        )? > 0;
+        if refreshed {
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind, note, actor_kind)
+                 VALUES (?1, 'details_updated', ?2, 'jira')",
+                params![
+                    task_id.to_string(),
+                    format!("Description refreshed from Jira {issue_key}")
+                ],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE jira_issue_links SET jira_description_unapplied_at = NULL
+             WHERE issue_id = ?1",
+            [issue_id],
+        )?;
+        return Ok(refreshed);
+    }
+    if !edited_in_jira {
+        return Ok(false);
+    }
+    transaction.execute(
+        "UPDATE jira_issue_links SET jira_description_unapplied_at = unixepoch()
+         WHERE issue_id = ?1",
+        [issue_id],
+    )?;
+    transaction.execute(
+        "INSERT INTO task_activity (task_id, kind, note, actor_kind)
+         VALUES (?1, 'details_updated', ?2, 'jira')",
+        params![
+            task_id.to_string(),
+            format!(
+                "Description edited in Jira {issue_key}; kept here because the task is taken \
+                 or closed. Jira's text is listed beside it until the task is unrouted."
+            )
+        ],
+    )?;
+    Ok(true)
 }
 
 fn table_sql_mentions(
@@ -2985,6 +3172,420 @@ mod tests {
         assert!(
             store
                 .claim_jira_transitions(2_000_000_000)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// One WWD project mapped To Do -> Ready, for the description tests.
+    fn website_project(store: &TaskStore) -> JiraProjectBinding {
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10009",
+                project_key: "WWD",
+                project_name: "WS: Website Development",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "10040".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        binding
+    }
+
+    fn answer_endpoint(description: &str) -> JiraIssueSnapshot<'_> {
+        JiraIssueSnapshot {
+            issue_id: "27053",
+            issue_key: "WWD-7053",
+            summary: "AI search answer endpoint",
+            description,
+            status_id: "10040",
+            status_name: "To Do",
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at: "2026-10-30T13:00:00.000+0000",
+            priority: TaskPriority::Normal,
+        }
+    }
+
+    fn jira_notes(store: &TaskStore, task: TaskId) -> Vec<String> {
+        store
+            .list_task_activity(task, 50)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter(|event| {
+                event.actor_kind == TaskActivityActorKind::Jira
+                    && event.kind == swarm_domain::TaskActivityKind::DetailsUpdated
+            })
+            .map(|event| event.note)
+            .collect()
+    }
+
+    /// ADR 0133, and the case the task was filed on: WWD-7053 was rewritten in
+    /// Jira three times in one day while its board copy kept the import text.
+    /// Nobody had taken it, so the board copy should simply follow Jira.
+    #[test]
+    fn an_unrouted_task_takes_a_description_edited_in_jira() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = website_project(&store);
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Merge and deploy are operator decisions.")],
+            )
+            .unwrap()
+            .remove(0);
+
+        let refreshed = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Queen may release once checks pass.")],
+            )
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(refreshed.description, "Queen may release once checks pass.");
+        assert_eq!(
+            jira_notes(&store, task.id),
+            ["Description refreshed from Jira WWD-7053"]
+        );
+        assert!(
+            store
+                .unapplied_jira_descriptions(&[task.id])
+                .unwrap()
+                .is_empty(),
+            "an applied change has nothing left to list beside the task"
+        );
+
+        // The same text again is not another edit.
+        let cursor = store
+            .list_control_room_events(0)
+            .unwrap()
+            .events
+            .last()
+            .unwrap()
+            .sequence;
+        store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Queen may release once checks pass.")],
+            )
+            .unwrap();
+        assert_eq!(jira_notes(&store, task.id).len(), 1);
+        assert!(
+            store
+                .list_control_room_events(cursor)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+    }
+
+    /// ⚠️ THE GUARD ON THE FIX. A description governs what the work is for, so
+    /// Jira rewriting it must not change the job under the worker doing it.
+    /// The worker is told instead, with Jira's text beside its own, and the
+    /// text is applied once nobody holds the task.
+    #[test]
+    fn a_task_somebody_holds_keeps_its_description_and_lists_jiras_beside_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Website",
+                ProviderKind::ClaudeCode,
+                "/projects/website",
+                false,
+                1,
+            )
+            .unwrap();
+        let binding = website_project(&store);
+        let task = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("Build the answer endpoint.")])
+            .unwrap()
+            .remove(0);
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+
+        let kept = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Build it behind an off switch.")],
+            )
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(kept.description, "Build the answer endpoint.");
+        let listed = store.unapplied_jira_descriptions(&[task.id]).unwrap();
+        let change = listed
+            .get(&task.id)
+            .expect("Jira's text is listed beside the task");
+        assert_eq!(change.issue_key, "WWD-7053");
+        assert_eq!(change.description, "Build it behind an off switch.");
+        assert_eq!(jira_notes(&store, task.id).len(), 1);
+
+        // Reading the same edit again records nothing new.
+        store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Build it behind an off switch.")],
+            )
+            .unwrap();
+        assert_eq!(jira_notes(&store, task.id).len(), 1);
+
+        // Unrouted, it takes the text it was kept from without another edit.
+        store.unassign_task(task.id).unwrap();
+        let applied = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Build it behind an off switch.")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(applied.description, "Build it behind an off switch.");
+        assert!(
+            store
+                .unapplied_jira_descriptions(&[task.id])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The same rule as priority: an edit made on this board is somebody's
+    /// judgement, and an unchanged Jira issue re-sent every few minutes must not
+    /// undo it. Only a new edit in Jira replaces it.
+    #[test]
+    fn a_description_edited_here_survives_until_jira_is_edited_again() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = website_project(&store);
+        let task = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("From Jira.")])
+            .unwrap()
+            .remove(0);
+        store
+            .update_task_details(
+                task.id,
+                &TaskDetailsUpdate {
+                    description: Some("Clarified on the board.".into()),
+                    ..TaskDetailsUpdate::default()
+                },
+            )
+            .unwrap();
+
+        let resent = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("From Jira.")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(resent.description, "Clarified on the board.");
+
+        let edited = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("Edited in Jira.")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(edited.description, "Edited in Jira.");
+    }
+
+    /// A Hive upgrading to schema 217 already holds the stale copies, and the
+    /// upgrade has to catch them: the column is backfilled with each task's own
+    /// description, so the first sync afterwards sees Jira's text as an edit.
+    #[test]
+    fn an_upgraded_hive_refreshes_a_description_jira_edited_before_the_upgrade() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hive.db");
+        let store = TaskStore::open(&path).unwrap();
+        let binding = website_project(&store);
+        let task = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("Import-time brief.")])
+            .unwrap()
+            .remove(0);
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE jira_issue_links DROP COLUMN jira_description_unapplied_at;
+                 ALTER TABLE jira_issue_links DROP COLUMN jira_description;
+                 PRAGMA user_version = 216;",
+            )
+            .unwrap();
+        drop(store);
+
+        let store = TaskStore::open(&path).unwrap();
+        let backfilled: Option<String> = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT jira_description FROM jira_issue_links WHERE task_id = ?1",
+                [task.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backfilled.as_deref(), Some("Import-time brief."));
+
+        let refreshed = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("Rewritten in Jira.")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(refreshed.description, "Rewritten in Jira.");
+        store.verify_integrity().unwrap();
+    }
+
+    /// The same project with its backlog and done statuses mapped too.
+    fn website_project_with_backlog_and_done(store: &TaskStore) -> JiraProjectBinding {
+        let binding = website_project(store);
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "10000".into(),
+                        jira_status_name: "Backlog".into(),
+                        task_state: TaskState::Draft,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "10040".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "10041".into(),
+                        jira_status_name: "Done".into(),
+                        task_state: TaskState::Completed,
+                    },
+                ],
+            )
+            .unwrap();
+        binding
+    }
+
+    fn answer_endpoint_in<'a>(
+        status_id: &'a str,
+        status_name: &'a str,
+        description: &'a str,
+    ) -> JiraIssueSnapshot<'a> {
+        JiraIssueSnapshot {
+            status_id,
+            status_name,
+            ..answer_endpoint(description)
+        }
+    }
+
+    /// Jira's backlog maps to Draft, and a Draft nobody holds is as unrouted
+    /// as a Ready one: nobody is building to its brief yet.
+    #[test]
+    fn a_draft_nobody_holds_takes_a_description_edited_in_jira() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = website_project_with_backlog_and_done(&store);
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint_in("10000", "Backlog", "Rough idea.")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(task.state, TaskState::Draft);
+
+        let refreshed = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint_in("10000", "Backlog", "Refined idea.")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(refreshed.description, "Refined idea.");
+    }
+
+    /// Closed work keeps the description it was closed against, because that
+    /// is the record of what was done. If Jira reopens it to nobody, the text
+    /// Jira was edited to meanwhile is what the next worker needs.
+    #[test]
+    fn a_closed_task_keeps_its_description_until_jira_reopens_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = website_project_with_backlog_and_done(&store);
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint_in("10040", "To Do", "First brief.")],
+            )
+            .unwrap()
+            .remove(0);
+
+        let closed = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint_in("10041", "Done", "Second brief.")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(closed.state, TaskState::Completed);
+        assert_eq!(closed.description, "First brief.");
+
+        let reopened = store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint_in("10040", "To Do", "Second brief.")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(reopened.state, TaskState::Ready);
+        assert_eq!(reopened.description, "Second brief.");
+        assert!(
+            store
+                .unapplied_jira_descriptions(&[task.id])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Bringing the brief into line with Jira by hand settles the change at
+    /// once, so the worker is not told about a difference that is gone.
+    #[test]
+    fn matching_the_description_to_jira_settles_a_kept_change() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Website",
+                ProviderKind::ClaudeCode,
+                "/projects/website",
+                false,
+                1,
+            )
+            .unwrap();
+        let binding = website_project(&store);
+        let task = store
+            .sync_jira_issues(binding.id, &[answer_endpoint("Build the answer endpoint.")])
+            .unwrap()
+            .remove(0);
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store
+            .sync_jira_issues(
+                binding.id,
+                &[answer_endpoint("Build it behind an off switch.")],
+            )
+            .unwrap();
+        assert_eq!(
+            store.unapplied_jira_descriptions(&[task.id]).unwrap().len(),
+            1
+        );
+
+        store
+            .update_task_details(
+                task.id,
+                &TaskDetailsUpdate {
+                    description: Some("Build it behind an off switch.".into()),
+                    ..TaskDetailsUpdate::default()
+                },
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .unapplied_jira_descriptions(&[task.id])
                 .unwrap()
                 .is_empty()
         );

@@ -3198,7 +3198,8 @@ impl AgentMcp {
                 value
             })
             .collect();
-        self.with_intake(tasks, values)
+        let values = self.with_intake(tasks, values)?;
+        self.with_jira_descriptions(tasks, values)
     }
 
     /// Adds what an outside tool said when it filed each task (ADR 0126), in
@@ -3213,6 +3214,41 @@ impl AgentMcp {
         for (task, value) in tasks.iter().zip(&mut values) {
             if let Some(facts) = intake.remove(&task.id) {
                 add_intake(value, task, &facts);
+            }
+        }
+        Ok(values)
+    }
+
+    /// Adds Jira's current text to each linked task that kept its own
+    /// description when Jira was edited under a worker (ADR 0133), in one read.
+    ///
+    /// The worker reads its brief here and nowhere else, so this is the only
+    /// place telling it that the issue it is working was rewritten. The
+    /// description is not replaced: it governs what the work is for.
+    fn with_jira_descriptions(
+        &self,
+        tasks: &[swarm_domain::Task],
+        mut values: Vec<Value>,
+    ) -> Result<Vec<Value>, ApplicationError> {
+        let ids = tasks.iter().map(|task| task.id).collect::<Vec<_>>();
+        let mut changes = self.tasks.store().unapplied_jira_descriptions(&ids)?;
+        for (task, value) in tasks.iter().zip(&mut values) {
+            if let Some(change) = changes.remove(&task.id)
+                && let Some(object) = value.as_object_mut()
+            {
+                object.insert(
+                    "jira_description_change_note".into(),
+                    json!(format!(
+                        "Jira {} was edited after this task was taken or closed. The \
+                         description above was kept, because it governs what this work is for \
+                         and must not change under whoever holds it. `jira_description_change` is \
+                         Jira's text now: read it before building. Where it changes the scope \
+                         or acceptance, the description still governs until Queen says \
+                         otherwise, so ask her.",
+                        change.issue_key
+                    )),
+                );
+                object.insert("jira_description_change".into(), json!(change));
             }
         }
         Ok(values)
@@ -8146,6 +8182,91 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("placeholder")
+        );
+    }
+
+    /// ADR 0133. A worker reads its brief through `swarm_list_tasks` and nowhere
+    /// else, so a Jira edit it was not given has to arrive there: beside its
+    /// description, which stays as it was.
+    #[tokio::test]
+    async fn a_worker_reads_jiras_edit_beside_the_brief_it_kept() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10009",
+                project_key: "WWD",
+                project_name: "WS: Website Development",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "10040".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let snapshot = |description| JiraIssueSnapshot {
+            issue_id: "27053",
+            issue_key: "WWD-7053",
+            summary: "AI search answer endpoint",
+            description,
+            status_id: "10040",
+            status_name: "To Do",
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at: "2026-10-30T13:00:00.000+0000",
+            priority: TaskPriority::Normal,
+        };
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[snapshot("Merge and deploy are operator decisions.")],
+            )
+            .unwrap()
+            .remove(0);
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let own_task = |listing: &Value| listing["result"]["structuredContent"]["tasks"][0].clone();
+
+        let before = own_task(
+            &call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await,
+        );
+        assert_eq!(before["id"], json!(task.id), "{before}");
+        assert!(before.get("jira_description_change").is_none(), "{before}");
+
+        store
+            .sync_jira_issues(
+                binding.id,
+                &[snapshot("Queen may release once checks pass.")],
+            )
+            .unwrap();
+        let after = own_task(
+            &call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await,
+        );
+        assert_eq!(after["id"], json!(task.id), "{after}");
+        assert_eq!(
+            after["description"],
+            "Merge and deploy are operator decisions."
+        );
+        assert_eq!(
+            after["jira_description_change"]["description"],
+            "Queen may release once checks pass."
+        );
+        assert_eq!(after["jira_description_change"]["issue_key"], "WWD-7053");
+        assert!(
+            after["jira_description_change_note"]
+                .as_str()
+                .unwrap()
+                .contains("ask her"),
+            "{after}"
         );
     }
 

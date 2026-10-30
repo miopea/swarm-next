@@ -134,8 +134,8 @@ mod legacy_source;
 mod migration;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 pub use jira::{
-    HeldJiraResolution, JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
-    JiraTransitionDispatch, JiraTransitionFailure,
+    HeldJiraResolution, JiraCommentDispatch, JiraDescriptionChange, JiraIssueSnapshot,
+    JiraProjectBindingInput, JiraTransitionDispatch, JiraTransitionFailure,
 };
 pub use legacy_source::{
     LegacySourceError, claude_project_directory, claude_project_slugs, read_legacy_migration_bundle,
@@ -440,7 +440,9 @@ const QUEEN_RELEASES_SCHEMA_MARKER: i64 = 215;
 /// What each Claude worker's launch carried of the settings it reads only at
 /// start (ADR 0132).
 const WORKER_LAUNCH_CHOICES_SCHEMA_MARKER: i64 = 216;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_LAUNCH_CHOICES_SCHEMA_MARKER;
+/// The description each linked Jira issue last had in Jira (ADR 0133).
+const JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER: i64 = 217;
+const CURRENT_SCHEMA_VERSION: i64 = JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4899,6 +4901,9 @@ fn migrate_fleet_health_schema_steps(
             transaction,
             WORKER_LAUNCH_CHOICES_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER {
+        crate::jira::migrate_issue_descriptions(transaction, JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11095,6 +11100,15 @@ mod tests {
             undo_sql: "DROP TABLE worker_launch_choices;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'worker_launch_choices'",
+        },
+        // The description each linked Jira issue last had in Jira (ADR 0133).
+        SchemaStep {
+            table: "jira_issue_links",
+            artifact: "jira_description",
+            undo_sql: "ALTER TABLE jira_issue_links DROP COLUMN jira_description_unapplied_at;
+                ALTER TABLE jira_issue_links DROP COLUMN jira_description;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM pragma_table_info('jira_issue_links')
+                WHERE name IN ('jira_description', 'jira_description_unapplied_at')",
         },
     ];
 
