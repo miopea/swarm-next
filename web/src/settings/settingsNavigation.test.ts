@@ -32,13 +32,43 @@ test("recognizes every section anchor and rejects unrelated hashes", () => {
  */
 test("an older anchor still opens the section that now holds it", () => {
   expect(readSettingsSection("#settings-crew", "")).toBe("settings-workers");
-  expect(readSettingsSection("#settings-queen", "")).toBe("settings-workers");
+  // The rules about what happens without the operator moved to Authority.
+  expect(readSettingsSection("#settings-queen", "")).toBe("settings-authority");
+  expect(readSettingsSection("#settings-queen-releases", "")).toBe("settings-authority");
+  expect(readSettingsSection("#settings-check-gate", "")).toBe("settings-authority");
+  expect(readSettingsSection("#settings-answers", "")).toBe("settings-authority");
+  // Provider usage is what workers spend, not upkeep.
+  expect(readSettingsSection("#settings-usage", "")).toBe("settings-workers");
   // Apiary moved to Your Hive when joining was simplified; an old bookmark must
   // still land where the card actually is, which is the whole point of this test.
   expect(readSettingsSection("#settings-apiary", "")).toBe("settings-hive");
   expect(readSettingsSection("#settings-runtime", "")).toBe("settings-updates");
   expect(readSettingsSection("#settings-diagnostics", "")).toBe("settings-maintenance");
-  expect(readSettingsSection("#settings-notifications", "")).toBe("settings-hive");
+  // The operator's own preferences left Your Hive for You.
+  expect(readSettingsSection("#settings-notifications", "")).toBe("settings-you");
+  expect(readSettingsSection("#settings-presence", "")).toBe("settings-you");
+  expect(readSettingsSection("#settings-shortcuts", "")).toBe("settings-you");
+  expect(readSettingsSection("#settings-system", "")).toBe("settings-updates");
+  // The sections themselves keep their anchors.
+  expect(readSettingsSection("#settings-hive", "")).toBe("settings-hive");
+  expect(readSettingsSection("#settings-workers", "")).toBe("settings-workers");
+});
+
+/**
+ * Every rule about what happens without the operator, in one section.
+ *
+ * They were split between Workers, below the roster, and Your Hive, and which
+ * workers held raised access could only be read row by row on the roster.
+ */
+test("Authority holds every rule about what happens without the operator", () => {
+  const authority = SETTINGS_CARDS.filter((card) => card.section === "settings-authority").map((card) => card.id);
+  expect(authority).toEqual(expect.arrayContaining([
+    "settings-queen", "settings-queen-releases", "settings-check-gate", "settings-answers", "settings-worker-access",
+  ]));
+  expect(authority).toHaveLength(5);
+  expect(filterSettingsCards("authority").map((card) => card.id).sort()).toEqual([...authority].sort());
+  expect(SETTINGS_CARDS.filter((card) => card.section === "settings-hive").map((card) => card.id))
+    .toEqual(["settings-identity", "settings-apiary"]);
 });
 
 test("routes Jira callbacks to connections when no explicit anchor is present", () => {
@@ -126,8 +156,9 @@ test("finds the Queen releases setting by merge, deploy and the refusal", () => 
 });
 
 test("matches the section name too, so browsing by group still works", () => {
+  // "Worker access" matches by its own title; the other two by their section.
   expect(filterSettingsCards("access").map((card) => card.id))
-    .toEqual(["settings-access", "settings-remote"]);
+    .toEqual(["settings-worker-access", "settings-access", "settings-remote"]);
 });
 
 test("finds visible settings labels and multi-word queries without requiring a literal phrase", () => {

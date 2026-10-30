@@ -115,8 +115,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     onForceWorkerReload: vi.fn().mockResolvedValue(undefined),
     onReloadDevelopment: vi.fn().mockResolvedValue(undefined),
     onHiveIdentityChange: vi.fn(),
+    onOpenSection: vi.fn(),
   };
-  const { rerender } = render(<SettingsWorkspace {...props} section="settings-hive" />);
+  // Presence, alerts and keyboard are the operator's own preferences: "You".
+  const { rerender } = render(<SettingsWorkspace {...props} section="settings-you" />);
 
   // Section navigation lives in the rail now, with every other surface's, and
   // is covered at that level. This file covers what the workspace itself does.
@@ -141,8 +143,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   fireEvent.click(screen.getByRole("button", { name: "Enable this device" }));
   expect(onEnableNotifications).toHaveBeenCalledOnce();
 
-  // Queen's autonomy ceiling sits with the workers it governs.
-  rerender(<SettingsWorkspace {...props} section="settings-workers" onQueenPolicyChange={onQueenPolicyChange} />);
+  // Queen's autonomy ceiling sits with the other rules about what happens
+  // without the operator.
+  rerender(<SettingsWorkspace {...props} section="settings-authority" onQueenPolicyChange={onQueenPolicyChange} />);
   fireEvent.change(screen.getByLabelText("Reachable"), { target: { value: "advisory" } });
   expect(onQueenPolicyChange).toHaveBeenCalledWith({ at_hive: "coordinate", away: "advisory", night_watch: "local_execution" });
 
@@ -227,7 +230,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   rerender(
     <SettingsWorkspace
       {...minimalProps()}
-      section="settings-hive"
+      section="settings-you"
       colorTheme="light"
       onThemeChange={onThemeChange}
     />,
@@ -481,7 +484,7 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
     return ok({ type: "history_diagnostics", diagnostics: null });
   }));
 
-  render(<SettingsWorkspace {...minimalProps()} section="settings-workers" />);
+  render(<SettingsWorkspace {...minimalProps()} section="settings-authority" />);
 
   expect(await screen.findByText("Manual review only")).toBeInTheDocument();
   const toggle = screen.getByRole("checkbox", { name: "Automatic off" });
@@ -514,7 +517,7 @@ test("a Queen autonomy tier set by the Apiary is locked, and the others stay the
     night_watch: "advisory" as const,
     set_by_apiary: { at_hive: null, away: null, night_watch: "advisory" as const },
   };
-  render(<SettingsWorkspace {...minimalProps()} queenPolicy={queenPolicy} onQueenPolicyChange={onQueenPolicyChange} section="settings-workers" />);
+  render(<SettingsWorkspace {...minimalProps()} queenPolicy={queenPolicy} onQueenPolicyChange={onQueenPolicyChange} section="settings-authority" />);
 
   const nightWatch = screen.getByLabelText("Night Watch");
   expect(nightWatch).toBeDisabled();
@@ -545,7 +548,7 @@ test("routes an existing Queen decision to Needs you instead of repeating the re
     return ok({ type: "history_diagnostics", diagnostics: null });
   }));
 
-  render(<SettingsWorkspace {...minimalProps()} section="settings-workers" pendingQueenDecisionCount={1} onOpenQueenDecisions={onOpenQueenDecisions} />);
+  render(<SettingsWorkspace {...minimalProps()} section="settings-authority" pendingQueenDecisionCount={1} onOpenQueenDecisions={onOpenQueenDecisions} />);
 
   expect(await screen.findByText("Queen needs you")).toBeInTheDocument();
   expect(screen.getByText(/1 specific Queen decision is waiting in Needs you/)).toBeInTheDocument();
@@ -701,7 +704,7 @@ test("Queen status bounds a stalled sibling request after the other read fails",
     }
     return Promise.resolve(ok({ enabled: false, version: "0.1.0" }));
   }));
-  const view = render(<SettingsWorkspace {...minimalProps()} section="settings-workers" />);
+  const view = render(<SettingsWorkspace {...minimalProps()} section="settings-authority" />);
   await act(async () => { await Promise.resolve(); });
   expect(coordinatorSignal?.aborted).toBe(false);
   await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
@@ -756,6 +759,43 @@ test("worker creation draft survives section changes and settings filtering with
   expect(props.onCreateWorker).not.toHaveBeenCalled();
 });
 
+/**
+ * Authority lists who holds raised access; each worker's access is still set in
+ * its own row on the roster. Edit has to land on that row, not on the top of a
+ * roster thirty workers long.
+ */
+test("editing a worker from Authority opens Workers at that worker's row", () => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
+  const props = {
+    ...minimalProps(),
+    workers: [
+      { id: "w1", hive_id: "hive", name: "Hub", role: "worker" as const, provider: "claude_code" as const, workspace: "/hub", autostart: false, board_read: false, system_access: "none" as const, position: 0, active_session_id: null, running: false, attention_state: "resting" as const, created_at: 1, updated_at: 1 },
+      { id: "w2", hive_id: "hive", name: "Ops", role: "worker" as const, provider: "claude_code" as const, workspace: "/ops", autostart: false, board_read: false, system_access: "services" as const, position: 1, active_session_id: null, running: false, attention_state: "resting" as const, created_at: 1, updated_at: 1 },
+    ],
+  };
+  // jsdom has no layout, so it has no scrollIntoView either.
+  const scrolled = vi.fn();
+  Element.prototype.scrollIntoView = scrolled;
+  try {
+    const view = render(<SettingsWorkspace {...props} section="settings-authority" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Ops" }));
+    expect(props.onOpenSection).toHaveBeenCalledWith("settings-workers");
+
+    view.rerender(<SettingsWorkspace {...props} section="settings-workers" />);
+    const row = screen.getByRole("group", { name: "Worker Ops" });
+    expect(row).toHaveFocus();
+    expect(scrolled.mock.contexts).toEqual([row]);
+
+    // Shown once. Coming back to Workers later starts at the top as usual.
+    view.rerender(<SettingsWorkspace {...props} section="settings-authority" />);
+    view.rerender(<SettingsWorkspace {...props} section="settings-workers" />);
+    expect(scrolled).toHaveBeenCalledOnce();
+  } finally {
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  }
+});
+
 function minimalProps() {
   return {
     // Tests that exercise a specific card pass the section that now holds it.
@@ -767,7 +807,7 @@ function minimalProps() {
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
     onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(),
-    onChooseWorkerMark: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onRestartProviders: vi.fn(), onRestartForSettings: vi.fn(), onUpdateWorkerEngine: vi.fn(), onForceWorkerReload: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
+    onChooseWorkerMark: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onRestartProviders: vi.fn(), onRestartForSettings: vi.fn(), onUpdateWorkerEngine: vi.fn(), onForceWorkerReload: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(), onOpenSection: vi.fn(),
   startSurface: "tasks",
   onStartSurfaceChange: vi.fn(),
   onLock: vi.fn(),
@@ -813,7 +853,7 @@ test("chooses the screen Swarm opens on, for every device", () => {
   // like the theme beside it — a phone opening somewhere a desktop would not is
   // the thing this exists to stop.
   const onStartSurfaceChange = vi.fn();
-  render(<SettingsWorkspace {...minimalProps()} startSurface="tasks" onStartSurfaceChange={onStartSurfaceChange} />);
+  render(<SettingsWorkspace {...minimalProps()} section="settings-you" startSurface="tasks" onStartSurfaceChange={onStartSurfaceChange} />);
 
   const choice = screen.getByRole("combobox", { name: /Opening screen/ });
   expect(choice).toHaveValue("tasks");
@@ -831,7 +871,7 @@ test("keeps locking reachable without giving it a place in every header", () => 
   // Locking Swarm while leaving the machine unlocked is a rare thing to want,
   // so it is reachable rather than resident — here, and in the command palette.
   const onLock = vi.fn();
-  render(<SettingsWorkspace {...minimalProps()} onLock={onLock} />);
+  render(<SettingsWorkspace {...minimalProps()} section="settings-you" onLock={onLock} />);
 
   fireEvent.click(screen.getByRole("button", { name: "Lock" }));
 

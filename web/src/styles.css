@@ -1691,6 +1691,8 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .configured-worker { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; min-height: 58px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }
 .configured-worker[draggable="true"] { cursor: grab; }
 .configured-worker-dragging { opacity: .52; border-color: var(--accent); }
+/* Where Settings → Authority's access list lands. */
+.configured-worker:focus { outline: 2px solid var(--focus); outline-offset: 2px; }
 .drop-target-before { border-color: var(--accent) !important; background: color-mix(in srgb, var(--accent-soft) 62%, var(--panel)) !important; }
 .drop-target-before::before { position: absolute; z-index: 3; top: -6px; right: 8px; left: 8px; height: 3px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 78%, transparent); content: ""; }
 .configured-worker { position: relative; }
@@ -3033,6 +3035,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .check-gate-settings select { width: 100%; min-width: 0; }
 .check-gate-settings .check-gate-set-by-apiary { color: var(--warn-strong); font-size: .73rem; font-weight: 650; }
 .check-gate-settings .check-gate-detail { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.worker-access-settings { display: grid; gap: 10px; }
+.worker-access-settings > small { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.worker-access-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.worker-access-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.worker-access-list li > span { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.worker-access-list small { color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.worker-access-list .worker-capability-chip { white-space: normal; }
 .worker-model-settings, .terminal-history-settings { display: grid; gap: 10px; }
 .worker-remote-control-settings, .queen-releases-settings { display: grid; gap: 10px; }
 .worker-remote-control-settings .worker-autostart, .queen-releases-settings .worker-autostart { align-items: flex-start; }

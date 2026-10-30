@@ -294,6 +294,11 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
+/** The roster row Settings → Authority links to, so it can be shown and focused. */
+export function workerRowId(workerId: string): string {
+  return `worker-row-${workerId}`;
+}
+
 /** What a level is called where there is no room to explain it. */
 const SYSTEM_ACCESS_CHIP: Record<SystemAccess, string | undefined> = {
   none: undefined,
@@ -315,7 +320,7 @@ const SYSTEM_ACCESS_CHIP: Record<SystemAccess, string | undefined> = {
  * A badge on every row is a badge nobody reads; the point is that the few stand
  * out from the many.
  */
-function WorkerCapabilities({ worker }: { worker: Worker }) {
+export function WorkerCapabilities({ worker }: { worker: Worker }) {
   const access = SYSTEM_ACCESS_CHIP[worker.system_access] ?? undefined;
   if (!worker.board_read && !access) return null;
   return (
@@ -472,6 +477,8 @@ function WorkerPreferenceRow({ worker, workspaces, busy, first, last, managed, o
 
   return (
     <div
+      id={workerRowId(worker.id)}
+      tabIndex={-1}
       className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
       role="group"
       aria-label={`Worker ${worker.name}`}

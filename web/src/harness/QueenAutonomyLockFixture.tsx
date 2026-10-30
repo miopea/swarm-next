@@ -10,7 +10,7 @@ const resolved = () => Promise.resolve();
 export default function QueenAutonomyLockFixture() {
   return (
     <SettingsWorkspace
-      section="settings-workers"
+      section="settings-authority"
       busy={false}
       colorTheme="light"
       feedbackRevision={0}
@@ -55,6 +55,7 @@ export default function QueenAutonomyLockFixture() {
       onForceWorkerReload={resolved}
       onReloadDevelopment={resolved}
       onHiveIdentityChange={noop}
+      onOpenSection={noop}
     />
   );
 }
