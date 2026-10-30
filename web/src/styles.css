@@ -2344,7 +2344,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .destructive-action:hover:not(:disabled) { color: var(--panel); background: var(--bad); }
 .runtime-update:hover { border-color: var(--accent-strong); background: var(--panel-raised); }
 .runtime-update-worker_engine { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
-.runtime-update-provider { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.runtime-update-provider, .runtime-update-worker_settings { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .runtime-update-failed { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
 .runtime-update-spinner { width: 10px; height: 10px; border: 2px solid color-mix(in srgb, var(--accent-strong) 35%, transparent); border-top-color: var(--accent-strong); border-radius: 50%; animation: maintenance-spin .9s linear infinite; }
 .worker-repository { display: inline-flex; box-sizing: border-box; min-height: var(--pill-height); flex: 0 0 auto; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
@@ -3183,6 +3183,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-subsystem-card header strong { font-size: .94rem; }
 .runtime-subsystem-card p, .runtime-subsystem-card small { margin: 0; color: var(--muted); font-size: .77rem; line-height: 1.48; }
 .runtime-subsystem-card small strong { color: var(--text); }
+.settings-restart-workers { display: grid; gap: 3px; margin: 0; padding-left: 18px; color: var(--muted); font-size: .77rem; line-height: 1.48; overflow-wrap: anywhere; }
+.settings-restart-workers strong { color: var(--text); }
 .runtime-subsystem-card > button { justify-self: start; margin-top: auto; }
 .runtime-subsystem-restart { border-color: color-mix(in srgb, var(--danger) 48%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 40%, var(--panel)); }
 .runtime-subsystem-safe, .runtime-subsystem-current { border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good-soft) 34%, var(--panel)); }

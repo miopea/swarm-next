@@ -412,13 +412,80 @@ pub(super) async fn restart_all_workers(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let guard = state.worker_lifecycle.lock().await;
-    let store = task_store(&state)?;
-    let workers = store
+    let workers = task_store(&state)?
         .active_worker_sessions()
         .map_err(|error| task_store_error(&error))?
         .into_iter()
         .map(|session| session.worker_id)
         .collect::<Vec<_>>();
+    restart_workers(&state, guard, workers).await
+}
+
+/// The running workers still on an older value of a setting they read only
+/// when they start, and which settings (ADR 0132).
+#[derive(Debug, Serialize)]
+pub(super) struct SettingsRestartView {
+    workers: Vec<WorkerBehindSettingsView>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerBehindSettingsView {
+    worker_id: swarm_domain::WorkerId,
+    name: String,
+    settings: Vec<&'static str>,
+}
+
+pub(super) async fn settings_restart(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<SettingsRestartView>, ApiError> {
+    authorize(&state, &headers)?;
+    let workers = task_store(&state)?
+        .workers_behind_settings()
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .map(|worker| WorkerBehindSettingsView {
+            worker_id: worker.worker_id,
+            name: worker.name,
+            settings: worker
+                .settings
+                .into_iter()
+                .map(swarm_domain::RestartBoundSetting::as_str)
+                .collect(),
+        })
+        .collect();
+    Ok(Json(SettingsRestartView { workers }))
+}
+
+/// Restarts the running workers still on an older value of a setting they read
+/// only when they start, and no others (ADR 0132).
+///
+/// The list is read here, under the lifecycle lock, never taken from the
+/// caller: a page open since before a worker restarted would otherwise end the
+/// session that already carries the change.
+pub(super) async fn restart_workers_for_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let guard = state.worker_lifecycle.lock().await;
+    let workers = task_store(&state)?
+        .workers_behind_settings()
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .map(|worker| worker.worker_id)
+        .collect::<Vec<_>>();
+    restart_workers(&state, guard, workers).await
+}
+
+/// Ends each listed worker's session, keeping what it needs to resume, and
+/// starts it again.
+async fn restart_workers(
+    state: &Arc<AppState>,
+    guard: tokio::sync::MutexGuard<'_, ()>,
+    workers: Vec<swarm_domain::WorkerId>,
+) -> Result<Response, ApiError> {
+    let store = task_store(state)?;
     if workers.is_empty() {
         return Ok(Json(RestartWorkersResponse {
             restarted_workers: 0,
@@ -438,7 +505,7 @@ pub(super) async fn restart_all_workers(
         let Some(session_id) = profile.active_session_id else {
             continue;
         };
-        worker_runtime::stop_worker_session_preserving_context(&state, session_id).await?;
+        worker_runtime::stop_worker_session_preserving_context(state, session_id).await?;
         store
             .release_worker_session(session_id)
             .map_err(|error| task_store_error(&error))?;
@@ -450,7 +517,7 @@ pub(super) async fn restart_all_workers(
     // Released before reviving: starting a worker takes this same mutex, and it
     // is not reentrant.
     drop(guard);
-    let restarted_workers = revive_loaded_workers(&state, &workers).await;
+    let restarted_workers = revive_loaded_workers(state, &workers).await;
     state.control_room_notify.notify_waiters();
     Ok(Json(RestartWorkersResponse {
         restarted_workers,
@@ -1186,6 +1253,106 @@ mod tests {
     #[tokio::test]
     async fn direct_worker_stop_saves_selection_and_retains_binding_on_cleanup_failure() {
         assert_stop_route_preserves_context(true).await;
+    }
+
+    /// ⚠️ ONLY THE WORKERS BEHIND A SETTING ARE STOPPED (ADR 0132). Two run,
+    /// one started before Queen releases was turned on; the fake host fails the
+    /// first stop it is asked for, so nothing is restarted, and the one session
+    /// it was asked to stop has to be the one behind. The list is the store's,
+    /// not the caller's.
+    #[tokio::test]
+    async fn restarting_for_settings_stops_only_the_workers_behind_them() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("settings.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let mut sessions = Vec::new();
+        // "current" starts first, so restarting every worker would ask the host
+        // to stop it first.
+        for name in ["current", "behind"] {
+            let worker = store
+                .create_worker(
+                    name,
+                    ProviderKind::ClaudeCode,
+                    &format!("/workspace/{name}"),
+                    false,
+                    0,
+                )
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            store
+                .record_worker_launch_choices(
+                    worker.id,
+                    session,
+                    swarm_persistence::LaunchChoices {
+                        remote_control: Some(false),
+                        queen_releases: Some(name == "current"),
+                        system_access: Some(swarm_domain::SystemAccess::None),
+                    },
+                    0,
+                )
+                .unwrap();
+            sessions.push(session);
+        }
+        store.set_queen_releases(true, 10).unwrap();
+        let state = Arc::new(
+            AppState::default()
+                .with_task_store(store.clone())
+                .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture"),
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer fixture".parse().unwrap(),
+        );
+        let listed = settings_restart(State(state.clone()), headers.clone())
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(
+            serde_json::to_value(&listed).unwrap()["workers"],
+            serde_json::json!([{
+                "worker_id": store.active_worker_sessions().unwrap().iter()
+                    .find(|active| active.session_id == sessions[1]).unwrap().worker_id,
+                "name": "behind",
+                "settings": ["queen_releases"],
+            }])
+        );
+
+        let serve = async {
+            let mut asked_to_stop = None;
+            for kind in ["ping", "stop_retained"] {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut line = String::new();
+                stream.read_line(&mut line).await.unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["type"], kind);
+                let response = if kind == "ping" {
+                    serde_json::json!({"type":"pong","protocol_version":16})
+                } else {
+                    asked_to_stop = Some(request["session_id"].clone());
+                    serde_json::json!({"type":"error","code":"fixture","message":"stop refused"})
+                };
+                let mut response = serde_json::to_vec(&response).unwrap();
+                response.push(b'\n');
+                stream.get_mut().write_all(&response).await.unwrap();
+            }
+            asked_to_stop
+        };
+        let restart = restart_workers_for_settings(State(state), headers);
+        let (asked_to_stop, restarted) = tokio::join!(serve, restart);
+        assert!(restarted.is_err(), "the fixture refused the stop");
+        assert_eq!(asked_to_stop, Some(serde_json::json!(sessions[1])));
+        assert_eq!(
+            store.active_worker_sessions().unwrap().len(),
+            2,
+            "a refused stop releases no session"
+        );
     }
 
     async fn assert_stop_route_preserves_context(direct_stop: bool) {

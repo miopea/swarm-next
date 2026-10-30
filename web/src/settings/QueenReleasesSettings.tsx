@@ -48,7 +48,7 @@ export default function QueenReleasesSettings({ operatorToken }: { operatorToken
       {enabled === false && (
         <small className="queen-releases-detail">Off: a merge or deploy that Queen passes on is stopped by Claude's auto mode, and you are asked to approve it.</small>
       )}
-      <small className="queen-releases-detail">A change reaches each worker the next time it starts, and Queen at her next review.</small>
+      <small className="queen-releases-detail">A change reaches each worker the next time it starts, and Queen at her next review. Until then, the left panel lists the workers still on the old setting and can restart them.</small>
       {error && <p role="alert">{error}</p>}
     </section>
   );

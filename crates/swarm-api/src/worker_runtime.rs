@@ -300,7 +300,7 @@ pub(super) async fn start_worker_process_unlocked(
     } else {
         None
     };
-    write_claude_launch_settings(state, worker_id, profile.provider);
+    let launch_choices = write_claude_launch_settings(state, &profile);
     // The Hive's worker model, written after the grants because both share the
     // file and each owns only its own key (ADR 0116). A model that cannot be
     // applied must not stop a worker starting either: the start is recorded with
@@ -344,6 +344,7 @@ pub(super) async fn start_worker_process_unlocked(
         // Unrecorded reads as "not on the Hive's model", the honest direction.
         tracing::warn!(%error, "could not record the model this worker started with");
     }
+    record_launch_choices(task_store(state)?, worker_id, session_id, launch_choices);
     forget_worker_failure(state, worker_id).await;
     state.control_room_notify.notify_waiters();
     let profile = task_store(state)?
@@ -442,38 +443,81 @@ fn session_workspace(state: &AppState, worker_id: WorkerId, checkout: PathBuf) -
     }
 }
 
-/// The approved-command grants and the Remote Control choice, written beside a
+/// Records the choices a Claude worker's new session started with (ADR 0132).
+/// A record that cannot be written must not stop a worker that has started.
+fn record_launch_choices(
+    store: &swarm_persistence::TaskStore,
+    worker_id: WorkerId,
+    session_id: WorkerSessionId,
+    choices: Option<swarm_persistence::LaunchChoices>,
+) {
+    if let Some(choices) = choices
+        && let Err(error) = store.record_worker_launch_choices(
+            worker_id,
+            session_id,
+            choices,
+            crate::unix_timestamp(),
+        )
+    {
+        // Unrecorded is judged by when each setting last changed, which still
+        // names this worker if one changes after it started.
+        tracing::warn!(%error, "could not record the settings this worker started with");
+    }
+}
+
+/// The approved-command grants and the operator's choices, written beside a
 /// Claude worker's config before it starts. Each writer owns only its own key in
 /// the shared file; the model writer that follows owns another.
-fn write_claude_launch_settings(state: &AppState, worker_id: WorkerId, provider: ProviderKind) {
-    let Some(bridge) = state.agent_bridge.as_ref() else {
-        return;
-    };
-    if provider != ProviderKind::ClaudeCode {
-        return;
+///
+/// Returns what the launch carries, to be recorded once the session exists, so
+/// Swarm can say which running workers started before a choice changed (ADR
+/// 0132). `None` for a worker these choices do not reach.
+fn write_claude_launch_settings(
+    state: &AppState,
+    profile: &WorkerProfile,
+) -> Option<swarm_persistence::LaunchChoices> {
+    let bridge = state.agent_bridge.as_ref()?;
+    if profile.provider != ProviderKind::ClaudeCode {
+        return None;
     }
+    let worker_id = profile.id;
     // Refreshed on every start, so a grant approved since the last one takes
     // effect and one whose task has left the board stops existing. The host
     // finds this by deriving it from the MCP config path above; nothing needs
     // to be passed, which is what keeps this off the wire protocol.
-    if let Err(error) = bridge.ensure_worker_settings(worker_id) {
-        // A grant that cannot be written must not stop a worker starting. The
-        // worker then runs without it and is denied exactly as it is today,
-        // which is the safe direction and the state it was already in.
-        tracing::warn!(%error, "could not write the approved-command grants for this worker");
-    }
+    let system_access = match bridge.ensure_worker_settings(worker_id) {
+        Ok(_) => Some(profile.system_access),
+        Err(error) => {
+            // A grant that cannot be written must not stop a worker starting.
+            // The worker then runs without it and is denied exactly as it is
+            // today, which is the safe direction and the state it was already in.
+            tracing::warn!(%error, "could not write the approved-command grants for this worker");
+            None
+        }
+    };
     // Whether this worker connects to Remote Control (ADR 0122). A choice that
     // cannot be written leaves Claude's own default, which is where every
     // worker was before the setting existed.
-    if let Err(error) = bridge.apply_worker_remote_control(worker_id) {
-        tracing::warn!(%error, "could not write the Remote Control choice for this worker");
-    }
+    let remote_control = bridge
+        .apply_worker_remote_control(worker_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not write the Remote Control choice for this worker");
+            None
+        });
     // Whether Queen's review is enough to release code (ADR 0131). A choice
     // that cannot be written leaves the worker without the rule, which is where
     // every worker was before the setting existed.
-    if let Err(error) = bridge.apply_queen_releases(worker_id) {
-        tracing::warn!(%error, "could not write the Queen releases choice for this worker");
-    }
+    let queen_releases = bridge
+        .apply_queen_releases(worker_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not write the Queen releases choice for this worker");
+            None
+        });
+    Some(swarm_persistence::LaunchChoices {
+        remote_control,
+        queen_releases,
+        system_access,
+    })
 }
 
 fn provider_start_request(

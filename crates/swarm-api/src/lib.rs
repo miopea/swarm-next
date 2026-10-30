@@ -4985,6 +4985,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/runtime/workers/restart",
             post(maintenance::restart_all_workers),
         )
+        .route(
+            "/api/v1/runtime/settings-restart",
+            get(maintenance::settings_restart).post(maintenance::restart_workers_for_settings),
+        )
         .route("/api/v1/backups/database", get(backups::download_database))
         .route(
             "/api/v1/migrations/legacy/local",

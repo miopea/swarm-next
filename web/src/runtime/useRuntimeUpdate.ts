@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchDevelopmentRuntime, fetchHealth, fetchProviderCapabilities, fetchTerminalHostStatus } from "../api";
+import { fetchDevelopmentRuntime, fetchHealth, fetchProviderCapabilities, fetchSettingsRestart, fetchTerminalHostStatus } from "../api";
 import { nextRuntimeUpdates, type RuntimeUpdateSummary } from "./runtimeUpdates";
 import { useVisiblePolling } from "./useVisiblePolling";
 
@@ -31,17 +31,18 @@ export function useRuntimeUpdate(
 
   const poll = useCallback(async (signal: AbortSignal) => {
     if (!operatorToken) return;
-    const [health, host, development, providers] = await Promise.all([
+    const [health, host, development, providers, settingsRestart] = await Promise.all([
       fetchHealth(signal).catch(() => undefined),
       fetchTerminalHostStatus(operatorToken, signal).catch(() => undefined),
       fetchDevelopmentRuntime(operatorToken, signal).catch(() => undefined),
       fetchProviderCapabilities(operatorToken, signal).catch(() => undefined),
+      fetchSettingsRestart(operatorToken, signal).catch(() => undefined),
     ]);
     if (signal.aborted) return;
     // An API restart is unknown status, not a switch to a release installation.
     if (development) setDevelopmentMode(development.enabled);
     setUpdates((previous) =>
-      nextRuntimeUpdates(previous, health, host, development, providers ? providers.superseded ?? [] : undefined));
+      nextRuntimeUpdates(previous, health, host, development, providers ? providers.superseded ?? [] : undefined, settingsRestart?.workers));
   }, [operatorToken]);
 
   const refresh = useVisiblePolling(poll, Boolean(operatorToken), refreshMs);

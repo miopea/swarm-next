@@ -45,6 +45,8 @@ mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod queen_releases;
+mod settings_restart;
+pub use settings_restart::{LaunchChoices, WorkerBehindSettings};
 mod worker_model;
 mod worker_remote_control;
 pub use worker_model::WorkerModelSetting;
@@ -435,7 +437,10 @@ const COMMAND_GRANT_SCRIPT_SCHEMA_MARKER: i64 = 213;
 const COMMAND_REFUSAL_SCHEMA_MARKER: i64 = 214;
 /// Whether Queen's review is enough to release code (ADR 0131).
 const QUEEN_RELEASES_SCHEMA_MARKER: i64 = 215;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_RELEASES_SCHEMA_MARKER;
+/// What each Claude worker's launch carried of the settings it reads only at
+/// start (ADR 0132).
+const WORKER_LAUNCH_CHOICES_SCHEMA_MARKER: i64 = 216;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_LAUNCH_CHOICES_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4888,6 +4893,12 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < QUEEN_RELEASES_SCHEMA_MARKER {
         crate::queen_releases::migrate_queen_releases(transaction, QUEEN_RELEASES_SCHEMA_MARKER)?;
+    }
+    if schema_version < WORKER_LAUNCH_CHOICES_SCHEMA_MARKER {
+        crate::settings_restart::migrate_worker_launch_choices(
+            transaction,
+            WORKER_LAUNCH_CHOICES_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -11076,6 +11087,14 @@ mod tests {
             undo_sql: "DROP TABLE queen_release_settings;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'queen_release_settings'",
+        },
+        // What each Claude worker's launch carried (ADR 0132).
+        SchemaStep {
+            table: "worker_launch_choices",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_launch_choices;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'worker_launch_choices'",
         },
     ];
 
