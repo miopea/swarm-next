@@ -1580,7 +1580,15 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .delivery-state.delivered { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good-soft) 62%, transparent); }
 .delivery-state.queued, .delivery-state.dispatching { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 36%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 58%, transparent); }
 .delivery-state.uncertain { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 38%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 60%, transparent); }
-.settings-workspace { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); align-content: start; align-items: start; gap: 14px; min-width: 0; min-height: 0; padding: 26px; overflow-x: hidden; overflow-y: auto; }
+/* ⚠️ TWO COLUMNS ONLY WHERE TWO FIT. `repeat(2, minmax(280px, 1fr))` asked for
+   two 280px columns at any width, and the phone rule below only takes over at
+   680px. Between 681px and about 912px, beside the rail, the workspace is
+   narrower than the 626px that needs, so the right-hand card was cut off by
+   `overflow-x: hidden`; at 768px Queen releases lost half its text. Each
+   column is at least half the row, so there are never three, and falls to one
+   when half is under 280px. The 15px is the 14px gap plus 1px of slack, so
+   rounding can never turn exactly two into one. */
+.settings-workspace { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(280px, calc((100% - 15px) / 2)), 1fr)); align-content: start; align-items: start; gap: 14px; min-width: 0; min-height: 0; padding: 26px; overflow-x: hidden; overflow-y: auto; }
 .settings-section-nav { position: sticky; top: -12px; z-index: 5; grid-column: 1 / -1; display: flex; min-width: 0; min-height: 52px; align-items: center; gap: 6px; padding: 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; border: 1px solid var(--line); border-radius: var(--radius-md); background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 5px 18px color-mix(in srgb, var(--text) 7%, transparent); backdrop-filter: blur(12px); }
 .settings-section-nav button { flex: 0 0 auto; min-height: 34px; padding: 6px 11px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: .78rem; font-weight: 650; }
 .settings-section-nav button:hover, .settings-section-nav button:focus-visible { background: var(--soft); color: var(--text); }

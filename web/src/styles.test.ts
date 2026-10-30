@@ -416,6 +416,19 @@ test("the worker roster spans both columns from its wrapper, not from its card",
   );
 });
 
+/**
+ * Measured at 768px: the workspace beside the rail is 482px wide, two 280px
+ * columns need 626px, and the second column was clipped rather than wrapped.
+ * The phone rule only takes over at 680px, so the gap between is the grid's to
+ * handle.
+ */
+test("settings fall to one column wherever two would not fit", () => {
+  expect(stylesheet).toContain(
+    ".settings-workspace { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(280px, calc((100% - 15px) / 2)), 1fr));",
+  );
+  expect(stylesheet).not.toContain("grid-template-columns: repeat(2, minmax(280px, 1fr))");
+});
+
 test("spans a revealed task panel across the card instead of into a column", () => {
   // The Original report and Step 1 of 2 panels drew on top of each other and
   // clipped at the card's right edge. Both are wrapped in a plain div so they
