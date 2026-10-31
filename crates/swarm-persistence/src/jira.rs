@@ -650,7 +650,7 @@ impl TaskStore {
     }
 
     /// Jira's current description for each of these tasks that kept its own
-    /// when Jira was edited under a worker (ADR 0133), in one read.
+    /// when Jira's text changed under a worker (ADR 0133), in one read.
     ///
     /// A task whose description has since been made to match Jira's is left
     /// out, so editing the brief to adopt the change settles it without
@@ -1699,7 +1699,7 @@ fn sync_issue_description(
         params![
             task_id.to_string(),
             format!(
-                "Description edited in Jira {issue_key}; kept here because the task is taken \
+                "Jira {issue_key}'s description changed; kept here because the task is taken \
                  or closed. Jira's text is listed beside it until the task is unrouted."
             )
         ],

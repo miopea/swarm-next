@@ -76,7 +76,7 @@ the task is for.
 
 - Unrouted Jira-backed tasks carry Jira's current brief. Until this ships,
   whoever routes a Jira-backed task should hand the worker the live Jira text.
-- A worker holding a Jira-backed task sees the issue was rewritten the next
+- A worker holding a Jira-backed task sees that Jira's text changed the next
   time it reads its assignment. Nothing interrupts it mid-turn. This is the
   same reach an amendment has.
 - A description edited on this board is replaced the next time Jira's own
@@ -92,8 +92,12 @@ the task is for.
 - Refreshing a description changes the task's evidence revision. Any Queen
   assessment of that task reads as evidence changed, which is correct: its
   brief changed.
-- The conversion from Jira's rich text still drops issue links, mentions and
-  dates. That is a separate defect, filed as 01a18ee3.
+- Swarm's own reading of Jira's text can change too. Task 01a18ee3 stopped
+  dropping issue links, mentions and dates, so every issue holding one reads
+  differently at the next sync, whether or not anyone edited it. An unrouted
+  task takes the fuller text. A held task lists it once. That is why the
+  history row and the listing say Jira's text "changed" rather than "was
+  edited".
 
 ## Validation
 
