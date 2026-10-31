@@ -72,7 +72,7 @@ pub use provider::{
 };
 pub use provider_activity::{
     BackgroundWork, ProviderActivity, background_work, classify_provider_activity,
-    claude_restart_unknown,
+    claude_menu_asks, claude_restart_unknown,
 };
 pub use provider_interview::{
     NativeInterviewObservation, NativeInterviewOption, NativeInterviewPhase,

@@ -58,6 +58,44 @@ impl NativeInterviewQuestion {
             multi_select: question.multi_select,
         })
     }
+
+    /// Whether an answer to this captured question answers the decision's
+    /// question (ADR 0134).
+    ///
+    /// The wording, the header, the option labels in their order, and whether
+    /// several may be chosen must all be equal, because those are what an
+    /// answer names. The text under each option may differ: a worker often
+    /// writes it in the terminal and not on the card, and the operator who
+    /// answered in the terminal read the fuller one. Measured over 30 days to
+    /// 2026-10-31: every terminal answer that matched a card's question and
+    /// still left the card lit failed on that text alone.
+    #[must_use]
+    pub fn answers_decision(&self, decision: &crate::DecisionQuestion) -> bool {
+        Self::from_decision(decision).is_some_and(|card| {
+            card.question == self.question
+                && card.header == self.header
+                && card.multi_select == self.multi_select
+                && card
+                    .options
+                    .iter()
+                    .map(|option| &option.label)
+                    .eq(self.options.iter().map(|option| &option.label))
+        })
+    }
+}
+
+/// Whether a captured interview answers exactly the decision's questions, in
+/// their order (ADR 0134). See [`NativeInterviewQuestion::answers_decision`].
+#[must_use]
+pub fn native_interview_answers_decision(
+    captured: &[NativeInterviewQuestion],
+    decision: &[crate::DecisionQuestion],
+) -> bool {
+    captured.len() == decision.len()
+        && captured
+            .iter()
+            .zip(decision)
+            .all(|(captured, decision)| captured.answers_decision(decision))
 }
 
 #[cfg(test)]

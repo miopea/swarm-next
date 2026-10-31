@@ -702,7 +702,7 @@ enum Baseline {
 }
 
 /// Bounds transport observation without inferring whether a write landed.
-async fn coordination_request(
+pub(super) async fn coordination_request(
     client: &HostClient,
     request: &HostRequest,
 ) -> Result<Option<HostResponse>, swarm_terminal::IpcError> {

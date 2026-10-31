@@ -241,6 +241,58 @@ fn claude_menu_is_open(visible: &str) -> bool {
     footer_is_last && lines.take(12).any(is_numbered_choice)
 }
 
+/// Whether the Claude choice menu open on screen asks exactly `question`.
+///
+/// THE WORDS, NOT THE LAYOUT (ADR 0134). Claude draws an `AskUserQuestion`
+/// question as a bordered block of "│ text" rows above its options, wrapped to
+/// the terminal's width, and wrapping drops the space at each break. The rows
+/// are rejoined and compared word for word, so the same question matches at
+/// any width and a reworded one never does.
+///
+/// Swarm presses Esc on the strength of this answer, so every doubt reads as
+/// no: a menu that is not live, a question scrolled off the screen or taller
+/// than it, and a block that is not this menu's own all return false. The
+/// cost of a false no is an answer that waits, which is what happened before.
+#[must_use]
+pub fn claude_menu_asks(snapshot: &TerminalSnapshot, question: &str) -> bool {
+    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+    parser.process(&snapshot.bytes);
+    menu_asks(&parser.screen().contents(), question)
+}
+
+fn menu_asks(visible: &str, question: &str) -> bool {
+    claude_menu_is_open(visible)
+        && open_menu_question(visible)
+            .is_some_and(|shown| shown.split_whitespace().eq(question.split_whitespace()))
+}
+
+/// The bordered question block nearest above the menu's footer, rejoined.
+///
+/// The search stops at the second rule above the footer: the first separates
+/// the options from "Chat about this", the second is the menu's top border.
+/// A block beyond it belongs to the transcript, not to this menu.
+fn open_menu_question(visible: &str) -> Option<String> {
+    let mut rows = Vec::new();
+    let mut rules = 0;
+    for line in visible.lines().rev().map(str::trim) {
+        if let Some(text) = line.strip_prefix('│') {
+            rows.push(text.trim());
+        } else if !rows.is_empty() {
+            break;
+        } else if !line.is_empty() && line.chars().all(|glyph| glyph == '─') {
+            rules += 1;
+            if rules == 2 {
+                return None;
+            }
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    rows.reverse();
+    Some(rows.join(" "))
+}
+
 /// ⚠️ A PREFIX, because a narrow terminal truncates the END of the line.
 ///
 /// Measured across this Hive's journals: "esc to interrupt" 4486, but also
@@ -675,6 +727,96 @@ mod tests {
         );
         state.push(text.as_bytes().to_vec());
         state.snapshot()
+    }
+
+    const JAR: &str = "Which fictional jar should hold the spare buttons this week?";
+
+    /// A question's rows drawn the way Claude draws them: a dim border, each
+    /// word placed with a cursor move, wrapped at `width` columns.
+    fn drawn_question(question: &str, width: usize) -> String {
+        use std::fmt::Write as _;
+
+        let mut rows: Vec<Vec<&str>> = vec![Vec::new()];
+        let mut used = 0;
+        for word in question.split_whitespace() {
+            if used > 0 && used + 1 + word.len() > width {
+                rows.push(Vec::new());
+                used = 0;
+            }
+            used += usize::from(used > 0) + word.len();
+            rows.last_mut().unwrap().push(word);
+        }
+        let mut drawn = String::new();
+        for row in rows {
+            drawn.push_str("\x1b[2m│\x1b[3G\x1b[22m");
+            let mut column = 3;
+            for (index, word) in row.iter().enumerate() {
+                if index > 0 {
+                    let _ = write!(drawn, "\x1b[{column}G");
+                }
+                drawn.push_str(word);
+                column += word.len() + 1;
+            }
+            drawn.push_str("\r\n");
+        }
+        drawn
+    }
+
+    /// A live `AskUserQuestion` menu around already drawn question rows.
+    fn claude_menu(question_rows: &str) -> String {
+        format!(
+            "● Fictional earlier work.\r\n\r\n────────────────────\r\n ☐ Jar \r\n{question_rows}\
+             ❯ 1. Amber\r\n     Holds the most.\r\n  2. Teal\r\n  3. Type something.\r\n\
+             ────────────────────\r\n  4. Chat about this\r\n\r\n\
+             Enter to select · ↑/↓ to navigate · Esc to cancel"
+        )
+    }
+
+    /// ADR 0134: Swarm closes a question the operator answered in Needs you
+    /// only when the menu on screen asks it in the same words. Claude wraps
+    /// the question and drops the space at each break, so words are compared,
+    /// not rows.
+    #[test]
+    fn an_open_menu_is_recognised_by_its_question_at_any_width() {
+        for width in [80, 30, 12] {
+            let screen = snapshot(&claude_menu(&drawn_question(JAR, width)));
+            assert!(super::claude_menu_asks(&screen, JAR), "width {width}");
+            assert!(!super::claude_menu_asks(
+                &screen,
+                "Which fictional jar should hold the spare buttons today?"
+            ));
+            assert!(!super::claude_menu_asks(
+                &screen,
+                "Which fictional jar should hold the spare buttons"
+            ));
+        }
+    }
+
+    /// Every doubt reads as no, because a yes presses Esc on a worker's screen.
+    #[test]
+    fn a_question_that_is_not_the_live_menus_own_is_never_matched() {
+        let menu = claude_menu(&drawn_question(JAR, 30));
+        // Answered: Claude draws its composer below, so the footer is not last.
+        let answered = format!("{menu}\r\n● Answered.\r\n────\r\n❯ \r\n────");
+        assert!(!super::claude_menu_asks(&snapshot(&answered), JAR));
+        // No footer: not a live menu.
+        let cut = menu.rsplit_once("\r\n\r\nEnter").unwrap().0;
+        assert!(!super::claude_menu_asks(&snapshot(cut), JAR));
+        // A different live question, with ours still in the transcript above.
+        let lid = "Which fictional lid fits?";
+        let other = format!(
+            "{}{}",
+            drawn_question(JAR, 80),
+            claude_menu(&drawn_question(lid, 30))
+        );
+        assert!(super::claude_menu_asks(&snapshot(&other), lid));
+        assert!(!super::claude_menu_asks(&snapshot(&other), JAR));
+        // The live menu's own question scrolled away: the search stops at the
+        // menu's top border instead of reading ours out of the transcript.
+        let scrolled = format!("{}{}", drawn_question(JAR, 80), claude_menu(""));
+        assert!(!super::claude_menu_asks(&snapshot(&scrolled), JAR));
+        // An empty screen asks nothing.
+        assert!(!super::claude_menu_asks(&snapshot(""), JAR));
     }
 
     /// ⚠️ THE REPORTED SCREEN, read off this Hive at the moment the roster
