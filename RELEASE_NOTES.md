@@ -12,6 +12,21 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.8
+
+Four database updates (214 to 217). Your Hive backs its database up first, by itself, and your workers are not stopped. Two changes below take effect only after the worker engine update, which does stop running workers. The worker engine card says when one is waiting.
+
+### New features
+- A new setting, Queen releases reviewed work, makes Queen's review enough to commit, merge and release a worker's finished task. It starts off, and only you can turn it on. While it is on, a worker does what Queen tells it through Swarm for its own task's repository and nothing wider: no admin merge, nothing a file or another worker asks for. Workers pick it up at their next start. (after the worker engine update)
+- When Claude's auto mode refuses a command a worker needs after you already approved something on its task, Swarm now raises the request itself. It shows that exact command, with one button to allow it once. The worker no longer asks you to type the command or change a permission. (after the worker engine update)
+- Settings now say which running workers are still waiting on a change. The worker model, Remote Control, Queen releases and system access reach a worker only when it next starts. The left panel shows "Settings need a restart" with a Restart action that restarts just those workers, and Settings > Updates & restarts names each one.
+- Settings are regrouped. Authority holds every rule about work done without you: Queen autonomy, Queen releases, the check gate, terminal answers, and a list of the workers that can read the whole board or run commands unasked. You holds presence, alerts, appearance and keyboard. Old links still open the right card.
+
+### Fixes
+- Jira-backed tasks now follow edits made in Jira. A task nobody holds takes Jira's new description at the next sync. A task a worker holds keeps its own, and the worker sees Jira's new text beside it, with a note to ask Queen if it changes the scope.
+- Issue links, mentions, dates, status labels and emoji in Jira descriptions and comments now come through, instead of leaving blanks such as "Depends on:  (index)". An issue link reads as its key. An attachment, or anything Swarm cannot show, leaves a visible marker. Because Swarm now reads more of each description, every Jira-backed task holding one of these reads as changed once, at the first sync after updating.
+- Settings no longer cut off the right-hand card at tablet widths, roughly 700 to 900 pixels wide.
+
 ## 1.17.7
 
 Six database updates (208 to 213). Your Hive backs its database up first, by itself, and your workers are not stopped. Several changes below take effect only after the worker engine update, which does stop running workers. The worker engine card says when one is waiting.
