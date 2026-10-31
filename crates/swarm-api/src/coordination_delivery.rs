@@ -1248,23 +1248,44 @@ fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
 }
 
 /// Physical row boundaries may divide an otherwise exact marker. Preserve the
-/// original byte position for prompt ordering; ignore only CR/LF, never spaces
-/// or intervening text. This is display evidence, not permission to replay.
+/// original byte position for prompt ordering. This is display evidence, not
+/// permission to replay.
 fn visible_marker_position(snapshot: &[u8], marker: &[u8]) -> Option<usize> {
     let first = *marker.first()?;
-    snapshot
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(position, byte)| {
-            (*byte == first
-                && snapshot[position..]
-                    .iter()
-                    .filter(|byte| !matches!(**byte, b'\r' | b'\n'))
-                    .take(marker.len())
-                    .eq(marker.iter()))
-            .then_some(position)
-        })
+    (0..snapshot.len()).rev().find(|&position| {
+        snapshot[position] == first && marker_starts(&snapshot[position..], marker)
+    })
+}
+
+/// Whether `marker` is drawn from the start of `text`, rows allowed to divide it.
+///
+/// Within a row every byte must match, spaces included. A row break, with the
+/// blanks either side of it, stands for the marker's space where Claude
+/// word-wrapped and for nothing where a token was cut, because Claude drops the
+/// space at a wrap and indents the next row two columns. Measured 2026-10-31: a
+/// break between "restarted onto" and "Claude Code" left a restart notice in a
+/// worker's prompt, never submitted. Never intervening text.
+fn marker_starts(text: &[u8], marker: &[u8]) -> bool {
+    let (mut drawn, mut expected) = (0, 0);
+    while expected < marker.len() {
+        let blanks = text[drawn..]
+            .iter()
+            .take_while(|byte| matches!(byte, b' ' | b'\r' | b'\n'))
+            .count();
+        if text[drawn..drawn + blanks]
+            .iter()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
+        {
+            drawn += blanks;
+            expected += usize::from(marker[expected] == b' ');
+        } else if text.get(drawn) == Some(&marker[expected]) {
+            drawn += 1;
+            expected += 1;
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// A coordination message and the marker that proves it reached the screen.
@@ -2646,7 +2667,11 @@ mod tests {
         let session = WorkerSessionId::new();
         let marker = b"[Swarm delivery exact-id]";
         for (text, ours) in [
-            ("❯ [Swarm delivery\r\nexact-id]\r\nauto mode on", false),
+            // Claude's word wrap drops the space it breaks at and indents the
+            // next row (measured 2026-10-31), so this is the marker. Within a
+            // row a missing space is still a different text.
+            ("❯ [Swarm delivery\r\n  exact-id]\r\nauto mode on", true),
+            ("❯ [Swarm deliveryexact-id]\r\nauto mode on", false),
             ("❯ [Swarm delivery ex\r\nact-id]\r\nauto mode on", true),
             (
                 "❯ [Swarm delivery ex\r\notheract-id]\r\nauto mode on",
@@ -3207,6 +3232,43 @@ mod tests {
             visible_marker_position(b"01a070f6- 10c6-7e11-b324-f960469bf310", marker).is_none()
         );
         assert!(visible_marker_position(b"anything", b"").is_none());
+    }
+
+    #[test]
+    fn a_marker_with_spaces_survives_claudes_word_wrap() {
+        // Measured 2026-10-31 on a 48-column worker: Claude wrapped the restart
+        // notice between "restarted onto" and "Claude Code 2.1.316" and indented
+        // the next row two columns. Delivery never found its marker, so it never
+        // pressed Enter, and the notice sat in the prompt until the operator did.
+        let marker = b"restarted onto Claude Code 2.1.316";
+        let words = ["restarted", "onto", "Claude", "Code", "2.1.316"];
+        for wrap in 1..words.len() {
+            let (first_row, next_row) = words.split_at(wrap);
+            for row_end in ["", "   "] {
+                let rendered = format!(
+                    "❯ [Swarm] This session was {}{row_end}\n  {} to pick up an update.",
+                    first_row.join(" "),
+                    next_row.join(" ")
+                );
+                let position = rendered.find("restarted");
+                assert_eq!(
+                    visible_marker_position(rendered.as_bytes(), marker),
+                    position,
+                    "wrapped after {:?}",
+                    first_row.last()
+                );
+                assert!(!resting_prompt_follows_marker(rendered.as_bytes(), marker));
+                let submitted = format!("{rendered}\n\n❯ ");
+                assert!(resting_prompt_follows_marker(submitted.as_bytes(), marker));
+            }
+        }
+        // Within a row a space is still a byte to match, and a row break does
+        // not excuse text between the halves.
+        assert!(visible_marker_position(b"restarted onto  Claude Code 2.1.316", marker).is_none());
+        assert!(visible_marker_position(b"restarted ontoClaude Code 2.1.316", marker).is_none());
+        assert!(
+            visible_marker_position(b"restarted onto\n  and Claude Code 2.1.316", marker).is_none()
+        );
     }
 
     #[test]

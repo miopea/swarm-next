@@ -707,13 +707,62 @@ mod tests {
         }
     }
 
-    /// A fake terminal host holding one Claude session, which answers
-    /// `/restart` with `reply`, and reports `restart` as Claude's cached flag.
+    /// Wide enough that nothing typed into the fake prompt wraps.
+    #[cfg(unix)]
+    const WIDE: u16 = 240;
+
+    /// The prompt as Claude draws it, measured 2026-10-31 on a 48-column
+    /// worker: `❯ ` and the text, word-wrapped four columns short of the edge,
+    /// each later row indented two columns, and the gap between words drawn as
+    /// a cursor move rather than a space.
+    #[cfg(unix)]
+    fn claude_prompt(typed: &str, columns: u16) -> String {
+        use std::fmt::Write as _;
+
+        let width = usize::from(columns).saturating_sub(4);
+        let mut rows: Vec<Vec<&str>> = vec![Vec::new()];
+        let mut used = 0;
+        for word in typed.split(' ') {
+            if used > 0 && used + 1 + word.len() > width {
+                rows.push(Vec::new());
+                used = 0;
+            }
+            used += usize::from(used > 0) + word.len();
+            rows.last_mut().expect("there is always a row").push(word);
+        }
+        let mut drawn = String::from("❯ ");
+        for (index, row) in rows.iter().enumerate() {
+            if index > 0 {
+                drawn.push_str("\r\n  ");
+            }
+            let mut column = 3;
+            for (position, word) in row.iter().enumerate() {
+                if position > 0 {
+                    let _ = write!(drawn, "\u{1b}[{column}G");
+                }
+                drawn.push_str(word);
+                column += word.len() + 1;
+            }
+        }
+        drawn
+    }
+
+    /// The whole fake screen: the transcript, then the prompt holding `typed`.
+    #[cfg(unix)]
+    fn claude_screen(transcript: &str, typed: &str, columns: u16) -> Vec<u8> {
+        let prompt = claude_prompt(typed, columns);
+        format!("\u{1b}[2J\u{1b}[H{transcript}\r\n{prompt}\r\n  ? for shortcuts").into_bytes()
+    }
+
+    /// A fake terminal host holding one Claude session `columns` wide, which
+    /// answers `/restart` with `reply`, and reports `restart` as Claude's cached
+    /// flag.
     #[cfg(unix)]
     fn fake_host(
         session: WorkerSessionId,
         reply: Reply,
         restart: Option<bool>,
+        columns: u16,
     ) -> (
         tempfile::TempDir,
         crate::HostClient,
@@ -732,16 +781,13 @@ mod tests {
         tokio::spawn(async move {
             let mut terminal = CanonicalTerminalState::new(
                 JournalLimits::new(64 * 1024, 64),
-                TerminalSize::new(30, 240),
+                TerminalSize::new(30, columns),
             );
             let mut transcript = String::from(reply.screen_before());
             let mut typed = String::new();
             let mut running = OLDER.to_owned();
             let redraw = |terminal: &mut CanonicalTerminalState, transcript: &str, typed: &str| {
-                terminal.push(
-                    format!("\u{1b}[2J\u{1b}[H{transcript}\r\n❯ {typed}\r\n  ? for shortcuts")
-                        .into_bytes(),
-                );
+                terminal.push(claude_screen(transcript, typed, columns));
             };
             redraw(&mut terminal, &transcript, &typed);
             loop {
@@ -862,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn a_resting_worker_is_restarted_onto_the_update_and_told_to_carry_on() {
         let session = WorkerSessionId::new();
-        let (_directory, client, submitted) = fake_host(session, Reply::Moves, None);
+        let (_directory, client, submitted) = fake_host(session, Reply::Moves, None, WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
@@ -885,13 +931,40 @@ mod tests {
         );
     }
 
+    /// The operator's report, 2026-10-31: on a 48-column worker Claude wraps
+    /// the notice inside the words delivery looks for. It must still be seen,
+    /// and Enter pressed, rather than left in the prompt.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_carry_on_is_submitted_when_a_narrow_prompt_wraps_it() {
+        let session = WorkerSessionId::new();
+        let (_directory, client, submitted) = fake_host(session, Reply::Moves, None, 48);
+        let (state, observed) = hive_with_working_worker(client, session);
+        let wrapped = claude_prompt(
+            std::str::from_utf8(&carry_on_message(Some("2.1.310")).bytes)
+                .unwrap()
+                .trim_end_matches('\r'),
+            48,
+        );
+        assert!(
+            wrapped.contains("restarted\u{1b}[38Gonto\r\n  Claude"),
+            "the fixture must wrap inside the marker: {wrapped:?}"
+        );
+
+        assert_eq!(advance(&state, &observed).await, 1);
+        assert_eq!(advance(&state, &observed).await, 0);
+        let sent = submitted.lock().unwrap();
+        assert_eq!(sent.len(), 2, "the notice was typed but never submitted");
+        assert!(sent[1].starts_with("[Swarm] This session was restarted onto Claude Code 2.1.310"));
+    }
+
     /// Claude refused, so the worker is still behind. It is not asked again on
     /// every rest; the Restart button is what asks again.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_refused_restart_is_not_repeated_until_the_operator_asks() {
         let session = WorkerSessionId::new();
-        let (_directory, client, submitted) = fake_host(session, Reply::Refuses, None);
+        let (_directory, client, submitted) = fake_host(session, Reply::Refuses, None, WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
@@ -911,7 +984,7 @@ mod tests {
     #[tokio::test]
     async fn a_switched_off_restart_is_never_typed() {
         let session = WorkerSessionId::new();
-        let (_directory, client, submitted) = fake_host(session, Reply::Unknown, Some(false));
+        let (_directory, client, submitted) = fake_host(session, Reply::Unknown, Some(false), WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 0);
@@ -931,7 +1004,7 @@ mod tests {
     #[tokio::test]
     async fn claudes_unknown_command_answer_ends_in_place_updates_for_the_release() {
         let session = WorkerSessionId::new();
-        let (_directory, client, submitted) = fake_host(session, Reply::Unknown, None);
+        let (_directory, client, submitted) = fake_host(session, Reply::Unknown, None, WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
@@ -967,7 +1040,7 @@ mod tests {
     async fn a_flag_that_reads_on_outranks_an_old_answer_on_screen() {
         let session = WorkerSessionId::new();
         let (_directory, client, submitted) =
-            fake_host(session, Reply::MovesPastAnOldAnswer, Some(true));
+            fake_host(session, Reply::MovesPastAnOldAnswer, Some(true), WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
@@ -985,7 +1058,7 @@ mod tests {
     #[tokio::test]
     async fn an_answer_still_on_screen_is_read_before_asking_again() {
         let session = WorkerSessionId::new();
-        let (directory, client, submitted) = fake_host(session, Reply::Unknown, None);
+        let (directory, client, submitted) = fake_host(session, Reply::Unknown, None, WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
         assert_eq!(advance(&state, &observed).await, 1);
 
@@ -1005,7 +1078,7 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_is_not_read_as_a_missing_command() {
         let session = WorkerSessionId::new();
-        let (_directory, client, _submitted) = fake_host(session, Reply::Refuses, None);
+        let (_directory, client, _submitted) = fake_host(session, Reply::Refuses, None, WIDE);
         let (state, observed) = hive_with_working_worker(client, session);
 
         assert_eq!(advance(&state, &observed).await, 1);
