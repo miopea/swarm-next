@@ -1,4 +1,5 @@
 mod agent;
+mod answered_question_close;
 mod attach;
 mod attachments;
 mod auth;
@@ -496,6 +497,8 @@ pub struct AppState {
     /// When this Hive last looked at which workers were busy, so the next look
     /// can credit the time between (ADR 0114 addendum).
     busy_sampled_at: Arc<std::sync::Mutex<Option<i64>>>,
+    /// Decisions whose question Swarm has pressed Esc on (ADR 0134).
+    answered_questions: Arc<answered_question_close::AnsweredQuestions>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
@@ -643,6 +646,7 @@ impl AppState {
             health_shipping: fleet_health::SharedHealthShipping::default(),
             usage_shipping: apiary_usage::SharedUsageShipping::default(),
             busy_sampled_at: Arc::new(std::sync::Mutex::new(None)),
+            answered_questions: Arc::default(),
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
@@ -2937,7 +2941,31 @@ impl AppState {
             |delivery| (delivery.session_id, decision_delivery_message(delivery)),
         )
         .await;
-        for (delivery, submission) in settled {
+        for (delivery, mut submission) in settled {
+            // Held behind a question? If it is this decision's own question,
+            // the operator has already answered it: close it and deliver now
+            // rather than leave the answer waiting behind it (ADR 0134).
+            if matches!(
+                submission,
+                Ok(TerminalSubmission::Deferred(
+                    coordination_delivery::DeferralReason::ProviderAwaitingInput
+                ))
+            ) && answered_question_close::close_answered_question(
+                store,
+                client,
+                &self.answered_questions,
+                &delivery,
+            )
+            .await
+            {
+                submission = submit_coordination_message(
+                    store,
+                    client,
+                    delivery.session_id,
+                    decision_delivery_message(&delivery),
+                )
+                .await;
+            }
             let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
                     clear_held_delivery_refusals(

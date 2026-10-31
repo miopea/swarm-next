@@ -135,11 +135,7 @@ impl TaskStore {
         let questions: Vec<swarm_domain::DecisionQuestion> =
             serde_json::from_str(&questions.ok_or(NativeInterviewStoreError::Invalid)?)
                 .map_err(|_| NativeInterviewStoreError::Invalid)?;
-        let native: Option<Vec<_>> = questions
-            .iter()
-            .map(swarm_domain::NativeInterviewQuestion::from_decision)
-            .collect();
-        if native.as_ref() != Some(&source.questions) {
+        if !swarm_domain::native_interview_answers_decision(&source.questions, &questions) {
             return Err(NativeInterviewStoreError::Invalid);
         }
         tx.execute(
@@ -471,8 +467,9 @@ mod tests {
                 .unwrap()
                 .id
         };
+        // Reworded, not re-described: option descriptions may differ (ADR 0134).
         let mut changed = question.clone();
-        changed.option_descriptions.clear();
+        changed.question.push_str(" Or a different one?");
         let changed_id = create(&changed);
         assert!(matches!(
             store.bind_native_interview(source.id, changed_id, worker, source.session_id),

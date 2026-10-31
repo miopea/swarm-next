@@ -111,17 +111,27 @@ mod tests {
         source: &NativeInterviewEvidence,
     ) -> swarm_domain::DecisionRequestId {
         let _ = source;
-        let question = swarm_domain::DecisionQuestion {
-            header: "Jar".into(),
-            question: "Which jar?".into(),
-            options: vec!["Amber".into(), "Blue".into()],
-            option_descriptions: [
-                ("Amber".to_owned(), "Keep closed".to_owned()),
-                ("Blue".to_owned(), "Do not move".to_owned()),
-            ]
-            .into(),
-            multi_select: false,
-        };
+        pending_decision_asking(
+            store,
+            &swarm_domain::DecisionQuestion {
+                header: "Jar".into(),
+                question: "Which jar?".into(),
+                options: vec!["Amber".into(), "Blue".into()],
+                option_descriptions: [
+                    ("Amber".to_owned(), "Keep closed".to_owned()),
+                    ("Blue".to_owned(), "Do not move".to_owned()),
+                ]
+                .into(),
+                multi_select: false,
+            },
+        )
+    }
+
+    /// A pending decision asking `question`, by the fixture's worker.
+    fn pending_decision_asking(
+        store: &TaskStore,
+        question: &swarm_domain::DecisionQuestion,
+    ) -> swarm_domain::DecisionRequestId {
         // ensure_queen is idempotent, so this is the same worker the fixture
         // bound the session to.
         let worker = store.ensure_queen("/fictional").unwrap().id;
@@ -139,7 +149,7 @@ mod tests {
                 suggested_action: "Choose",
                 allowed_actions: &[],
                 operator_actions: &[],
-                questions: std::slice::from_ref(&question),
+                questions: std::slice::from_ref(question),
                 deadline: None,
                 requested_command: None,
                 requested_script: None,
@@ -299,6 +309,78 @@ mod tests {
                 store.get_decision_request(decision).unwrap().state,
                 swarm_domain::DecisionRequestState::Pending,
                 "neither may be resolved on a guess"
+            );
+        }
+    }
+
+    /// ADR 0134: the card wrote nothing under its options, or wrote something
+    /// else, while the question in the terminal explained each one. Measured
+    /// 2026-10-27: a card stayed lit 42 minutes after the operator answered in
+    /// the terminal. Wording and options match, so the answer settles the
+    /// card.
+    #[test]
+    fn a_terminal_answer_settles_a_card_whose_option_descriptions_differ() {
+        let card = |descriptions: &[(&str, &str)]| swarm_domain::DecisionQuestion {
+            header: "Jar".into(),
+            question: "Which jar?".into(),
+            options: vec!["Amber".into(), "Blue".into()],
+            option_descriptions: descriptions
+                .iter()
+                .map(|(label, text)| ((*label).to_owned(), (*text).to_owned()))
+                .collect(),
+            multi_select: false,
+        };
+        for descriptions in [vec![], vec![("Amber", "Only on Tuesdays")]] {
+            let store = TaskStore::in_memory().unwrap();
+            let mut source = fixture(&store);
+            source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+            let service = TaskService::new(store.clone());
+            let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+            let decision = pending_decision_asking(&store, &card(&descriptions));
+
+            assert_eq!(
+                service
+                    .resolve_decision_from_native_answer(source.id, 101)
+                    .unwrap(),
+                NativeAnswerLink::Resolved,
+                "card descriptions {descriptions:?}"
+            );
+            let resolved = store.get_decision_request(decision).unwrap();
+            assert_eq!(resolved.state, swarm_domain::DecisionRequestState::Resolved);
+            assert_eq!(resolved.resolution_answers["Jar"], vec!["Amber".to_owned()]);
+        }
+
+        // Different wording or options is a different question, as before.
+        for changed in [
+            swarm_domain::DecisionQuestion {
+                question: "Which jar today?".into(),
+                ..card(&[])
+            },
+            swarm_domain::DecisionQuestion {
+                options: vec!["Amber".into(), "Green".into()],
+                ..card(&[])
+            },
+            swarm_domain::DecisionQuestion {
+                multi_select: true,
+                ..card(&[])
+            },
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let mut source = fixture(&store);
+            source.final_result = Some(swarm_domain::NativeInterviewFinalResult::ExactBatch);
+            let service = TaskService::new(store.clone());
+            let _ = service.retain_native_sources(std::slice::from_ref(&source), 100);
+            let decision = pending_decision_asking(&store, &changed);
+
+            assert_ne!(
+                service
+                    .resolve_decision_from_native_answer(source.id, 101)
+                    .unwrap(),
+                NativeAnswerLink::Resolved
+            );
+            assert_eq!(
+                store.get_decision_request(decision).unwrap().state,
+                swarm_domain::DecisionRequestState::Pending
             );
         }
     }
@@ -728,8 +810,8 @@ impl TaskService {
     ///
     /// The retain pass knows a source, not a decision — a captured interview
     /// carries no decision id until bind writes one. So the candidate set is
-    /// this worker's PENDING decisions, narrowed to those whose questions equal
-    /// the captured snapshot exactly.
+    /// this worker's PENDING decisions, narrowed to those the captured
+    /// questions answer: the same wording and options, in order (ADR 0134).
     ///
     /// ⚠️ EXACTLY ONE, OR NOTHING. Two pending decisions for one worker with
     /// identical questions is a real shape — the same template asked twice —
@@ -804,8 +886,8 @@ impl TaskService {
         Ok(outcome)
     }
 
-    /// This worker's pending decisions whose questions equal the captured
-    /// snapshot exactly, in the order the store returned them.
+    /// This worker's pending decisions the captured questions answer (ADR
+    /// 0134), in the order the store returned them.
     fn decisions_matching_native_answer(
         &self,
         stored: &swarm_persistence::StoredNativeInterview,
@@ -820,12 +902,10 @@ impl TaskService {
                 // label would ask whether an answer that does not exist matches.
                 request.state == swarm_domain::DecisionRequestState::Pending
                     && request.questions_convert_for_a_terminal()
-                    && request
-                        .questions
-                        .iter()
-                        .map(swarm_domain::NativeInterviewQuestion::from_decision)
-                        .collect::<Option<Vec<_>>>()
-                        .is_some_and(|converted| converted == stored.source.questions)
+                    && swarm_domain::native_interview_answers_decision(
+                        &stored.source.questions,
+                        &request.questions,
+                    )
             })
             .map(|request| request.id)
             .collect())
@@ -907,8 +987,25 @@ impl TaskService {
             Err(_) => return Ok(NativeAnswerLink::NoLongerApplicable),
         };
 
+        // Each statement names the card's question as the card asked it. The
+        // terminal may have shown different option descriptions (ADR 0134),
+        // and resolution compares statements with the card, not the screen.
+        let card = match self.store.get_decision_request(decision_id) {
+            Ok(card) => card,
+            Err(swarm_persistence::TaskStoreError::DecisionNotFound) => {
+                return Ok(NativeAnswerLink::NoLongerApplicable);
+            }
+            Err(error) => return Err(error),
+        };
+        if !swarm_domain::native_interview_answers_decision(
+            &stored.source.questions,
+            &card.questions,
+        ) {
+            return Ok(NativeAnswerLink::NoLongerApplicable);
+        }
+
         let mut ids = Vec::with_capacity(stored.source.questions.len());
-        for question in &stored.source.questions {
+        for (question, asked) in stored.source.questions.iter().zip(&card.questions) {
             let Some(answer) = stored.source.answers.get(&question.question) else {
                 return Ok(NativeAnswerLink::Incomplete);
             };
@@ -919,7 +1016,7 @@ impl TaskService {
                 continue;
             }
             let Some(evidence) = swarm_domain::OperatorAnswerEvidence::new(
-                decision_target(decision_id, worker, session, question),
+                decision_target(decision_id, worker, session, asked),
                 answer.clone(),
                 swarm_domain::OperatorAnswerConsumption::Confirmed,
             ) else {
@@ -988,33 +1085,23 @@ fn terminal_answer_note(source: &NativeInterviewEvidence) -> String {
     format!("{}{CUT}", &note[..end])
 }
 
-/// The exact target a statement must bind to.
+/// The exact target a statement must bind to: the card's question, as the card
+/// asked it (ADR 0134).
 ///
-/// Total on purpose: every captured question maps to a decision question, and
-/// whether it matches the PENDING decision is settled by bind, which compares
-/// the whole snapshot. Returning an Option here would imply a second opinion
-/// about applicability that this function is not entitled to.
+/// Total on purpose: whether the capture answers the PENDING decision is
+/// settled by bind, and checked again by the caller. Returning an Option here
+/// would imply a second opinion about applicability that this function is not
+/// entitled to.
 fn decision_target(
     decision_id: swarm_domain::DecisionRequestId,
     worker_id: swarm_domain::WorkerId,
     session_id: swarm_domain::WorkerSessionId,
-    question: &swarm_domain::NativeInterviewQuestion,
+    question: &swarm_domain::DecisionQuestion,
 ) -> swarm_domain::OperatorAnswerTarget {
     swarm_domain::OperatorAnswerTarget {
         decision_id,
         worker_id,
         session_id,
-        question: swarm_domain::DecisionQuestion {
-            header: question.header.clone(),
-            question: question.question.clone(),
-            options: question.options.iter().map(|o| o.label.clone()).collect(),
-            option_descriptions: question
-                .options
-                .iter()
-                .filter(|o| !o.description.is_empty())
-                .map(|o| (o.label.clone(), o.description.clone()))
-                .collect(),
-            multi_select: question.multi_select,
-        },
+        question: question.clone(),
     }
 }
