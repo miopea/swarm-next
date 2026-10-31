@@ -18665,8 +18665,19 @@ mod tests {
             first_json["events"][0]["task"]["title"],
             "Prepare the shared release brief"
         );
-        let retry = app.oneshot(request()).await.unwrap();
-        assert_eq!(response_json(retry).await, first_json);
+        // A retry returns the same page, except for the second it was built
+        // in: two requests that straddle a second boundary differ there and
+        // nowhere else, so that field is checked to move forward, not to match.
+        let mut retry_json = response_json(app.oneshot(request()).await.unwrap()).await;
+        let mut first_page = first_json.clone();
+        let built = |page: &mut serde_json::Value| {
+            page.as_object_mut()
+                .and_then(|page| page.remove("generated_at"))
+                .and_then(|at| at.as_i64())
+                .expect("a federation task page says when it was built")
+        };
+        assert!(built(&mut retry_json) >= built(&mut first_page));
+        assert_eq!(retry_json, first_page);
         let serialized = first_json.to_string();
         for forbidden in [
             "jira_status",
