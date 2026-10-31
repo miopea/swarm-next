@@ -3220,11 +3220,15 @@ impl AgentMcp {
     }
 
     /// Adds Jira's current text to each linked task that kept its own
-    /// description when Jira was edited under a worker (ADR 0133), in one read.
+    /// description when Jira's text changed under a worker (ADR 0133), in one
+    /// read.
     ///
     /// The worker reads its brief here and nowhere else, so this is the only
-    /// place telling it that the issue it is working was rewritten. The
+    /// place telling it that the issue it is working reads differently now. The
     /// description is not replaced: it governs what the work is for.
+    ///
+    /// "Changed", not "edited": the text also changes when Swarm reads more of
+    /// the same document, as it did once issue links stopped being dropped.
     fn with_jira_descriptions(
         &self,
         tasks: &[swarm_domain::Task],
@@ -3239,7 +3243,7 @@ impl AgentMcp {
                 object.insert(
                     "jira_description_change_note".into(),
                     json!(format!(
-                        "Jira {} was edited after this task was taken or closed. The \
+                        "Jira {}'s text changed after this task was taken or closed. The \
                          description above was kept, because it governs what this work is for \
                          and must not change under whoever holds it. `jira_description_change` is \
                          Jira's text now: read it before building. Where it changes the scope \

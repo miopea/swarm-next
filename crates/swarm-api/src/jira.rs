@@ -1440,6 +1440,48 @@ mod priority_tests {
     }
 }
 
+/// Containers that hold nothing of their own, so an empty one loses nothing.
+const DOCUMENT_CONTAINERS: &[&str] = &[
+    "doc",
+    "paragraph",
+    "heading",
+    "bulletList",
+    "orderedList",
+    "listItem",
+    "blockquote",
+    "codeBlock",
+    "rule",
+    "panel",
+    "expand",
+    "nestedExpand",
+    "table",
+    "tableRow",
+    "tableCell",
+    "tableHeader",
+    "mediaSingle",
+    "mediaGroup",
+    "caption",
+    "taskList",
+    "taskItem",
+    "decisionList",
+    "decisionItem",
+    "layoutSection",
+    "layoutColumn",
+];
+
+/// Jira's rich-text description as the plain text a worker reads.
+///
+/// ⚠️ A NODE WHOSE TEXT LIVES IN `attrs` IS NOT A `text` NODE, AND READING
+/// ONLY `text` NODES DROPPED EVERY ONE OF THEM. An issue key pasted into Jira
+/// becomes an `inlineCard` holding only a URL, so "Ready once ABC-102 and
+/// ABC-103 are done" reached the board as "Ready once  and  are done". 78
+/// such cards were found across 70 issues of one project in a fortnight, and
+/// nothing said anything was missing.
+///
+/// So each kind is written out from what it holds: an issue link as its key,
+/// any other link as its URL, a mention, date, status or emoji as its text.
+/// Anything whose text is unknown becomes a visible placeholder rather than
+/// nothing, because a gap a reader cannot see is worse than one they can.
 fn jira_document_text(value: &serde_json::Value) -> String {
     fn visit(value: &serde_json::Value, output: &mut String) {
         match value {
@@ -1451,22 +1493,29 @@ fn jira_document_text(value: &serde_json::Value) -> String {
             }
             serde_json::Value::Object(object) => {
                 let node_type = object.get("type").and_then(serde_json::Value::as_str);
-                if node_type == Some("text") {
-                    if let Some(text) = object.get("text").and_then(serde_json::Value::as_str) {
-                        output.push_str(text);
-                    }
-                    return;
-                }
-                if node_type == Some("hardBreak") {
-                    output.push('\n');
+                if node_type.is_some_and(|kind| write_leaf(kind, object, output)) {
                     return;
                 }
                 if let Some(content) = object.get("content") {
                     visit(content, output);
+                } else if let Some(kind) = node_type
+                    && !DOCUMENT_CONTAINERS.contains(&kind)
+                {
+                    output.push('[');
+                    output.push_str(kind);
+                    output.push_str(" not shown]");
                 }
                 if matches!(
                     node_type,
-                    Some("paragraph" | "heading" | "listItem" | "blockquote" | "codeBlock")
+                    Some(
+                        "paragraph"
+                            | "heading"
+                            | "listItem"
+                            | "blockquote"
+                            | "codeBlock"
+                            | "mediaSingle"
+                            | "mediaGroup"
+                    )
                 ) && !output.ends_with('\n')
                 {
                     output.push('\n');
@@ -1487,6 +1536,289 @@ fn jira_document_text(value: &serde_json::Value) -> String {
         boundary -= 1;
     }
     normalized[..boundary].trim_end().to_owned()
+}
+
+/// Writes a node that carries its own text instead of child content, and says
+/// whether it was one.
+fn write_leaf(
+    kind: &str,
+    node: &serde_json::Map<String, serde_json::Value>,
+    output: &mut String,
+) -> bool {
+    let attr = |name: &str| {
+        node.get("attrs")
+            .and_then(|attrs| attrs.get(name))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    match kind {
+        "text" => {
+            if let Some(text) = node.get("text").and_then(serde_json::Value::as_str) {
+                output.push_str(text);
+            }
+        }
+        "hardBreak" => output.push('\n'),
+        "inlineCard" => output.push_str(&card_text(node.get("attrs"))),
+        "blockCard" | "embedCard" => {
+            if !output.is_empty() && !output.ends_with('\n') {
+                output.push('\n');
+            }
+            output.push_str(&card_text(node.get("attrs")));
+            output.push('\n');
+        }
+        // Never the account id: it is not a name anyone knows.
+        "mention" => output.push_str(attr("text").unwrap_or("[mention]")),
+        "date" => output.push_str(
+            &attr("timestamp")
+                .and_then(document_date)
+                .unwrap_or_else(|| "[date]".to_owned()),
+        ),
+        "status" => output.push_str(attr("text").unwrap_or("[status]")),
+        "emoji" => output.push_str(
+            attr("text")
+                .or_else(|| attr("shortName"))
+                .unwrap_or("[emoji]"),
+        ),
+        "media" | "mediaInline" => match attr("alt") {
+            Some(alt) => {
+                output.push_str("[attachment: ");
+                output.push_str(alt);
+                output.push(']');
+            }
+            None => output.push_str("[attachment]"),
+        },
+        _ => return false,
+    }
+    true
+}
+
+/// A link card as the text a reader needs: an issue's key for a Jira issue
+/// link, else the URL, else the name its linked data gives.
+///
+/// Jira writes an issue link as `https://<site>/browse/ABC-102#icft=ABC-102`.
+/// The key is what the editor shows and what a worker searches for; the
+/// fragment is Jira's own bookkeeping.
+fn card_text(attrs: Option<&serde_json::Value>) -> String {
+    let field = |value: Option<&serde_json::Value>, name: &str| {
+        value
+            .and_then(|value| value.get(name))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    if let Some(url) = field(attrs, "url") {
+        return issue_key_from_url(&url).unwrap_or(url);
+    }
+    let data = attrs.and_then(|attrs| attrs.get("data"));
+    field(data, "name")
+        .or_else(|| field(data, "url"))
+        .unwrap_or_else(|| "[link]".to_owned())
+}
+
+fn issue_key_from_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let mut segments = parsed.path_segments()?;
+    if segments.next()? != "browse" {
+        return None;
+    }
+    let key = segments.next()?;
+    if segments.next().is_some_and(|rest| !rest.is_empty()) {
+        return None;
+    }
+    let (project, number) = key.split_once('-')?;
+    let valid = project.starts_with(|c: char| c.is_ascii_uppercase())
+        && project
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit());
+    valid.then(|| key.to_owned())
+}
+
+/// A date node's timestamp as an ISO date. Atlassian's reference shows epoch
+/// seconds and the editor writes milliseconds, so both are read; a date is a
+/// calendar day at UTC midnight, so it is formatted in UTC. A value of a
+/// hundred billion or more is milliseconds: as seconds it would be past the
+/// year 5000, and the only milliseconds it misreads fall before March 1973.
+fn document_date(timestamp: &str) -> Option<String> {
+    let value = timestamp.parse::<i64>().ok()?;
+    let seconds = if value.unsigned_abs() >= 100_000_000_000 {
+        value / 1000
+    } else {
+        value
+    };
+    chrono::DateTime::from_timestamp(seconds, 0).map(|date| date.format("%Y-%m-%d").to_string())
+}
+
+#[cfg(test)]
+mod document_text_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn paragraph(content: &serde_json::Value) -> serde_json::Value {
+        json!({ "type": "doc", "version": 1, "content": [{ "type": "paragraph", "content": content }] })
+    }
+
+    /// The live shape, read 2026-10-30: the key was the only
+    /// thing in the sentence a worker needed, and it was the thing dropped.
+    #[test]
+    fn an_issue_link_reads_as_its_key() {
+        let document = paragraph(&json!([
+            { "type": "text", "text": "Status: Ready once " },
+            { "type": "inlineCard", "attrs": { "url": "https://example.atlassian.net/browse/ABC-102#icft=ABC-102" } },
+            { "type": "text", "text": " and " },
+            { "type": "inlineCard", "attrs": { "url": "https://example.atlassian.net/browse/ABC-103#icft=ABC-103" } },
+            { "type": "text", "text": " are done." }
+        ]));
+        assert_eq!(
+            jira_document_text(&document),
+            "Status: Ready once ABC-102 and ABC-103 are done."
+        );
+    }
+
+    #[test]
+    fn any_other_link_reads_as_its_url_or_its_linked_name() {
+        let document = paragraph(&json!([
+            { "type": "inlineCard", "attrs": { "url": "https://github.com/example/app/pull/704" } },
+            { "type": "text", "text": " / " },
+            { "type": "inlineCard", "attrs": { "url": "https://example.atlassian.net/browse/ABC-102/extra" } },
+            { "type": "text", "text": " / " },
+            { "type": "inlineCard", "attrs": { "data": { "@type": "Document", "name": "Search design" } } },
+            { "type": "text", "text": " / " },
+            { "type": "inlineCard", "attrs": { "data": { "@type": "Document" } } }
+        ]));
+        assert_eq!(
+            jira_document_text(&document),
+            "https://github.com/example/app/pull/704 / \
+             https://example.atlassian.net/browse/ABC-102/extra / Search design / [link]"
+        );
+    }
+
+    #[test]
+    fn a_block_card_stands_on_its_own_line() {
+        let document = json!({ "type": "doc", "version": 1, "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Depends on:" }] },
+            { "type": "blockCard", "attrs": { "url": "https://example.atlassian.net/browse/ABC-101" } },
+            { "type": "embedCard", "attrs": { "url": "https://example.test/board", "layout": "wide" } },
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Then ship." }] }
+        ] });
+        assert_eq!(
+            jira_document_text(&document),
+            "Depends on:\nABC-101\nhttps://example.test/board\nThen ship."
+        );
+    }
+
+    /// The account id is an opaque identifier, not a name. Writing it in place
+    /// of a missing name would look like information and be none.
+    #[test]
+    fn a_mention_reads_as_its_name_and_never_its_account_id() {
+        let document = paragraph(&json!([
+            { "type": "text", "text": "Ask " },
+            { "type": "mention", "attrs": { "id": "557058:abc", "text": "@Bea Lopez" } },
+            { "type": "text", "text": " or " },
+            { "type": "mention", "attrs": { "id": "557058:def" } }
+        ]));
+        let text = jira_document_text(&document);
+        assert_eq!(text, "Ask @Bea Lopez or [mention]");
+        assert!(!text.contains("557058"));
+    }
+
+    #[test]
+    fn a_date_reads_as_its_calendar_day_whether_seconds_or_milliseconds() {
+        let document = paragraph(&json!([
+            { "type": "date", "attrs": { "timestamp": "1582152559" } },
+            { "type": "text", "text": " " },
+            { "type": "date", "attrs": { "timestamp": "1582070400000" } },
+            { "type": "text", "text": " " },
+            { "type": "date", "attrs": { "timestamp": "next week" } },
+            { "type": "text", "text": " " },
+            { "type": "date", "attrs": { "timestamp": "-9223372036854775808" } }
+        ]));
+        assert_eq!(
+            jira_document_text(&document),
+            "2020-02-19 2020-02-19 [date] [date]"
+        );
+    }
+
+    #[test]
+    fn a_status_reads_as_its_label() {
+        let document = paragraph(&json!([
+            { "type": "text", "text": "Design: " },
+            { "type": "status", "attrs": { "text": "In Progress", "color": "yellow", "localId": "a1" } },
+            { "type": "text", "text": ", copy: " },
+            { "type": "status", "attrs": { "color": "neutral" } }
+        ]));
+        assert_eq!(
+            jira_document_text(&document),
+            "Design: In Progress, copy: [status]"
+        );
+    }
+
+    #[test]
+    fn an_emoji_reads_as_itself_or_its_short_name() {
+        let document = paragraph(&json!([
+            { "type": "emoji", "attrs": { "shortName": ":grinning:", "text": "😀" } },
+            { "type": "emoji", "attrs": { "shortName": ":party_parrot:", "id": "atlassian-parrot" } }
+        ]));
+        assert_eq!(jira_document_text(&document), "😀:party_parrot:");
+    }
+
+    #[test]
+    fn an_attachment_is_marked_where_it_sat() {
+        let document = json!({ "type": "doc", "version": 1, "content": [
+            { "type": "mediaSingle", "content": [
+                { "type": "media", "attrs": { "type": "file", "id": "f1", "collection": "c", "alt": "results mock-up" } }
+            ] },
+            { "type": "paragraph", "content": [
+                { "type": "text", "text": "See " },
+                { "type": "mediaInline", "attrs": { "type": "file", "id": "f2", "collection": "c" } }
+            ] }
+        ] });
+        assert_eq!(
+            jira_document_text(&document),
+            "[attachment: results mock-up]\nSee [attachment]"
+        );
+    }
+
+    /// A kind added to Jira after this was written still leaves a mark.
+    #[test]
+    fn a_node_of_an_unknown_kind_is_marked_rather_than_dropped() {
+        let document = paragraph(&json!([
+            { "type": "text", "text": "Before " },
+            { "type": "inlineExtension", "attrs": { "extensionKey": "jira-macro" } },
+            { "type": "text", "text": " after" }
+        ]));
+        assert_eq!(
+            jira_document_text(&document),
+            "Before [inlineExtension not shown] after"
+        );
+    }
+
+    /// Empty structure carries nothing, so it must not be reported as missing.
+    #[test]
+    fn empty_structure_adds_no_placeholder() {
+        let document = json!({ "type": "doc", "version": 1, "content": [
+            { "type": "paragraph" },
+            { "type": "rule" },
+            { "type": "mediaSingle", "content": [
+                { "type": "media", "attrs": { "type": "file", "id": "f1", "collection": "c" } },
+                { "type": "caption" }
+            ] },
+            { "type": "paragraph", "content": [{ "type": "text", "text": "Only this." }] }
+        ] });
+        assert_eq!(jira_document_text(&document), "[attachment]\nOnly this.");
+    }
+
+    #[test]
+    fn the_description_bound_still_holds_with_cards_in_it() {
+        let card = json!({ "type": "inlineCard", "attrs": { "url": "https://example.atlassian.net/browse/ABC-102#icft=ABC-102" } });
+        let document = paragraph(&json!(vec![card; 20_000]));
+        let text = jira_document_text(&document);
+        assert!(text.len() <= MAX_ISSUE_DESCRIPTION_BYTES);
+        assert!(text.starts_with("ABC-102ABC-102"));
+    }
 }
 
 /// Validates what an operator typed, without contacting anything.
