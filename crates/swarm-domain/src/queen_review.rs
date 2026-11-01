@@ -291,6 +291,7 @@ impl QueenRunUncovered {
                                 state,
                                 title,
                                 obligation,
+                                next: moves_off_queens_list(obligation, state),
                             }),
                             None => uncovered.unavailable = true,
                         }
@@ -308,7 +309,42 @@ pub struct UncoveredQueenWork {
     pub state: TaskState,
     pub title: String,
     pub obligation: UncoveredObligation,
+    /// The moves that take a Draft or Review item off Queen's list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<&'static str>,
 }
+
+/// What takes an uncovered item off Queen's list, for the two states where she
+/// kept choosing something that does not (ADR 0135).
+///
+/// ⚠️ MEASURED 2026-11-01, after the first ADR 0135 fix: every run for three
+/// hours finished incomplete on the same three items. Two were Review tasks
+/// whose returned review the worker had answered, which hands the next move
+/// back to Queen. She answered with an ordinary message ("it stays with you")
+/// and an `insufficient_evidence` record each run, and neither moves anything.
+/// The list named the tasks but not the way out.
+///
+/// Other states and recovery items carry no hint here, because why they are
+/// Queen's depends on facts this list does not hold.
+#[must_use]
+pub const fn moves_off_queens_list(
+    obligation: UncoveredObligation,
+    state: TaskState,
+) -> Option<&'static str> {
+    match (obligation, state) {
+        (UncoveredObligation::Review, TaskState::Review) => Some(REVIEW_LEAVES_YOUR_LIST),
+        (UncoveredObligation::Review, TaskState::Draft) => Some(DRAFT_LEAVES_YOUR_LIST),
+        _ => None,
+    }
+}
+
+const REVIEW_LEAVES_YOUR_LIST: &str = "It stays yours until one of these happens. Approved and only waiting to ship: move it to awaiting_release. Finished and verified: completed. The worker still owes work or an answer: swarm_return_reviewed_work, which works again after they have answered an earlier return. Waits on another task: add that task as a prerequisite. Needs the operator's judgment: swarm_request_decision. A message or an insufficient_evidence record leaves it yours.";
+
+const DRAFT_LEAVES_YOUR_LIST: &str = "It stays yours until one of these happens. Make it ready and assign it if nobody holds it, or abandoned if it should not be done. Waits on another task: add that task as a prerequisite. Waits on the operator: ask once with swarm_request_decision, then act on the answer or cite it as an operator_deferral. An insufficient_evidence record leaves it yours.";
+
+/// Said when Queen messages the worker on a Review task that is still hers
+/// (ADR 0135). A message never changes who owes the next move.
+pub const A_MESSAGE_HANDS_NOTHING_BACK: &str = "This task is in Review and its next move is still yours: a message hands nothing back. If the worker owes more work or an answer, return it with swarm_return_reviewed_work, which works again after they have answered an earlier return. If it is approved and only waits to ship, move it to awaiting_release.";
 
 /// Which duty a run did not account for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -619,6 +655,86 @@ mod tests {
             |_| None,
         );
         assert_eq!((covered.total, covered.unavailable), (0, false));
+    }
+
+    /// Queen read three uncovered names every run for three hours and moved
+    /// none of them: the list said what was left, not how it leaves (ADR 0135).
+    #[test]
+    fn each_uncovered_draft_or_review_says_how_it_leaves_queens_list() {
+        let review = TaskId::new();
+        let draft = TaskId::new();
+        let blocked = TaskId::new();
+        let stalled = TaskId::new();
+        let uncovered = QueenRunUncovered::from_coverage(
+            [
+                (
+                    Some(QueenReviewCoverage::Missing {
+                        task_ids: vec![review, draft, blocked],
+                    }),
+                    UncoveredObligation::Review,
+                ),
+                (
+                    Some(QueenReviewCoverage::Missing {
+                        task_ids: vec![stalled],
+                    }),
+                    UncoveredObligation::Recovery,
+                ),
+            ],
+            |task_id| {
+                let state = if task_id == review {
+                    TaskState::Review
+                } else if task_id == draft {
+                    TaskState::Draft
+                } else if task_id == blocked {
+                    TaskState::Blocked
+                } else {
+                    TaskState::Review
+                };
+                Some((state, "Fixture".to_owned()))
+            },
+        );
+        let next = |id: TaskId| {
+            uncovered
+                .work
+                .iter()
+                .find(|item| item.task_id == id)
+                .expect("named")
+                .next
+        };
+
+        let review_moves = next(review).expect("a Review item names its exits");
+        for exit in [
+            "awaiting_release",
+            "swarm_return_reviewed_work",
+            "works again after they have answered",
+            "prerequisite",
+            "swarm_request_decision",
+            "A message or an insufficient_evidence record leaves it yours",
+        ] {
+            assert!(review_moves.contains(exit), "{exit}: {review_moves}");
+        }
+
+        let draft_moves = next(draft).expect("a Draft item names its exits");
+        // Ready alone leaves an unassigned task Queen's to route.
+        for exit in [
+            "ready",
+            "assign it if nobody holds it",
+            "abandoned",
+            "prerequisite",
+            "swarm_request_decision",
+            "operator_deferral",
+        ] {
+            assert!(draft_moves.contains(exit), "{exit}: {draft_moves}");
+        }
+        assert!(
+            !draft_moves.contains("blocked"),
+            "a draft cannot be blocked, so the hint must not offer it: {draft_moves}"
+        );
+
+        // Why other items are Queen's depends on facts this list does not
+        // hold, so they carry no hint rather than a wrong one.
+        assert_eq!(next(blocked), None);
+        assert_eq!(next(stalled), None, "a recovery item is not a review exit");
     }
 
     #[test]

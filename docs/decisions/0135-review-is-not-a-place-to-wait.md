@@ -115,3 +115,65 @@ Measured on the Keeper on 2026-11-01:
   (MCP): `uncovered` names the untriaged draft.
 - `a draft behind unfinished work says it is waiting, not awaiting triage` (web).
 - Not yet observed on a live Queen run.
+
+## Amendment, 2026-11-01: a message hands nothing back
+
+Decided by the operator, answering on task 01a1978e ("Yes, fix it").
+
+### What was observed after the first fix
+
+For about three hours after reload, drafts and reviews moved without the
+operator's help: 14 drafts went to Ready, 8 reviews to awaiting release, and 10
+were completed. Every Queen run still finished incomplete, and the new
+`uncovered` list named the same three tasks each time.
+
+- **Two were Review tasks Queen believed she had handed back.** She returned
+  them to their worker, and the worker answered: "not release-only, the rest is
+  not built". An answer hands the next move back to Queen, by design. She
+  replied with `swarm_message_worker` ("it stays with you") and recorded
+  insufficient evidence each run. Neither changes who owes the next move, and
+  nothing told her so.
+- **One was a draft that waits on the operator's word.** "What this does not
+  change" above already covers it: a resolved decision makes it an operator
+  deferral. Queen had not asked.
+
+The list said what was left, but not how each item leaves her list.
+
+### Decision
+
+1. **A message on Review work that is still Queen's says so.** The
+   `swarm_message_worker` reply carries the task's `next_move_owner`. When the
+   task is in Review and its next move is Queen's, `still_yours` says the
+   message hands nothing back. It names `swarm_return_reviewed_work`, which can
+   be used again after the worker answered an earlier return, and awaiting
+   release. The message is recorded before the task is read, so a failed read
+   only leaves these fields out.
+2. **Each uncovered Draft or Review item names its exits** in `next`:
+   - for Review: awaiting release, completed, a fresh return, a prerequisite, or
+     a decision;
+   - for Draft: ready, and assigned if nobody holds it, since unassigned Ready
+     work is still hers to route; or abandoned, a prerequisite, or one decision
+     whose answer she acts on or cites as an operator deferral.
+
+   Both hints say a message or an insufficient-evidence record leaves the task
+   hers. Other states and recovery items carry no hint, because why they are
+   Queen's depends on facts the list does not hold. The incomplete-finish reply
+   points at `next`.
+
+Moves, coverage and ownership are unchanged.
+
+### Validation
+
+- `each_uncovered_draft_or_review_says_how_it_leaves_queens_list` (domain):
+  - Review names all five exits.
+  - Draft names its exits and never offers "blocked".
+  - Blocked and recovery items carry no hint.
+- `a_message_on_review_work_that_is_still_queens_says_it_hands_nothing_back`
+  (MCP):
+  - silent while a return is open;
+  - after the worker answers, the reply says the task is still Queen's, and it
+    really is;
+  - a second return then hands the task to the worker.
+- The extended `unattended_queen_run_blocks_external_effects_and_closes_only_its_exact_marker`
+  (MCP): an uncovered draft carries `next`, and the reply points at it.
+- Not yet observed on a live Queen run.
