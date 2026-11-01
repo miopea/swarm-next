@@ -433,6 +433,8 @@ fn task_review_snapshot(
                 &assessment.run_id,
                 current_run_id.as_deref(),
                 revision == obligation.evidence_revision,
+                task.state,
+                task.next_move_owner,
             );
             Ok(swarm_domain::QueenReviewAssessmentEvidence {
                 assessment,
@@ -707,8 +709,8 @@ impl TaskStore {
             [&id],
             crate::task_from_row,
         )?;
-        if !input.can_record(task.state, task.next_move_owner) {
-            return Err(TaskStoreError::IntegrityFailure("this is not Queen-owned waiting work; route Ready work or use the existing dependency, decision and lifecycle commands".into()));
+        if let Some(reason) = input.refusal(task.state, task.next_move_owner) {
+            return Err(TaskStoreError::IntegrityFailure(reason.into()));
         }
         if let Some(sequence) = input.operator_activity_sequence {
             let genuine: bool = transaction.query_row(
@@ -853,11 +855,23 @@ pub(super) fn review_coverage(
             return Ok(QueenReviewCoverage::Unavailable);
         }
         let current = task_review_evidence(connection, task.id)?;
-        let saved: Option<(String, i64)> = connection.query_row(
-            "SELECT accepted_revision, times_seen FROM queen_task_review_receipts WHERE task_id=?1 AND kind IN ('operator_deferral','external_condition')",
-            rusqlite::params![task.id.to_string()], |row| Ok((row.get(0)?, row.get(1)?)),
+        let saved: Option<(String, i64, String)> = connection.query_row(
+            "SELECT accepted_revision, times_seen, kind FROM queen_task_review_receipts WHERE task_id=?1 AND kind IN ('operator_deferral','external_condition')",
+            rusqlite::params![task.id.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
-        if let Some((accepted_revision, times_seen)) = saved {
+        // ⚠️ A RECEIPT COVERS ONLY A STATE THAT STILL ACCEPTS ITS KIND. Approved
+        // work sat in Review behind "waiting on deploy" receipts recorded before
+        // ADR 0135 refused them there, and a receipt past the bound below would
+        // have kept covering it until the task moved.
+        let saved = saved.filter(|(_, _, kind)| {
+            let kind = if kind == "operator_deferral" {
+                QueenReviewDispositionKind::OperatorDeferral
+            } else {
+                QueenReviewDispositionKind::ExternalCondition
+            };
+            kind.covers(task.state, task.next_move_owner)
+        });
+        if let Some((accepted_revision, times_seen, _)) = saved {
             receipts.push(VerifiedQueenReviewReceipt {
                 task_id: task.id,
                 // ⚠️ THE BOUND, ON THE COVERAGE PATH TOO, and it reuses both the
@@ -2933,5 +2947,136 @@ mod tests {
             None,
             "work that MOVED is not parked, and nothing had to clear a flag"
         );
+    }
+
+    fn in_review(store: &TaskStore, title: &str) -> TaskId {
+        let task = store.create_task(title, "/workspace/demo").unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        task.id
+    }
+
+    fn uncovered(store: &TaskStore, run_id: &str) -> Vec<TaskId> {
+        match store.queen_run_review_coverage(run_id).unwrap() {
+            QueenReviewCoverage::Missing { task_ids } => task_ids,
+            other => panic!("expected uncovered work, got {other:?}"),
+        }
+    }
+
+    /// Measured 2026-11-01: approved work sat in Review behind a fresh "waiting
+    /// on deploy" receipt every run, and each one covered it (ADR 0135).
+    #[test]
+    fn approved_work_cannot_wait_in_review_on_an_outside_condition() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = in_review(&store, "Approved fixture change");
+        let run_id = start_review(&store, 100);
+        let input = QueenReviewDispositionInput {
+            task_id: task,
+            run_id: run_id.clone(),
+            expected_revision: store
+                .queen_task_review_evidence(task)
+                .unwrap()
+                .evidence_revision,
+            kind: QueenReviewDispositionKind::ExternalCondition,
+            condition: "Fixture PR is approved and waits for the fixture deploy".into(),
+            evidence: "Read the fictional pull request".into(),
+            source: "Fictional pull request".into(),
+            operator_activity_sequence: None,
+            operator_decision_id: None,
+        };
+        let refused = store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .expect_err("an outside wait is refused on Review");
+        assert!(
+            refused.to_string().contains("awaiting_release"),
+            "the refusal names where approved work goes: {refused}"
+        );
+
+        // A receipt written before the rule -- this run, this exact revision,
+        // already past the repetition bound -- must not keep covering the task,
+        // and Queen's snapshot must not call it covered either, or the task
+        // drops out of her review focus while the run still counts it missing.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO queen_task_review_receipts
+                     (task_id, run_id, kind, accepted_revision, input_payload,
+                      recorded_sequence, recorded_at, times_seen, first_seen_at)
+                 VALUES (?1, ?2, 'external_condition', ?3, ?4,
+                     (SELECT max(sequence) FROM task_activity WHERE task_id = ?1), 100, ?5, 100)",
+                rusqlite::params![
+                    task.to_string(),
+                    run_id,
+                    input.expected_revision,
+                    serde_json::to_string(&input).unwrap(),
+                    MAX_UNCHANGED_REVIEW_PASSES + 10
+                ],
+            )
+            .unwrap();
+        assert_eq!(uncovered(&store, &run_id), vec![task]);
+        let snapshot = store.queen_task_review_snapshot(task).unwrap();
+        assert_eq!(snapshot.current_run_id.as_deref(), Some(run_id.as_str()));
+        assert_eq!(
+            snapshot.previous_assessment.unwrap().status,
+            swarm_domain::QueenReviewAssessmentStatus::FreshExternalCheckRequired,
+            "an outside wait saved on Review is not reported covered"
+        );
+
+        // Where approved work belongs, nothing is owed: awaiting release closes
+        // itself when the deployment is recorded.
+        store
+            .transition_task(task, TaskState::AwaitingRelease)
+            .unwrap();
+        assert!(matches!(
+            store.queen_run_review_coverage(&run_id).unwrap(),
+            QueenReviewCoverage::Covered { .. }
+        ));
+    }
+
+    /// A draft cannot move to Blocked, so one filed behind unfinished work was
+    /// Queen's, no assessment could cover it, and every run read incomplete
+    /// (ADR 0135).
+    #[test]
+    fn a_draft_behind_unfinished_work_is_not_queens_until_that_work_finishes() {
+        let store = TaskStore::in_memory().unwrap();
+        let draft = store
+            .create_task("Fixture follow-up", "/workspace/demo")
+            .unwrap();
+        let upstream = store
+            .create_task("Fixture contract", "/workspace/demo")
+            .unwrap();
+        store
+            .transition_task(upstream.id, TaskState::Ready)
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                draft.id,
+                upstream.id,
+                "The follow-up builds on the contract",
+                &TaskActivityActor::operator(),
+                100,
+            )
+            .unwrap();
+        let run_id = start_review(&store, 100);
+
+        let waiting = store.get_task(draft.id).unwrap();
+        assert_eq!(waiting.state, TaskState::Draft);
+        assert_eq!(waiting.next_move_owner, NextMoveOwner::Blocked);
+        assert!(
+            !uncovered(&store, &run_id).contains(&draft.id),
+            "nothing Queen can do covers a draft that is waiting"
+        );
+
+        for state in [TaskState::Active, TaskState::Review, TaskState::Completed] {
+            store.transition_task(upstream.id, state).unwrap();
+        }
+        assert_eq!(
+            store.get_task(draft.id).unwrap().next_move_owner,
+            NextMoveOwner::Queen,
+            "it comes back to Queen to triage once the contract is done"
+        );
+        assert_eq!(uncovered(&store, &run_id), vec![draft.id]);
     }
 }

@@ -42,19 +42,36 @@ impl TaskPrerequisite {
     pub fn satisfied(&self) -> bool {
         !self.removed && self.state == TaskState::Completed
     }
+
+    /// Not finished, and still able to finish. An abandoned or removed
+    /// prerequisite never will, so it holds nothing: the task is Queen's to
+    /// re-route, as the wake count already says.
+    #[must_use]
+    pub fn outstanding(&self) -> bool {
+        !self.removed && !matches!(self.state, TaskState::Completed | TaskState::Abandoned)
+    }
 }
 
 impl NextMoveOwner {
     /// Review may wait on another task without losing its finished-work state.
+    ///
+    /// So may a Draft (ADR 0135). A draft cannot move to Blocked, so one filed
+    /// with an unfinished prerequisite stayed Queen's to triage, and no
+    /// assessment could cover it while it waited. Every Queen run then ended
+    /// incomplete. It comes back to Queen when the prerequisite finishes.
+    ///
+    /// ⚠️ ONLY WORK THAT CAN STILL FINISH HOLDS IT. A prerequisite that was
+    /// abandoned or removed never completes, so waiting on it would take the
+    /// task off Queen's list for good while the wake count still names it.
     #[must_use]
-    pub fn after_review_prerequisites(
+    pub fn after_unfinished_prerequisites(
         self,
         state: TaskState,
         prerequisites: &[TaskPrerequisite],
     ) -> Self {
-        if state == TaskState::Review
+        if matches!(state, TaskState::Review | TaskState::Draft)
             && self != Self::Operator
-            && prerequisites.iter().any(|item| !item.satisfied())
+            && prerequisites.iter().any(TaskPrerequisite::outstanding)
         {
             Self::Blocked
         } else {
@@ -276,5 +293,80 @@ mod tests {
         ] {
             assert_eq!(owner.after_blocker_evidence(false, &empty, false), owner);
         }
+    }
+
+    /// A draft cannot move to Blocked, so before ADR 0135 a draft filed behind
+    /// an unfinished task stayed Queen's, uncoverable, and every run read
+    /// incomplete. It now waits like Review does and returns when the
+    /// prerequisite completes.
+    #[test]
+    fn a_draft_behind_unfinished_work_waits_and_returns_when_it_finishes() {
+        let mut prerequisite = TaskPrerequisite {
+            task_id: TaskId::new(),
+            prerequisite_id: TaskId::new(),
+            title: "Contract".to_owned(),
+            state: TaskState::Active,
+            assigned_worker_id: None,
+            removed: false,
+            reason: "Required".to_owned(),
+            created_at: 1,
+        };
+        for state in [TaskState::Draft, TaskState::Review] {
+            assert_eq!(
+                NextMoveOwner::Queen
+                    .after_unfinished_prerequisites(state, std::slice::from_ref(&prerequisite)),
+                NextMoveOwner::Blocked,
+                "{state:?} waits on unfinished work"
+            );
+            assert_eq!(
+                NextMoveOwner::Operator
+                    .after_unfinished_prerequisites(state, std::slice::from_ref(&prerequisite)),
+                NextMoveOwner::Operator,
+                "a pending operator ruling still owns {state:?}"
+            );
+        }
+        assert_eq!(
+            NextMoveOwner::Queen.after_unfinished_prerequisites(TaskState::Draft, &[]),
+            NextMoveOwner::Queen,
+            "a draft with nothing to wait on is Queen's to triage"
+        );
+        assert_eq!(
+            NextMoveOwner::Worker.after_unfinished_prerequisites(
+                TaskState::Ready,
+                std::slice::from_ref(&prerequisite)
+            ),
+            NextMoveOwner::Worker,
+            "other states keep their owner"
+        );
+        prerequisite.state = TaskState::Completed;
+        assert_eq!(
+            NextMoveOwner::Queen.after_unfinished_prerequisites(
+                TaskState::Draft,
+                std::slice::from_ref(&prerequisite)
+            ),
+            NextMoveOwner::Queen,
+            "the draft comes back to Queen once its prerequisite finishes"
+        );
+
+        // Work that will never finish holds nothing: Queen must re-route it.
+        prerequisite.state = TaskState::Abandoned;
+        for state in [TaskState::Draft, TaskState::Review] {
+            assert_eq!(
+                NextMoveOwner::Queen
+                    .after_unfinished_prerequisites(state, std::slice::from_ref(&prerequisite)),
+                NextMoveOwner::Queen,
+                "an abandoned prerequisite does not strand {state:?}"
+            );
+        }
+        prerequisite.state = TaskState::Active;
+        prerequisite.removed = true;
+        assert_eq!(
+            NextMoveOwner::Queen.after_unfinished_prerequisites(
+                TaskState::Draft,
+                std::slice::from_ref(&prerequisite)
+            ),
+            NextMoveOwner::Queen,
+            "a removed prerequisite does not strand the draft"
+        );
     }
 }

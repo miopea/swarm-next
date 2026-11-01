@@ -3531,16 +3531,32 @@ impl TaskService {
     /// complete open set in order and can corrupt it if the caller gets the
     /// list wrong; "put this first" cannot.
     ///
+    /// ⚠️ A DRAFT IS REFUSED (ADR 0135). "Promote" reads as moving a draft on,
+    /// and the reply said `promoted: true`, so Queen promoted two drafts three
+    /// times on 2026-11-01 and believed they had moved. They stayed Draft until
+    /// she made them Ready eleven minutes later. Returns the task so the reply
+    /// can state what it now is.
+    ///
     /// # Errors
-    /// Denies a non-Queen caller, and propagates the reordering rules.
+    /// Denies a non-Queen caller, refuses a Draft, and propagates the
+    /// reordering rules.
     pub fn promote_task(
         &self,
         principal: AgentPrincipal,
         task_id: TaskId,
-    ) -> Result<(), ApplicationError> {
+    ) -> Result<Task, ApplicationError> {
         require_queen(principal)?;
-        self.store.promote_open_task(task_id)?;
-        Ok(())
+        if self.store.get_task(task_id)?.state == TaskState::Draft {
+            return Err(ApplicationError::Refused(
+                "swarm_promote_task only moves a task to the front of the delivery queue and never changes its state, so it is refused on a Draft (ADR 0135). To triage this draft, use swarm_transition_task with state ready, or abandoned if it should not be done."
+                    .to_owned(),
+            ));
+        }
+        self.store
+            .promote_open_task(task_id)?
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .ok_or(ApplicationError::Store(TaskStoreError::NotFound))
     }
 
     /// Records why a reviewer does not consider shipped work finished.

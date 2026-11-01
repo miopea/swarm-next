@@ -893,7 +893,15 @@ fn queue_run(
 /// holds the task too, because each names who must act (ADR 0119).
 const ACTIONABLE_TASKS: &str = concat!("task.removed_at IS NULL
              AND (
-                 task.state IN ('draft','review')
+                 -- A draft or review behind work that can still finish is not
+                 -- Queen's until it does, the same hold as blocked work below
+                 -- (ADR 0135). An abandoned or removed prerequisite holds
+                 -- nothing.
+                 (task.state IN ('draft','review')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM task_prerequisites p JOIN tasks upstream ON upstream.id = p.prerequisite_id
+                         WHERE p.task_id = task.id AND upstream.removed_at IS NULL
+                           AND upstream.state NOT IN ('completed','abandoned')))
                  OR (task.state = 'blocked'
                      AND (task.blocked_until IS NULL OR task.blocked_until <= :now)
                      AND NOT EXISTS (
@@ -2197,6 +2205,59 @@ mod tests {
         assert!(
             store.observe_queen_automation(50_000).unwrap(),
             "the date hold expiring is a change"
+        );
+    }
+
+    /// A draft behind unfinished work is not Queen's (ADR 0135), so it must not
+    /// keep the count above zero either, or the unchanged-board recheck wakes
+    /// her every fifteen minutes to an empty review focus. A prerequisite that
+    /// will never finish holds nothing, and the draft is hers again.
+    #[test]
+    fn a_draft_behind_unfinished_work_wakes_her_only_when_she_can_triage_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let draft = store
+            .create_task("Fixture follow-up", "/workspace")
+            .unwrap();
+        let upstream = store.create_task("Fixture contract", "/workspace").unwrap();
+        for state in [TaskState::Ready, TaskState::Active] {
+            store.transition_task(upstream.id, state).unwrap();
+        }
+        store
+            .add_task_prerequisite(
+                draft.id,
+                upstream.id,
+                "The follow-up builds on the contract",
+                &TaskActivityActor::operator(),
+                100,
+            )
+            .unwrap();
+        let counted = || {
+            actionable_fingerprint(&store.connection().unwrap(), 200)
+                .unwrap()
+                .1
+        };
+        assert_eq!(
+            counted(),
+            0,
+            "the draft waits on work that can still finish"
+        );
+
+        store
+            .transition_task(upstream.id, TaskState::Abandoned)
+            .unwrap();
+        assert_eq!(
+            counted(),
+            1,
+            "an abandoned prerequisite never finishes, so the draft is Queen's to re-route"
+        );
+        assert_eq!(
+            store.get_task(draft.id).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen,
+            "and the board agrees with the wake count"
         );
     }
 

@@ -190,19 +190,28 @@ pub struct QueenReviewAssessmentEvidence {
 }
 
 /// Reusing a receipt never means resuming or completing its task.
+///
+/// A receipt whose kind no longer covers the task's current state is never
+/// reported covered (ADR 0135), so this view agrees with run coverage: an
+/// external condition saved on Review before the rule asks for a fresh check,
+/// and recording one is then refused with the move to make.
 #[must_use]
 pub fn queen_review_assessment_status(
     kind: QueenReviewDispositionKind,
     recorded_run: &str,
     current_run: Option<&str>,
     revision_matches: bool,
+    state: TaskState,
+    owner: NextMoveOwner,
 ) -> QueenReviewAssessmentStatus {
     if !revision_matches {
         QueenReviewAssessmentStatus::EvidenceChanged
     } else if kind == QueenReviewDispositionKind::InsufficientEvidence {
         QueenReviewAssessmentStatus::InsufficientEvidence
     } else if let Some(current_run) = current_run {
-        if kind == QueenReviewDispositionKind::OperatorDeferral || recorded_run == current_run {
+        if kind.covers(state, owner)
+            && (kind == QueenReviewDispositionKind::OperatorDeferral || recorded_run == current_run)
+        {
             QueenReviewAssessmentStatus::CoveredForCurrentRun
         } else {
             QueenReviewAssessmentStatus::FreshExternalCheckRequired
@@ -233,6 +242,82 @@ pub enum QueenReviewCoverage {
     Covered { waiting_obligations: usize },
     Missing { task_ids: Vec<TaskId> },
     Unavailable,
+}
+
+/// What a Queen run left unaccounted for, named so an incomplete finish says
+/// what is left (ADR 0135).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct QueenRunUncovered {
+    /// Up to [`MAX_NAMED_UNCOVERED`] named items.
+    pub work: Vec<UncoveredQueenWork>,
+    /// How many items were uncovered in all.
+    pub total: usize,
+    /// Coverage could not be read in full, so the list may be short.
+    pub unavailable: bool,
+}
+
+/// How many uncovered items a finish reply names, so it stays readable.
+pub const MAX_NAMED_UNCOVERED: usize = 16;
+
+impl QueenRunUncovered {
+    /// Names what a finished run left, from coverage read after it finished.
+    ///
+    /// ⚠️ THE RUN IS ALREADY RECORDED when this is read, so nothing here may
+    /// fail. A coverage that could not be read (`None`), or a task that has
+    /// gone since, marks the list `unavailable` instead. An error here would
+    /// turn a finish that succeeded into one Queen is told never to repeat.
+    pub fn from_coverage(
+        coverage: impl IntoIterator<Item = (Option<QueenReviewCoverage>, UncoveredObligation)>,
+        mut describe: impl FnMut(TaskId) -> Option<(TaskState, String)>,
+    ) -> Self {
+        let mut uncovered = Self {
+            work: Vec::new(),
+            total: 0,
+            unavailable: false,
+        };
+        for (coverage, obligation) in coverage {
+            match coverage {
+                Some(QueenReviewCoverage::Covered { .. }) => {}
+                None | Some(QueenReviewCoverage::Unavailable) => uncovered.unavailable = true,
+                Some(QueenReviewCoverage::Missing { task_ids }) => {
+                    uncovered.total += task_ids.len();
+                    for task_id in task_ids {
+                        if uncovered.work.len() == MAX_NAMED_UNCOVERED {
+                            break;
+                        }
+                        match describe(task_id) {
+                            Some((state, title)) => uncovered.work.push(UncoveredQueenWork {
+                                task_id,
+                                state,
+                                title,
+                                obligation,
+                            }),
+                            None => uncovered.unavailable = true,
+                        }
+                    }
+                }
+            }
+        }
+        uncovered
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UncoveredQueenWork {
+    pub task_id: TaskId,
+    pub state: TaskState,
+    pub title: String,
+    pub obligation: UncoveredObligation,
+}
+
+/// Which duty a run did not account for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UncoveredObligation {
+    /// A Queen-owned task with no move and no assessment that covers it.
+    Review,
+    /// A worker whose stalled work Queen has not assessed.
+    Recovery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -304,23 +389,53 @@ impl QueenReviewDispositionInput {
         }
     }
 
+    /// Why this assessment cannot be recorded on a task in `state`, or `None`
+    /// when it can.
     #[must_use]
-    pub fn can_record(&self, state: TaskState, owner: NextMoveOwner) -> bool {
-        self.can_cover(state, owner)
+    pub fn refusal(&self, state: TaskState, owner: NextMoveOwner) -> Option<&'static str> {
+        let recordable = self.can_cover(state, owner)
             || (self.kind == QueenReviewDispositionKind::InsufficientEvidence
                 && owner == NextMoveOwner::Queen
-                && !matches!(state, TaskState::Completed | TaskState::Abandoned))
+                && !matches!(state, TaskState::Completed | TaskState::Abandoned));
+        if recordable {
+            None
+        } else if self.kind == QueenReviewDispositionKind::ExternalCondition
+            && state == TaskState::Review
+        {
+            Some(REVIEW_IS_NOT_A_WAIT)
+        } else {
+            Some(
+                "this is not Queen-owned waiting work; route Ready work or use the existing dependency, decision and lifecycle commands",
+            )
+        }
     }
 
     #[must_use]
     pub fn can_cover(&self, state: TaskState, owner: NextMoveOwner) -> bool {
+        self.kind.covers(state, owner)
+    }
+}
+
+/// ⚠️ REVIEW IS NOT A PLACE TO WAIT (ADR 0135). An external condition used to
+/// cover a Review task, so approved work waiting only to merge and ship sat in
+/// Review behind a fresh "waiting on deploy" note every run. Each note
+/// satisfied coverage, so nothing ever pushed the work on. Measured 2026-11-01:
+/// one worker had 18 approved tasks, re-noted up to 19 times each. Awaiting release
+/// is where finished, unshipped work goes, and it closes itself.
+pub const REVIEW_IS_NOT_A_WAIT: &str = "Review is not a place to wait, so an external condition is refused on a Review task (ADR 0135). If the work is approved and only waits to be merged or shipped, move it to awaiting_release with swarm_transition_task: it needs no evidence and completes itself when the deployment is recorded. If something is missing, or the work waits on an outside party or a date, hand it back with swarm_return_reviewed_work so its worker blocks it with a named wait. If it waits on another task, add that task as a prerequisite. If the operator must judge, ask with swarm_request_decision.";
+
+impl QueenReviewDispositionKind {
+    /// Whether a saved assessment of this kind accounts for a task that is in
+    /// `state` now. Coverage asks this of every saved receipt, so a receipt
+    /// recorded under an older rule stops covering a state that no longer
+    /// accepts it.
+    #[must_use]
+    pub fn covers(self, state: TaskState, owner: NextMoveOwner) -> bool {
         owner == NextMoveOwner::Queen
-            && match self.kind {
-                QueenReviewDispositionKind::InsufficientEvidence => false,
-                QueenReviewDispositionKind::ExternalCondition => {
-                    matches!(state, TaskState::Blocked | TaskState::Review)
-                }
-                QueenReviewDispositionKind::OperatorDeferral => matches!(
+            && match self {
+                Self::InsufficientEvidence => false,
+                Self::ExternalCondition => state == TaskState::Blocked,
+                Self::OperatorDeferral => matches!(
                     state,
                     TaskState::Draft | TaskState::Blocked | TaskState::Review
                 ),
@@ -382,6 +497,130 @@ pub fn queen_review_coverage(
 mod tests {
     use super::*;
 
+    fn assessment(kind: QueenReviewDispositionKind) -> QueenReviewDispositionInput {
+        QueenReviewDispositionInput {
+            task_id: TaskId::new(),
+            run_id: uuid::Uuid::nil().to_string(),
+            expected_revision: "0".repeat(64),
+            kind,
+            condition: "A fictional vendor window".into(),
+            evidence: "Read the fictional status page".into(),
+            source: "Fictional status page".into(),
+            operator_activity_sequence: None,
+            operator_decision_id: None,
+        }
+    }
+
+    /// Measured 2026-11-01: approved work sat in Review behind a fresh "waiting
+    /// on deploy" note every run, and each note satisfied coverage (ADR 0135).
+    #[test]
+    fn review_is_not_a_place_to_wait_on_an_outside_condition() {
+        let outside = assessment(QueenReviewDispositionKind::ExternalCondition);
+        assert!(!outside.can_cover(TaskState::Review, NextMoveOwner::Queen));
+        let refusal = outside
+            .refusal(TaskState::Review, NextMoveOwner::Queen)
+            .expect("an outside wait is refused on Review");
+        for exit in [
+            "awaiting_release",
+            "swarm_return_reviewed_work",
+            "prerequisite",
+            "swarm_request_decision",
+        ] {
+            assert!(
+                refusal.contains(exit),
+                "the refusal names {exit}: {refusal}"
+            );
+        }
+
+        // Blocked is where an outside wait belongs, and it still covers there.
+        assert!(outside.can_cover(TaskState::Blocked, NextMoveOwner::Queen));
+        assert_eq!(
+            outside.refusal(TaskState::Blocked, NextMoveOwner::Queen),
+            None
+        );
+
+        // An operator's word still parks Review, and an unknown answer is still
+        // recordable there without covering anything.
+        let deferral = QueenReviewDispositionKind::OperatorDeferral;
+        assert!(deferral.covers(TaskState::Review, NextMoveOwner::Queen));
+        let unknown = assessment(QueenReviewDispositionKind::InsufficientEvidence);
+        assert_eq!(
+            unknown.refusal(TaskState::Review, NextMoveOwner::Queen),
+            None
+        );
+        assert!(!unknown.can_cover(TaskState::Review, NextMoveOwner::Queen));
+
+        // Work that is not Queen's keeps the general refusal.
+        let general = outside
+            .refusal(TaskState::Active, NextMoveOwner::Worker)
+            .expect("active work is not Queen-owned waiting work");
+        assert!(
+            general.contains("not Queen-owned waiting work"),
+            "{general}"
+        );
+    }
+
+    /// The finish is recorded before this list is built, so a failed read or
+    /// a task removed since must say `unavailable`, never fail (ADR 0135).
+    #[test]
+    fn an_incomplete_finish_names_what_is_left_without_failing() {
+        let gone = TaskId::new();
+        let named: Vec<TaskId> = (0..MAX_NAMED_UNCOVERED + 3)
+            .map(|_| TaskId::new())
+            .collect();
+        let uncovered = QueenRunUncovered::from_coverage(
+            [
+                (
+                    Some(QueenReviewCoverage::Missing {
+                        task_ids: std::iter::once(gone).chain(named.clone()).collect(),
+                    }),
+                    UncoveredObligation::Review,
+                ),
+                (
+                    Some(QueenReviewCoverage::Covered {
+                        waiting_obligations: 0,
+                    }),
+                    UncoveredObligation::Recovery,
+                ),
+            ],
+            |task_id| (task_id != gone).then(|| (TaskState::Draft, "Fixture draft".to_owned())),
+        );
+        assert_eq!(
+            uncovered.total,
+            MAX_NAMED_UNCOVERED + 4,
+            "every item counts"
+        );
+        assert_eq!(
+            uncovered.work.len(),
+            MAX_NAMED_UNCOVERED,
+            "the named list is bounded"
+        );
+        assert_eq!(
+            uncovered.work[0].task_id, named[0],
+            "a task gone since is skipped"
+        );
+        assert!(uncovered.unavailable, "a task gone since says so");
+
+        let unread =
+            QueenRunUncovered::from_coverage([(None, UncoveredObligation::Recovery)], |_| None);
+        assert_eq!(
+            (unread.total, unread.unavailable),
+            (0, true),
+            "a coverage that could not be read says so"
+        );
+
+        let covered = QueenRunUncovered::from_coverage(
+            [(
+                Some(QueenReviewCoverage::Covered {
+                    waiting_obligations: 0,
+                }),
+                UncoveredObligation::Review,
+            )],
+            |_| None,
+        );
+        assert_eq!((covered.total, covered.unavailable), (0, false));
+    }
+
     #[test]
     fn missing_evidence_is_never_a_verified_wait_in_any_run() {
         for run in [None, Some("original"), Some("later")] {
@@ -390,7 +629,9 @@ mod tests {
                     QueenReviewDispositionKind::InsufficientEvidence,
                     "original",
                     run,
-                    true
+                    true,
+                    TaskState::Blocked,
+                    NextMoveOwner::Queen
                 ),
                 QueenReviewAssessmentStatus::InsufficientEvidence
             );
@@ -399,7 +640,9 @@ mod tests {
                     QueenReviewDispositionKind::InsufficientEvidence,
                     "original",
                     run,
-                    false
+                    false,
+                    TaskState::Blocked,
+                    NextMoveOwner::Queen
                 ),
                 QueenReviewAssessmentStatus::EvidenceChanged
             );

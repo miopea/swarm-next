@@ -7283,7 +7283,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                 row.get(19)?,
                 row.get(20)?,
             )
-            .after_review_prerequisites(
+            .after_unfinished_prerequisites(
                 TaskState::from_str(&state).unwrap_or(TaskState::Draft),
                 &prerequisites,
             )
