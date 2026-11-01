@@ -1959,7 +1959,7 @@ impl ServerHandler for AgentMcp {
                         })).collect::<Vec<_>>(),
                         "remaining_queen_tasks_truncated": queen_owned_count > 16,
                         "next_action": if recorded_outcome == swarm_domain::QueenAutomationOutcome::Incomplete {
-                            "This review or worker recovery was not covered; `uncovered` names what this run left unaccounted for. On your next review, route actionable work using lifecycle tools and inspect current coordination attention. For Queen-owned waits, use swarm_read_review_evidence and swarm_record_review_disposition. For worker recovery waits, use the current recovery_identity with swarm_record_recovery_assessment and freshly checked evidence/source. Working and guarded pending delivery are checked automatically; do not add Queen approvals. Do not manufacture operator deferrals or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
+                            "This review or worker recovery was not covered; `uncovered` names what this run left unaccounted for. Each Draft or Review item in it says in `next` which moves take it off your list; a message or an insufficient_evidence record does not. On your next review, route actionable work using lifecycle tools and inspect current coordination attention. For Queen-owned waits, use swarm_read_review_evidence and swarm_record_review_disposition. For worker recovery waits, use the current recovery_identity with swarm_record_recovery_assessment and freshly checked evidence/source. Working and guarded pending delivery are checked automatically; do not add Queen approvals. Do not manufacture operator deferrals or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
                         } else if queen_owned_count > 0 {
                             "Your turn ended, but recorded work still requires Queen. Reconcile verified prose dependencies to explicit prerequisite links; record true holds or task-linked operator decisions, and safely route recoverable work. Unchanged does not mean handled. Read current task history before claiming a watched task is still Ready."
                         } else {
@@ -2573,9 +2573,23 @@ impl AgentMcp {
             ),
             (None, true) => "Queued, NOT delivered — this returns before delivery, so it is never delivered at this point. It reaches that worker when its terminal is next resting, rather than interrupting a turn. To find out whether it landed, read swarm_read_task_history: the message carries a delivered_at once it arrives, and that is the only live answer.".to_owned(),
         };
+        // ⚠️ A MESSAGE HANDS NOTHING BACK (ADR 0135). Queen answered a worker's
+        // reply to a returned review with "it stays with you" in a message, and
+        // the task stayed hers for every run after. The message is already
+        // recorded, so a failed read only leaves these out.
+        let task = self.tasks.store().get_task(task_id).ok();
+        let still_yours = task
+            .as_ref()
+            .filter(|task| {
+                task.state == TaskState::Review
+                    && task.next_move_owner == swarm_domain::NextMoveOwner::Queen
+            })
+            .map(|_| swarm_domain::A_MESSAGE_HANDS_NOTHING_BACK);
         structured(json!({
             "message_id": message.id,
             "task_id": input.task_id,
+            "next_move_owner": task.map(|task| task.next_move_owner),
+            "still_yours": still_yours,
             "purpose": purpose,
             "status": match (&message.held_behind, reachable) {
                 (_, false) => "queued_but_unreachable",
@@ -10054,6 +10068,86 @@ mod tests {
         assert!(same["held_behind"].is_null());
     }
 
+    /// ⚠️ MEASURED 2026-11-01: Queen returned two Review tasks, the worker
+    /// answered (which hands the next move back to her), and she replied "it
+    /// stays with you" in a message. Both stayed hers, uncovered, for every run
+    /// after. The reply now says so and names the move that does hand it back
+    /// (ADR 0135).
+    #[tokio::test]
+    async fn a_message_on_review_work_that_is_still_queens_says_it_hands_nothing_back() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Garden planner: export, then import", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let message = || {
+            call_review_test_tool(
+                bridge.clone(),
+                &queen_token,
+                "swarm_message_worker",
+                json!({"task_id": task.id, "worker_id": worker_id, "body": "Agreed: it stays with you."}),
+            )
+        };
+        let return_it = |request: &'static str| {
+            call_review_test_tool(
+                bridge.clone(),
+                &queen_token,
+                "swarm_return_reviewed_work",
+                json!({"task_id": task.id.to_string(), "request": request}),
+            )
+        };
+
+        // While a return is open the worker owes the move, so nothing to say.
+        let first = return_it("Which lines are met?").await;
+        assert_eq!(first["result"]["isError"], false, "{first}");
+        let open = message().await["result"]["structuredContent"].clone();
+        assert_eq!(open["next_move_owner"], "worker", "{open}");
+        assert!(open["still_yours"].is_null(), "{open}");
+
+        // The worker answers, and the move is Queen's again.
+        let request_id = first["result"]["structuredContent"]["request_message_id"].clone();
+        let answer = call_review_test_tool(
+            bridge.clone(),
+            &worker_token,
+            "swarm_message_queen",
+            json!({
+                "task_id": task.id.to_string(),
+                "body": "Not release-only: the import is not built.",
+                "reply_to_message_id": request_id,
+            }),
+        )
+        .await;
+        assert_eq!(answer["result"]["isError"], false, "{answer}");
+
+        let replied = message().await["result"]["structuredContent"].clone();
+        assert_eq!(replied["next_move_owner"], "queen", "{replied}");
+        let said = replied["still_yours"]
+            .as_str()
+            .expect("the reply says the task is still hers");
+        assert!(said.contains("hands nothing back"), "{said}");
+        assert!(said.contains("swarm_return_reviewed_work"), "{said}");
+        assert_eq!(
+            store.get_task(task.id).unwrap().next_move_owner,
+            swarm_domain::NextMoveOwner::Queen,
+            "and the message really did leave it hers"
+        );
+
+        // The exit it names works after an answer, so the hint is true.
+        let again = return_it("Build the import, then resubmit.").await;
+        assert_eq!(again["result"]["isError"], false, "{again}");
+        let current = store.get_task(task.id).unwrap();
+        assert_eq!(current.state, TaskState::Review);
+        assert_eq!(current.next_move_owner, swarm_domain::NextMoveOwner::Worker);
+    }
+
     #[tokio::test]
     async fn queen_reconciles_the_exact_uncertain_message_without_worker_authority() {
         let (bridge, store, queen_id, worker_id, _) = setup();
@@ -12209,6 +12303,15 @@ mod tests {
         );
         assert_eq!(content["uncovered"]["work"][0]["obligation"], "review");
         assert_eq!(content["uncovered"]["work"][0]["state"], "draft");
+        // And how it leaves her list, since naming it alone moved nothing.
+        let next = content["uncovered"]["work"][0]["next"]
+            .as_str()
+            .expect("an uncovered draft names its exits");
+        assert!(next.contains("Make it ready"), "{next}");
+        assert!(
+            content["next_action"].as_str().unwrap().contains("`next`"),
+            "{content}"
+        );
     }
 
     /// Queen promoted two drafts three times on 2026-11-01, read
