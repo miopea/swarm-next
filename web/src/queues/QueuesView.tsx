@@ -149,6 +149,11 @@ function taskProgress(task: Task, now: number): string {
       : "Blocked · reason not recorded";
   }
   if (task.state === "awaiting_release") return "Awaiting release";
+  // A draft behind work that can still finish is not Queen's until it does
+  // (ADR 0135). The server decides that; this only says how many it waits on.
+  // An abandoned or removed prerequisite never finishes, so it is not counted.
+  const waitingOn = (task.prerequisites ?? []).filter((item) => !item.removed && item.state !== "completed" && item.state !== "abandoned").length;
+  if (task.next_move_owner === "blocked" && waitingOn > 0) return `Draft waiting on ${waitingOn} prerequisite${waitingOn === 1 ? "" : "s"}`;
   return "Draft · awaiting triage";
 }
 

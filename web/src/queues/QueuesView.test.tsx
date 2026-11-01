@@ -306,6 +306,19 @@ describe("QueuesView", () => {
     expect(screen.getByText("Waiting for your decision")).toBeVisible();
   });
 
+  test("a draft behind unfinished work says it is waiting, not awaiting triage (ADR 0135)", () => {
+    const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "active" as const, assigned_worker_id: null, removed: false, reason: "Builds on the contract", created_at: 1 };
+    const waiting = task({ state: "draft", next_move_owner: "blocked", prerequisites: [prerequisite] });
+    const { rerender } = render(<QueuesView tasks={[waiting]} workers={[]} onOpenTask={vi.fn()} />);
+    expect(screen.getByText("Draft waiting on 1 prerequisite")).toBeVisible();
+    expect(screen.queryByText("Draft · awaiting triage")).not.toBeInTheDocument();
+    rerender(<QueuesView tasks={[{ ...waiting, next_move_owner: "queen", prerequisites: [{ ...prerequisite, state: "completed" }] }]} workers={[]} onOpenTask={vi.fn()} />);
+    expect(screen.getByText("Draft · awaiting triage")).toBeVisible();
+    // Abandoned work never finishes, so the draft is Queen's to re-route.
+    rerender(<QueuesView tasks={[{ ...waiting, next_move_owner: "queen", prerequisites: [{ ...prerequisite, state: "abandoned" }] }]} workers={[]} onOpenTask={vi.fn()} />);
+    expect(screen.getByText("Draft · awaiting triage")).toBeVisible();
+  });
+
   test("removed and reopened prerequisites stay visible without claiming the worker stopped", () => {
     const prerequisite = { task_id: "t1", prerequisite_id: "upstream", title: "Shared API contract", state: "completed" as const, assigned_worker_id: null, removed: true, reason: "Contract first", created_at: 1 };
     render(<QueuesView tasks={[task({ state: "active", next_move_owner: "worker", dispatch_state: "delivered", prerequisites: [prerequisite] })]} workers={[]} onOpenTask={vi.fn()} />);

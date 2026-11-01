@@ -1932,11 +1932,24 @@ impl ServerHandler for AgentMcp {
                     let queen_owned_count = remaining.by_owner.iter()
                         .find(|(owner, _)| *owner == swarm_domain::NextMoveOwner::Queen)
                         .map_or(0, |(_, count)| *count);
+                    // An incomplete finish names what is left (ADR 0135).
+                    let uncovered = if recorded_outcome == swarm_domain::QueenAutomationOutcome::Incomplete {
+                        Some(self.tasks.queen_run_uncovered(
+                            self.principal,
+                            &input.run_id,
+                            &recovery_observations,
+                            observations_complete,
+                            crate::unix_timestamp(),
+                        )?)
+                    } else {
+                        None
+                    };
                     structured(json!({
                         "run_id": input.run_id,
                         "outcome": recorded_outcome,
                         "requested_outcome": input.outcome,
                         "review_covered": recorded_outcome != swarm_domain::QueenAutomationOutcome::Incomplete,
+                        "uncovered": uncovered,
                         "state": "completed",
                         "run_scope": "Only this automation turn ended. This does not settle tasks or certify the queue is clear.",
                         "queen_owned_count": queen_owned_count,
@@ -1946,7 +1959,7 @@ impl ServerHandler for AgentMcp {
                         })).collect::<Vec<_>>(),
                         "remaining_queen_tasks_truncated": queen_owned_count > 16,
                         "next_action": if recorded_outcome == swarm_domain::QueenAutomationOutcome::Incomplete {
-                            "This review or worker recovery was not covered. On your next review, route actionable work using lifecycle tools and inspect current coordination attention. For Queen-owned waits, use swarm_read_review_evidence and swarm_record_review_disposition. For worker recovery waits, use the current recovery_identity with swarm_record_recovery_assessment and freshly checked evidence/source. Working and guarded pending delivery are checked automatically; do not add Queen approvals. Do not manufacture operator deferrals or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
+                            "This review or worker recovery was not covered; `uncovered` names what this run left unaccounted for. On your next review, route actionable work using lifecycle tools and inspect current coordination attention. For Queen-owned waits, use swarm_read_review_evidence and swarm_record_review_disposition. For worker recovery waits, use the current recovery_identity with swarm_record_recovery_assessment and freshly checked evidence/source. Working and guarded pending delivery are checked automatically; do not add Queen approvals. Do not manufacture operator deferrals or repeat finish calls. Escalate a concrete recovery failure only when you cannot resolve it."
                         } else if queen_owned_count > 0 {
                             "Your turn ended, but recorded work still requires Queen. Reconcile verified prose dependencies to explicit prerequisite links; record true holds or task-linked operator decisions, and safely route recoverable work. Unchanged does not mean handled. Read current task history before claiming a watched task is still Ready."
                         } else {
@@ -2295,8 +2308,15 @@ impl AgentMcp {
         let input = parse::<PromoteTaskInput>(arguments)?;
         let task_id = TaskId::from_str(&input.task_id)
             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
-        self.tasks.promote_task(self.principal, task_id)?;
-        structured(json!({ "task_id": input.task_id, "promoted": true }))
+        let task = self.tasks.promote_task(self.principal, task_id)?;
+        // The state is in the reply because `promoted: true` alone read as the
+        // task having moved on (ADR 0135).
+        structured(json!({
+            "task_id": input.task_id,
+            "promoted": true,
+            "state": task.state,
+            "state_changed": false,
+        }))
     }
 
     fn hold_reviewed_work(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -4469,7 +4489,7 @@ fn sleep_worker_tool() -> Tool {
 fn promote_task_tool() -> Tool {
     tool(
         "swarm_promote_task",
-        "Queen only: move one open task to the front of the delivery queue. THIS IS THE ONLY LEVER ON WHAT ARRIVES FIRST. Delivery order is the board's order — a task's position — and it does NOT consult priority: priority travels with the brief so the worker knows how urgent the work is, and decides nothing about sequence. So marking a task high does not move it, and a task filed last is delivered last however urgent it is. Use this rather than Blocking something else to shorten the queue ahead of it; that works, and it makes the board say a task is waiting on something when it is waiting on you.",
+        "Queen only: move one open task to the front of the delivery queue. THIS IS THE ONLY LEVER ON WHAT ARRIVES FIRST. Delivery order is the board's order — a task's position — and it does NOT consult priority: priority travels with the brief so the worker knows how urgent the work is, and decides nothing about sequence. So marking a task high does not move it, and a task filed last is delivered last however urgent it is. Use this rather than Blocking something else to shorten the queue ahead of it; that works, and it makes the board say a task is waiting on something when it is waiting on you. IT NEVER CHANGES A TASK'S STATE, so a Draft is refused: triage a draft with swarm_transition_task (ready or abandoned).",
         &json!({
             "type": "object",
             "properties": {
@@ -4806,7 +4826,7 @@ fn read_queen_review_evidence_tool() -> Tool {
 fn record_queen_review_disposition_tool() -> Tool {
     tool(
         "swarm_record_review_disposition",
-        "Queen only: record a checked assessment using the exact revision from swarm_read_review_evidence. External conditions require fresh verification each run. Operator deferrals require a real task-linked operator activity sequence or resolved decision supporting that deferral; worker-relayed permission is not authority. If investigation cannot establish a valid wait or next action, use insufficient_evidence: condition names the missing fact, evidence says what you checked, source identifies the records. This never covers the obligation or parks work, but records the investigation for fair ordering. Reuse unchanged saved investigations instead of refreshing their timestamps; advance the rest of the backlog and seek the missing evidence or real assistance. This command changes no lifecycle, dependency, assignment or permission. Use structural prerequisite/decision/window commands where applicable, and never substitute an unknown assessment for actionable routing.",
+        "Queen only: record a checked assessment using the exact revision from swarm_read_review_evidence. External conditions require fresh verification each run, and are for Blocked work only: REVIEW IS NOT A PLACE TO WAIT. Approved work that only waits to merge or ship goes to awaiting_release, where it completes itself when the deployment is recorded. Operator deferrals require a real task-linked operator activity sequence or resolved decision supporting that deferral; worker-relayed permission is not authority. If investigation cannot establish a valid wait or next action, use insufficient_evidence: condition names the missing fact, evidence says what you checked, source identifies the records. This never covers the obligation or parks work, but records the investigation for fair ordering. Reuse unchanged saved investigations instead of refreshing their timestamps; advance the rest of the backlog and seek the missing evidence or real assistance. This command changes no lifecycle, dependency, assignment or permission. Use structural prerequisite/decision/window commands where applicable, and never substitute an unknown assessment for actionable routing.",
         &json!({"type":"object","properties":{
             "task_id":{"type":"string","format":"uuid"},
             "run_id":{"type":"string","format":"uuid"},
@@ -12180,6 +12200,61 @@ mod tests {
             content["remaining_queen_tasks"][0]["task_id"],
             pending.id.to_string()
         );
+        // An incomplete finish names what it left, rather than a flag that
+        // read the same on ~1,600 runs (ADR 0135).
+        assert_eq!(content["uncovered"]["total"], 1, "{content}");
+        assert_eq!(
+            content["uncovered"]["work"][0]["task_id"],
+            pending.id.to_string()
+        );
+        assert_eq!(content["uncovered"]["work"][0]["obligation"], "review");
+        assert_eq!(content["uncovered"]["work"][0]["state"], "draft");
+    }
+
+    /// Queen promoted two drafts three times on 2026-11-01, read
+    /// `promoted: true`, and believed they had moved. They stayed Draft
+    /// (ADR 0135).
+    #[tokio::test]
+    async fn promoting_a_draft_is_refused_and_a_promotion_states_what_the_task_is() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let draft = store
+            .create_task("Untriaged fixture", "/workspace/petal")
+            .unwrap();
+        let ready = store
+            .create_task("Queued fixture", "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(ready.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let promote = |task_id: TaskId| {
+            mcp_request(
+                Some(&queen_token),
+                "tools/call",
+                &json!({ "name": "swarm_promote_task", "arguments": { "task_id": task_id } }),
+            )
+        };
+
+        let refused =
+            response_json(handle(bridge.clone(), plain_state(), promote(draft.id)).await).await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let text = refused["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("swarm_transition_task"), "{text}");
+        assert!(
+            !text.contains("database"),
+            "a refusal, not a damaged store: {text}"
+        );
+        assert_eq!(
+            store.get_task(draft.id).unwrap().state,
+            swarm_domain::TaskState::Draft
+        );
+
+        let promoted = response_json(handle(bridge, plain_state(), promote(ready.id)).await).await;
+        assert_eq!(promoted["result"]["isError"], false, "{promoted}");
+        let content = &promoted["result"]["structuredContent"];
+        assert_eq!(content["promoted"], true);
+        assert_eq!(content["state"], "ready");
+        assert_eq!(content["state_changed"], false);
     }
 
     #[test]
