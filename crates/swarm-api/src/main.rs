@@ -440,6 +440,7 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
         std::time::Duration::from_secs(30),
         false,
         Some(state.coordination_wakeup()),
+        Some(state.coordination_deadline()),
         move || {
             let state = supervisor.clone();
             async move {
