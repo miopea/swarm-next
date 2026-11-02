@@ -66,18 +66,14 @@ impl TaskStore {
     pub fn decision_inbox(&self) -> Result<Vec<swarm_domain::DecisionInboxEntry>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let decisions = {
-            let mut statement = transaction.prepare(&crate::decisions::decision_inbox_sql())?;
-            statement
-                .query_map(
-                    rusqlite::params![
-                        crate::decisions::MAX_DECISION_RESULTS,
-                        Option::<String>::None
-                    ],
-                    crate::decisions::decision_from_row,
-                )?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        let decisions = crate::decisions::read_decisions(
+            &transaction,
+            &crate::decisions::decision_inbox_sql(),
+            rusqlite::params![
+                crate::decisions::MAX_DECISION_RESULTS,
+                Option::<String>::None
+            ],
+        )?;
         let mut summaries = summaries_from(&transaction)?;
         let inbox = decisions
             .into_iter()

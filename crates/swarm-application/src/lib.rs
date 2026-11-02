@@ -311,17 +311,7 @@ impl ApiaryService {
                     .map(move |condition| (*hive, condition))
             })
             .collect::<Vec<_>>();
-        let asked = self
-            .store
-            .list_decision_requests()?
-            .into_iter()
-            .filter(|request| {
-                request
-                    .evidence
-                    .lines()
-                    .any(|line| line.starts_with("Hive fault: "))
-            })
-            .collect::<Vec<_>>();
+        let asked = self.store.raises_with_evidence_line("Hive fault: ")?;
 
         for (hive, fault, since) in self.store.hive_fault_episodes()? {
             // ⚠️ CLEARED ONLY WHEN IT IS GONE, NOT WHEN IT STOPS PUSHING. A disk
@@ -374,7 +364,7 @@ impl ApiaryService {
         hive: swarm_domain::HiveId,
         name: &str,
         condition: &swarm_domain::HiveCondition,
-        asked: &[swarm_domain::DecisionRequest],
+        asked: &[swarm_persistence::RaiseRecord],
         now: i64,
     ) -> Result<(), ApplicationError> {
         let since = self
@@ -438,12 +428,7 @@ impl ApiaryService {
     ) -> Result<swarm_persistence::FleetVersionReport, ApplicationError> {
         let report = self.store.fleet_version_report(now, keeper_build)?;
         let raised = report.raised();
-        let asked = self
-            .store
-            .list_decision_requests()?
-            .into_iter()
-            .filter(|request| request.title == FLEET_BEHIND_QUESTION_TITLE)
-            .collect::<Vec<_>>();
+        let asked = self.store.raises_titled(FLEET_BEHIND_QUESTION_TITLE)?;
         let open = self.withdraw_settled_fleet_raises(&asked, &report);
         // Already asked, and still true. Asking again would be the loop.
         if open > 0 {
@@ -527,7 +512,7 @@ impl ApiaryService {
     /// still raised for, and returns how many stay open.
     fn withdraw_settled_fleet_raises(
         &self,
-        asked: &[DecisionRequest],
+        asked: &[swarm_persistence::RaiseRecord],
         report: &swarm_persistence::FleetVersionReport,
     ) -> usize {
         // ⚠️ THE CARD MUST GO AWAY BY ITSELF. The operator's standing complaint
