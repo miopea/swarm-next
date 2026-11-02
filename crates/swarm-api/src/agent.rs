@@ -3384,6 +3384,12 @@ read are not wrong, they are dated — and this board moves within minutes."
 
     /// How much of one reply the open tasks may take, serialized.
     const BOARD_LISTING_BYTES: usize = 2 * 1024 * 1024;
+    /// How many recently closed tasks a whole-board listing names (ADR 0143).
+    /// It named as many as fit in the byte budget below, about 300 on the
+    /// operator's Hive, 68 KB of titles in every listing.
+    const CLOSED_INDEX_ENTRIES: usize = 50;
+    /// How much of a blocker note a brief entry carries.
+    const BRIEF_NOTE_CHARS: usize = 240;
 
     /// How much of one reply the one-line index of closed tasks may take.
     const CLOSED_INDEX_BYTES: usize = 64 * 1024;
@@ -3406,15 +3412,18 @@ read are not wrong, they are dated — and this board moves within minutes."
         &self,
         tasks: &[swarm_domain::Task],
         scope_note: Option<&str>,
+        brief: bool,
     ) -> Result<CallToolResult, ApplicationError> {
         let (mut closed, open): (Vec<&swarm_domain::Task>, Vec<&swarm_domain::Task>) = tasks
             .iter()
             .partition(|task| matches!(task.state, TaskState::Completed | TaskState::Abandoned));
         let open = open.into_iter().cloned().collect::<Vec<_>>();
-        let (listed, omitted) = fit_in_bytes(
-            self.tasks_with_amendments(&open)?,
-            Self::BOARD_LISTING_BYTES,
-        );
+        let entries = if brief {
+            self.brief_board_entries(&open)?
+        } else {
+            self.tasks_with_amendments(&open)?
+        };
+        let (listed, omitted) = fit_in_bytes(entries, Self::BOARD_LISTING_BYTES);
         let omitted = open[open.len() - omitted..]
             .iter()
             .map(|task| json!({ "id": task.id, "title": task.title, "state": task.state }))
@@ -3424,6 +3433,7 @@ read are not wrong, they are dated — and this board moves within minutes."
         let (closed, _) = fit_in_bytes(
             closed
                 .into_iter()
+                .take(Self::CLOSED_INDEX_ENTRIES)
                 .map(|task| {
                     json!({
                         "id": task.id,
@@ -3454,7 +3464,64 @@ read are not wrong, they are dated — and this board moves within minutes."
         if let Some(note) = scope_note {
             listing["scope_note"] = json!(note);
         }
+        if brief {
+            listing["brief_note"] = json!(
+                "Open tasks assigned to you are in full. Every other open task is in brief \
+(`brief: true`): what it is, who holds it, where it stands and why it waits. Its description, \
+amendments and Jira text are not here; `amendments` counts them. Read any task in full with \
+swarm_read_task_history before acting on it."
+            );
+        }
         structured(Self::stamped(listing))
+    }
+
+    /// The whole board in brief, with the reader's own assignments in full
+    /// (ADR 0143).
+    ///
+    /// ⚠️ ONE LISTING WAS ABOUT 290 KB, roughly 75,000 tokens, on the
+    /// operator's Hive on 2026-11-02: 44 open tasks in full, and descriptions
+    /// were 44% of it. Queen reads the board on each of about 100 reviews a
+    /// day, and the reply overflowed her tool output. She routes from what a
+    /// task is and where it stands, and reads the one she acts on in full.
+    fn brief_board_entries(
+        &self,
+        open: &[swarm_domain::Task],
+    ) -> Result<Vec<Value>, ApplicationError> {
+        let own =
+            |task: &swarm_domain::Task| task.assigned_worker_id == Some(self.principal.worker_id);
+        let mine = open
+            .iter()
+            .filter(|task| own(task))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut in_full = self.tasks_with_amendments(&mine)?.into_iter();
+        let others = open
+            .iter()
+            .filter(|task| !own(task))
+            .map(|task| task.id)
+            .collect::<Vec<_>>();
+        let amendments = self.tasks.store().amendments_for_tasks(&others)?;
+        let jira_changes = self.tasks.store().unapplied_jira_descriptions(&others)?;
+        // Kept in brief: Queen routes a filed draft from what the tool that
+        // filed it said (ADR 0126), and it is a few fields.
+        let mut intake = self.tasks.store().intake_for_tasks(&others)?;
+        Ok(open
+            .iter()
+            .map(|task| {
+                if own(task) {
+                    return in_full.next().unwrap_or_else(|| json!(task));
+                }
+                let mut entry = brief_board_entry(
+                    task,
+                    amendments.get(&task.id).map_or(0, Vec::len),
+                    jira_changes.contains_key(&task.id),
+                );
+                if let Some(facts) = intake.remove(&task.id) {
+                    add_intake(&mut entry, task, &facts);
+                }
+                entry
+            })
+            .collect())
     }
 
     /// The visible tasks, and — when there are none — why.
@@ -3481,11 +3548,12 @@ read are not wrong, they are dated — and this board moves within minutes."
                 Some(
                     "These are the tasks you filed, newest first: open ones in full, closed ones by id and title. Read any of them in full with swarm_read_task_history. Other open work is found by title with swarm_search_tasks.",
                 ),
+                false,
             );
         }
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
             if self.tasks.reads_the_board(self.principal) {
-                return self.board_listing(tasks, None);
+                return self.board_listing(tasks, None, true);
             }
             return structured(Self::stamped(
                 json!({ "tasks": self.tasks_with_amendments(tasks)? }),
@@ -3917,6 +3985,79 @@ fn review_evidence_next_step(
         ),
         CompletionEvidence::Deployed | CompletionEvidence::ExemptionApproved => None,
     }
+}
+
+/// One open task in brief: what it is, who holds it, where it stands and why
+/// it waits (ADR 0143). Named fields rather than the task with some removed,
+/// so a field added to a task later does not grow every whole-board listing.
+fn brief_board_entry(task: &swarm_domain::Task, amendments: usize, jira_changed: bool) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("brief".into(), json!(true));
+    entry.insert("id".into(), json!(task.id));
+    entry.insert("title".into(), json!(task.title));
+    entry.insert("state".into(), json!(task.state));
+    entry.insert("priority".into(), json!(task.priority));
+    entry.insert("workspace".into(), json!(task.workspace));
+    entry.insert("assigned_worker_id".into(), json!(task.assigned_worker_id));
+    entry.insert("next_move_owner".into(), json!(task.next_move_owner));
+    entry.insert("updated_at".into(), json!(task.updated_at));
+    if let Some(note) = &task.blocked_note {
+        let cut = note.chars().count() > AgentMcp::BRIEF_NOTE_CHARS;
+        let mut kept = note
+            .chars()
+            .take(AgentMcp::BRIEF_NOTE_CHARS)
+            .collect::<String>();
+        if cut {
+            kept.push('…');
+        }
+        entry.insert("blocked_note".into(), json!(kept));
+    }
+    if let Some(until) = task.blocked_until {
+        entry.insert("blocked_until".into(), json!(until));
+    }
+    if let Some(wait) = &task.wait {
+        entry.insert("wait".into(), json!(wait));
+    }
+    let prerequisites = task
+        .prerequisites
+        .iter()
+        .filter(|prerequisite| !prerequisite.removed)
+        .map(|prerequisite| {
+            json!({
+                "id": prerequisite.prerequisite_id,
+                "title": prerequisite.title,
+                "state": prerequisite.state,
+            })
+        })
+        .collect::<Vec<_>>();
+    if !prerequisites.is_empty() {
+        entry.insert("prerequisites".into(), json!(prerequisites));
+    }
+    if let Some(state) = &task.dispatch_state {
+        entry.insert("dispatch_state".into(), json!(state));
+    }
+    if let Some(state) = &task.outcome_delivery_state {
+        entry.insert("outcome_delivery_state".into(), json!(state));
+    }
+    if let Some(park) = &task.park {
+        entry.insert("park".into(), json!(park));
+    }
+    if task.review_request.is_some() {
+        entry.insert("review_requested".into(), json!(true));
+    }
+    if !task.clarification_waits.is_empty() {
+        entry.insert(
+            "clarification_waits".into(),
+            json!(task.clarification_waits.len()),
+        );
+    }
+    if amendments > 0 {
+        entry.insert("amendments".into(), json!(amendments));
+    }
+    if jira_changed {
+        entry.insert("jira_description_changed".into(), json!(true));
+    }
+    Value::Object(entry)
 }
 
 /// The leading values whose serialized size fits in `budget`, and how many
@@ -4444,7 +4585,7 @@ fn request_decision_tool() -> Tool {
 fn list_tasks_tool() -> Tool {
     tool(
         "swarm_list_tasks",
-        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment. A whole-board listing carries open tasks in full and names the most recently closed ones in `closed` by id and title; read any task in full with swarm_read_task_history. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
+        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment. A whole-board listing carries your own open assignments in full and every other open task in brief (what it is, who holds it, where it stands, why it waits), and names the 50 most recently closed in `closed` by id and title; read any task in full with swarm_read_task_history before acting on it. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -4596,7 +4737,7 @@ fn approve_no_deployment_tool() -> Tool {
 fn read_task_history_tool() -> Tool {
     tool(
         "swarm_read_task_history",
-        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists an open one, so a closed task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
+        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists your own open assignment, so a closed task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
         &json!({
             "type": "object",
             "properties": {
@@ -5873,6 +6014,119 @@ mod tests {
         );
     }
 
+    /// ADR 0143: a whole-board listing carries other work in brief and the
+    /// reader's own assignment in full, which is the one it works from.
+    #[tokio::test]
+    async fn a_board_reader_reads_other_work_in_brief_and_its_own_in_full() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        store
+            .update_worker_profile(
+                worker_id,
+                &swarm_persistence::WorkerProfileEdit {
+                    board_read: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let theirs = store
+            .create_task_with_details(
+                "Somebody else's",
+                "THE OTHER DESCRIPTION",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace/elsewhere",
+            )
+            .unwrap();
+        store
+            .amend_task_facts(theirs.id, queen_id, "THE OTHER AMENDMENT")
+            .unwrap();
+        store.transition_task(theirs.id, TaskState::Ready).unwrap();
+        let long_note = format!("Waiting on the vendor. {}", "x".repeat(400));
+        store
+            .transition_task_with_note(theirs.id, TaskState::Blocked, &long_note)
+            .unwrap();
+        let mine = store
+            .create_task_with_details(
+                "Mine",
+                "MY DESCRIPTION",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        store.assign_task_to_worker(mine.id, worker_id).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listing = &response["result"]["structuredContent"];
+        let entry = |title: &str| {
+            listing["tasks"]
+                .as_array()
+                .unwrap_or_else(|| panic!("tasks are listed: {response}"))
+                .iter()
+                .find(|task| task["title"] == title)
+                .unwrap_or_else(|| panic!("{title} is listed: {response}"))
+                .clone()
+        };
+        let other = entry("Somebody else's");
+        assert_eq!(other["brief"], true, "{other}");
+        assert_eq!(other["state"], "blocked", "{other}");
+        assert_eq!(other["amendments"], 1, "{other}");
+        assert_eq!(other["workspace"], "/workspace/elsewhere", "{other}");
+        let note = other["blocked_note"].as_str().unwrap_or_default();
+        assert!(note.starts_with("Waiting on the vendor."), "{other}");
+        assert_eq!(note.chars().count(), 241, "cut to 240 and marked: {other}");
+        assert!(
+            !response.to_string().contains("THE OTHER DESCRIPTION")
+                && !response.to_string().contains("THE OTHER AMENDMENT"),
+            "other work is named, not carried: {response}"
+        );
+        let own = entry("Mine");
+        assert_eq!(own["description"], "MY DESCRIPTION", "{own}");
+        assert!(own.get("brief").is_none(), "{own}");
+        assert!(listing["brief_note"].is_string(), "{response}");
+    }
+
+    /// ADR 0143: Queen's listing is the brief board too, and names only the
+    /// most recent closed work.
+    #[tokio::test]
+    async fn queen_reads_the_board_in_brief_with_the_last_fifty_closed() {
+        let (bridge, store, queen_id, _, _) = setup();
+        store
+            .create_task_with_details(
+                "Open work",
+                "AN OPEN DESCRIPTION",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        for index in 0..55 {
+            let closed = store
+                .create_task(&format!("Closed {index}"), "/workspace")
+                .unwrap();
+            store
+                .transition_task(closed.id, TaskState::Abandoned)
+                .unwrap();
+        }
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listing = &response["result"]["structuredContent"];
+        assert_eq!(listing["tasks"][0]["brief"], true, "{response}");
+        assert!(
+            !response.to_string().contains("AN OPEN DESCRIPTION"),
+            "{response}"
+        );
+        assert_eq!(
+            listing["closed"].as_array().map(Vec::len),
+            Some(50),
+            "{response}"
+        );
+        assert_eq!(listing["closed_total"], 55, "{response}");
+    }
+
     /// ⚠️ CLOSED WORK IN FULL IS WHAT MADE QUEEN'S LISTING TOO LARGE TO RETURN.
     /// By 2026-10-24 it was 8.2 million characters, nine tenths of them closed
     /// tasks, and every call after that disconnected her from her tools.
@@ -5968,7 +6222,8 @@ mod tests {
     /// so "report completion on 01a063d6" turns an explicitly assigned step
     /// into a relay through Queen. Three times in one week. The resolution is
     /// attached where the task is READ, which also repairs the briefs already
-    /// on the board.
+    /// on the board. A whole-board listing carries other work in brief, without
+    /// its text, so this is read where the text is (ADR 0143).
     #[tokio::test]
     async fn a_task_naming_another_by_a_fragment_carries_the_full_id() {
         let (bridge, store, queen_id, _, _) = setup();
@@ -5976,7 +6231,7 @@ mod tests {
             .create_task("The work being pointed at", "/workspace")
             .unwrap();
         let fragment = referenced.id.to_string()[..8].to_owned();
-        store
+        let pointing = store
             .create_task_with_details(
                 "Points at it badly",
                 &format!("Report completion on {fragment} when this lands."),
@@ -5986,16 +6241,16 @@ mod tests {
             .unwrap();
         let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
 
-        let response =
-            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        let response = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({ "task_id": pointing.id }),
+        )
+        .await;
 
-        let listed = &response["result"]["structuredContent"]["tasks"];
-        let pointing = listed
-            .as_array()
-            .expect("tasks are listed")
-            .iter()
-            .find(|task| task["title"] == "Points at it badly")
-            .expect("the filing task is listed");
+        let pointing = &response["result"]["structuredContent"]["task"];
+        assert_eq!(pointing["title"], "Points at it badly", "{response}");
         let named = &pointing["referenced_records"][0];
         assert_eq!(named["written"], fragment);
         assert_eq!(named["id"], referenced.id.to_string());
@@ -6027,7 +6282,7 @@ mod tests {
             "this test needs two ids sharing a prefix, which UUIDv7 gives \
              within the same time window"
         );
-        store
+        let pointing = store
             .create_task_with_details(
                 "Points at both without knowing",
                 &format!("See {fragment} for the background."),
@@ -6037,16 +6292,19 @@ mod tests {
             .unwrap();
         let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
 
-        let response =
-            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        let response = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({ "task_id": pointing.id }),
+        )
+        .await;
 
-        let listed = &response["result"]["structuredContent"]["tasks"];
-        let pointing = listed
-            .as_array()
-            .expect("tasks are listed")
-            .iter()
-            .find(|task| task["title"] == "Points at both without knowing")
-            .expect("the filing task is listed");
+        let pointing = &response["result"]["structuredContent"]["task"];
+        assert_eq!(
+            pointing["title"], "Points at both without knowing",
+            "{response}"
+        );
         let named = pointing["referenced_records"]
             .as_array()
             .expect("the fragment resolved");
@@ -6061,7 +6319,7 @@ mod tests {
     async fn a_task_citing_a_whole_id_gains_nothing_to_read() {
         let (bridge, store, queen_id, _, _) = setup();
         let referenced = store.create_task("Properly cited", "/workspace").unwrap();
-        store
+        let citing = store
             .create_task_with_details(
                 "Cites it in full",
                 &format!("Report completion on {} when this lands.", referenced.id),
@@ -6071,16 +6329,18 @@ mod tests {
             .unwrap();
         let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
 
-        let response =
-            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+        // Read in full: a brief listing entry never carries this field, so
+        // its absence there would prove nothing (ADR 0143).
+        let response = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_read_task_history",
+            json!({ "task_id": citing.id }),
+        )
+        .await;
 
-        let listed = &response["result"]["structuredContent"]["tasks"];
-        let citing = listed
-            .as_array()
-            .expect("tasks are listed")
-            .iter()
-            .find(|task| task["title"] == "Cites it in full")
-            .expect("the citing task is listed");
+        let citing = &response["result"]["structuredContent"]["task"];
+        assert_eq!(citing["title"], "Cites it in full", "{response}");
         assert!(
             citing.get("referenced_records").is_none(),
             "a whole id needs no reading aid, and adding one would train readers \
