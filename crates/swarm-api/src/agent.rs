@@ -2204,7 +2204,7 @@ impl AgentMcp {
             .get_worker_profile(worker_id)
             .map_err(ApplicationError::Store)?;
         let holds_active = store
-            .list_tasks()
+            .list_unfinished_tasks_assigned_to(worker_id)
             .map_err(ApplicationError::Store)?
             .into_iter()
             .any(|task| {
@@ -2791,9 +2791,7 @@ impl AgentMcp {
         }
         let current = self
             .tasks
-            .list_visible_tasks(self.principal)?
-            .into_iter()
-            .find(|task| task.id == task_id)
+            .visible_task(self.principal, task_id)?
             .ok_or_else(|| self.unavailable_task(task_id))?;
         if !current.state.can_transition_to(input.state) {
             return Err(ApplicationError::Store(TaskStoreError::InvalidTransition {
@@ -3706,10 +3704,8 @@ read are not wrong, they are dated — and this board moves within minutes."
         let task_id = TaskId::from_str(value)
             .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
         self.tasks
-            .list_visible_tasks(self.principal)?
-            .into_iter()
-            .any(|task| task.id == task_id)
-            .then_some(task_id)
+            .visible_task(self.principal, task_id)?
+            .map(|_| task_id)
             .ok_or_else(|| self.unavailable_task(task_id))
     }
 
@@ -5638,6 +5634,45 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), notified.as_mut())
             .await
             .unwrap();
+    }
+
+    /// Queen cannot stand down a worker that holds Active work, and Active
+    /// is the only state that stops her. The check reads only that worker's
+    /// unfinished tasks (ADR 0137), so both directions are pinned here.
+    #[tokio::test]
+    async fn sleeping_a_worker_is_refused_only_while_it_holds_active_work() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task("Mid-sentence", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let sleep = || {
+            call_review_test_tool(
+                bridge.clone(),
+                &token,
+                "swarm_sleep_worker",
+                json!({"worker_id": worker_id, "reason": "Nothing left to do."}),
+            )
+        };
+
+        let refused = sleep().await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert!(
+            refused.to_string().contains("still holds Active work"),
+            "{refused}"
+        );
+
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let after = sleep().await;
+        assert!(
+            !after.to_string().contains("still holds Active work"),
+            "{after}"
+        );
     }
 
     /// ⚠️ A LISTING WITH NO TIME ON IT BECOMES A CLAIM ABOUT THE PRESENT.

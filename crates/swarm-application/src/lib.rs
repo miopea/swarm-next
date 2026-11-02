@@ -3710,22 +3710,45 @@ impl TaskService {
         &self,
         principal: AgentPrincipal,
     ) -> Result<Vec<Task>, ApplicationError> {
-        let tasks = self.list_tasks()?;
         if principal.role == WorkerRole::Queen {
-            return Ok(tasks);
+            return self.list_tasks();
         }
-        Ok(principal
-            .active_session_id
-            .map_or_else(Vec::new, |session_id| {
-                tasks
-                    .into_iter()
-                    .filter(|task| {
-                        task.assigned_worker_id == Some(principal.worker_id)
-                            && task.assigned_session_id == Some(session_id)
-                            && task.state != TaskState::Completed
-                    })
-                    .collect()
-            }))
+        if principal.active_session_id.is_none() {
+            return Ok(Vec::new());
+        }
+        // Only this worker's unfinished rows: the rule below could accept no
+        // other, and reading the whole board to discard it cost seconds per
+        // call on a long-lived Hive (ADR 0137).
+        Ok(self
+            .store
+            .list_unfinished_tasks_assigned_to(principal.worker_id)?
+            .into_iter()
+            .filter(|task| acts_on(principal, task))
+            .collect())
+    }
+
+    /// The one task a principal may act on, by the same rule as
+    /// `list_visible_tasks`, reading only that task.
+    ///
+    /// ⚠️ EVERY ACT GATE ASKS THIS, SO IT MUST NEVER READ THE BOARD. Transitions,
+    /// notes, evidence and messages each asked `list_visible_tasks` and looked
+    /// for one id in the answer, which projected every task on the Hive to
+    /// answer a question about one: about 4 s of CPU per call at 2,000 tasks,
+    /// holding the store the whole time (ADR 0137).
+    ///
+    /// # Errors
+    /// Returns a persistence error when the task cannot be read.
+    pub fn visible_task(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<Option<Task>, ApplicationError> {
+        let task = match self.store.get_task(task_id) {
+            Ok(task) => task,
+            Err(TaskStoreError::NotFound) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Ok((principal.role == WorkerRole::Queen || acts_on(principal, &task)).then_some(task))
     }
 
     /// Every task a principal may READ, which is not the same set as the ones
@@ -3758,6 +3781,36 @@ impl TaskService {
             return Ok(self.store.list_tasks_filed_by(principal.worker_id)?);
         }
         self.list_visible_tasks(principal)
+    }
+
+    /// Whether `task_id` is in `list_tasks_readable_by(principal)`, reading
+    /// only that task wherever the answer allows (ADR 0137).
+    ///
+    /// ⚠️ THE SAME THREE BRANCHES, IN THE SAME ORDER, AS THE LIST ABOVE. A
+    /// reader that answered differently here would make a task appear in a
+    /// worker's list and then refuse its history, or the reverse. A test holds
+    /// the two to each other across principals and tasks.
+    fn task_readable_by(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<bool, ApplicationError> {
+        if self.reads_the_board(principal) {
+            return match self.store.get_task(task_id) {
+                Ok(_) => Ok(true),
+                Err(TaskStoreError::NotFound) => Ok(false),
+                Err(error) => Err(error.into()),
+            };
+        }
+        if self.files_by_intake(principal) {
+            // Already bounded by FILED_TASKS_LIMIT, so it stays a list.
+            return Ok(self
+                .store
+                .list_tasks_filed_by(principal.worker_id)?
+                .iter()
+                .any(|task| task.id == task_id));
+        }
+        Ok(self.visible_task(principal, task_id)?.is_some())
     }
 
     /// Whether this principal reads the whole board rather than only its own
@@ -3794,11 +3847,7 @@ impl TaskService {
         principal: AgentPrincipal,
         task_id: TaskId,
     ) -> Result<(), ApplicationError> {
-        if self
-            .list_tasks_readable_by(principal)?
-            .iter()
-            .any(|task| task.id == task_id)
-        {
+        if self.task_readable_by(principal, task_id)? {
             return Ok(());
         }
         // A task the board has NAMED as this worker's own blocker is readable.
@@ -3855,7 +3904,8 @@ impl TaskService {
         principal: AgentPrincipal,
     ) -> Result<Vec<Task>, ApplicationError> {
         let mut finished = self
-            .list_tasks()?
+            .store
+            .list_finished_tasks_assigned_to(principal.worker_id)?
             .into_iter()
             .filter(|task| {
                 task.assigned_worker_id == Some(principal.worker_id)
@@ -4081,11 +4131,7 @@ impl TaskService {
         if principal.role != WorkerRole::Queen {
             return Err(ApplicationError::NotAuthorized);
         }
-        let visible = self
-            .list_visible_tasks(principal)?
-            .into_iter()
-            .any(|task| task.id == task_id);
-        if !visible {
+        if self.visible_task(principal, task_id)?.is_none() {
             return Err(ApplicationError::NotAuthorized);
         }
         Ok(self.store.approve_completion_exemption(
@@ -5065,6 +5111,17 @@ fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {
     }
 }
 
+/// A worker acts on its own unfinished assignment in its live session, and on
+/// nothing else. The one statement of that rule: `list_visible_tasks` and
+/// `visible_task` both apply it, so narrowing what they read cannot widen it.
+fn acts_on(principal: AgentPrincipal, task: &Task) -> bool {
+    principal.active_session_id.is_some_and(|session_id| {
+        task.assigned_worker_id == Some(principal.worker_id)
+            && task.assigned_session_id == Some(session_id)
+            && task.state != TaskState::Completed
+    })
+}
+
 /// A task may not be called done on prose alone.
 ///
 /// The operator's ruling, 2026-08-21: nothing closes without a deployment,
@@ -6022,6 +6079,249 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|task| task.id == mine.id)
+        );
+    }
+
+    /// One task for every branch of the act and read rules.
+    struct GateTasks {
+        stale: TaskId,
+        held: TaskId,
+        abandoned: TaskId,
+        finished: TaskId,
+        active: TaskId,
+        loose: TaskId,
+        removed: TaskId,
+        elsewhere: TaskId,
+        filed: TaskId,
+    }
+
+    /// A Hive with every kind of principal the gates distinguish.
+    struct GateHive {
+        service: TaskService,
+        queen: AgentPrincipal,
+        /// The profile from before its session, so it holds none.
+        worker: WorkerProfile,
+        other: WorkerId,
+        reader: WorkerId,
+        tool: AgentPrincipal,
+        tasks: GateTasks,
+    }
+
+    impl GateHive {
+        fn new() -> Self {
+            let (service, queen, worker) = setup();
+            let queen = AgentPrincipal::from(&queen);
+            let other = Self::colleague(&service, "Moss", false);
+            let reader = Self::colleague(&service, "Fern", true);
+            let tool = service
+                .store()
+                .connection_principal("client-a", "Claude")
+                .unwrap();
+            let tool = AgentPrincipal::from(&tool);
+            let tasks = Self::tasks(&service, queen, &worker, other, tool);
+            Self {
+                service,
+                queen,
+                worker,
+                other,
+                reader,
+                tool,
+                tasks,
+            }
+        }
+
+        fn colleague(service: &TaskService, name: &str, board_read: bool) -> WorkerId {
+            let store = service.store();
+            let workspace = format!("/workspace/{}", name.to_lowercase());
+            let worker = store
+                .create_worker(name, ProviderKind::ClaudeCode, &workspace, false, 1)
+                .unwrap();
+            if board_read {
+                let edit = swarm_persistence::WorkerProfileEdit {
+                    board_read: Some(true),
+                    ..Default::default()
+                };
+                store.update_worker_profile(worker.id, &edit).unwrap();
+            }
+            store
+                .bind_worker_session(worker.id, WorkerSessionId::new())
+                .unwrap();
+            worker.id
+        }
+
+        fn tasks(
+            service: &TaskService,
+            queen: AgentPrincipal,
+            worker: &WorkerProfile,
+            other: WorkerId,
+            tool: AgentPrincipal,
+        ) -> GateTasks {
+            let store = service.store();
+            let task = |title: &str| {
+                let created =
+                    service.create_task(queen, title, "", TaskPriority::Normal, &worker.workspace);
+                created.unwrap().id
+            };
+            let assign = |id: TaskId, to: WorkerId| service.assign_task(queen, id, to).unwrap();
+            let walk = |id: TaskId, states: &[TaskState]| {
+                for state in states {
+                    service.transition_operator_task(id, *state).unwrap();
+                }
+            };
+            // Held under an earlier session, then the worker restarts.
+            let earlier = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, earlier).unwrap();
+            let stale = task("Held before a restart");
+            assign(stale, worker.id);
+            store.release_worker_session(earlier).unwrap();
+            store
+                .bind_worker_session(worker.id, WorkerSessionId::new())
+                .unwrap();
+            let held = task("Held now");
+            assign(held, worker.id);
+            let abandoned = task("Abandoned while held");
+            assign(abandoned, worker.id);
+            walk(abandoned, &[TaskState::Abandoned]);
+            // Finished before another goes Active: a worker holds one at a time.
+            let finished = task("Finished");
+            assign(finished, worker.id);
+            walk(
+                finished,
+                &[TaskState::Ready, TaskState::Active, TaskState::Review],
+            );
+            store
+                .record_task_deployment(finished, "production", "release 7", 1_000)
+                .unwrap();
+            service
+                .transition_operator_task_with_note(finished, TaskState::Completed, "Released.")
+                .unwrap();
+            let active = task("Active now");
+            assign(active, worker.id);
+            walk(active, &[TaskState::Ready, TaskState::Active]);
+            let removed = task("Removed");
+            service.remove_operator_task(removed).unwrap();
+            let elsewhere = task("Someone else's");
+            assign(elsewhere, other);
+            let request = crate::task_intake::IntakeRequest {
+                title: "Filed by a tool",
+                description: "From an email.",
+                priority: TaskPriority::Normal,
+                workspace: None,
+                recommended_worker: None,
+                source_link: None,
+                source_jira_key: None,
+                requested_by: None,
+            };
+            let filed = service.file_intake_task(tool, &request).unwrap().id;
+            GateTasks {
+                stale,
+                held,
+                abandoned,
+                finished,
+                active,
+                loose: task("Nobody's"),
+                removed,
+                elsewhere,
+                filed,
+            }
+        }
+
+        fn principal(&self, id: WorkerId) -> AgentPrincipal {
+            AgentPrincipal::from(&self.service.store().get_worker_profile(id).unwrap())
+        }
+
+        fn ids(&self) -> [TaskId; 10] {
+            let t = &self.tasks;
+            [
+                t.stale,
+                t.held,
+                t.abandoned,
+                t.finished,
+                t.active,
+                t.loose,
+                t.removed,
+                t.elsewhere,
+                t.filed,
+                TaskId::new(),
+            ]
+        }
+
+        /// Every gate answers for `principal` what the whole board answered.
+        fn assert_agrees(&self, who: &str, principal: AgentPrincipal) {
+            let service = &self.service;
+            let board = service.store().list_tasks().unwrap();
+            // The old act rule, applied to the whole board as it used to be.
+            let acts = board
+                .iter()
+                .filter(|task| {
+                    principal.role == WorkerRole::Queen
+                        || principal.active_session_id.is_some_and(|session_id| {
+                            task.assigned_worker_id == Some(principal.worker_id)
+                                && task.assigned_session_id == Some(session_id)
+                                && task.state != TaskState::Completed
+                        })
+                })
+                .map(|task| task.id)
+                .collect::<Vec<_>>();
+            let visible = service.list_visible_tasks(principal).unwrap();
+            let visible = visible.iter().map(|task| task.id).collect::<Vec<_>>();
+            assert_eq!(visible, acts, "{who}");
+            let readable = service.list_tasks_readable_by(principal).unwrap();
+            for id in self.ids() {
+                let may_act = service.visible_task(principal, id).unwrap().is_some();
+                assert_eq!(may_act, acts.contains(&id), "{who} acting on {id}");
+                let may_read = service.task_readable_by(principal, id).unwrap();
+                let listed = readable.iter().any(|task| task.id == id);
+                assert_eq!(may_read, listed, "{who} reading {id}");
+            }
+            let mut finished = board
+                .into_iter()
+                .filter(|task| {
+                    task.assigned_worker_id == Some(principal.worker_id)
+                        && task.state == TaskState::Completed
+                })
+                .collect::<Vec<_>>();
+            finished.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
+            let narrowed = service.tasks_this_worker_finished(principal).unwrap();
+            assert_eq!(narrowed, finished, "{who}");
+        }
+    }
+
+    /// The narrowed gates give exactly the answers the whole-board reads gave
+    /// (ADR 0137), for every kind of principal against every kind of task.
+    #[test]
+    fn the_single_task_gates_agree_with_the_whole_board_they_replaced() {
+        let hive = GateHive::new();
+        let (worker, reader) = (hive.principal(hive.worker.id), hive.principal(hive.reader));
+        for (who, principal) in [
+            ("queen", hive.queen),
+            ("worker", worker),
+            ("worker with no session", AgentPrincipal::from(&hive.worker)),
+            ("other worker", hive.principal(hive.other)),
+            ("board reader", reader),
+            ("tool", hive.tool),
+        ] {
+            hive.assert_agrees(who, principal);
+        }
+
+        // The fixture reaches every branch, so agreement is not agreement on nothing.
+        let (service, t) = (&hive.service, &hive.tasks);
+        let ids_of = |tasks: Vec<Task>| tasks.into_iter().map(|task| task.id).collect::<Vec<_>>();
+        let visible = ids_of(service.list_visible_tasks(worker).unwrap());
+        assert_eq!(visible, [t.held, t.abandoned, t.active]);
+        assert!(service.task_readable_by(reader, t.elsewhere).unwrap());
+        assert!(service.visible_task(reader, t.elsewhere).unwrap().is_none());
+        assert_eq!(
+            ids_of(service.list_tasks_readable_by(hive.tool).unwrap()),
+            [t.filed]
+        );
+        let finished = ids_of(service.tasks_this_worker_finished(worker).unwrap());
+        assert_eq!(finished, [t.finished]);
+        assert!(
+            service
+                .visible_task(hive.queen, t.removed)
+                .unwrap()
+                .is_none()
         );
     }
 

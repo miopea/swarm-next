@@ -36,6 +36,35 @@ pub(super) fn migrate(tx: &Transaction<'_>) -> rusqlite::Result<()> {
     )
 }
 
+/// Which decisions belong to which task, written so a query for ONE task reads
+/// only that task's rows (ADR 0137).
+///
+/// ⚠️ THE SAME SET AS THE `UNION` IT REPLACES, WITHOUT THE `UNION`. `SQLite`
+/// cannot push a correlated `task_id = t.id` into a de-duplicating compound
+/// view, so every row that asked rebuilt the whole set: about 0.7 ms each
+/// time, three times per task in the task projection, which made reading the
+/// board cost 4 s of CPU on a Hive with 2,000 tasks and 1,500 decisions.
+///
+/// `UNION ALL` is flattened into the query, so each half uses its index. It
+/// returns exactly the old set because neither half can repeat itself (a
+/// decision's id is unique, and a link's key is `(task_id, decision_id)`) and
+/// the anti-join drops a link that restates the decision's own task. Callers
+/// may therefore keep treating it as a set.
+const DECISION_MEMBERSHIP_VIEW: &str = "
+        CREATE VIEW task_decision_membership AS
+            SELECT task_id, id AS decision_id FROM decision_requests WHERE task_id IS NOT NULL
+            UNION ALL
+            SELECT l.task_id, l.decision_id FROM task_decision_links l
+            WHERE NOT EXISTS (SELECT 1 FROM decision_requests d
+                              WHERE d.id = l.decision_id AND d.task_id = l.task_id);";
+
+pub(super) fn migrate_membership_view(tx: &Transaction<'_>, version: i64) -> rusqlite::Result<()> {
+    tx.execute_batch(&format!(
+        "DROP VIEW IF EXISTS task_decision_membership;{DECISION_MEMBERSHIP_VIEW}"
+    ))?;
+    tx.pragma_update(None, "user_version", version)
+}
+
 fn local_states(
     tx: &Transaction<'_>,
     task: TaskId,

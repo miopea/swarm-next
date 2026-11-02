@@ -620,3 +620,84 @@ fn shared_decision_refuses_foreign_task_or_question_even_when_both_match() {
         assert!(store.task_decision_links(task).unwrap().is_empty());
     }
 }
+
+/// The membership view is the set the old `UNION` returned, and a question
+/// about one task reads that task's rows by index (ADR 0137).
+///
+/// The plan is asserted because the defect was never a wrong answer: the old
+/// view was correct and rebuilt every membership row each time one task asked,
+/// which made reading the board cost seconds. Only the plan shows that.
+#[test]
+fn membership_is_the_union_set_read_one_task_at_a_time() {
+    let store = TaskStore::in_memory().unwrap();
+    let (primary, first) = decision(&store);
+    let (other_primary, second) = decision(&store);
+    let consumer = blocked(&store);
+    link(&store, consumer, first);
+    link(&store, consumer, second);
+    // A link restating a decision's own task. The API refuses one today, so it
+    // is written directly, as an older row could have been.
+    store
+        .connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO task_decision_links(task_id,decision_id,reason,actor_kind,created_at)
+             VALUES (?1,?2,'Restated','operator',100)",
+            params![primary.to_string(), first.to_string()],
+        )
+        .unwrap();
+    let connection = store.connection().unwrap();
+    let rows = |sql: &str| {
+        connection
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let view = rows("SELECT task_id, decision_id FROM task_decision_membership ORDER BY 1, 2");
+    let union = rows(
+        "SELECT task_id, id FROM decision_requests WHERE task_id IS NOT NULL
+         UNION SELECT task_id, decision_id FROM task_decision_links ORDER BY 1, 2",
+    );
+    assert_eq!(view, union);
+    let mut expected = vec![
+        (primary.to_string(), first.to_string()),
+        (other_primary.to_string(), second.to_string()),
+        (consumer.to_string(), first.to_string()),
+        (consumer.to_string(), second.to_string()),
+    ];
+    expected.sort();
+    assert_eq!(
+        view, expected,
+        "each membership once, the restated link included once"
+    );
+
+    let plan = connection
+        .prepare(
+            // The shape the task projection asks, three times per task.
+            "EXPLAIN QUERY PLAN SELECT t.id,
+               EXISTS(SELECT 1 FROM decision_requests dr
+                      WHERE dr.id IN (SELECT decision_id FROM task_decision_membership
+                                      WHERE task_id = t.id))
+             FROM tasks t",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let rebuilt = plan.iter().any(|step| {
+        step.contains("TEMP B-TREE")
+            || step.starts_with("CO-ROUTINE")
+            || step.starts_with("MATERIALIZE")
+            || (step.starts_with("SCAN") && !step.starts_with("SCAN t "))
+    });
+    assert!(
+        !rebuilt,
+        "a task's membership must be searched, not rebuilt: {plan:#?}"
+    );
+}
