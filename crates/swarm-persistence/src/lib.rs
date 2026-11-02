@@ -2764,7 +2764,11 @@ impl TaskStore {
         }
         transaction.commit()?;
         drop(connection);
-        self.list_tasks()
+        // The board, as `GET /api/v1/tasks` serves it. The page shows these
+        // beside settled work it reads separately, so returning every task
+        // listed each settled one twice until the next refresh, and sent the
+        // whole history on every drag.
+        self.list_board_tasks()
     }
 
     /// Removes one task from the active Hive without deleting its source,
@@ -8193,6 +8197,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![third.id, first.id, second.id]
         );
+    }
+
+    /// A reorder replies with the board. The page lists this beside the
+    /// settled work it reads on its own, so every task here would show settled
+    /// work twice.
+    #[test]
+    fn a_reorder_replies_with_the_board_and_not_settled_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+        let settled = store.create_task("Settled", "/workspace").unwrap();
+        store
+            .transition_task(settled.id, TaskState::Abandoned)
+            .unwrap();
+
+        let reordered = store.reorder_open_tasks(&[second.id, first.id]).unwrap();
+
+        assert_eq!(
+            reordered.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![second.id, first.id]
+        );
+        assert_eq!(reordered, store.list_board_tasks().unwrap());
     }
 
     #[test]
