@@ -705,6 +705,20 @@ fn reload_state_from(
     }
 }
 
+/// What each agent tool has cost to answer since this process started, most
+/// time first (ADR 0144). Counts only; no arguments or answers are kept.
+pub(super) async fn agent_tool_costs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.agent_tool_costs.reading(unix_timestamp())),
+    )
+        .into_response())
+}
+
 pub(super) async fn resources(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

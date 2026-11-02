@@ -1175,11 +1175,26 @@ impl ServerHandler for AgentMcp {
         Ok(ListToolsResult::with_all_items(tools))
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        // Counted per tool for the cost sweep (ADR 0144). The answer is built
+        // in its own method so that every `return` in it is counted here.
+        let tool = request.name.to_string();
+        let started = std::time::Instant::now();
+        let response = self.answer_tool_call(request).await;
+        self.record_tool_cost(&tool, started, &response);
+        response
+    }
+}
+
+impl AgentMcp {
+    #[allow(clippy::too_many_lines)]
+    async fn answer_tool_call(
+        &self,
+        request: CallToolRequestParams,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         if self.principal.role == WorkerRole::Queen {
@@ -2008,9 +2023,30 @@ impl ServerHandler for AgentMcp {
             }
         }
     }
-}
 
-impl AgentMcp {
+    /// Counts one answered tool call: time to answer, and the size of the
+    /// answer the agent reads (ADR 0144).
+    fn record_tool_cost(
+        &self,
+        tool: &str,
+        started: std::time::Instant,
+        response: &Result<CallToolResponse, ErrorData>,
+    ) {
+        let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let (failed, bytes) = match response {
+            Ok(CallToolResponse::Complete(result)) => (
+                result.is_error == Some(true),
+                serde_json::to_vec(result)
+                    .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+            ),
+            Ok(_) => (false, 0),
+            Err(_) => (true, 0),
+        };
+        self.state
+            .agent_tool_costs
+            .record(tool, failed, micros, bytes);
+    }
+
     /// Sends what Queen just queued for the Keeper now, rather than at the next
     /// paced pass, as the operator's own claim does.
     fn send_to_keeper_now(&self) {
@@ -8581,6 +8617,39 @@ mod tests {
         )
         .await;
         assert_eq!(typo["result"]["isError"], true, "{typo}");
+    }
+
+    /// ADR 0144: every answered call is counted against its tool, including
+    /// one the server refuses, so the sweep sees what agents actually call.
+    #[tokio::test]
+    async fn each_tool_call_is_counted_with_the_size_of_its_answer() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let state = connected_state(&store);
+        store.create_task("Counted work", "/workspace").unwrap();
+        let queen = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let listing = call_as(&bridge, &state, &queen, "swarm_list_tasks", json!({})).await;
+        call_as(&bridge, &state, &queen, "swarm_no_such_tool", json!({})).await;
+
+        let reading = state.agent_tool_costs.reading(0);
+        let cost = |name: &str| {
+            reading
+                .tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} is counted: {reading:?}"))
+                .cost
+        };
+        let listed = cost("swarm_list_tasks");
+        assert_eq!((listed.calls, listed.failures), (1, 0), "{reading:?}");
+        let answer = serde_json::to_vec(&listing["result"]).unwrap().len() as u64;
+        assert!(
+            listed.total_bytes > 0 && listed.total_bytes.abs_diff(answer) < 64,
+            "the counted size is the answer the agent reads: {} against {answer}",
+            listed.total_bytes
+        );
+        let refused = cost("swarm_no_such_tool");
+        assert_eq!((refused.calls, refused.failures), (1, 1), "{reading:?}");
     }
 
     /// ADR 0126. Queen routes from what the tool said, so her board carries

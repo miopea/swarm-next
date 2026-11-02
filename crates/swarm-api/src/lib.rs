@@ -1,4 +1,5 @@
 mod agent;
+mod agent_tool_costs;
 mod answered_question_close;
 mod attach;
 mod attachments;
@@ -427,6 +428,9 @@ pub struct AppState {
     /// the journal should have to explain.
     engine_drift_reported: Arc<std::sync::atomic::AtomicBool>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
+    /// What each agent tool has cost to answer since this process started
+    /// (ADR 0144). Bounded by tool name.
+    agent_tool_costs: Arc<agent_tool_costs::AgentToolCosts>,
     /// The last whole screen reading of each live session, so a roster look
     /// that finds nothing drawn since reuses it rather than reading and parsing
     /// the whole snapshot again (ADR 0139). Holds only sessions live at the
@@ -627,6 +631,7 @@ impl AppState {
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             engine_drift_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
+            agent_tool_costs: Arc::default(),
             provider_screens: Arc::default(),
             provider_updates: Arc::default(),
             tool_reconnects: Arc::default(),
@@ -4966,6 +4971,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/control-room/events", get(control_room::events))
         .route("/api/v1/runtime/limits", get(runtime::limits))
         .route("/api/v1/runtime/resources", get(runtime::resources))
+        .route(
+            "/api/v1/runtime/agent-tools",
+            get(runtime::agent_tool_costs),
+        )
         .route(
             "/api/v1/runtime/database/integrity",
             post(database_integrity::check),
@@ -24704,6 +24713,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// ADR 0144: the per-tool tally is read with the operator's token, and
+    /// refused without it, like every other runtime reading.
+    #[tokio::test]
+    async fn the_agent_tool_tally_is_an_authenticated_runtime_reading() {
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret");
+        state
+            .agent_tool_costs
+            .record("swarm_list_tasks", false, 1_500, 4_096);
+        let app = router(state);
+        let refused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/runtime/agent-tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/runtime/agent-tools").await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let reading = response_json(response).await;
+        assert_eq!(reading["tools"][0]["name"], "swarm_list_tasks");
+        assert_eq!(reading["tools"][0]["calls"], 1);
+        assert_eq!(reading["tools"][0]["total_bytes"], 4_096);
+        assert!(reading["since"].as_i64().is_some(), "{reading}");
     }
 
     #[tokio::test]
