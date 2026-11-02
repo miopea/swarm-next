@@ -240,6 +240,17 @@ pub struct RaiseRecord {
     pub evidence: String,
 }
 
+/// What [`TaskStore::decision_index_page`] returns.
+#[derive(Debug)]
+pub struct DecisionIndexPage {
+    /// Every pending decision in scope.
+    pub pending: Vec<DecisionRequest>,
+    /// One page of settled decisions, the one last settled first.
+    pub settled: Vec<DecisionRequest>,
+    /// How many settled decisions the scope holds, on every page.
+    pub settled_total: usize,
+}
+
 pub const MAX_PENDING_DECISIONS: i64 = 256;
 // Pending-first ordering must fit every admitted request. History uses only
 // remaining capacity; it must never conceal an unanswered operator request.
@@ -680,32 +691,6 @@ impl TaskStore {
         .ok_or(TaskStoreError::DecisionNotFound)
     }
 
-    /// How many decisions this Hive holds, before the listing cap.
-    ///
-    /// ⚠️ THE CAP WAS SILENT AND THAT COST A PUBLISHED NUMBER. `list_decision_requests`
-    /// stops at `MAX_DECISION_RESULTS` and the response reported the returned
-    /// length as `count`, so a caller read "200 decisions" when there were 305.
-    /// A coordinator published ratios off that denominator tonight.
-    ///
-    /// The caption made it worse rather than better: it said the index omits
-    /// reason, risk and evidence — a truncation of CONTENT — while saying
-    /// nothing about omitted ROWS. A truncation that announces a different
-    /// truncation is worse than one that announces none, because the reader
-    /// believes they have already been warned.
-    ///
-    /// # Errors
-    /// Returns an error when persistence is unavailable.
-    pub fn count_decision_requests(&self) -> Result<usize, TaskStoreError> {
-        let connection = self.connection()?;
-        let total: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM decision_requests d
-             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        Ok(usize::try_from(total).unwrap_or(usize::MAX))
-    }
-
     /// Retracts an obsolete question without recording an operator judgment.
     ///
     /// # Errors
@@ -927,6 +912,51 @@ impl TaskStore {
         worker_id: WorkerId,
     ) -> Result<Vec<DecisionRequest>, TaskStoreError> {
         self.list_scoped_decisions(Some(worker_id))
+    }
+
+    /// One page of the decision index an agent reads (ADR 0145): every pending
+    /// decision in scope, then `settled_limit` settled ones from
+    /// `settled_offset`, the one last settled first, and how many of each the
+    /// scope holds. `worker_id` None is Queen's scope, the whole Hive.
+    ///
+    /// ⚠️ PENDING IS NEVER PAGED. An unanswered request is what the index is
+    /// for, so every page carries all of them; admission already bounds them
+    /// to [`MAX_PENDING_DECISIONS`]. Only settled history is paged.
+    ///
+    /// # Errors
+    /// Returns a database or persisted-data integrity error.
+    pub fn decision_index_page(
+        &self,
+        worker_id: Option<WorkerId>,
+        settled_offset: i64,
+        settled_limit: i64,
+    ) -> Result<DecisionIndexPage, TaskStoreError> {
+        let connection = self.connection()?;
+        let worker = worker_id.map(|id| id.to_string());
+        let pending = read_decisions(
+            &connection,
+            &pending_index_sql(),
+            params![MAX_PENDING_DECISIONS, worker],
+        )?;
+        let settled = read_decisions(
+            &connection,
+            &settled_index_sql(),
+            params![settled_limit, worker, settled_offset],
+        )?;
+        // ⚠️ THE TOTAL IS THE SCOPE, NOT THE PAGE. A listing once reported its
+        // returned length as its count, and a caller published ratios off
+        // "200 decisions" against a store holding 305.
+        // The scope names its worker as `?2`, so `?1` is bound and unused here.
+        let settled_total: i64 = connection.query_row(
+            &format!("SELECT COUNT(*) {DECISION_SCOPE} AND d.state <> 'pending'"),
+            params![Option::<i64>::None, worker],
+            |row| row.get(0),
+        )?;
+        Ok(DecisionIndexPage {
+            pending,
+            settled,
+            settled_total: usize::try_from(settled_total).unwrap_or(usize::MAX),
+        })
     }
 
     /// This Hive's raises carrying exactly `title`, pending first and then
@@ -2046,15 +2076,41 @@ fn validate_questions(questions: &[DecisionQuestion]) -> Result<(), TaskStoreErr
 const DECISION_INBOX_ORDER: &str = "state = 'pending' DESC, urgency = 'time_sensitive' DESC,
     deadline IS NULL, deadline, created_at DESC, id DESC";
 
-fn decision_inbox_scope() -> String {
-    format!(
-        "FROM decision_requests d
+/// The decisions a reader may list: every one in this Hive when `?2` is NULL
+/// (Queen), otherwise a worker's own raises and rulings on its assigned work.
+/// Shared by the inbox and the agent index so the two cannot disagree on scope.
+const DECISION_SCOPE: &str = "FROM decision_requests d
          JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
          WHERE (?2 IS NULL OR d.requesting_worker_id = ?2 OR EXISTS(
              SELECT 1 FROM tasks t WHERE t.id IN (
                  SELECT task_id FROM task_decision_membership WHERE decision_id=d.id)
-             AND t.removed_at IS NULL AND t.assigned_worker_id = ?2))
-         ORDER BY {DECISION_INBOX_ORDER} LIMIT ?1"
+             AND t.removed_at IS NULL AND t.assigned_worker_id = ?2))";
+
+/// Settled decisions, the one last settled first.
+const SETTLED_ORDER: &str =
+    "COALESCE(d.resolved_at, d.withdrawn_at, d.updated_at) DESC, d.created_at DESC, d.id DESC";
+
+fn decision_inbox_scope() -> String {
+    format!("{DECISION_SCOPE} ORDER BY {DECISION_INBOX_ORDER} LIMIT ?1")
+}
+
+/// Pending decisions in scope, in inbox order. `?1` caps them and `?2` scopes.
+fn pending_index_sql() -> String {
+    format!(
+        "WITH inbox AS MATERIALIZED (SELECT d.id AS inbox_id {DECISION_SCOPE}
+             AND d.state = 'pending' ORDER BY {DECISION_INBOX_ORDER} LIMIT ?1)
+         {DECISION_COLUMNS} FROM inbox i JOIN decision_requests d ON d.id=i.inbox_id
+         ORDER BY {DECISION_INBOX_ORDER}"
+    )
+}
+
+/// One page of settled decisions in scope: `?1` rows from offset `?3`.
+fn settled_index_sql() -> String {
+    format!(
+        "WITH inbox AS MATERIALIZED (SELECT d.id AS inbox_id {DECISION_SCOPE}
+             AND d.state <> 'pending' ORDER BY {SETTLED_ORDER} LIMIT ?1 OFFSET ?3)
+         {DECISION_COLUMNS} FROM inbox i JOIN decision_requests d ON d.id=i.inbox_id
+         ORDER BY {SETTLED_ORDER}"
     )
 }
 
@@ -2506,6 +2562,50 @@ mod tests {
                 .unwrap();
         }
         request.id
+    }
+
+    /// ADR 0145: the agent index carries every pending decision on every page,
+    /// and pages settled ones by when they were settled rather than when they
+    /// were raised. Its total counts the scope, never the page.
+    #[test]
+    fn the_decision_index_pages_settled_history_by_when_it_settled() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap().id;
+        let waiting = card(&store, queen, "Still waiting", false);
+        let early = card(&store, queen, "Raised first, settled last", true);
+        let late = card(&store, queen, "Raised last, settled first", true);
+        let connection = store.connection().unwrap();
+        for (id, resolved_at) in [(early, 2_000_i64), (late, 1_000)] {
+            connection
+                .execute(
+                    "UPDATE decision_requests SET resolved_at = ?2 WHERE id = ?1",
+                    params![id.to_string(), resolved_at],
+                )
+                .unwrap();
+        }
+        drop(connection);
+        let ids = |decisions: &[DecisionRequest]| {
+            decisions
+                .iter()
+                .map(|decision| decision.id)
+                .collect::<Vec<_>>()
+        };
+
+        let first = store.decision_index_page(None, 0, 1).unwrap();
+        assert_eq!(ids(&first.pending), [waiting]);
+        assert_eq!(ids(&first.settled), [early], "the one last settled leads");
+        assert_eq!(first.settled_total, 2);
+        let second = store.decision_index_page(None, 1, 1).unwrap();
+        assert_eq!(ids(&second.pending), [waiting], "pending is on every page");
+        assert_eq!(ids(&second.settled), [late]);
+        assert_eq!(second.settled_total, 2);
+        assert!(
+            store
+                .decision_index_page(None, 2, 1)
+                .unwrap()
+                .settled
+                .is_empty()
+        );
     }
 
     /// ⚠️ A RAISE IS FOUND HOWEVER MANY DECISIONS CAME AFTER IT. The fleet

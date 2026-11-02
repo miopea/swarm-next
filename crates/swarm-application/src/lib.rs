@@ -4499,24 +4499,23 @@ impl TaskService {
             )
             .map_err(Into::into)
     }
-    /// Lists the operator/Queen inbox, or only requests originated by a worker caller.
+    /// The agent decision index, one page of it (ADR 0145): Queen's covers the
+    /// Hive; a worker's covers the requests it raised and the rulings on work
+    /// assigned to it, scoped before any page is cut, so unrelated history
+    /// cannot hide them and it need not rely on Queen relaying an id.
     ///
     /// # Errors
-    /// Returns a persistence or persisted-data integrity error.
-    pub fn list_visible_decisions(
+    /// Returns a store error when the index cannot be read.
+    pub fn decision_index_page(
         &self,
-        principal: Option<AgentPrincipal>,
-    ) -> Result<Vec<DecisionRequest>, ApplicationError> {
-        // Scope before the persistence read cap, not after a global history page.
-        let decisions = match principal {
-            Some(principal) if principal.role != WorkerRole::Queen => self
-                .store
-                .list_worker_decision_requests(principal.worker_id)?,
-            _ => self.store.list_decision_requests()?,
-        };
-        // Workers discover both their own requests and rulings on currently
-        // assigned work, so they need not rely on Queen relaying an authority ID.
-        Ok(decisions)
+        principal: AgentPrincipal,
+        settled_offset: i64,
+        settled_limit: i64,
+    ) -> Result<swarm_persistence::DecisionIndexPage, ApplicationError> {
+        let worker = (principal.role != WorkerRole::Queen).then_some(principal.worker_id);
+        Ok(self
+            .store
+            .decision_index_page(worker, settled_offset, settled_limit)?)
     }
 
     /// Spends the grant that lets this worker run exactly `command` once, if
@@ -8088,16 +8087,20 @@ mod tests {
                 )
                 .unwrap();
         }
-        assert!(
-            service
-                .list_visible_decisions(None)
-                .unwrap()
-                .iter()
-                .all(|d| d.id != own.id)
-        );
-        let visible = service.list_visible_decisions(Some(principal)).unwrap();
-        assert_eq!(visible.len(), 1);
-        assert_eq!(visible[0].id, own.id);
+        // Queen's index pages settled history apart from the pending inbox, so
+        // a full inbox does not push the ruling out of it either (ADR 0145).
+        let hive = service
+            .decision_index_page(AgentPrincipal::from(&queen), 0, 20)
+            .unwrap();
+        let pending = usize::try_from(swarm_persistence::MAX_DECISION_RESULTS).unwrap();
+        assert_eq!(hive.pending.len(), pending);
+        assert!(hive.pending.iter().all(|d| d.id != own.id));
+        assert_eq!(hive.settled[0].id, own.id);
+        let visible = service.decision_index_page(principal, 0, 20).unwrap();
+        assert!(visible.pending.is_empty());
+        assert_eq!(visible.settled.len(), 1);
+        assert_eq!(visible.settled[0].id, own.id);
+        assert_eq!(visible.settled_total, 1);
     }
 
     #[test]
@@ -8156,16 +8159,16 @@ mod tests {
             )
             .unwrap();
 
+        let worker_index = service
+            .decision_index_page(worker_principal, 0, 20)
+            .unwrap();
+        assert_eq!(worker_index.pending, [worker_request]);
+        assert!(worker_index.settled.is_empty());
         assert_eq!(
             service
-                .list_visible_decisions(Some(worker_principal))
-                .unwrap(),
-            [worker_request]
-        );
-        assert_eq!(
-            service
-                .list_visible_decisions(Some(queen_principal))
+                .decision_index_page(queen_principal, 0, 20)
                 .unwrap()
+                .pending
                 .len(),
             2
         );

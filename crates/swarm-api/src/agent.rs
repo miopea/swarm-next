@@ -859,7 +859,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 35;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 36;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -878,7 +878,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 35;
 /// no fingerprint change means the wording moved; a fingerprint change always
 /// means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "184ad343e1527afecefb0d43000056c511bb1e05048e28e3f90f3ef389731c1b";
+    "230d03abe2e0e9a69cae30d9a47ad6cb848c7527e0045d6c07fbab0c2417a77e";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1716,57 +1716,7 @@ impl AgentMcp {
                 }
                 match input.decision_id {
                     Some(id) => self.verify_decision(&id),
-                    None => self.tasks.list_visible_decisions(Some(self.principal)).and_then(
-                        |decisions| {
-                            // An empty list and "there is one but it is not
-                            // yours to see" are different facts, and they used
-                            // to arrive wearing the same clothes: a well-formed
-                            // empty result, no error and no hint. A worker that
-                            // had not read the tool description closely would
-                            // most naturally conclude the decision did not
-                            // exist and report a contradiction that was not
-                            // there.
-                            let scope = if self.principal.role == WorkerRole::Queen {
-                                "every decision in this Hive"
-                            } else {
-                                "decisions this worker raised, plus rulings attached to tasks assigned to it — so a gate that says verify the operator's sign-off at source can be satisfied without being told the id by anyone. Other decisions are still readable by passing decision_id with a FULL id."
-                            };
-                            // ⚠️ ROWS CAN BE MISSING AND THE CAPTION ONLY EVER
-                            // ADMITTED TO MISSING FIELDS. The listing stops at
-                            // MAX_DECISION_RESULTS; `count` reported the returned
-                            // length, so a caller read "200 decisions" against a
-                            // store holding 305 and published ratios off it.
-                            //
-                            // The old caption made that worse rather than better:
-                            // it said reason, risk and evidence were omitted — a
-                            // truncation of CONTENT — while saying nothing about
-                            // dropped ROWS. A truncation that announces a
-                            // different truncation is worse than one that
-                            // announces none, because the reader believes they
-                            // have already been warned.
-                            let total = self
-                                .tasks
-                                .store()
-                                .count_decision_requests()
-                                .map_err(ApplicationError::Store)?;
-                            let shown = decisions.len();
-                            structured(json!({
-                                "decisions": decisions
-                                    .iter()
-                                    .map(decision_index_entry)
-                                    .collect::<Vec<_>>(),
-                                "count": shown,
-                                "total": total,
-                                "truncated": total > shown,
-                                "scope": scope,
-                                "next": if total > shown {
-                                    "This is an index AND IT IS SHORT: `count` is what came back, `total` is what the Hive holds, and the difference was dropped by the page cap — do not read `count` as a total. Content is abridged too: reason, risk, evidence, questions and the operator's answers are omitted. Pass decision_id with a FULL id to read one in full."
-                                } else {
-                                    "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full."
-                                }
-                            }))
-                        },
-                    ),
+                    None => self.decision_index(input.settled_page.unwrap_or(0)),
                 }
             }),
             "swarm_request_decision" => {
@@ -2025,7 +1975,12 @@ impl AgentMcp {
     }
 
     /// Counts one answered tool call: time to answer, and the size of the
-    /// answer the agent reads (ADR 0144).
+    /// answer's text, which is what the agent reads (ADR 0144, ADR 0145).
+    ///
+    /// ⚠️ AN ANSWER IS SENT TWICE. `CallToolResult::structured` carries the
+    /// same JSON as text and as `structuredContent`; the model reads one copy.
+    /// Counting the whole serialized result reported about 2.15 times what an
+    /// agent reads.
     fn record_tool_cost(
         &self,
         tool: &str,
@@ -2036,8 +1991,15 @@ impl AgentMcp {
         let (failed, bytes) = match response {
             Ok(CallToolResponse::Complete(result)) => (
                 result.is_error == Some(true),
-                serde_json::to_vec(result)
-                    .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+                u64::try_from(
+                    result
+                        .content
+                        .iter()
+                        .filter_map(|block| block.as_text())
+                        .map(|text| text.text.len())
+                        .sum::<usize>(),
+                )
+                .unwrap_or(u64::MAX),
             ),
             Ok(_) => (false, 0),
             Err(_) => (true, 0),
@@ -2477,6 +2439,92 @@ impl AgentMcp {
                 json!({"verified": false, "reason": "No retained local-Hive statement has that full id. Absence grants no authority."}),
             ),
         }
+    }
+
+    /// One page of the decision index (ADR 0145): every pending decision in
+    /// the reader's scope, and settled ones a page at a time.
+    fn decision_index(&self, page: u32) -> Result<CallToolResult, ApplicationError> {
+        let offset = i64::from(page).saturating_mul(Self::SETTLED_DECISIONS_PER_PAGE);
+        let index = self.tasks.decision_index_page(
+            self.principal,
+            offset,
+            Self::SETTLED_DECISIONS_PER_PAGE,
+        )?;
+        // An empty list and "there is one but it is not
+        // yours to see" are different facts, and they used
+        // to arrive wearing the same clothes: a well-formed
+        // empty result, no error and no hint. A worker that
+        // had not read the tool description closely would
+        // most naturally conclude the decision did not
+        // exist and report a contradiction that was not
+        // there.
+        let scope = if self.principal.role == WorkerRole::Queen {
+            "every decision in this Hive"
+        } else {
+            "decisions this worker raised, plus rulings attached to tasks assigned to it — so a gate that says verify the operator's sign-off at source can be satisfied without being told the id by anyone. Other decisions are still readable by passing decision_id with a FULL id."
+        };
+        // ⚠️ ROWS CAN BE MISSING AND THE CAPTION ONLY EVER
+        // ADMITTED TO MISSING FIELDS. `count` once reported the
+        // returned length, so a caller read "200 decisions"
+        // against a store holding 305 and published ratios
+        // off it. `total` is what this scope holds.
+        //
+        // The old caption made that worse rather than better:
+        // it said reason, risk and evidence were omitted — a
+        // truncation of CONTENT — while saying nothing about
+        // dropped ROWS. A truncation that announces a
+        // different truncation is worse than one that
+        // announces none, because the reader believes they
+        // have already been warned.
+        //
+        // ⚠️ ONE INDEX WAS ABOUT 210 KB OF TEXT on the
+        // operator's Hive on 2026-11-02 (ADR 0145): the newest
+        // 256 decisions, 235 of them resolved and 2 pending,
+        // past an agent's tool output limit. Every pending
+        // decision is listed; settled ones are paged.
+        let pending = index.pending.len();
+        let settled_shown = index.settled.len();
+        let shown = pending + settled_shown;
+        let total = pending + index.settled_total;
+        let older = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .saturating_add(settled_shown)
+            < index.settled_total;
+        let per_page = Self::SETTLED_DECISIONS_PER_PAGE;
+        let next = if shown < total {
+            let paging = if older {
+                format!(
+                    "pass settled_page {} for older ones",
+                    page.saturating_add(1)
+                )
+            } else if settled_shown == 0 {
+                "this page is past the last one, and lower pages hold every settled decision"
+                    .to_owned()
+            } else {
+                "this is the last page, and lower pages hold newer ones".to_owned()
+            };
+            format!(
+                "This is an index AND IT IS SHORT: `count` is what came back and `total` is what this scope holds — do not read `count` as a total. Every pending decision is here. Settled ones come {per_page} a page, the one last settled first; this is settled_page {page}, and the rest were left off by paging: {paging}. Content is abridged too: reason, risk, evidence, questions and the operator's answers are omitted. Pass decision_id with a FULL id to read one in full."
+            )
+        } else {
+            "This is an index. reason, risk, evidence, questions and the operator's answers are omitted here — pass decision_id with a FULL id to read one in full.".to_owned()
+        };
+        structured(json!({
+            "decisions": index
+                .pending
+                .iter()
+                .chain(&index.settled)
+                .map(decision_index_entry)
+                .collect::<Vec<_>>(),
+            "count": shown,
+            "total": total,
+            "pending": pending,
+            "settled_total": index.settled_total,
+            "settled_page": page,
+            "truncated": shown < total,
+            "scope": scope,
+            "next": next,
+        }))
     }
 
     fn verify_decision(&self, id: &str) -> Result<CallToolResult, ApplicationError> {
@@ -3426,6 +3474,9 @@ read are not wrong, they are dated — and this board moves within minutes."
     const CLOSED_INDEX_ENTRIES: usize = 50;
     /// How much of a blocker note a brief entry carries.
     const BRIEF_NOTE_CHARS: usize = 240;
+    /// How many settled decisions one page of the decision index lists
+    /// (ADR 0145). Pending ones are never paged.
+    const SETTLED_DECISIONS_PER_PAGE: i64 = 20;
 
     /// How much of one reply the one-line index of closed tasks may take.
     const CLOSED_INDEX_BYTES: usize = 64 * 1024;
@@ -3502,7 +3553,7 @@ read are not wrong, they are dated — and this board moves within minutes."
         }
         if brief {
             listing["brief_note"] = json!(
-                "Open tasks assigned to you are in full. Every other open task is in brief \
+                "Your Active and Ready tasks are in full. Every other open task is in brief \
 (`brief: true`): what it is, who holds it, where it stands and why it waits. Its description, \
 amendments and Jira text are not here; `amendments` counts them. Read any task in full with \
 swarm_read_task_history before acting on it."
@@ -3511,20 +3562,27 @@ swarm_read_task_history before acting on it."
         structured(Self::stamped(listing))
     }
 
-    /// The whole board in brief, with the reader's own assignments in full
-    /// (ADR 0143).
+    /// Open tasks in brief, except the reader's own Active and Ready work,
+    /// which is in full (ADR 0143, ADR 0145).
     ///
     /// ⚠️ ONE LISTING WAS ABOUT 290 KB, roughly 75,000 tokens, on the
     /// operator's Hive on 2026-11-02: 44 open tasks in full, and descriptions
     /// were 44% of it. Queen reads the board on each of about 100 reviews a
     /// day, and the reply overflowed her tool output. She routes from what a
     /// task is and where it stands, and reads the one she acts on in full.
+    ///
+    /// ⚠️ A WORKER'S OWN LIST REACHED ABOUT 105 KB OF TEXT the same day: 19
+    /// assignments in full, one of them Active. Work it is doing or can pick up
+    /// stays in full; Blocked, Review, Awaiting release and Draft work is in
+    /// brief, and the worker reads one in full when it moves.
     fn brief_board_entries(
         &self,
         open: &[swarm_domain::Task],
     ) -> Result<Vec<Value>, ApplicationError> {
-        let own =
-            |task: &swarm_domain::Task| task.assigned_worker_id == Some(self.principal.worker_id);
+        let own = |task: &swarm_domain::Task| {
+            task.assigned_worker_id == Some(self.principal.worker_id)
+                && matches!(task.state, TaskState::Active | TaskState::Ready)
+        };
         let mine = open
             .iter()
             .filter(|task| own(task))
@@ -3591,9 +3649,21 @@ swarm_read_task_history before acting on it."
             if self.tasks.reads_the_board(self.principal) {
                 return self.board_listing(tasks, None, true);
             }
-            return structured(Self::stamped(
-                json!({ "tasks": self.tasks_with_amendments(tasks)? }),
-            ));
+            // Only work in hand in full (ADR 0145): a worker held 19 open
+            // tasks, one of them Active, and listed all 19 in full.
+            let entries = self.brief_board_entries(tasks)?;
+            let mut listing = json!({ "tasks": entries });
+            if tasks
+                .iter()
+                .any(|task| !matches!(task.state, TaskState::Active | TaskState::Ready))
+            {
+                listing["brief_note"] = json!(
+                    "Your Active and Ready tasks are in full. Your other open tasks are in brief \
+(`brief: true`): what each is, where it stands and why it waits. Read one in full with \
+swarm_read_task_history before acting on it."
+                );
+            }
+            return structured(Self::stamped(listing));
         }
         let finished = self.tasks.tasks_this_worker_finished(self.principal)?;
         let Some(latest) = finished.first() else {
@@ -4311,6 +4381,9 @@ struct ListDecisionsInput {
     decision_id: Option<String>,
     #[serde(default)]
     statement_id: Option<String>,
+    /// Which page of settled decisions the index lists (ADR 0145).
+    #[serde(default)]
+    settled_page: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -4569,7 +4642,7 @@ fn operator_submissions_tool() -> Tool {
 fn list_decisions_tool() -> Tool {
     tool(
         "swarm_list_decisions",
-        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. The listing is an INDEX — reason, risk, evidence, questions and the operator's answers are omitted, because the full records run to tens of thousands of characters and a reply that overflows your output limit reads exactly like no decisions at all. Pass decision_id to read one in full. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
+        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. Every pending decision is listed; settled ones come 20 a page, the one last settled first, and settled_page reads older ones. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. The listing is an INDEX — reason, risk, evidence, questions and the operator's answers are omitted, because the full records run to tens of thousands of characters and a reply that overflows your output limit reads exactly like no decisions at all. Pass decision_id to read one in full. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
         &json!({
             "type": "object",
             "properties": {
@@ -4580,6 +4653,11 @@ fn list_decisions_tool() -> Tool {
                 "statement_id": {
                     "type": "string",
                     "description": "Instead of decision_id, verify one full first-party operator statement id, including its exact question, worker and session. Read-only; never creates evidence from an agent claim."
+                },
+                "settled_page": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "With no decision_id: which page of settled decisions to list, 20 a page, the one last settled first. 0, the default, is the newest. Every page carries every pending decision."
                 }
             },
             "additionalProperties": false
@@ -4621,7 +4699,7 @@ fn request_decision_tool() -> Tool {
 fn list_tasks_tool() -> Tool {
     tool(
         "swarm_list_tasks",
-        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment. A whole-board listing carries your own open assignments in full and every other open task in brief (what it is, who holds it, where it stands, why it waits), and names the 50 most recently closed in `closed` by id and title; read any task in full with swarm_read_task_history before acting on it. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
+        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees its own open tasks, with the ones it is doing or can pick up (Active and Ready) in full and the rest in brief. A whole-board listing carries your own Active and Ready tasks in full and every other open task in brief (what it is, who holds it, where it stands, why it waits), and names the 50 most recently closed in `closed` by id and title; read any task in full with swarm_read_task_history before acting on it. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -4773,7 +4851,7 @@ fn approve_no_deployment_tool() -> Tool {
 fn read_task_history_tool() -> Tool {
     tool(
         "swarm_read_task_history",
-        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists your own open assignment, so a closed task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
+        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists your own Active and Ready work, so a closed or resting task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
         &json!({
             "type": "object",
             "properties": {
@@ -6050,8 +6128,9 @@ mod tests {
         );
     }
 
-    /// ADR 0143: a whole-board listing carries other work in brief and the
-    /// reader's own assignment in full, which is the one it works from.
+    /// ADR 0143, ADR 0145: a whole-board listing carries other work in brief
+    /// and the reader's own Active and Ready work in full, which is what it
+    /// works from. Its own resting work is in brief like everyone else's.
     #[tokio::test]
     async fn a_board_reader_reads_other_work_in_brief_and_its_own_in_full() {
         let (bridge, store, queen_id, worker_id, _directory) = setup();
@@ -6089,6 +6168,20 @@ mod tests {
             )
             .unwrap();
         store.assign_task_to_worker(mine.id, worker_id).unwrap();
+        store.transition_task(mine.id, TaskState::Ready).unwrap();
+        let resting = store
+            .create_task_with_details(
+                "Mine, waiting",
+                "MY WAITING DESCRIPTION",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace",
+            )
+            .unwrap();
+        store.assign_task_to_worker(resting.id, worker_id).unwrap();
+        store.transition_task(resting.id, TaskState::Ready).unwrap();
+        store
+            .transition_task_with_note(resting.id, TaskState::Blocked, "Waiting on a vendor.")
+            .unwrap();
         let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
 
         let response =
@@ -6120,6 +6213,94 @@ mod tests {
         let own = entry("Mine");
         assert_eq!(own["description"], "MY DESCRIPTION", "{own}");
         assert!(own.get("brief").is_none(), "{own}");
+        let waiting = entry("Mine, waiting");
+        assert_eq!(waiting["brief"], true, "{waiting}");
+        assert_eq!(waiting["blocked_note"], "Waiting on a vendor.", "{waiting}");
+        assert!(
+            !response.to_string().contains("MY WAITING DESCRIPTION"),
+            "own resting work is named, not carried: {response}"
+        );
+        assert!(listing["brief_note"].is_string(), "{response}");
+    }
+
+    /// ADR 0145: a worker's own list carries the work it is doing or can pick
+    /// up in full, and its resting work in brief. A worker held 19 open tasks,
+    /// one of them Active, and read all 19 in full on every listing.
+    #[tokio::test]
+    async fn a_worker_reads_its_work_in_hand_in_full_and_its_resting_work_in_brief() {
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = |title: &str, description: &str, states: &[TaskState]| {
+            let task = store
+                .create_task_with_details(
+                    title,
+                    description,
+                    swarm_domain::TaskPriority::Normal,
+                    "/workspace/petal",
+                )
+                .unwrap();
+            store.assign_task_to_worker(task.id, worker_id).unwrap();
+            for state in states {
+                store.transition_task(task.id, *state).unwrap();
+            }
+        };
+        // A worker holds one Active task, so the resting ones pass through
+        // Active before the one it is doing starts.
+        task(
+            "Shipped, waiting",
+            "SHIPPED TEXT",
+            &[
+                TaskState::Ready,
+                TaskState::Active,
+                TaskState::Review,
+                TaskState::AwaitingRelease,
+            ],
+        );
+        task(
+            "Under review",
+            "REVIEW TEXT",
+            &[TaskState::Ready, TaskState::Active, TaskState::Review],
+        );
+        task(
+            "Doing",
+            "DOING TEXT",
+            &[TaskState::Ready, TaskState::Active],
+        );
+        task("Next up", "NEXT TEXT", &[TaskState::Ready]);
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let response =
+            call_review_test_tool(bridge.clone(), &token, "swarm_list_tasks", json!({})).await;
+
+        let listing = &response["result"]["structuredContent"];
+        let entry = |title: &str| {
+            listing["tasks"]
+                .as_array()
+                .unwrap_or_else(|| panic!("tasks are listed: {response}"))
+                .iter()
+                .find(|task| task["title"] == title)
+                .unwrap_or_else(|| panic!("{title} is listed: {response}"))
+                .clone()
+        };
+        for (title, text) in [("Doing", "DOING TEXT"), ("Next up", "NEXT TEXT")] {
+            let full = entry(title);
+            assert_eq!(full["description"], text, "{full}");
+            assert!(full.get("brief").is_none(), "{full}");
+        }
+        for (title, state) in [
+            ("Shipped, waiting", "awaiting_release"),
+            ("Under review", "review"),
+        ] {
+            let brief = entry(title);
+            assert_eq!(brief["brief"], true, "{brief}");
+            assert_eq!(brief["state"], state, "{brief}");
+        }
+        let rendered = response.to_string();
+        assert!(
+            !rendered.contains("SHIPPED TEXT") && !rendered.contains("REVIEW TEXT"),
+            "resting work is named, not carried: {response}"
+        );
         assert!(listing["brief_note"].is_string(), "{response}");
     }
 
@@ -8642,11 +8823,13 @@ mod tests {
         };
         let listed = cost("swarm_list_tasks");
         assert_eq!((listed.calls, listed.failures), (1, 0), "{reading:?}");
-        let answer = serde_json::to_vec(&listing["result"]).unwrap().len() as u64;
-        assert!(
-            listed.total_bytes > 0 && listed.total_bytes.abs_diff(answer) < 64,
-            "the counted size is the answer the agent reads: {} against {answer}",
-            listed.total_bytes
+        // The text the agent reads, and not the structured copy sent beside it.
+        let text = listing["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(listing["result"]["structuredContent"].is_object());
+        assert_eq!(
+            listed.total_bytes,
+            u64::try_from(text.len()).unwrap(),
+            "the counted size is the text the agent reads"
         );
         let refused = cost("swarm_no_such_tool");
         assert_eq!((refused.calls, refused.failures), (1, 1), "{reading:?}");
@@ -12335,80 +12518,132 @@ mod tests {
         assert_eq!(listed["decisions"][0]["discharge"], serde_json::Value::Null);
     }
 
+    /// Files one plain approval for the decision index tests.
+    fn ship_it_decision(
+        store: &swarm_persistence::TaskStore,
+        requester: swarm_domain::WorkerId,
+    ) -> swarm_domain::DecisionRequest {
+        store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: requester,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Ship it",
+                summary: "One of many.",
+                reason: "The batch is ready and waiting on a decision.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Ship",
+                allowed_actions: &["Ship".to_owned()],
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap()
+    }
+
     /// ⚠️ AND THE CASE THAT MATTERS IS THE TRUNCATED ONE, which a small fixture
     /// cannot reach. The test above passes whether or not `total` is the store's
-    /// count, because three rows fit under the cap — so on its own it proves the
-    /// keys exist and nothing about what they mean. This one crosses the cap,
-    /// which is the only place the old behaviour and the new one differ.
+    /// count, because three rows fit on one page — so on its own it proves the
+    /// keys exist and nothing about what they mean. This one has more settled
+    /// history than a page, which is where `count` and `total` part (ADR 0145).
     #[tokio::test]
     async fn past_the_cap_the_index_reports_the_store_total_and_not_the_page() {
         let (bridge, store, queen_id, _worker_id, _) = setup();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
-        let over = usize::try_from(swarm_persistence::MAX_DECISION_RESULTS).unwrap() + 1;
-        for index in 0..over {
-            let decision = store
-                .create_decision_request(&swarm_persistence::NewDecisionRequest {
-                    requesting_worker_id: queen_id,
-                    task_id: None,
-                    kind: swarm_domain::DecisionRequestKind::Approval,
-                    urgency: swarm_domain::DecisionUrgency::Normal,
-                    title: "Ship it",
-                    summary: "One of many.",
-                    reason: "The batch is ready and waiting on a decision.",
-                    risk: "",
-                    evidence: "",
-                    suggested_action: "Ship",
-                    allowed_actions: &["Ship".to_owned()],
-                    operator_actions: &[],
-                    questions: &[],
-                    deadline: None,
-                    requested_command: None,
-                    requested_script: None,
-                })
-                .unwrap();
-            // Admission and the page share the pending bound. History can
-            // exceed it; an impossible extra pending request cannot.
-            if index == 0 {
+        let per_page = usize::try_from(AgentMcp::SETTLED_DECISIONS_PER_PAGE).unwrap();
+        let settled = per_page + 5;
+        let mut pending = Vec::new();
+        for index in 0..settled + 2 {
+            let decision = ship_it_decision(&store, queen_id);
+            // The two oldest stay pending, behind all the settled history.
+            if index < 2 {
+                pending.push(decision.id.to_string());
+            } else {
                 store
                     .resolve_decision_request(decision.id, "Ship", "", "test")
                     .unwrap();
             }
         }
+        let page = |number: u32| {
+            let bridge = bridge.clone();
+            let queen_token = queen_token.clone();
+            async move {
+                response_json(
+                    handle(
+                        bridge,
+                        plain_state(),
+                        mcp_request(
+                            Some(&queen_token),
+                            "tools/call",
+                            &json!({
+                                "name": "swarm_list_decisions",
+                                "arguments": { "settled_page": number }
+                            }),
+                        ),
+                    )
+                    .await,
+                )
+                .await["result"]["structuredContent"]
+                    .clone()
+            }
+        };
 
-        let listed = response_json(
-            handle(
-                bridge.clone(),
-                plain_state(),
-                mcp_request(
-                    Some(&queen_token),
-                    "tools/call",
-                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
-                ),
-            )
-            .await,
-        )
-        .await;
-        let listed = &listed["result"]["structuredContent"];
-
+        let first = page(0).await;
+        assert_eq!(first["count"], per_page + 2, "{first}");
         assert_eq!(
-            listed["count"],
-            swarm_persistence::MAX_DECISION_RESULTS,
-            "the page is capped, which is fine and not the defect"
-        );
-        assert_eq!(
-            listed["total"], over,
-            "the total is what the Hive holds. Reporting the page here is how 199 \
+            first["total"],
+            settled + 2,
+            "the total is what the scope holds. Reporting the page here is how 199 \
              was published as a denominator against a store of 305"
         );
-        assert_eq!(listed["truncated"], true);
+        assert_eq!(first["pending"], 2, "{first}");
+        assert_eq!(first["settled_total"], settled, "{first}");
+        assert_eq!(first["truncated"], true);
+        let leading = first["decisions"].as_array().unwrap()[..2]
+            .iter()
+            .map(|decision| decision["id"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            leading,
+            pending.iter().cloned().collect(),
+            "every pending decision leads, however old: {first}"
+        );
+        let next = first["next"].as_str().unwrap();
         assert!(
-            listed["next"]
+            next.contains("left off by paging") && next.contains("settled_page 1"),
+            "the caption must admit to dropped ROWS and say how to reach them, not \
+             only name omitted fields — it used to name the field abridgement only, \
+             so a reader who had read it believed they had been warned about the \
+             wrong thing: {next}"
+        );
+
+        let second = page(1).await;
+        assert_eq!(
+            second["count"],
+            5 + 2,
+            "pending again, then the rest: {second}"
+        );
+        assert_eq!(second["total"], settled + 2);
+        assert!(
+            second["next"].as_str().unwrap().contains("last page"),
+            "{second}"
+        );
+
+        let beyond = page(2).await;
+        assert_eq!(
+            beyond["count"], 2,
+            "pending still leads an empty page: {beyond}"
+        );
+        assert!(
+            beyond["next"]
                 .as_str()
                 .unwrap()
-                .contains("dropped by the page cap"),
-            "the caption must admit to dropped ROWS, not only omitted fields — it \
-             used to name the field abridgement only, so a reader who had read it \
-             believed they had been warned about the wrong thing"
+                .contains("past the last one"),
+            "a page past the end must not call itself the last page: {beyond}"
         );
     }
 
