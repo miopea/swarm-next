@@ -136,16 +136,153 @@ async fn observe(
                 .then_some((session_id, profile.provider))
         })
         .collect::<Vec<_>>();
-    stream::iter(observations)
-        .map(|(session_id, provider)| async move {
-            observe_session(state, session_id, provider)
+    // Held across the reads so that two looks at once, one from each open
+    // page, do not both pay for a whole snapshot: the second waits for the
+    // first and then finds nothing new (ADR 0139).
+    let mut screens = state.provider_screens.lock().await;
+    // Bounded by the sessions live now. A session that is not live is never
+    // read again, so its reading goes.
+    let mut previous = std::mem::take(&mut *screens);
+    let looks = observations
+        .into_iter()
+        .map(|(session_id, provider)| {
+            let last = previous
+                .remove(&session_id)
+                .filter(|reading| reading.provider == provider);
+            (session_id, provider, last)
+        })
+        .collect::<Vec<_>>();
+    stream::iter(looks)
+        .map(|(session_id, provider, last)| async move {
+            observe_screen(state, session_id, provider, last)
                 .await
-                .map(|signals| (session_id, signals))
+                .map(|(signals, reading)| (session_id, signals, reading))
         })
         .buffer_unordered(8)
         .filter_map(async move |observation| observation)
-        .collect()
+        .collect::<Vec<_>>()
         .await
+        .into_iter()
+        .map(|(session_id, signals, reading)| {
+            screens.insert(session_id, reading);
+            (session_id, signals)
+        })
+        .collect()
+}
+
+/// What one whole read of a session's screen said, kept so that a later look
+/// finding nothing drawn since can reuse it (ADR 0139).
+///
+/// Reusing it is exact, not an approximation. The host advances a session's
+/// sequence for every frame of output and for every resize, and it answers a
+/// read after a sequence with no frames only when it holds nothing newer. So
+/// an empty answer means the screen these were derived from is still the
+/// screen. Everything else in a look — the hooks' turn report and how long
+/// the terminal has been quiet — comes fresh with every answer.
+#[derive(Debug)]
+pub(super) struct ScreenReading {
+    provider: ProviderKind,
+    sequence: u64,
+    activity: ProviderActivity,
+    background_work: swarm_terminal::BackgroundWork,
+    turn_ended: bool,
+}
+
+impl ScreenReading {
+    fn read(provider: ProviderKind, snapshot: &TerminalSnapshot) -> Self {
+        Self {
+            provider,
+            sequence: snapshot.sequence,
+            activity: classify_observed_activity(provider, snapshot),
+            background_work: swarm_terminal::background_work(provider, snapshot),
+            // Only a Claude turn report ever asks.
+            turn_ended: provider == ProviderKind::ClaudeCode && turn_ended_on_screen(snapshot),
+        }
+    }
+
+    fn signals(
+        &self,
+        turn: Option<&ProviderTurn>,
+        last_output_at: Option<i64>,
+        now: i64,
+    ) -> ProviderSignals {
+        combined_signals(
+            self.provider,
+            self.activity,
+            self.background_work,
+            || self.turn_ended,
+            turn,
+            last_output_at,
+            now,
+        )
+    }
+}
+
+/// One look at a session for the roster, reading the whole snapshot only when
+/// something has been drawn since the last one (ADR 0139).
+///
+/// A snapshot carries up to a thousand rows of scrollback, so a whole read is
+/// hundreds of kilobytes for the host to format and send and for this side to
+/// decode and parse. Most sessions draw nothing between looks.
+///
+/// Not for deciding whether to type into a session: delivery reads the exact
+/// current snapshot itself with `observe_session_snapshot`.
+async fn observe_screen(
+    state: &AppState,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+    last: Option<ScreenReading>,
+) -> Option<(ProviderSignals, ScreenReading)> {
+    let after_sequence = last.as_ref().map(|reading| reading.sequence);
+    let (resume, turn, last_output_at) = read_session(state, session_id, after_sequence).await?;
+    let (reading, turn, last_output_at) = match resume {
+        swarm_terminal::Resume::Snapshot { snapshot } => (
+            ScreenReading::read(provider, &snapshot),
+            turn,
+            last_output_at,
+        ),
+        swarm_terminal::Resume::Deltas { frames } if frames.is_empty() => {
+            (last?, turn, last_output_at)
+        }
+        swarm_terminal::Resume::Deltas { .. } => match read_session(state, session_id, None).await?
+        {
+            (swarm_terminal::Resume::Snapshot { snapshot }, turn, last_output_at) => (
+                ScreenReading::read(provider, &snapshot),
+                turn,
+                last_output_at,
+            ),
+            (swarm_terminal::Resume::Deltas { .. }, ..) => return None,
+        },
+    };
+    let signals = reading.signals(turn.as_ref(), last_output_at, crate::unix_timestamp());
+    Some((signals, reading))
+}
+
+/// One read of a running session: what the host returned, its turn report and
+/// when it last drew. Nothing for a session that is not running.
+async fn read_session(
+    state: &AppState,
+    session_id: WorkerSessionId,
+    after_sequence: Option<u64>,
+) -> Option<(swarm_terminal::Resume, Option<ProviderTurn>, Option<i64>)> {
+    match request_host(
+        state,
+        HostRequest::Read {
+            session_id,
+            after_sequence,
+        },
+    )
+    .await
+    {
+        Ok(HostResponse::Output {
+            session_id: observed_session,
+            resume,
+            running: true,
+            provider_turn,
+            last_output_at,
+        }) if observed_session == session_id => Some((resume, provider_turn, last_output_at)),
+        _ => None,
+    }
 }
 
 /// Reads the exact current host-owned snapshot for one provider session.
@@ -251,14 +388,35 @@ pub(super) fn observed_signals(
     last_output_at: Option<i64>,
     now: i64,
 ) -> ProviderSignals {
-    let screen = classify_observed_activity(provider, snapshot);
-    let screen_background = swarm_terminal::background_work(provider, snapshot);
+    combined_signals(
+        provider,
+        classify_observed_activity(provider, snapshot),
+        swarm_terminal::background_work(provider, snapshot),
+        || turn_ended_on_screen(snapshot),
+        turn,
+        last_output_at,
+        now,
+    )
+}
+
+/// The screen's answers and the turn report, combined. Whether the screen was
+/// read just now or reused from a look that found nothing new since, this is
+/// the one place they meet (ADR 0139).
+fn combined_signals(
+    provider: ProviderKind,
+    screen: ProviderActivity,
+    screen_background: swarm_terminal::BackgroundWork,
+    ended_on_screen: impl FnOnce() -> bool,
+    turn: Option<&ProviderTurn>,
+    last_output_at: Option<i64>,
+    now: i64,
+) -> ProviderSignals {
     let Some(turn) = turn.filter(|_| provider == ProviderKind::ClaudeCode) else {
         return ProviderSignals::from_screen(screen, screen_background);
     };
     let quiet = last_output_at.is_some_and(|at| now.saturating_sub(at) >= QUIET_TURN_SECONDS);
     ProviderSignals {
-        activity: turn_activity(screen, turn, || turn_ended_on_screen(snapshot), quiet),
+        activity: turn_activity(screen, turn, ended_on_screen, quiet),
         // Claude's list is exact and typed, and every task that finishes
         // starts a short turn of its own whose Stop lists the rest. It is
         // read only from a turn that ENDED: a failed one never refreshed it,
@@ -1123,5 +1281,234 @@ mod tests {
     fn an_empty_composer_is_still_empty() {
         let empty = snapshot("\u{276f}\r\n\u{23f5}\u{23f5} auto mode on");
         assert!(!has_open_provider_input(ProviderKind::ClaudeCode, &empty));
+    }
+
+    /// ADR 0139: a reused screen reading answers exactly as a fresh read of
+    /// the same screen would, whatever the turn report says now.
+    #[test]
+    fn a_reused_screen_reading_answers_as_a_fresh_read_would() {
+        let mut failed = turn(ProviderTurnPhase::Failed);
+        failed.failure = Some(swarm_terminal::ProviderTurnFailure::RateLimit);
+        failed.waiting = Some(ProviderTurnWait::UsageLimit);
+        let mut asking = turn(ProviderTurnPhase::Working);
+        asking.waiting = Some(ProviderTurnWait::Question);
+        let mut ended = turn(ProviderTurnPhase::Ended);
+        ended.background = Some(swarm_terminal::ProviderTurnBackground {
+            shells: 3,
+            ..swarm_terminal::ProviderTurnBackground::default()
+        });
+        let turns = [
+            None,
+            Some(turn(ProviderTurnPhase::Working)),
+            Some(asking),
+            Some(ended),
+            Some(failed),
+        ];
+        let screens = [
+            snapshot("✻ Brewing… (12s · esc to interrupt)\r\n"),
+            snapshot("something this build cannot read\r\n"),
+            claude_at_rest("● Done."),
+            claude_at_rest("✻ Baked for 3s · done 10:14 PM"),
+            claude_at_rest("  ⎿  Interrupted · What should Claude do instead?"),
+            claude_at_rest("● Started the build.\r\n  2 shells still running"),
+            snapshot(
+                "✻ Worked for 18s\r\n\r\n❯ /\r\n/compact  Clear history\r\n/config  Open config",
+            ),
+            snapshot("› \r\n  gpt-5.6 medium · ~/projects"),
+        ];
+        for provider in [ProviderKind::ClaudeCode, ProviderKind::Codex] {
+            for screen in &screens {
+                let reading = ScreenReading::read(provider, screen);
+                for turn in &turns {
+                    for quiet_for in [1, QUIET_TURN_SECONDS] {
+                        let now = 1_000 + quiet_for;
+                        assert_eq!(
+                            reading.signals(turn.as_ref(), Some(1_000), now),
+                            observed_signals(provider, screen, turn.as_ref(), Some(1_000), now),
+                            "{provider:?} {turn:?} {quiet_for}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// ADR 0139: the roster reads a session's whole snapshot only when
+    /// something has been drawn since its last look, against a real terminal
+    /// host. A resize is a change too, and the host answers it with the
+    /// snapshot itself.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_roster_look_reads_the_whole_screen_only_after_something_was_drawn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use swarm_terminal::{
+            HostClient, ProviderCommand, SessionRegistry, TerminalWriteProvenance,
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(64 * 1024, 256), 1, [workspace.clone()])
+                .unwrap(),
+        );
+        // A resting Claude prompt. Each line typed draws a working spinner.
+        let session_id = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: "/bin/sh".into(),
+                    arguments: vec![
+                        "-c".into(),
+                        "printf '❯ \\nauto mode on\\n'; while IFS= read -r line; do printf '✻ Brewing… (12s · esc to interrupt)\\n'; done".into(),
+                    ],
+                    working_directory: workspace.clone(),
+                },
+                TerminalSize::new(24, 100),
+            )
+            .unwrap()
+            .id();
+        let host_socket = workspace.join("host.sock");
+        let server = tokio::spawn(
+            swarm_terminal_host::HostServer::bind(&host_socket, registry)
+                .unwrap()
+                .run(),
+        );
+        let host = HostClient::new(host_socket);
+        let screen_shows = |text: &'static str| {
+            let host = host.clone();
+            async move {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if let Ok(HostResponse::Output {
+                            resume: swarm_terminal::Resume::Snapshot { snapshot },
+                            ..
+                        }) = host
+                            .request(&HostRequest::Read {
+                                session_id,
+                                after_sequence: None,
+                            })
+                            .await
+                            && swarm_terminal::snapshot_plain_text(
+                                &snapshot.bytes,
+                                snapshot.rows,
+                                snapshot.columns,
+                            )
+                            .contains(text)
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+        };
+        screen_shows("auto mode on").await;
+
+        // Counts the roster's reads on their way to the host.
+        let proxy_socket = workspace.join("roster.sock");
+        let listener = tokio::net::UnixListener::bind(&proxy_socket).unwrap();
+        let looks = Arc::new(AtomicUsize::new(0));
+        let whole_reads = Arc::new(AtomicUsize::new(0));
+        let proxy = {
+            let host = host.clone();
+            let looks = looks.clone();
+            let whole_reads = whole_reads.clone();
+            tokio::spawn(async move {
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut reader = BufReader::new(stream);
+                    let mut line = Vec::new();
+                    reader.read_until(b'\n', &mut line).await.unwrap();
+                    let request: HostRequest = serde_json::from_slice(&line).unwrap();
+                    if let HostRequest::Read { after_sequence, .. } = &request {
+                        looks.fetch_add(1, Ordering::SeqCst);
+                        if after_sequence.is_none() {
+                            whole_reads.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    let mut response =
+                        serde_json::to_vec(&host.request(&request).await.unwrap()).unwrap();
+                    response.push(b'\n');
+                    reader.get_mut().write_all(&response).await.unwrap();
+                }
+            })
+        };
+        let counts = || {
+            (
+                looks.load(Ordering::SeqCst),
+                whole_reads.load(Ordering::SeqCst),
+            )
+        };
+
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                &workspace.to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session_id).unwrap();
+        let profiles = store.list_worker_profiles().unwrap();
+        let state = AppState::new(JournalLimits::new(64 * 1024, 64))
+            .with_task_store(store)
+            .with_terminal_host(
+                HostClient::new(proxy_socket),
+                "fictional-roster-look-token-0001",
+            );
+        let live = HashSet::from([session_id]);
+
+        let first = refresh(&state, &profiles, &live).await;
+        assert_eq!(first[&session_id].activity, ProviderActivity::Resting);
+        assert_eq!(counts(), (1, 1), "a first look reads the whole screen");
+
+        let again = refresh(&state, &profiles, &live).await;
+        assert_eq!(again, first);
+        assert_eq!(counts(), (2, 1), "nothing drawn since: no snapshot");
+
+        host.request(&HostRequest::Write {
+            session_id,
+            bytes: b"go\r".to_vec(),
+            provenance: TerminalWriteProvenance::coordination(),
+        })
+        .await
+        .unwrap();
+        screen_shows("Brewing").await;
+        let busy = refresh(&state, &profiles, &live).await;
+        assert_eq!(busy[&session_id].activity, ProviderActivity::Active);
+        assert_eq!(
+            counts(),
+            (4, 2),
+            "something drawn: one look finds it, then one whole read"
+        );
+
+        assert!(matches!(
+            host.request(&HostRequest::Resize {
+                session_id,
+                size: TerminalSize::new(30, 120),
+            })
+            .await
+            .unwrap(),
+            HostResponse::Acknowledged
+        ));
+        let resized = refresh(&state, &profiles, &live).await;
+        assert_eq!(resized[&session_id].activity, ProviderActivity::Active);
+        assert_eq!(counts(), (5, 2), "a resize is answered with the snapshot");
+
+        assert!(refresh(&state, &profiles, &HashSet::new()).await.is_empty());
+        assert!(
+            state.provider_screens.lock().await.is_empty(),
+            "a session that is not live keeps no reading"
+        );
+        refresh(&state, &profiles, &live).await;
+        assert_eq!(counts(), (6, 3), "and its next look reads it whole");
+
+        proxy.abort();
+        server.abort();
     }
 }

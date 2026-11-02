@@ -422,6 +422,11 @@ pub struct AppState {
     /// the journal should have to explain.
     engine_drift_reported: Arc<std::sync::atomic::AtomicBool>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
+    /// The last whole screen reading of each live session, so a roster look
+    /// that finds nothing drawn since reuses it rather than reading and parsing
+    /// the whole snapshot again (ADR 0139). Holds only sessions live at the
+    /// last look; only the roster refresh reads or writes it.
+    provider_screens: Arc<Mutex<HashMap<WorkerSessionId, provider_activity::ScreenReading>>>,
     /// The `/restart` requests Swarm has typed into Claude workers (ADR 0122).
     provider_updates: Arc<provider_updates::ProviderUpdates>,
     /// The `/mcp reconnect all` asks Swarm has typed (ADR 0123).
@@ -616,6 +621,7 @@ impl AppState {
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             engine_drift_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
+            provider_screens: Arc::default(),
             provider_updates: Arc::default(),
             tool_reconnects: Arc::default(),
             tools_relays: Arc::default(),
