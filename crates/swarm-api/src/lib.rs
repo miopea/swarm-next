@@ -16261,6 +16261,12 @@ mod tests {
         send("critical").await;
         assert!(pending().is_empty());
         assert_eq!(raised().len(), 2);
+
+        // ⚠️ HOWEVER MANY DECISIONS COME AFTER IT. The check filtered the
+        // capped inbox, so an answer older than its newest 256 was lost.
+        bury_under_later_decisions(&keeper);
+        send("critical").await;
+        assert!(pending().is_empty(), "the answer still holds");
     }
 
     /// ⚠️ ADR 0114: a member's health reaches its Keeper only on its own
@@ -17005,6 +17011,15 @@ mod tests {
             0,
             "the same Hive behind the same release is not asked about twice"
         );
+        bury_under_later_decisions(&keeper);
+        service
+            .raise_hives_left_behind(raised_at + 1, "1.13.0")
+            .unwrap();
+        assert_eq!(
+            cards(swarm_domain::DecisionRequestState::Pending),
+            0,
+            "nor once 256 newer decisions push the answer out of the inbox"
+        );
 
         // The Hive upgrades.
         let current = member_store
@@ -17103,6 +17118,39 @@ mod tests {
             }
             keeper
                 .authenticated_member_hive(&self.credential, to)
+                .unwrap();
+        }
+    }
+
+    /// Answers as many unrelated decisions as the capped inbox holds, so an
+    /// earlier answered raise is no longer among the newest it returns.
+    fn bury_under_later_decisions(keeper: &TaskStore) {
+        let queen = keeper.queen_worker_id().unwrap().unwrap();
+        let actions = vec!["Water it".to_owned()];
+        for n in 0..swarm_persistence::MAX_DECISION_RESULTS {
+            let title = format!("Seed tray {n}");
+            let later = keeper
+                .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                    requesting_worker_id: queen,
+                    task_id: None,
+                    kind: swarm_domain::DecisionRequestKind::Input,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: &title,
+                    summary: "Whether the tray needs water.",
+                    reason: "Fixture.",
+                    risk: "",
+                    evidence: "",
+                    suggested_action: "Water it",
+                    allowed_actions: &actions,
+                    operator_actions: &[],
+                    questions: &[],
+                    deadline: None,
+                    requested_command: None,
+                    requested_script: None,
+                })
+                .unwrap();
+            keeper
+                .resolve_decision_request(later.id, "Water it", "", "control_room")
                 .unwrap();
         }
     }

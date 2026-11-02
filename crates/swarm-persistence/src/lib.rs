@@ -169,8 +169,8 @@ mod passkeys;
 mod presence;
 pub use decisions::{
     CommandGrantOutcome, DecisionDeliveryFailure, DecisionDispatch, FollowedApproval,
-    LiveCommandGrant, MAX_PENDING_REFUSED_COMMANDS, NewDecisionRequest, RefusalWording,
-    RefusedCommand, RefusedCommandFiling,
+    LiveCommandGrant, MAX_PENDING_REFUSED_COMMANDS, NewDecisionRequest, RaiseRecord,
+    RefusalWording, RefusedCommand, RefusedCommandFiling,
 };
 pub use email::{
     EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
