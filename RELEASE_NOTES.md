@@ -12,6 +12,28 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.9
+
+Two database updates (218 and 219). Your Hive backs up its database by itself before applying them, and your workers keep running. One change below reaches Queen and the workers only when each next starts.
+
+### New features
+- With Queen releases reviewed work turned on, Queen now tells a worker to run a production deploy of reviewed work through that repository's own release script or deploy workflow, rather than to ask you for the command. Those deploys had been reaching you as "allow this command" cards. A database migration, or a change to production data, credentials, permissions, app settings or secrets, still comes to you as a command request, one step at a time. Queen and each worker pick this up when they next start.
+
+### Fixes
+- Swarm no longer holds a whole processor core for seconds at a time on a Hive with about two thousand tasks. Opening the decision inbox or the fleet checks cost about a second each. Each agent tool call ran a full coordination pass. Each look at the workers re-read every terminal's whole screen and scrollback. Pages and workers that waited behind all of that now get their answers sooner.
+- An open control-room page now reloads only the parts an event can change. A worker starting or finishing a turn no longer reloads everything. In one before-and-after reading on a busy Hive, the API's background CPU fell from 52 to 30 ms a second and the worker engine's from 61 to 29.
+- Queen moves Review and Draft work on her own instead of waiting to be told:
+  - Approved work goes on to Awaiting Release, rather than being noted again on every run.
+  - A move that cannot happen is refused and names the move that can, instead of answering as though it worked.
+  - A run that ends with work left says which tasks remain and how each can be moved.
+- Queen's view of the whole board is far smaller. Other workers' open tasks come in short form, her own work in hand in full, and only the 50 most recently closed tasks. It had grown to about 291 KB per read.
+- Queen's list of decisions now fits in what Claude can read in one answer. It had grown to about 210 KB, more than Claude accepts from one tool answer by default. Every decision still waiting on you is on it, and settled ones come 20 at a time, the most recently settled first.
+- A worker's list of its own tasks now carries what it is doing or can pick up next in full, and the rest in brief. One worker holding 19 tasks had been reading all 19 in full each time, about 105 KB.
+- Dragging a task on the board no longer downloads every finished task, about 7 MB on a busy Hive. Finished tasks no longer show twice on the board until the next refresh.
+- A message held back by a terminal's five-minute pacing pause now goes as soon as the pause ends. Before, it could wait up to another 30 seconds.
+- Answering a worker's question in its terminal now clears the matching Needs you card. Answering the card closes the question on the worker's screen too.
+- After Swarm moves a worker onto a new Claude Code, the restart notice is now submitted even when Claude wraps it on a narrow terminal. Before, the worker sat waiting for someone to press Enter.
+
 ## 1.17.8
 
 Four database updates (214 to 217). Your Hive backs its database up first, by itself, and your workers are not stopped. Two changes below take effect only after the worker engine update, which does stop running workers. The worker engine card says when one is waiting.
