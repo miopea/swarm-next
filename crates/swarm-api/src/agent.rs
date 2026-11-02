@@ -750,10 +750,12 @@ pub async fn handle(
         }
     };
     let bridge_state = Arc::clone(&state);
+    let deliver_after = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let handler = AgentMcp {
         tasks: bridge.tasks.clone(),
         principal,
         changed: bridge.changed.clone(),
+        deliver_after: Arc::clone(&deliver_after),
         jira: bridge.jira.clone(),
         state,
     };
@@ -766,10 +768,19 @@ pub async fn handle(
             .with_sse_keep_alive(None)
             .with_allowed_hosts(allowed_mcp_hosts(&bridge_state)),
     );
-    match service.oneshot(request).await {
+    let response = match service.oneshot(request).await {
         Ok(response) => response.into_response(),
         Err(error) => match error {},
+    };
+    // A call that may have changed something gets its delivery attempted
+    // before it is answered (ADR 0016). A read, a refusal, or a request that
+    // never authenticated changed nothing there is to deliver, so it no
+    // longer pays for a whole coordination pass with the store held (ADR
+    // 0138). The supervisor still runs one every thirty seconds.
+    if deliver_after.load(std::sync::atomic::Ordering::Acquire) {
+        bridge_state.deliver_coordination().await;
     }
+    response
 }
 
 /// Which `Host` values the MCP endpoint will answer to.
@@ -816,6 +827,10 @@ struct AgentMcp {
     tasks: TaskService,
     principal: AgentPrincipal,
     changed: Arc<Notify>,
+    /// Set by a call that may have changed something, the same calls that
+    /// tell the control room; `handle` then runs the delivery pass before it
+    /// answers. One per request.
+    deliver_after: Arc<std::sync::atomic::AtomicBool>,
     jira: crate::jira::JiraReadinessProbe,
     /// Reaches the running installation, not just the task store: reloading
     /// this Hive needs its configured paths and its own build version.
@@ -1983,6 +1998,8 @@ impl ServerHandler for AgentMcp {
                     && request.name.as_ref() != "swarm_list_coordination_attention"
                 {
                     self.changed.notify_waiters();
+                    self.deliver_after
+                        .store(true, std::sync::atomic::Ordering::Release);
                 }
                 Ok(result.into())
             }
@@ -5634,6 +5651,108 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), notified.as_mut())
             .await
             .unwrap();
+    }
+
+    /// ADR 0138. A coordination pass costs about 135 ms of CPU with the
+    /// store held, and every agent request used to pay for one: reads,
+    /// refusals, and requests that never authenticated. Only a call that may
+    /// have changed something still gets its delivery attempted before it is
+    /// answered (ADR 0016).
+    ///
+    /// The witness is a message claim no pass owns, as an interrupted pass
+    /// leaves one: the next pass recovers it to uncertain, and nothing else
+    /// touches it. So the claim staying put proves no pass ran.
+    #[tokio::test]
+    async fn only_a_call_that_may_have_changed_something_runs_a_delivery_pass() {
+        let (bridge, store, _queen_id, worker_id, directory) = setup();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Interrupted delivery", "/workspace/petal")
+            .unwrap();
+        store
+            .send_task_message(
+                task.id,
+                swarm_persistence::MessageEnd::queen(),
+                swarm_persistence::MessageEnd::worker(worker_id),
+                "Which SHA?",
+                10,
+            )
+            .unwrap();
+        assert_eq!(store.claim_task_messages(11).unwrap().len(), 1);
+        // Through the router, so the whole MCP route is held to this and not
+        // only the handler.
+        let app = crate::router(
+            crate::AppState::default()
+                .with_terminal_host(
+                    swarm_terminal::HostClient::new("/unreachable/terminal.sock"),
+                    "operator-token-for-tests",
+                )
+                .with_task_store(store.clone())
+                .with_agent_configuration(
+                    directory.path().to_path_buf(),
+                    "http://127.0.0.1:8876/mcp",
+                ),
+        );
+        let claim = || {
+            store.task_messages(task.id).unwrap()[0]
+                .delivery_state
+                .clone()
+        };
+        let call = |token: Option<&str>, name: &str, arguments: Value| {
+            app.clone().oneshot(mcp_request(
+                token,
+                "tools/call",
+                &json!({"name": name, "arguments": arguments}),
+            ))
+        };
+
+        let unauthenticated = call(None, "swarm_create_task", json!({"title": "Never filed"}))
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(claim(), "dispatching", "a request that never authenticated");
+
+        let read = response_json(
+            call(Some(&token), "swarm_list_tasks", json!({}))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(read["result"]["isError"], false, "{read}");
+        assert_eq!(claim(), "dispatching", "a read");
+
+        let refused = response_json(
+            call(
+                Some(&token),
+                "swarm_transition_task",
+                json!({"task_id": task.id, "state": "active"}),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert_eq!(claim(), "dispatching", "a refused call");
+
+        let filed = response_json(
+            call(
+                Some(&token),
+                "swarm_create_task",
+                json!({"title": "A real change", "workspace": "/workspace", "description": "Bounded fixture"}),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(filed["result"]["isError"], false, "{filed}");
+        assert_eq!(
+            claim(),
+            "uncertain",
+            "a call that changed something runs the pass before it is answered"
+        );
     }
 
     /// Queen cannot stand down a worker that holds Active work, and Active

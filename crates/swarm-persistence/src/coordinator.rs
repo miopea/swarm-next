@@ -85,6 +85,10 @@ fn refusal_matches(
 ///
 /// Filtering by kind rather than by actor, because the actor is not the problem:
 /// a worker's correction suppresses it identically.
+///
+/// ⚠️ Read through the partial index `task_activity_blocked_transitions`
+/// (schema 219), which is used only while this `WHERE` matches its own. See
+/// `migrate_detector_indexes`.
 macro_rules! blocked_transition_source {
     () => {
         "(SELECT task_id, MAX(occurred_at) AS blocked_at
@@ -94,6 +98,9 @@ macro_rules! blocked_transition_source {
     };
 }
 
+/// ⚠️ Read through the partial index `task_activity_owner_actions` (schema
+/// 219), which is used only while this `WHERE` matches its own. See
+/// `migrate_detector_indexes`.
 macro_rules! last_task_action_source {
     () => {
         "(SELECT task_id, MAX(occurred_at) AS acted_at
@@ -2793,6 +2800,41 @@ pub(super) fn migrate_reviewed_work_evidence_attention(
     )
 }
 
+/// Indexes the detectors read by, so a pass finds its few candidates without
+/// reading every activity row and every attention row (ADR 0138).
+///
+/// ⚠️ THE TWO PARTIAL INDEXES ARE ONLY USED WHILE THEIR `WHERE` MATCHES THE
+/// MACRO'S WORD FOR WORD. `blocked_transition_source` and
+/// `last_task_action_source` each filter `task_activity` on columns no other
+/// index leads with, so the planner read all of it (about 28,000 rows with
+/// their notes, 25 ms) to group the handful of rows a pass wants. Edit a
+/// macro's filter and its index silently stops being used; the plan test on
+/// these indexes is what fails. The DDL here is frozen on purpose: a database
+/// already migrated keeps the index it was given.
+///
+/// `coordinator_actions(task_id, kind)` serves the `NOT EXISTS` each detector
+/// asks before raising an attention twice, which otherwise scanned the whole
+/// table once per candidate. A migration that rebuilds `coordinator_actions`
+/// drops it with the table, so such a migration must recreate it, as they
+/// already recreate `coordinator_actions_queue`.
+pub(super) fn migrate_detector_indexes(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS task_activity_blocked_transitions
+             ON task_activity(task_id, occurred_at)
+             WHERE to_state = 'blocked' AND kind = 'state_changed';
+         CREATE INDEX IF NOT EXISTS task_activity_owner_actions
+             ON task_activity(task_id, occurred_at)
+             WHERE actor_kind IN ('worker', 'operator')
+               AND kind IN ('corrected', 'details_updated', 'amended');
+         CREATE INDEX IF NOT EXISTS coordinator_actions_by_task
+             ON coordinator_actions(task_id, kind);",
+    )?;
+    transaction.pragma_update(None, "user_version", version)
+}
+
 #[cfg(test)]
 mod unattended_block_tests {
     use crate::TaskStore;
@@ -3640,6 +3682,60 @@ mod reviewed_work_tests {
 
 #[cfg(test)]
 mod tests {
+    fn plan(connection: &rusqlite::Connection, sql: &str) -> String {
+        let mut statement = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n")
+    }
+
+    /// ADR 0138. The results cannot differ, because the SQL did not change;
+    /// only the plan can, so the plan is what this holds. A detector's
+    /// sources read through the schema 219 indexes, and its check for an
+    /// attention it already raised searches rather than scans. Editing a
+    /// macro's filter away from its index, or rebuilding `coordinator_actions`
+    /// without recreating the index, fails here rather than quietly costing
+    /// every coordination pass a full read again.
+    #[test]
+    fn the_detectors_read_by_index_rather_than_scanning() {
+        let store = crate::TaskStore::in_memory().unwrap();
+        let connection = store.connection().unwrap();
+        let blocked = plan(
+            &connection,
+            &format!("SELECT * FROM {} blocked", blocked_transition_source!()),
+        );
+        assert!(
+            blocked.contains("USING COVERING INDEX task_activity_blocked_transitions"),
+            "{blocked}"
+        );
+        let acted = plan(
+            &connection,
+            &format!("SELECT * FROM {} acted", last_task_action_source!()),
+        );
+        assert!(
+            acted.contains("USING INDEX task_activity_owner_actions"),
+            "{acted}"
+        );
+        let raised = plan(
+            &connection,
+            "SELECT task.id FROM tasks task WHERE NOT EXISTS (
+                 SELECT 1 FROM coordinator_actions action
+                 WHERE action.kind = 'blocked_work_unattended_attention'
+                   AND action.task_id = task.id AND action.worker_id = 'fixture'
+                   AND action.evidence_revision = task.updated_at)",
+        );
+        assert!(
+            raised.contains("SEARCH action USING INDEX coordinator_actions_by_task"),
+            "{raised}"
+        );
+        assert!(!raised.contains("SCAN action"), "{raised}");
+    }
+
     #[test]
     fn admission_recovery_clears_aged_holds_once_without_clearing_prompt_evidence() {
         let store = crate::TaskStore::in_memory().unwrap();
