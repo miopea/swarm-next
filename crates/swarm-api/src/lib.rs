@@ -7,6 +7,7 @@ mod backups;
 pub mod bundled_feedback;
 mod control_room;
 mod coordination_attention_evidence;
+mod coordination_deadline;
 mod coordination_delivery;
 mod ops_mcp;
 #[cfg(test)]
@@ -18,6 +19,7 @@ use coordination_delivery::{
 mod database_integrity;
 mod decision_clarification;
 mod decisions;
+pub use coordination_deadline::CoordinationDeadline;
 pub use database_integrity::monitor_database_integrity;
 mod apiary_enrollment;
 mod apiary_policy_routes;
@@ -378,6 +380,9 @@ pub struct AppState {
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     coordination_wakeup: Arc<Notify>,
+    /// When the next pacing cooldown ends, so the supervisor can run the pass
+    /// that delivers whatever it held back (ADR 0140). Set by every pass.
+    coordination_deadline: Arc<CoordinationDeadline>,
     jira_delivery: Arc<Mutex<()>>,
     email_delivery: Arc<Mutex<()>>,
     enrollment_delivery: Arc<Mutex<()>>,
@@ -608,6 +613,7 @@ impl AppState {
             development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             coordination_wakeup: Arc::new(Notify::new()),
+            coordination_deadline: Arc::default(),
             jira_delivery: Arc::new(Mutex::new(())),
             email_delivery: Arc::new(Mutex::new(())),
             enrollment_delivery: Arc::new(Mutex::new(())),
@@ -2144,6 +2150,13 @@ impl AppState {
         self.coordination_wakeup.clone()
     }
 
+    /// The end of the next pacing cooldown, which the owned supervisor waits on
+    /// beside its tick and its wakeup (ADR 0140).
+    #[must_use]
+    pub fn coordination_deadline(&self) -> Arc<CoordinationDeadline> {
+        self.coordination_deadline.clone()
+    }
+
     /// Delivers durable coordination only to running workers without a live operator lease.
     pub async fn deliver_coordination(&self) {
         let _guard = self.coordination_delivery.lock().await;
@@ -2218,6 +2231,14 @@ impl AppState {
         }
         if !review_first {
             self.deliver_queen_automation(store, client).await;
+        }
+        // Anything a pacing cooldown held back above goes when the cooldown
+        // ends, not whenever the next call or tick happens to come (ADR 0140).
+        match store.next_coordination_cooldown_end(unix_timestamp()) {
+            Ok(at) => self.coordination_deadline.set(at),
+            Err(error) => {
+                tracing::warn!(message = %error, "the next pacing cooldown could not be read");
+            }
         }
     }
 

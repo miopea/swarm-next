@@ -1867,6 +1867,22 @@ impl TaskStore {
         coordination_is_cooling_down_from_connection(&connection, session_id, now)
     }
 
+    /// When the earliest pacing cooldown on a live session ends, if one is
+    /// running. The supervisor wakes then, so a delivery held back by it goes
+    /// as soon as it may (ADR 0140).
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn next_coordination_cooldown_end(&self, now: i64) -> Result<Option<i64>, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.query_row(
+            "SELECT MIN(last_coordination_delivery_at + ?2) FROM worker_sessions
+             WHERE ended_at IS NULL AND last_coordination_delivery_at + ?2 > ?1",
+            params![now, crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Records that coordination has just written to this terminal.
     ///
     /// Called on an ACKNOWLEDGED write only. A deferred or uncertain delivery
@@ -2725,6 +2741,52 @@ mod tests {
                 .coordination_is_cooling_down(session, 1_100)
                 .unwrap(),
             "a cooldown that does not survive a restart floods every terminal on every restart"
+        );
+    }
+
+    /// ADR 0140: the supervisor wakes when the earliest running cooldown on a
+    /// live session ends, so whatever it held back goes then.
+    #[test]
+    fn the_next_cooldown_end_is_the_earliest_running_one_on_a_live_session() {
+        let store = TaskStore::in_memory().unwrap();
+        let session_for = |name: &str| {
+            let worker = store
+                .create_worker(name, ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            session
+        };
+        let early = session_for("Petal");
+        let late = session_for("Bramble");
+        let ended = session_for("Clover");
+        assert_eq!(
+            store.next_coordination_cooldown_end(1_000).unwrap(),
+            None,
+            "nothing written to, nothing running"
+        );
+        store.record_coordination_delivery(late, 1_100).unwrap();
+        store.record_coordination_delivery(early, 1_000).unwrap();
+        store.record_coordination_delivery(ended, 950).unwrap();
+        store.release_worker_session(ended).unwrap();
+        let cooldown = crate::COORDINATION_DELIVERY_COOLDOWN_SECONDS;
+        assert_eq!(
+            store.next_coordination_cooldown_end(1_000).unwrap(),
+            Some(1_000 + cooldown),
+            "the earliest on a live session; an ended session holds nothing back"
+        );
+        assert_eq!(
+            store
+                .next_coordination_cooldown_end(1_000 + cooldown)
+                .unwrap(),
+            Some(1_100 + cooldown),
+            "a cooldown that has ended is not the next one"
+        );
+        assert_eq!(
+            store
+                .next_coordination_cooldown_end(1_100 + cooldown)
+                .unwrap(),
+            None
         );
     }
 

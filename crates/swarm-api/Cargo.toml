@@ -41,6 +41,8 @@ qrcode = { version = "0.14.1", default-features = false }
 
 [dev-dependencies]
 swarm-terminal-host = { path = "../swarm-terminal-host" }
+# Paused time, so the deadline tests (ADR 0140) wait no real seconds.
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = "0.29"
 
 [lints]

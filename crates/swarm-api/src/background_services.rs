@@ -28,7 +28,7 @@ impl BackgroundServices {
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
     {
-        self.periodic_with_wakeup(period, immediate, None, run);
+        self.periodic_with_wakeup(period, immediate, None, None, run);
     }
 
     pub(super) fn periodic_with_wakeup<F, Fut>(
@@ -36,6 +36,9 @@ impl BackgroundServices {
         period: Duration,
         immediate: bool,
         wakeup: Option<Arc<Notify>>,
+        // Also runs a pass when this arrives (ADR 0140): the end of a pacing
+        // cooldown that may be holding a delivery back.
+        deadline: Option<Arc<swarm_api::CoordinationDeadline>>,
         mut run: F,
     ) where
         F: FnMut() -> Fut + Send + 'static,
@@ -102,6 +105,13 @@ impl BackgroundServices {
                             std::future::pending::<()>().await;
                         }
                     } => {},
+                    () = async {
+                        if let Some(deadline) = &deadline {
+                            deadline.reached().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {},
                     _ = interval.tick() => {}
                 }
                 if *stop.borrow() {
@@ -145,6 +155,54 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    /// ADR 0140: the supervisor runs a pass when a pacing cooldown ends,
+    /// without waiting for its tick or for anybody to wake it, and only once.
+    #[tokio::test(start_paused = true)]
+    async fn the_end_of_a_cooldown_runs_a_pass_once() {
+        let mut services = BackgroundServices::new();
+        let deadline = Arc::new(swarm_api::CoordinationDeadline::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(Notify::new());
+        services.periodic_with_wakeup(
+            Duration::from_secs(3600),
+            false,
+            Some(Arc::new(Notify::new())),
+            Some(deadline.clone()),
+            {
+                let calls = calls.clone();
+                let entered = entered.clone();
+                move || {
+                    let calls = calls.clone();
+                    let entered = entered.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        entered.notify_one();
+                    }
+                }
+            },
+        );
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing due yet");
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        deadline.set(Some(now + 120));
+        tokio::time::timeout(Duration::from_secs(121), entered.notified())
+            .await
+            .expect("the pass runs when the cooldown ends, long before the hourly tick");
+        tokio::time::sleep(Duration::from_secs(1_000)).await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a spent deadline does not keep running passes"
+        );
+        services.shutdown().await;
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
@@ -306,6 +364,7 @@ mod tests {
             Duration::from_secs(3600),
             false,
             Some(wakeup.clone()),
+            None,
             move || {
                 let entered = entered.clone();
                 let gate = gate.clone();
