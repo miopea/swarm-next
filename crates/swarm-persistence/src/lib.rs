@@ -445,7 +445,10 @@ const JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER: i64 = 217;
 /// Decision membership is read one task at a time instead of rebuilt per row
 /// (ADR 0137).
 const DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER: i64 = 218;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER;
+/// The coordinator's detectors read by index rather than scanning activity and
+/// attention (ADR 0138).
+const DETECTOR_INDEXES_SCHEMA_MARKER: i64 = 219;
+const CURRENT_SCHEMA_VERSION: i64 = DETECTOR_INDEXES_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4950,6 +4953,9 @@ fn migrate_fleet_health_schema_steps(
             transaction,
             DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < DETECTOR_INDEXES_SCHEMA_MARKER {
+        crate::coordinator::migrate_detector_indexes(transaction, DETECTOR_INDEXES_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -9507,7 +9513,10 @@ mod tests {
                 .connection()
                 .unwrap()
                 .execute_batch(
-                    "ALTER TABLE task_activity DROP COLUMN actor_id;
+                    // Schema 219's index reads actor_kind, and a v43
+                    // database never had it.
+                    "DROP INDEX task_activity_owner_actions;
+                     ALTER TABLE task_activity DROP COLUMN actor_id;
                      ALTER TABLE task_activity DROP COLUMN actor_kind;
                      PRAGMA user_version = 43;",
                 )
@@ -11166,6 +11175,18 @@ mod tests {
                 UNION SELECT task_id, decision_id FROM task_decision_links;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'view'
                 AND name = 'task_decision_membership' AND instr(sql, 'UNION ALL') > 0",
+        },
+        // The detectors' indexes (ADR 0138).
+        SchemaStep {
+            table: "coordinator_actions",
+            artifact: "",
+            undo_sql: "DROP INDEX task_activity_blocked_transitions;
+                DROP INDEX task_activity_owner_actions;
+                DROP INDEX coordinator_actions_by_task;",
+            probe_sql: "SELECT COUNT(*) = 3 FROM sqlite_master WHERE type = 'index'
+                AND name IN ('task_activity_blocked_transitions',
+                             'task_activity_owner_actions',
+                             'coordinator_actions_by_task')",
         },
     ];
 

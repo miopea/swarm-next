@@ -5445,6 +5445,8 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     let Some(bridge) = state.agent_bridge.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    // Runs the delivery pass itself, and only after a call that may have
+    // changed something (ADR 0138).
     let mut response = agent::handle(bridge, Arc::clone(&state), request).await;
     // The relay compares this across responses and tells Claude when it moves,
     // so a running worker sees a tool shipped by a reload (ADR 0123).
@@ -5452,7 +5454,6 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
         swarm_terminal::AGENT_TOOL_SURFACE_HEADER,
         axum::http::HeaderValue::from(agent::AGENT_TOOL_SURFACE_REVISION),
     );
-    state.deliver_coordination().await;
     response
 }
 /// Large enough for any command a request may carry, which the store caps at
