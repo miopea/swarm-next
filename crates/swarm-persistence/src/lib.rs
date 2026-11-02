@@ -442,7 +442,10 @@ const QUEEN_RELEASES_SCHEMA_MARKER: i64 = 215;
 const WORKER_LAUNCH_CHOICES_SCHEMA_MARKER: i64 = 216;
 /// The description each linked Jira issue last had in Jira (ADR 0133).
 const JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER: i64 = 217;
-const CURRENT_SCHEMA_VERSION: i64 = JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER;
+/// Decision membership is read one task at a time instead of rebuilt per row
+/// (ADR 0137).
+const DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER: i64 = 218;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -2452,7 +2455,7 @@ impl TaskStore {
     /// # Errors
     /// Returns an error when persistence cannot be read safely.
     pub fn list_board_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
-        self.list_tasks_where(&format!("AND NOT {}", Self::SETTLED_PREDICATE))
+        self.list_tasks_where(&format!("AND NOT {}", Self::SETTLED_PREDICATE), [])
     }
 
     /// Every task on the Hive. What the agent surface reads.
@@ -2460,7 +2463,7 @@ impl TaskStore {
     /// # Errors
     /// Returns an error when persistence cannot be read safely.
     pub fn list_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
-        self.list_tasks_where("")
+        self.list_tasks_where("", [])
     }
 
     /// Settled work, which the board fetches when its completed panel is opened
@@ -2469,10 +2472,47 @@ impl TaskStore {
     /// # Errors
     /// Returns an error when persistence cannot be read safely.
     pub fn list_settled_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
-        self.list_tasks_where(&format!("AND {}", Self::SETTLED_PREDICATE))
+        self.list_tasks_where(&format!("AND {}", Self::SETTLED_PREDICATE), [])
     }
 
-    fn list_tasks_where(&self, extra: &str) -> Result<Vec<Task>, TaskStoreError> {
+    /// The tasks assigned to one worker that are not completed, in board order.
+    ///
+    /// Narrows by SQL so a permission check reads a worker's own handful of
+    /// rows rather than the whole board (ADR 0137). The caller still applies
+    /// its own rule to what comes back; this only skips rows that rule could
+    /// never accept.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_unfinished_tasks_assigned_to(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Vec<Task>, TaskStoreError> {
+        self.list_tasks_where(
+            "AND t.assigned_worker_id = ?1 AND t.state <> 'completed'",
+            [worker_id.to_string()],
+        )
+    }
+
+    /// The completed tasks assigned to one worker, in board order.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_finished_tasks_assigned_to(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Vec<Task>, TaskStoreError> {
+        self.list_tasks_where(
+            "AND t.assigned_worker_id = ?1 AND t.state = 'completed'",
+            [worker_id.to_string()],
+        )
+    }
+
+    fn list_tasks_where<P: rusqlite::Params>(
+        &self,
+        extra: &str,
+        params: P,
+    ) -> Result<Vec<Task>, TaskStoreError> {
         let connection = self.connection()?;
         let sql = format!(
             "{projection}\n            WHERE t.removed_at IS NULL {extra}\n{ordering}",
@@ -2481,7 +2521,7 @@ impl TaskStore {
         );
         let mut statement = connection.prepare(&sql)?;
         statement
-            .query_map([], task_from_row)?
+            .query_map(params, task_from_row)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(TaskStoreError::from)
     }
@@ -4904,6 +4944,12 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER {
         crate::jira::migrate_issue_descriptions(transaction, JIRA_ISSUE_DESCRIPTION_SCHEMA_MARKER)?;
+    }
+    if schema_version < DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER {
+        crate::task_decision_links::migrate_membership_view(
+            transaction,
+            DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -11109,6 +11155,17 @@ mod tests {
                 ALTER TABLE jira_issue_links DROP COLUMN jira_description;",
             probe_sql: "SELECT COUNT(*) = 2 FROM pragma_table_info('jira_issue_links')
                 WHERE name IN ('jira_description', 'jira_description_unapplied_at')",
+        },
+        // Decision membership without the de-duplicating UNION (ADR 0137).
+        SchemaStep {
+            table: "task_decision_links",
+            artifact: "",
+            undo_sql: "DROP VIEW task_decision_membership;
+                CREATE VIEW task_decision_membership AS
+                SELECT task_id, id AS decision_id FROM decision_requests WHERE task_id IS NOT NULL
+                UNION SELECT task_id, decision_id FROM task_decision_links;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'view'
+                AND name = 'task_decision_membership' AND instr(sql, 'UNION ALL') > 0",
         },
     ];
 
