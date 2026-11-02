@@ -34,7 +34,8 @@ pub(crate) struct ToolCost {
     pub failures: u64,
     pub total_micros: u64,
     pub max_micros: u64,
-    /// The serialized answer, which is what the calling agent reads.
+    /// The answer's text, which is what the calling agent reads. The same
+    /// answer sent again as structured content is not counted (ADR 0145).
     pub total_bytes: u64,
     pub max_bytes: u64,
 }
