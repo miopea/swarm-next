@@ -827,6 +827,9 @@ export function App() {
       operatorToken,
       async (page, signal) => {
         const runtimeChanged = page.reset_required || page.events.some((event) => event.kind === "runtime_changed");
+        // Which workers run behind the installed release changes when one
+        // restarts onto it, which is a worker change (ADR 0142).
+        const workersChanged = runtimeChanged || page.events.some((event) => event.kind === "workers_changed");
         // Status derives from tasks, decisions, sessions and presence as well
         // as workers. Runtime replacement can change the projection itself.
         const refreshQueenAutomation = page.reset_required || page.events.some((event) => event.kind !== "notifications_changed");
@@ -847,7 +850,7 @@ export function App() {
           runtimeChanged
             ? fetchPresentationPreferences(operatorToken, presentationDevice, signal)
             : Promise.resolve(undefined),
-          runtimeChanged
+          workersChanged
             ? fetchProviderCapabilities(operatorToken, signal).catch(() => {
                 if (!signal.aborted) setProviderCapabilitiesUnavailable(true);
                 return undefined;
@@ -874,7 +877,8 @@ export function App() {
           setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
           rememberMobileKeysVisibility(refreshedPresentation.terminal_keys_visible);
         }
-        if (controlRoom) setTerminalSelection((current) => reconcileTerminalSelection(current, controlRoom.workers, controlRoom.sessions));
+        const { workers: refreshedWorkers, sessions: refreshedSessions } = controlRoom ?? {};
+        if (refreshedWorkers && refreshedSessions) setTerminalSelection((current) => reconcileTerminalSelection(current, refreshedWorkers, refreshedSessions));
       },
       setLiveFeedState,
     );

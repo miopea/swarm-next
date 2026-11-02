@@ -27,8 +27,12 @@ content-free invalidation channel rather than a second copy of domain state.
 ## Recovery model
 
 The feed never applies business mutations in React. It tells the browser which
-typed subsystem changed, and the browser reloads the canonical control-room
-snapshots. Manual Refresh remains available as an explicit recovery control.
+typed subsystem changed, and the browser reloads the canonical snapshots that
+kind can change (ADR 0142). A reset, startup, a runtime change or an unknown
+kind reloads all of them. A worker's provider activity is a worker change.
+Worker and task changes are held for 250 ms, and at least a second after the
+previous refresh, then read again from the same cursor, so a burst costs one
+refresh. Manual Refresh remains available as an explicit recovery control.
 Notify wakeups reduce latency, while the long-poll timeout guarantees another
 database read even if a wakeup is missed.
 

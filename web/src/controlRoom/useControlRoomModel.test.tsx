@@ -2,8 +2,8 @@ import { act, renderHook } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 
 import { BROWSER_SESSION_AUTH, type ControlRoomEventPage } from "../api";
-import type { ControlRoomSnapshot } from "./useControlRoomModel";
-import { loadControlRoomSnapshot, mergeRecentEvents, useControlRoomModel } from "./useControlRoomModel";
+import type { ControlRoomPart, ControlRoomSnapshot } from "./useControlRoomModel";
+import { loadControlRoomParts, loadControlRoomSnapshot, mergeRecentEvents, partsChangedBy, useControlRoomModel } from "./useControlRoomModel";
 
 const populated = {
   hiveIdentity: { operator: { id: "operator", display_name: "Operator" }, hive: { id: "hive", name: "Hive", operator_id: "operator", apiary_id: null } },
@@ -15,6 +15,10 @@ const populated = {
   decisions: [{ id: "decision", title: "Choose" }],
   stewardAssists: { incoming: [], sent: [], outbox: [] },
 } as unknown as ControlRoomSnapshot;
+
+const EVERY_PART: readonly ControlRoomPart[] = [
+  "hiveIdentity", "sessions", "workers", "workspaces", "tasks", "jiraTaskLinks", "decisions", "stewardAssists",
+];
 
 test("replaces and clears the complete control-room snapshot as one ownership boundary", () => {
   const { result } = renderHook(() => useControlRoomModel());
@@ -62,11 +66,11 @@ test("restores the trusted browser session and snapshot through one model operat
 test("does not apply a live-feed refresh after its owning effect is cancelled", async () => {
   let finishLoad!: (snapshot: ControlRoomSnapshot) => void;
   const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishLoad = resolve; }));
-  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  const { result } = renderHook(() => useControlRoomModel(oneLoader(loadSnapshot)));
   const controller = new AbortController();
   const page = eventPage(1, false);
 
-  let refresh!: Promise<ControlRoomSnapshot | undefined>;
+  let refresh!: Promise<Partial<ControlRoomSnapshot> | undefined>;
   act(() => { refresh = result.current.refreshFromEvents("operator", page, controller.signal); });
   controller.abort();
   await act(async () => { finishLoad(populated); await refresh; });
@@ -77,7 +81,7 @@ test("does not apply a live-feed refresh after its owning effect is cancelled", 
 
 test("presence-only pages preserve the snapshot but reset and task events reload it", async () => {
   const loadSnapshot = vi.fn().mockResolvedValue(populated);
-  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  const { result } = renderHook(() => useControlRoomModel(oneLoader(loadSnapshot)));
   act(() => result.current.replace(populated));
   const page = eventPage(2, false);
   page.events[0].kind = "presence_changed";
@@ -97,9 +101,9 @@ test("presence-only pages preserve the snapshot but reset and task events reload
 test("a refresh overtaken by a confirmed task command retries without replacing newer state", async () => {
   let finishLoad!: (snapshot: ControlRoomSnapshot) => void;
   const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishLoad = resolve; }));
-  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  const { result } = renderHook(() => useControlRoomModel(oneLoader(loadSnapshot)));
   act(() => result.current.replace(populated));
-  let refresh!: Promise<ControlRoomSnapshot | undefined>;
+  let refresh!: Promise<Partial<ControlRoomSnapshot> | undefined>;
   act(() => { refresh = result.current.refreshFromEvents("operator", eventPage(4, false)); });
   const newerTasks = [{ ...populated.tasks[0], title: "Confirmed newer task" }];
   act(() => result.current.setTasks(newerTasks));
@@ -122,9 +126,9 @@ test.each([
 ] as const)("%s invalidates an older in-flight snapshot", async (command) => {
   let finishLoad!: (snapshot: ControlRoomSnapshot) => void;
   const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishLoad = resolve; }));
-  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  const { result } = renderHook(() => useControlRoomModel(oneLoader(loadSnapshot)));
   act(() => result.current.replace(populated));
-  let refresh!: Promise<ControlRoomSnapshot | undefined>;
+  let refresh!: Promise<Partial<ControlRoomSnapshot> | undefined>;
   act(() => { refresh = result.current.refreshFromEvents("operator", eventPage(4, false)); });
   act(() => {
     const model = result.current;
@@ -148,9 +152,9 @@ test.each([
 test("the last completed refresh cannot undo a newer already committed refresh", async () => {
   let finishOld!: (snapshot: ControlRoomSnapshot) => void;
   const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishOld = resolve; }));
-  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  const { result } = renderHook(() => useControlRoomModel(oneLoader(loadSnapshot)));
   act(() => result.current.replace(populated));
-  let oldRefresh!: Promise<ControlRoomSnapshot | undefined>;
+  let oldRefresh!: Promise<Partial<ControlRoomSnapshot> | undefined>;
   act(() => { oldRefresh = result.current.refreshFromEvents("operator", eventPage(4, false)); });
   const newer = { ...populated, tasks: [{ ...populated.tasks[0], title: "Newer refresh" }] };
   loadSnapshot.mockResolvedValueOnce(newer);
@@ -172,6 +176,58 @@ test("snapshot reads propagate their owner cancellation to every endpoint", asyn
     await loadControlRoomSnapshot("operator", controller.signal);
     expect(fetch).toHaveBeenCalledTimes(8);
     for (const [, init] of fetch.mock.calls) expect(init?.signal).toBe(controller.signal);
+  } finally { fetch.mockRestore(); }
+});
+
+test("a worker change reloads the roster, sessions, board and workspaces, and keeps the decision inbox", async () => {
+  const loadSnapshot = vi.fn().mockResolvedValue(populated);
+  const workers = [{ id: "worker", name: "Daisy, now working" }];
+  const loadParts = vi.fn().mockResolvedValue({ workers });
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot, loadParts }));
+  act(() => result.current.replace(populated));
+
+  await act(async () => { await result.current.refreshFromEvents("operator", eventPage(6, false, "workers_changed")); });
+
+  expect(loadSnapshot).not.toHaveBeenCalled();
+  expect([...loadParts.mock.calls[0][1]].sort()).toEqual(["hiveIdentity", "sessions", "tasks", "workers", "workspaces"]);
+  expect(result.current.workers).toEqual(workers);
+  expect(result.current.decisions).toBe(populated.decisions);
+  expect(result.current.jiraTaskLinks).toBe(populated.jiraTaskLinks);
+  expect(result.current.recentEvents.map((event) => event.sequence)).toEqual([6]);
+});
+
+test.each([
+  ["tasks_changed", ["decisions", "hiveIdentity", "jiraTaskLinks", "sessions", "stewardAssists", "tasks", "workers"]],
+  ["workers_changed", ["hiveIdentity", "sessions", "tasks", "workers", "workspaces"]],
+  ["sessions_changed", ["hiveIdentity", "sessions", "tasks", "workers", "workspaces"]],
+  ["decisions_changed", ["decisions", "hiveIdentity", "sessions", "tasks", "workers"]],
+  ["presence_changed", []],
+  ["notifications_changed", []],
+  ["runtime_changed", EVERY_PART],
+  ["a kind this browser does not know", EVERY_PART],
+] as const)("%s reloads exactly what it can change", (kind, parts) => {
+  const page = eventPage(7, false, kind as ControlRoomEventPage["events"][number]["kind"]);
+  expect([...partsChangedBy(page)].sort()).toEqual([...parts].sort());
+  expect([...partsChangedBy({ ...page, reset_required: true })].sort()).toEqual([...EVERY_PART].sort());
+});
+
+test("a page carrying several kinds reloads what any of them can change", () => {
+  const page = eventPage(8, false, "workers_changed");
+  page.events.push({ ...page.events[0], sequence: 9, kind: "decisions_changed" });
+  expect([...partsChangedBy(page)].sort()).toEqual(["decisions", "hiveIdentity", "sessions", "tasks", "workers", "workspaces"]);
+});
+
+test("a partial read asks only the endpoints for its parts", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = String(input);
+    const payload = path.endsWith("/hive") ? populated.hiveIdentity : path.endsWith("/sessions") ? { sessions: [] } : [];
+    return new Response(JSON.stringify(payload), { status: 200 });
+  });
+  try {
+    const loaded = await loadControlRoomParts("operator", partsChangedBy(eventPage(10, false, "workers_changed")));
+    const paths = fetch.mock.calls.map(([input]) => new URL(String(input), "http://hive").pathname).sort();
+    expect(paths).toEqual(["/api/v1/hive", "/api/v1/tasks", "/api/v1/terminal/sessions", "/api/v1/workers", "/api/v1/workspaces"]);
+    expect(Object.keys(loaded).sort()).toEqual(["hiveIdentity", "sessions", "tasks", "workers", "workspaces"]);
   } finally { fetch.mockRestore(); }
 });
 
@@ -203,9 +259,14 @@ test("bounded recent evidence deduplicates and orders a large mixed page", () =>
   expect(merged.at(-1)).toBe(first);
 });
 
-function eventPage(sequence: number, resetRequired: boolean): ControlRoomEventPage {
+/** One deferred read standing in for both the complete and the partial loader. */
+function oneLoader(load: (operatorToken: string, signal?: AbortSignal) => Promise<ControlRoomSnapshot>) {
+  return { loadSnapshot: load, loadParts: (operatorToken: string, _parts: ReadonlySet<ControlRoomPart>, signal?: AbortSignal) => load(operatorToken, signal) };
+}
+
+function eventPage(sequence: number, resetRequired: boolean, kind: ControlRoomEventPage["events"][number]["kind"] = "tasks_changed"): ControlRoomEventPage {
   return {
-    events: [{ sequence, hive_id: "hive", kind: "tasks_changed", occurred_at: sequence }],
+    events: [{ sequence, hive_id: "hive", kind, occurred_at: sequence }],
     next_cursor: sequence,
     reset_required: resetRequired,
   };

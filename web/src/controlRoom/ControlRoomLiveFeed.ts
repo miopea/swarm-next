@@ -3,9 +3,14 @@ import { fetchControlRoomEvents, type ControlRoomEventPage } from "../api";
 export type LiveFeedState = "connecting" | "connected" | "retrying";
 type FetchPage = (operatorToken: string, after: number, signal: AbortSignal) => Promise<ControlRoomEventPage>;
 type Delay = (milliseconds: number, signal: AbortSignal) => Promise<void>;
+type Clock = () => number;
 
 const RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 const ORDINARY_INVALIDATION_SETTLE_MS = 250;
+/// Worker and task changes refresh at most once in this long (ADR 0142).
+/// Measured on the operator's Hive, half of the gaps between refreshing
+/// events were under a second, and each refresh rebuilt the roster and board.
+const ORDINARY_INVALIDATION_MIN_GAP_MS = 1_000;
 
 /// How long one poll may take before it is treated as hung rather than slow.
 ///
@@ -24,6 +29,7 @@ export class ControlRoomLiveFeed {
     private readonly fetchPage: FetchPage = fetchControlRoomEvents,
     private readonly delay: Delay = abortableDelay,
     private readonly pollCeilingMs: number = POLL_CEILING_MS,
+    private readonly now: Clock = () => performance.now(),
   ) {}
 
   start(
@@ -50,6 +56,8 @@ export class ControlRoomLiveFeed {
   ) {
     let cursor = 0;
     let failures = 0;
+    let lastRefreshAt = Number.NEGATIVE_INFINITY;
+    let held = false;
     onStateChange("connecting");
     while (!signal.aborted) {
       const poll = new AbortController();
@@ -65,16 +73,20 @@ export class ControlRoomLiveFeed {
         if (signal.aborted) return;
         if (page.reset_required || page.events.length > 0) {
           // Worker and task changes can arrive several times during one provider
-          // turn. The resulting snapshot is authoritative and includes every
-          // change that lands during this short window, so refreshing it once
-          // after the window avoids making the browser and API rebuild the same
-          // roster repeatedly. Decisions, runtime/session state, presence and
-          // notifications remain immediate because they can change available
-          // operator actions or input safety.
-          if (settlesBeforeRefresh(page)) {
-            await this.delay(ORDINARY_INVALIDATION_SETTLE_MS, signal);
+          // turn. Hold them for a short window, and at least the minimum gap
+          // since the last refresh, then read again from the same cursor: that
+          // one page carries every change that landed while held, so they cost
+          // one refresh rather than one each (ADR 0142). Held once per refresh,
+          // so a steady stream still refreshes. Decisions, runtime/session
+          // state, presence and notifications remain immediate because they
+          // can change available operator actions or input safety.
+          if (!held && settlesBeforeRefresh(page)) {
+            held = true;
+            await this.delay(Math.max(ORDINARY_INVALIDATION_SETTLE_MS, lastRefreshAt + ORDINARY_INVALIDATION_MIN_GAP_MS - this.now()), signal);
+            continue;
           }
-          if (signal.aborted) return;
+          held = false;
+          lastRefreshAt = this.now();
           await onInvalidate(page, poll.signal);
         }
         if (signal.aborted) return;
