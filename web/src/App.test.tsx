@@ -1518,6 +1518,44 @@ test.each(["runtime_changed", "tasks_changed", "sessions_changed", "decisions_ch
   await waitFor(() => expect(screen.queryByText(oldReason)).not.toBeInTheDocument());
 });
 
+test("a worker change re-reads which workers run behind the installed release", async () => {
+  // ADR 0142: activity flips are worker changes now. A worker restarting onto
+  // the installed release is one, and the Settings card must follow it.
+  window.sessionStorage.setItem("swarm-next.surface.v1", "settings");
+  window.history.replaceState(null, "", "#settings-runtime");
+  const base = bootFetch();
+  let sendEvent: ((response: Response) => void) | undefined;
+  let superseded: unknown[] = [];
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/control-room/events")) return new Promise<Response>((resolve, reject) => {
+      sendEvent = resolve;
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    });
+    if (url === "/api/v1/providers") return Promise.resolve(ok({ claude_code: true, codex: false, superseded }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    render(<App />);
+    await screen.findByRole("heading", { name: "Local system" });
+    expect(screen.queryByLabelText("Provider release status")).not.toBeInTheDocument();
+    superseded = [{ provider: "claude_code", version: "9.9.9", installed_at: 1, worker_ids: ["daisy"], in_place_worker_ids: [], asked_worker_ids: [] }];
+    // A worker change is held, then read again from the same cursor.
+    for (let read = 0; read < 2; read += 1) {
+      await waitFor(() => expect(sendEvent).toBeDefined());
+      await act(async () => {
+        const send = sendEvent!;
+        sendEvent = undefined;
+        send(new Response(JSON.stringify({ events: [{ sequence: 1, kind: "workers_changed", occurred_at: 1 }], next_cursor: 1, reset_required: false }), { status: 200 }));
+      });
+    }
+    expect(await screen.findByLabelText("Provider release status")).toBeVisible();
+  } finally {
+    window.history.replaceState(null, "", "/");
+  }
+});
+
 test.each(["Fixture reload terminal", "Refresh control room"])("%s resets the selected renderer without waiting for API reads", async (action) => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const sessionId = "019fedfc-1c30-70e1-a5e2-9a3c94268082";

@@ -722,11 +722,16 @@ pub(super) async fn refresh(
     };
     crate::apiary_usage::record_busy_time(state, profiles, &busy, crate::unix_timestamp());
     if changed {
+        // A worker's activity is part of its roster row and nothing else the
+        // browser reads, so it is a worker change. It used to be a runtime
+        // change, which made every open page reload everything, settings and
+        // engine capabilities included, each time a worker started or finished
+        // a turn: about 940 times a day on the operator's Hive (ADR 0142).
         if let Some(store) = &state.task_store
             && let Err(error) =
-                store.record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+                store.record_control_room_event(ControlRoomEventKind::WorkersChanged)
         {
-            tracing::warn!(%error, "provider activity change could not publish its runtime event");
+            tracing::warn!(%error, "provider activity change could not publish its worker event");
         }
         state.control_room_notify.notify_waiters();
     }
@@ -1510,5 +1515,46 @@ mod tests {
 
         proxy.abort();
         server.abort();
+    }
+
+    /// ADR 0142: a worker starting or finishing a turn is a worker change.
+    /// Recorded as a runtime change, it made every open page reload settings,
+    /// engine capabilities and the whole snapshot on each turn.
+    #[tokio::test]
+    async fn an_activity_change_is_a_worker_change_not_a_runtime_change() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        let session = WorkerSessionId::new();
+        state.provider_activity.write().await.insert(
+            session,
+            ProviderSignals::from_screen(
+                ProviderActivity::Active,
+                swarm_terminal::BackgroundWork::default(),
+            ),
+        );
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+
+        // The session is no longer live: its activity leaves the roster.
+        assert!(refresh(&state, &[], &HashSet::new()).await.is_empty());
+
+        let kinds = store
+            .list_control_room_events(cursor)
+            .unwrap()
+            .events
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, [ControlRoomEventKind::WorkersChanged]);
+
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+        refresh(&state, &[], &HashSet::new()).await;
+        assert!(
+            store
+                .list_control_room_events(cursor)
+                .unwrap()
+                .events
+                .is_empty(),
+            "nothing changed, nothing recorded"
+        );
     }
 }

@@ -58,6 +58,7 @@ pub(super) async fn set_resolution_switch(
     let enabled = crate::task_store(&state)?
         .set_native_answer_resolution(request.enabled, crate::unix_timestamp())
         .map_err(|error| crate::task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok(read_response(enabled))
 }
 

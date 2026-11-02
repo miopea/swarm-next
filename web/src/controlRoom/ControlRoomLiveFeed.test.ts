@@ -19,7 +19,7 @@ test("resumes from the durable cursor and invalidates snapshots", async () => {
   feed.start("secret", invalidated, (state) => states.push(state));
   await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
 
-  expect(cursors).toEqual([0]);
+  expect(cursors).toEqual([0, 0]); // A task change is held once and read again from the same cursor.
   expect(states).toEqual(["connecting"]); // Stopped inside invalidation; no late Connected.
 });
 
@@ -69,7 +69,9 @@ test("does not acknowledge an event until snapshot invalidation succeeds", async
   feed.start("secret", invalidated);
   await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(2));
 
-  expect(cursors).toEqual([0, 0]);
+  // Each attempt is held once and read again from the same cursor; none of
+  // them moves past the event the failed refresh did not apply.
+  expect(cursors).toEqual([0, 0, 0, 0]);
   expect(delay).toHaveBeenCalledWith(250, expect.any(AbortSignal));
 });
 test("reconnecting cancels old invalidation and prevents a late Connected state", async () => {
@@ -108,6 +110,58 @@ test("settles ordinary worker and task bursts before rebuilding the snapshot", a
   expect(invalidated).not.toHaveBeenCalled();
   release();
   await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
+});
+
+test("changes that land while a burst is held cost one refresh, read from the same cursor", async () => {
+  const cursors: number[] = [];
+  const delay = vi.fn(async () => undefined);
+  const invalidated = vi.fn();
+  const worker = (sequence: number) => ({ sequence, hive_id: "hive-1", kind: "workers_changed" as const, occurred_at: 1 });
+  const feed = new ControlRoomLiveFeed(async (_token, after) => {
+    cursors.push(after);
+    // The first read sees one change; three more land during the hold.
+    return cursors.length === 1
+      ? { events: [worker(7)], next_cursor: 7, reset_required: false }
+      : { events: [worker(7), { ...worker(8), kind: "tasks_changed" as const }, worker(9), worker(10)], next_cursor: 10, reset_required: false };
+  }, delay);
+  invalidated.mockImplementation(async () => feed.stop());
+
+  feed.start("secret", invalidated);
+  await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
+
+  expect(cursors).toEqual([0, 0]);
+  expect(invalidated.mock.calls[0][0].events.map((event: { sequence: number }) => event.sequence)).toEqual([7, 8, 9, 10]);
+});
+
+test("worker and task refreshes keep a minimum gap, and a decision is not held by it", async () => {
+  let clock = 0;
+  const delay = vi.fn(async (milliseconds: number) => { clock += milliseconds; });
+  const pages = [
+    { events: [{ sequence: 1, hive_id: "hive-1", kind: "workers_changed" as const, occurred_at: 1 }], next_cursor: 1, reset_required: false },
+    { events: [{ sequence: 2, hive_id: "hive-1", kind: "tasks_changed" as const, occurred_at: 1 }], next_cursor: 2, reset_required: false },
+    { events: [{ sequence: 3, hive_id: "hive-1", kind: "decisions_changed" as const, occurred_at: 1 }], next_cursor: 3, reset_required: false },
+  ];
+  const cursors: number[] = [];
+  const refreshedAt: number[] = [];
+  const feed = new ControlRoomLiveFeed(async (_token, after) => {
+    cursors.push(after);
+    // The next change arrives 300 ms after each refresh began.
+    if (refreshedAt.length > 0 && clock < refreshedAt.at(-1)! + 300) clock = refreshedAt.at(-1)! + 300;
+    return pages.find((page) => page.next_cursor > after)!;
+  }, delay, 35_000, () => clock);
+  const invalidated = vi.fn(async () => {
+    refreshedAt.push(clock);
+    if (refreshedAt.length === 3) feed.stop();
+  });
+
+  feed.start("secret", invalidated);
+  await vi.waitFor(() => expect(invalidated).toHaveBeenCalledTimes(3));
+
+  // The first burst settles for the window; the second waits out the rest of
+  // the gap since the first refresh; the decision goes at once.
+  expect(delay.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([250, 700]);
+  expect(refreshedAt).toEqual([250, 1_250, 1_550]);
+  expect(cursors).toEqual([0, 0, 1, 1, 2]);
 });
 
 test.each(["decisions_changed", "runtime_changed", "sessions_changed", "presence_changed", "notifications_changed"] as const)(

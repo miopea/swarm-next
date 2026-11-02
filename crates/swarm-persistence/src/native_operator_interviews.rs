@@ -830,14 +830,23 @@ impl TaskStore {
         enabled: bool,
         now: i64,
     ) -> Result<bool, TaskStoreError> {
-        let connection = self.connection()?;
-        connection.execute(
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        tx.execute(
             "INSERT INTO native_answer_resolution_switch (singleton, enabled, updated_at)
              VALUES (1, ?1, ?2)
              ON CONFLICT(singleton) DO UPDATE
                  SET enabled = excluded.enabled, updated_at = excluded.updated_at",
             params![enabled, now],
         )?;
+        // Every inbox entry's "answer it in the terminal" label reads this
+        // switch, and an open page reloads the inbox only on a decision or task
+        // change (ADR 0142).
+        crate::insert_control_room_event(
+            &tx,
+            swarm_domain::ControlRoomEventKind::DecisionsChanged,
+        )?;
+        tx.commit()?;
         Ok(enabled)
     }
 }
@@ -845,6 +854,27 @@ impl TaskStore {
 #[cfg(test)]
 mod switch_tests {
     use crate::TaskStore;
+
+    /// ADR 0142: the inbox labels read this switch, and an open page reloads
+    /// the inbox only on a decision or task change.
+    #[test]
+    fn turning_the_switch_tells_open_pages_the_inbox_changed() {
+        let store = TaskStore::in_memory().unwrap();
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+        store.set_native_answer_resolution(false, 100).unwrap();
+        let kinds = store
+            .list_control_room_events(cursor)
+            .unwrap()
+            .events
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [swarm_domain::ControlRoomEventKind::DecisionsChanged]
+        );
+        assert!(!store.native_answer_resolution_enabled().unwrap());
+    }
 
     /// The default is the operator's choice, and a missing row is not "off".
     ///
