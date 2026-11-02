@@ -103,7 +103,7 @@ remain pending; no runtime integration is enabled yet.
 | Webhook service steps | Investigate | Easy to reintroduce once a real journey requires them. |
 | Headless-agent service steps | Merge | Likely part of orchestration rather than a generic service registry. |
 | Testing harness | Redesign | Preserve reproducibility and controlled comparisons; separate product testing from runtime orchestration. |
-| Tool-usage analytics | Redesign | Fold into unified observability rather than a special analysis subsystem. |
+| Tool-usage analytics | Redesign | Fold into unified observability rather than a special analysis subsystem. ADR 0144 counts each agent tool's calls, failures, answer time and answer size in the API process, bounded by name and lost on restart, read through an authorized runtime reading; the operator tool surface is not counted, and nothing is stored or shown in the interface. |
 | Harness-improvement digest | Investigate | Preserve only if it drives regular operator decisions. |
 
 ## Integrations
