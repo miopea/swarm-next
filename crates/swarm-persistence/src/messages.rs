@@ -179,14 +179,37 @@ pub const MAX_TASK_MESSAGE_BYTES: usize = 4_000;
 const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
        ON session.worker_id = {recipient} AND session.ended_at IS NULL";
 
+/// Whether a message to a worker is about work that worker has handed off:
+/// its own task, resting in Review or Awaiting release (ADR 0149). The message
+/// is aliased `m`.
+///
+/// ⚠️ SUCH A MESSAGE IS NOT HELD BEHIND THE WORKER'S OTHER ACTIVE WORK. It is
+/// the answer to the worker's handoff, usually Queen's go to release, and that
+/// task never becomes Active again to let it through. On 2026-11-03 Queen's go
+/// for one pull request waited 3 h 39 min across 113 attempts, 85% of it behind
+/// the worker's other Active task, while the worker's terminal accepted her
+/// messages about that task, and was cancelled when its task closed. The worker found the go in its task history,
+/// a tool result its auto mode rightly does not take as Queen's word, and asked
+/// the operator instead. It still waits for a resting prompt and for the
+/// operator's engagement to end, as every message does.
+macro_rules! handed_off_by_recipient {
+    () => {
+        "EXISTS(SELECT 1 FROM tasks own
+             WHERE own.id = m.task_id AND own.assigned_worker_id = m.recipient_worker_id
+               AND own.state IN ('review', 'awaiting_release') AND own.removed_at IS NULL)"
+    };
+}
+pub(crate) use handed_off_by_recipient;
+
 /// One column of the recipient's other Active task that holds a queued message
 /// to a worker (ADR 0067), or NULL. The message is aliased `m`.
 ///
 /// It states the same rule as the dispatch selection, which is what keeps a
 /// message out of a worker's terminal while it works on something else. Queen's
-/// office is exempt there and here. The test
-/// `a_queued_message_names_the_active_task_it_waits_behind` keeps the two in
-/// step: a message this names is one the dispatcher will not claim.
+/// office, and a message about work the worker has handed off, are exempt there
+/// and here. The test `a_queued_message_names_the_active_task_it_waits_behind`
+/// keeps the two in step: a message this names is one the dispatcher will not
+/// claim.
 macro_rules! held_behind_active_task {
     ($column:literal) => {
         concat!(
@@ -200,6 +223,9 @@ macro_rules! held_behind_active_task {
                  AND holder.role != 'queen'
                  AND ongoing.state = 'active' AND ongoing.removed_at IS NULL
                  AND ongoing.id != m.task_id
+                 AND NOT ",
+            crate::messages::handed_off_by_recipient!(),
+            "
                ORDER BY ongoing.id LIMIT 1)"
         )
     };
@@ -595,7 +621,7 @@ impl TaskStore {
              {live_session}
              LEFT JOIN worker_profiles sender ON sender.id = m.sender_worker_id
              WHERE m.delivered_at IS NULL AND delivery.state = 'queued'
-               AND (recipient.role = 'queen' OR NOT EXISTS (
+               AND (recipient.role = 'queen' OR {handed_off} OR NOT EXISTS (
                    SELECT 1 FROM tasks ongoing
                    WHERE ongoing.assigned_worker_id = recipient.id
                      AND ongoing.state = 'active' AND ongoing.removed_at IS NULL
@@ -604,6 +630,7 @@ impl TaskStore {
                    WHERE active.state = 'dispatching' AND active.session_id = session.session_id)
              ORDER BY ROW_NUMBER() OVER (PARTITION BY recipient.id ORDER BY m.created_at, m.id),
                  MIN(delivery.attempts) OVER (PARTITION BY recipient.id), m.created_at, m.id LIMIT {limit}",
+            handed_off = handed_off_by_recipient!(),
             limit = crate::TASK_MESSAGE_BATCH_LIMIT,
             live_session = LIVE_RECIPIENT_SESSION_JOIN.replace("{recipient}", "recipient.id"),
         );
@@ -1081,6 +1108,62 @@ mod tests {
             store.task_messages(task).unwrap().len(),
             1,
             "only the admitted second opinion is recorded"
+        );
+    }
+
+    /// ⚠️ ONLY THE WORKER'S OWN HANDED-OFF WORK SKIPS THE HOLD (ADR 0149). A
+    /// second opinion asks Scout about another worker's task in Review. Scout
+    /// handed nothing off, so once it takes Active work of its own the question
+    /// waits behind it, as ADR 0067 holds.
+    #[test]
+    fn a_second_opinion_on_someone_elses_review_still_waits_behind_scouts_work() {
+        let (store, task, worker) = hive();
+        store.assign_task_to_worker(task, worker).unwrap();
+        store.transition_task(task, TaskState::Active).unwrap();
+        store.transition_task(task, TaskState::Review).unwrap();
+        store
+            .create_worker(
+                "Project Root",
+                ProviderKind::ClaudeCode,
+                "/projects",
+                false,
+                2,
+            )
+            .unwrap();
+        let scout = store
+            .promote_project_root_to_scout("/projects")
+            .unwrap()
+            .unwrap();
+        store
+            .bind_worker_session(scout.id, WorkerSessionId::new())
+            .unwrap();
+        store
+            .send_queen_worker_message(
+                task,
+                scout.id,
+                WorkerMessagePurpose::ScoutSecondOpinion,
+                "Give this a second look.",
+                10,
+            )
+            .unwrap();
+        let scout_task = store.create_task("Scout owns this", "/projects").unwrap();
+        store
+            .assign_task_to_worker(scout_task.id, scout.id)
+            .unwrap();
+        store
+            .transition_task(scout_task.id, TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(scout_task.id, TaskState::Active)
+            .unwrap();
+
+        assert!(store.claim_task_messages(11).unwrap().is_empty());
+        assert_eq!(
+            store.task_messages(task).unwrap()[0].held_behind,
+            Some(crate::HeldBehindTask {
+                task_id: scout_task.id.to_string(),
+                title: "Scout owns this".to_owned(),
+            })
         );
     }
 
