@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.17.10
+
+One database update (220). Your Hive backs up its database by itself before applying it, and your workers keep running. The new setting below takes effect only after the worker engine update, which does stop running workers. The worker engine card says when one is waiting.
+
+### New features
+- A new setting, Workers read production for their task, lets a worker read production for its own task without an "allow this command" card each time. A read is a web or API GET, a read-only query, a log or metrics query, or a cloud listing. It starts off, and only you can turn it on. Anything that writes, deploys, migrates, changes a setting or permission, spends money or reads personal data such as names or email addresses still comes to you as a command request, one command at a time. "Settings need a restart" lists the workers still running without it. (after the worker engine update)
+
+### Fixes
+- Reading the whole board no longer fails on a busy Hive. At about 60 open tasks a whole-board read had grown past what Claude accepts from one tool answer, so it came back cut to a short preview or was refused outright. The board now comes a page at a time, each page small enough to read whole. The first page names the 20 most recently closed tasks (it was 50). A worker's own list is paged the same way.
+- With Queen releases reviewed work turned on, a production slot swap now comes to you as a command request. Before, a release Queen instructed could include one when a deploy workflow's production step was a swap. Queen and each worker pick this up when they next start.
+
 ## 1.17.9
 
 Two database updates (218 and 219). Your Hive backs up its database by itself before applying them, and your workers keep running. One change below reaches Queen and the workers only when each next starts.
