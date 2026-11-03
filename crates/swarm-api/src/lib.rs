@@ -5006,6 +5006,10 @@ fn api_router(state: AppState) -> Router {
             get(provider_updates::queen_releases).put(provider_updates::set_queen_releases),
         )
         .route(
+            "/api/v1/runtime/task-reads",
+            get(provider_updates::task_reads).put(provider_updates::set_task_reads),
+        )
+        .route(
             "/api/v1/runtime/terminal-history",
             get(terminal_history_routes::terminal_history)
                 .put(terminal_history_routes::set_terminal_history),
@@ -15758,22 +15762,21 @@ mod tests {
         .unwrap()
     }
 
-    /// ⚠️ ADR 0131: Queen's release authority is off until the operator turns
-    /// it on, and turning it on takes the operator's credential. A request
-    /// from this machine without one is refused, because a worker could send
-    /// it.
-    #[tokio::test]
-    async fn only_the_operators_credential_turns_on_queen_releases() {
+    /// An operator-only Hive switch: off until the operator turns it on, and
+    /// turning it on takes the operator's credential. A request from this
+    /// machine without one is refused, because a worker could send it.
+    async fn only_the_operators_credential_turns_on(path: &str) {
         let app = router(
             AppState::default()
                 .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
                 .with_task_store(TaskStore::in_memory().unwrap()),
         );
-        let off = authorized_get(app.clone(), "/api/v1/runtime/queen-releases").await;
-        assert_eq!(off.status(), StatusCode::OK);
+        let off = authorized_get(app.clone(), path).await;
+        assert_eq!(off.status(), StatusCode::OK, "{path}");
         assert_eq!(
             response_json(off).await,
-            serde_json::json!({ "enabled": false })
+            serde_json::json!({ "enabled": false }),
+            "{path}"
         );
 
         let from_this_machine = app
@@ -15781,7 +15784,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri("/api/v1/runtime/queen-releases")
+                    .uri(path)
                     .header("host", "127.0.0.1:8420")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -15791,30 +15794,52 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(from_this_machine.status(), StatusCode::UNAUTHORIZED);
-        let still_off = authorized_get(app.clone(), "/api/v1/runtime/queen-releases").await;
+        assert_eq!(
+            from_this_machine.status(),
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+        let still_off = authorized_get(app.clone(), path).await;
         assert_eq!(
             response_json(still_off).await,
-            serde_json::json!({ "enabled": false })
+            serde_json::json!({ "enabled": false }),
+            "{path}"
         );
 
         let on = send_json(
             app.clone(),
             "PUT",
-            "/api/v1/runtime/queen-releases",
+            path,
             serde_json::json!({ "enabled": true }),
         )
         .await;
-        assert_eq!(on.status(), StatusCode::OK);
+        assert_eq!(on.status(), StatusCode::OK, "{path}");
         assert_eq!(
             response_json(on).await,
-            serde_json::json!({ "enabled": true })
+            serde_json::json!({ "enabled": true }),
+            "{path}"
         );
-        let read = authorized_get(app, "/api/v1/runtime/queen-releases").await;
+        let read = authorized_get(app, path).await;
         assert_eq!(
             response_json(read).await,
-            serde_json::json!({ "enabled": true })
+            serde_json::json!({ "enabled": true }),
+            "{path}"
         );
+    }
+
+    /// ⚠️ ADR 0131: Queen's release authority is off until the operator turns
+    /// it on, and only the operator's credential turns it on.
+    #[tokio::test]
+    async fn only_the_operators_credential_turns_on_queen_releases() {
+        only_the_operators_credential_turns_on("/api/v1/runtime/queen-releases").await;
+    }
+
+    /// ⚠️ ADR 0146: a worker reading production for its own task unasked is off
+    /// until the operator turns it on, and only the operator's credential turns
+    /// it on, so a worker cannot widen its own reach.
+    #[tokio::test]
+    async fn only_the_operators_credential_turns_on_task_reads() {
+        only_the_operators_credential_turns_on("/api/v1/runtime/task-reads").await;
     }
 
     /// ⚠️ THE CHECK GATE AT THE OPERATOR'S OWN CLOSE (ADR 0115, decision

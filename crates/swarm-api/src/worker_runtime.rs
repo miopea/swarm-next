@@ -513,9 +513,17 @@ fn write_claude_launch_settings(
             tracing::warn!(%error, "could not write the Queen releases choice for this worker");
             None
         });
+    // Whether this worker may read production for its own task unasked
+    // (ADR 0146). A choice that cannot be written leaves the worker without
+    // the rule, so a read is asked for, as before the setting existed.
+    let task_reads = bridge.apply_task_reads(worker_id).unwrap_or_else(|error| {
+        tracing::warn!(%error, "could not write the task reads choice for this worker");
+        None
+    });
     Some(swarm_persistence::LaunchChoices {
         remote_control,
         queen_releases,
+        task_reads,
         system_access,
     })
 }

@@ -2692,7 +2692,7 @@ export async function restartSupersededWorkers(operatorToken: string): Promise<{
 }
 
 /** A setting a running worker reads only when it starts (ADR 0132). */
-export type RestartBoundSetting = "worker_model" | "remote_control" | "queen_releases" | "system_access";
+export type RestartBoundSetting = "worker_model" | "remote_control" | "queen_releases" | "task_reads" | "system_access";
 /** A running worker still on an older value of one or more of those settings. */
 export type WorkerBehindSettings = { worker_id: string; name: string; settings: RestartBoundSetting[] };
 export type SettingsRestart = { workers: WorkerBehindSettings[] };
@@ -2822,6 +2822,23 @@ export async function setQueenReleases(operatorToken: string, enabled: boolean):
     body: JSON.stringify({ enabled }),
   });
   return response.json() as Promise<QueenReleases>;
+}
+
+/** Whether a worker reads production for its own task without asking (ADR 0146). */
+export type TaskReads = { enabled: boolean };
+
+export async function fetchTaskReads(operatorToken: string, signal?: AbortSignal): Promise<TaskReads> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/task-reads", { signal });
+  return response.json() as Promise<TaskReads>;
+}
+
+export async function setTaskReads(operatorToken: string, enabled: boolean): Promise<TaskReads> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/task-reads", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<TaskReads>;
 }
 
 /** Days of terminal history a Hive keeps (ADR 0118). */

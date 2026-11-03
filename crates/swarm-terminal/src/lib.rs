@@ -29,6 +29,9 @@ pub const COMMAND_REFUSED_PATH_SUFFIX: &str = "/command-refused";
 /// on "Queen releases reviewed work" (ADR 0131). The API writes it and the
 /// terminal host reads it at launch.
 pub const QUEEN_RELEASES_SETTING_KEY: &str = "swarmQueenReleases";
+/// Whether a worker may read production for its own task unasked (ADR 0146),
+/// written by the API beside a worker's config and read by the terminal host.
+pub const TASK_READS_SETTING_KEY: &str = "swarmTaskReads";
 mod resources;
 mod startup_failure;
 mod state;

@@ -509,6 +509,34 @@ pub(super) async fn set_queen_releases(
     Ok(session_choice(enabled))
 }
 
+/// Whether a worker may read production for its own task unasked (ADR 0146).
+pub(super) async fn task_reads(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .task_reads()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(session_choice(enabled))
+}
+
+/// The operator turning task reads on or off. Like Queen releases, it needs
+/// the operator's own credential: a worker on this machine must not be able to
+/// widen its own authority with a loopback request.
+pub(super) async fn set_task_reads(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetSessionChoiceRequest>,
+) -> Result<Response, ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .set_task_reads(request.enabled, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(session_choice(enabled))
+}
+
 #[cfg(test)]
 mod tests {
     use swarm_terminal::BackgroundWork;

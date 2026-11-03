@@ -108,6 +108,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
   if (path === "/api/v1/runtime/queen-releases") {
     return { enabled: new URLSearchParams(window.location.search).get("queenReleases") === "on" };
   }
+  // ?taskReads=on is a Hive whose workers read production for their task unasked (ADR 0146).
+  if (path === "/api/v1/runtime/task-reads") {
+    return { enabled: new URLSearchParams(window.location.search).get("taskReads") === "on" };
+  }
   // ?workerModel=locked is a member whose Apiary sets the worker model (ADR 0116).
   if (path === "/api/v1/runtime/worker-model") {
     const locked = new URLSearchParams(window.location.search).get("workerModel") === "locked";

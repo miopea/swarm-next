@@ -35,6 +35,7 @@ test("an older anchor still opens the section that now holds it", () => {
   // The rules about what happens without the operator moved to Authority.
   expect(readSettingsSection("#settings-queen", "")).toBe("settings-authority");
   expect(readSettingsSection("#settings-queen-releases", "")).toBe("settings-authority");
+  expect(readSettingsSection("#settings-task-reads", "")).toBe("settings-authority");
   expect(readSettingsSection("#settings-check-gate", "")).toBe("settings-authority");
   expect(readSettingsSection("#settings-answers", "")).toBe("settings-authority");
   // Provider usage is what workers spend, not upkeep.
@@ -63,9 +64,10 @@ test("an older anchor still opens the section that now holds it", () => {
 test("Authority holds every rule about what happens without the operator", () => {
   const authority = SETTINGS_CARDS.filter((card) => card.section === "settings-authority").map((card) => card.id);
   expect(authority).toEqual(expect.arrayContaining([
-    "settings-queen", "settings-queen-releases", "settings-check-gate", "settings-answers", "settings-worker-access",
+    "settings-queen", "settings-queen-releases", "settings-task-reads", "settings-check-gate", "settings-answers",
+    "settings-worker-access",
   ]));
-  expect(authority).toHaveLength(5);
+  expect(authority).toHaveLength(6);
   expect(filterSettingsCards("authority").map((card) => card.id).sort()).toEqual([...authority].sort());
   expect(SETTINGS_CARDS.filter((card) => card.section === "settings-hive").map((card) => card.id))
     .toEqual(["settings-identity", "settings-apiary"]);

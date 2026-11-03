@@ -18,7 +18,7 @@ test("turning Queen releases on says what the operator is still asked about", as
   expect(screen.getByText(/you are asked to approve it/)).toBeInTheDocument();
 
   fireEvent.click(toggle);
-  expect(await screen.findByRole("status")).toHaveTextContent("still asked about production data, credentials, permissions, admin merges and failed checks");
+  expect(await screen.findByRole("status")).toHaveTextContent("still asked about production slot swaps, production data, credentials, permissions, admin merges and failed checks");
   expect(String(fetch.mock.calls[1]?.[0])).toContain("/api/v1/runtime/queen-releases");
   expect(fetch.mock.calls[1]?.[1].body).toBe(JSON.stringify({ enabled: true }));
   expect(toggle).toBeChecked();

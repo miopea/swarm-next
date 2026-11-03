@@ -16,6 +16,9 @@ pub enum RestartBoundSetting {
     RemoteControl,
     /// Whether Queen's review is enough to release code (ADR 0131).
     QueenReleases,
+    /// Whether a worker may read production for its own task unasked
+    /// (ADR 0146).
+    TaskReads,
     /// How far into the machine one worker may reach.
     SystemAccess,
 }
@@ -27,6 +30,7 @@ impl RestartBoundSetting {
             Self::WorkerModel => "worker_model",
             Self::RemoteControl => "remote_control",
             Self::QueenReleases => "queen_releases",
+            Self::TaskReads => "task_reads",
             Self::SystemAccess => "system_access",
         }
     }
@@ -109,6 +113,7 @@ mod tests {
             RestartBoundSetting::WorkerModel,
             RestartBoundSetting::RemoteControl,
             RestartBoundSetting::QueenReleases,
+            RestartBoundSetting::TaskReads,
             RestartBoundSetting::SystemAccess,
         ]
         .map(RestartBoundSetting::as_str);
@@ -118,6 +123,7 @@ mod tests {
                 "worker_model",
                 "remote_control",
                 "queen_releases",
+                "task_reads",
                 "system_access"
             ]
         );
