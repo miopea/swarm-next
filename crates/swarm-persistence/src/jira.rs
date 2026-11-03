@@ -528,6 +528,15 @@ impl TaskStore {
                             format!("Synchronized from Jira {issue_key}"),
                         ],
                     )?;
+                    if matches!(
+                        synchronized_state,
+                        TaskState::Completed | TaskState::Abandoned
+                    ) {
+                        crate::decisions::withdraw_command_requests_of_closed_task(
+                            &transaction,
+                            task_id,
+                        )?;
+                    }
                 }
                 task_id
             } else {

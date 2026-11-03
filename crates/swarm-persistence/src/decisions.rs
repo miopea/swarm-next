@@ -1673,6 +1673,22 @@ fn insert_decision_request(
     if request.deadline.is_some_and(|deadline| deadline <= now) {
         return Err(TaskStoreError::InvalidDecisionDeadline);
     }
+    // ⚠️ AN ALLOW THAT ALLOWED NOTHING (ADR 0148). On 2026-11-03 two command
+    // cards were filed 23 and 77 minutes after their task completed. The
+    // operator pressed Allow on both six hours later, the resolve correctly
+    // made no grant for closed work, and the worker asked again for one.
+    // Refused here, the worker hears it at once and asks on the open task.
+    if request.requested_command.is_some()
+        && let Some(task_id) = request.task_id
+        && transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?1
+                 AND (removed_at IS NOT NULL OR state IN ('completed','abandoned')))",
+            [task_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?
+    {
+        return Err(TaskStoreError::CommandRequestTaskClosed);
+    }
     let pending: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM decision_requests d
          JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
@@ -1731,6 +1747,91 @@ fn insert_decision_request(
     insert_control_room_event(transaction, ControlRoomEventKind::DecisionsChanged)?;
     super::notifications::enqueue_decision_notifications(transaction, id, request.urgency, now)?;
     Ok(())
+}
+
+/// What a command card taken down with its task says, to the operator and to
+/// the worker that asked.
+const CLOSED_TASK_WITHDRAWAL: &str = "Swarm withdrew this because its task closed. \
+     A command can be allowed only on an open task, so an Allow here could not have let it run. \
+     If it is still needed, ask on the open task it is for.";
+
+/// What a command card taken down with the session that asked says.
+const ENDED_SESSION_WITHDRAWAL: &str = "Swarm withdrew this because the session that asked \
+     has ended. A command can be allowed only in the session that asked for it, so an Allow here \
+     could not have let it run. If it is still needed, the worker asks again.";
+
+/// Takes a closing task's waiting command cards down, in the closing
+/// transaction (ADR 0148).
+///
+/// ⚠️ EVERY WRITE THAT CLOSES A TASK CALLS THIS: the lifecycle transition, the
+/// release settle, the Jira sync and removal. A grant dies with its task, so a
+/// card left up would wait for an Allow that grants nothing.
+///
+/// Other cards on the task stay. A question about closed work can still have
+/// an answer; only a command card is certain to be pressed for nothing.
+pub(super) fn withdraw_command_requests_of_closed_task(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+) -> rusqlite::Result<usize> {
+    withdraw_ungrantable(
+        transaction,
+        "task_id",
+        &task_id.to_string(),
+        CLOSED_TASK_WITHDRAWAL,
+    )
+}
+
+/// Takes an ending session's waiting command cards down, in the transaction
+/// that ends it (ADR 0148).
+///
+/// ⚠️ EVERY WRITE THAT ENDS A SESSION CALLS THIS: release, a terminal missing
+/// from the host, and a continuation handing over to a successor. A grant
+/// belongs to the session that asked (ADR 0129), and a later session never
+/// inherits it, so a card left up would wait for an Allow that grants nothing.
+/// Measured on 2026-10-31: a session ended 70 seconds before the operator
+/// pressed Allow on its card.
+pub(super) fn withdraw_command_requests_of_ended_session(
+    transaction: &rusqlite::Transaction<'_>,
+    session_id: WorkerSessionId,
+) -> rusqlite::Result<usize> {
+    withdraw_ungrantable(
+        transaction,
+        "requested_session_id",
+        &session_id.to_string(),
+        ENDED_SESSION_WITHDRAWAL,
+    )
+}
+
+/// Withdraws the pending command cards whose `column` is `value`, saying why.
+///
+/// Withdrawn, not resolved: the operator decided nothing, and the card says why
+/// it went. `column` is one of the two fixed names above, never caller text.
+fn withdraw_ungrantable(
+    transaction: &rusqlite::Transaction<'_>,
+    column: &'static str,
+    value: &str,
+    reason: &str,
+) -> rusqlite::Result<usize> {
+    let ids = transaction
+        .prepare(&format!(
+            "SELECT id FROM decision_requests
+             WHERE {column} = ?1 AND state = 'pending' AND requested_command IS NOT NULL"
+        ))?
+        .query_map([value], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for id in &ids {
+        transaction.execute(
+            "UPDATE decision_requests SET state = 'withdrawn', withdrawn_at = unixepoch(),
+                 withdrawal_reason = ?2, updated_at = unixepoch()
+             WHERE id = ?1 AND state = 'pending'",
+            params![id, reason],
+        )?;
+        crate::decision_clarification::cancel_queued(transaction, parse_id(id)?)?;
+    }
+    if !ids.is_empty() {
+        insert_control_room_event(transaction, ControlRoomEventKind::DecisionsChanged)?;
+    }
+    Ok(ids.len())
 }
 
 /// A request to run a command offers one affirmative answer: Swarm's grant.
@@ -2530,7 +2631,7 @@ fn parse_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
 mod tests {
     use super::*;
     use swarm_domain::CommitRepositoryState;
-    use swarm_domain::{NextMoveOwner, TaskState};
+    use swarm_domain::{NextMoveOwner, TaskActivityActor, TaskState};
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskPriority};
 
     /// Files a card, optionally answered, for the supersession tests below.
@@ -3096,6 +3197,354 @@ mod tests {
         }
     }
 
+    /// A task taken from Draft to Review, the last state before it can close.
+    fn task_in_review(store: &TaskStore, title: &str) -> TaskId {
+        let task = store.create_task(title, "/workspace/d365").unwrap().id;
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task, state).unwrap();
+        }
+        task
+    }
+
+    /// ⚠️ AN ALLOW THAT COULD ONLY GRANT NOTHING (ADR 0148). On 2026-11-03 two
+    /// command cards were filed 23 and 77 minutes after their task completed,
+    /// both were pressed, and neither could grant. A command card on closed work is
+    /// refused when it is filed, so the worker hears it at once.
+    #[test]
+    fn a_command_request_is_filed_only_on_an_open_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let completed = task_in_review(&store, "Finished");
+        store
+            .transition_task(completed, TaskState::Completed)
+            .unwrap();
+        let abandoned = store.create_task("Given up", "/workspace/d365").unwrap().id;
+        store
+            .transition_task(abandoned, TaskState::Abandoned)
+            .unwrap();
+        let removed = store.create_task("Retired", "/workspace/d365").unwrap().id;
+        store
+            .remove_task_as(removed, &TaskActivityActor::operator(), "Superseded")
+            .unwrap();
+
+        let before = store.list_decision_requests().unwrap().len();
+        for closed in [completed, abandoned, removed] {
+            assert!(
+                matches!(
+                    store.create_decision_request(&command_request(
+                        queen.id,
+                        closed,
+                        FORMULA_COLUMN
+                    )),
+                    Err(TaskStoreError::CommandRequestTaskClosed)
+                ),
+                "a command card on closed work is refused"
+            );
+        }
+        assert_eq!(
+            store.list_decision_requests().unwrap().len(),
+            before,
+            "and nothing reaches the operator's inbox"
+        );
+
+        // Only a command card. A question about finished work can still have
+        // an answer, so it files as before.
+        let actions = vec!["Keep it".to_owned(), "Drop it".to_owned()];
+        store
+            .create_decision_request(&NewDecisionRequest {
+                task_id: Some(completed),
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        let open = task_in_review(&store, "Still open");
+        store
+            .create_decision_request(&command_request(queen.id, open, FORMULA_COLUMN))
+            .unwrap();
+    }
+
+    /// The newest inbox invalidation, so a test can see whether one was written.
+    fn last_decisions_event(store: &TaskStore) -> i64 {
+        store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) FROM control_room_events WHERE kind = ?1",
+                [ControlRoomEventKind::DecisionsChanged.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// Files a command card on `task`, a question on it and a command card on
+    /// another task, runs `close`, and checks that only the first came down.
+    fn closing_takes_the_command_card_down(
+        store: &TaskStore,
+        worker: WorkerId,
+        path: &str,
+        task: TaskId,
+        close: impl FnOnce(),
+    ) {
+        let actions = vec!["Keep it".to_owned(), "Drop it".to_owned()];
+        let file =
+            |request: &NewDecisionRequest<'_>| store.create_decision_request(request).unwrap().id;
+        let waiting = file(&command_request(worker, task, FORMULA_COLUMN));
+        let question = file(&NewDecisionRequest {
+            task_id: Some(task),
+            ..request(worker, &actions)
+        });
+        let other_task = task_in_review(store, "Stays open");
+        let elsewhere = file(&command_request(worker, other_task, FORMULA_COLUMN));
+        let before = last_decisions_event(store);
+
+        close();
+
+        let withdrawn = store.get_decision_request(waiting).unwrap();
+        assert_eq!(
+            withdrawn.state,
+            DecisionRequestState::Withdrawn,
+            "{path}: the command card comes down"
+        );
+        assert_eq!(
+            withdrawn.withdrawal_reason.as_deref(),
+            Some(CLOSED_TASK_WITHDRAWAL),
+            "{path}: and says why"
+        );
+        assert_eq!(
+            withdrawn.withdrawn_by_worker_id, None,
+            "{path}: Swarm withdrew it, not the worker"
+        );
+        assert_eq!(
+            withdrawn.resolution_action, None,
+            "{path}: nobody decided it"
+        );
+        assert!(
+            last_decisions_event(store) > before,
+            "{path}: an open inbox is told to drop it"
+        );
+        assert!(
+            matches!(
+                store.resolve_decision_request(waiting, GRANT_COMMAND_ACTION, "", "inbox"),
+                Err(TaskStoreError::DecisionAlreadyResolved)
+            ),
+            "{path}: there is nothing left to press"
+        );
+        for (left, what) in [
+            (question, "a question on the task"),
+            (elsewhere, "another task's card"),
+        ] {
+            assert_eq!(
+                store.get_decision_request(left).unwrap().state,
+                DecisionRequestState::Pending,
+                "{path}: {what} stays up"
+            );
+        }
+    }
+
+    /// Synchronises one Jira issue, To Do or Done, through a Hive binding.
+    fn sync_launch_page_issue(store: &TaskStore, done: bool) -> swarm_domain::Task {
+        use swarm_domain::{JiraProjectScope, JiraStatusMapping};
+
+        let binding = store
+            .upsert_jira_project_binding(&crate::JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        let status = |id: &str, name: &str, task_state| JiraStatusMapping {
+            jira_status_id: id.into(),
+            jira_status_name: name.into(),
+            task_state,
+        };
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    status("1", "To Do", TaskState::Ready),
+                    status("5", "Done", TaskState::Completed),
+                ],
+            )
+            .unwrap();
+        let (status_id, status_name, remote_updated_at) = if done {
+            ("5", "Done", "2026-11-03T12:05:00.000+0000")
+        } else {
+            ("1", "To Do", "2026-11-03T12:00:00.000+0000")
+        };
+        store
+            .sync_jira_issues(
+                binding.id,
+                &[crate::JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    description: "",
+                    status_id,
+                    status_name,
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at,
+                    priority: TaskPriority::Normal,
+                }],
+            )
+            .unwrap()
+            .remove(0)
+    }
+
+    /// ⚠️ EVERY WRITE THAT CLOSES A TASK TAKES ITS COMMAND CARDS DOWN (ADR 0148).
+    /// A grant dies with its task, so a card left up waits for an Allow that
+    /// grants nothing. Each way a task closes is driven through its own public
+    /// path, because each writes the task's state with its own SQL.
+    #[test]
+    fn closing_a_task_any_way_takes_its_command_cards_down() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap().id;
+        store
+            .bind_worker_session(queen, WorkerSessionId::new())
+            .unwrap();
+        let check = |path: &str, task: TaskId, close: &dyn Fn()| {
+            closing_takes_the_command_card_down(&store, queen, path, task, close);
+        };
+
+        let task = task_in_review(&store, "Approved");
+        check("completed", task, &|| {
+            store.transition_task(task, TaskState::Completed).unwrap();
+        });
+
+        let task = store.create_task("Given up", "/workspace/d365").unwrap().id;
+        check("abandoned", task, &|| {
+            store.transition_task(task, TaskState::Abandoned).unwrap();
+        });
+
+        let task = store.create_task("Retired", "/workspace/d365").unwrap().id;
+        check("removed", task, &|| {
+            store
+                .remove_task_as(task, &TaskActivityActor::operator(), "Superseded")
+                .unwrap();
+        });
+
+        let task = task_in_review(&store, "Ships later");
+        store
+            .transition_task(task, TaskState::AwaitingRelease)
+            .unwrap();
+        check("released", task, &|| {
+            store
+                .record_task_deployment(task, "production", "v1.0.0", 1_000)
+                .unwrap();
+            assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+        });
+
+        let task = sync_launch_page_issue(&store, false).id;
+        check("closed in Jira", task, &|| {
+            assert_eq!(
+                sync_launch_page_issue(&store, true).state,
+                TaskState::Completed
+            );
+        });
+    }
+
+    /// ⚠️ A SESSION ENDING TAKES ITS COMMAND CARDS DOWN (ADR 0148). A grant
+    /// belongs to the session that asked, so a card it leaves behind waits for
+    /// an Allow that grants nothing. Measured 2026-10-31: a session ended 70
+    /// seconds before the operator pressed Allow on its card. The continuation
+    /// handover is covered beside its own fixture in `conversation_recovery`.
+    #[test]
+    fn a_session_ending_takes_its_command_cards_down() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let other = store
+            .create_worker(
+                "Other",
+                ProviderKind::ClaudeCode,
+                "/workspace/other",
+                false,
+                1,
+            )
+            .unwrap();
+        let other_session = WorkerSessionId::new();
+        store.bind_worker_session(other.id, other_session).unwrap();
+        let task = task_in_review(&store, "Still open");
+        let actions = vec!["Keep it".to_owned(), "Drop it".to_owned()];
+        let ends_its_cards = |path: &str, end: &dyn Fn(WorkerSessionId)| {
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(queen.id, session).unwrap();
+            let waiting = store
+                .create_decision_request(&command_request(queen.id, task, FORMULA_COLUMN))
+                .unwrap()
+                .id;
+            let question = store
+                .create_decision_request(&NewDecisionRequest {
+                    task_id: Some(task),
+                    ..request(queen.id, &actions)
+                })
+                .unwrap()
+                .id;
+            let elsewhere = store
+                .create_decision_request(&command_request(other.id, task, FORMULA_COLUMN))
+                .unwrap()
+                .id;
+
+            end(session);
+
+            let withdrawn = store.get_decision_request(waiting).unwrap();
+            assert_eq!(
+                withdrawn.state,
+                DecisionRequestState::Withdrawn,
+                "{path}: the command card comes down"
+            );
+            assert_eq!(
+                withdrawn.withdrawal_reason.as_deref(),
+                Some(ENDED_SESSION_WITHDRAWAL),
+                "{path}: and says why"
+            );
+            assert!(
+                matches!(
+                    store.resolve_decision_request(waiting, GRANT_COMMAND_ACTION, "", "inbox"),
+                    Err(TaskStoreError::DecisionAlreadyResolved)
+                ),
+                "{path}: there is nothing left to press"
+            );
+            for (left, what) in [
+                (question, "a question"),
+                (elsewhere, "another session's card"),
+            ] {
+                assert_eq!(
+                    store.get_decision_request(left).unwrap().state,
+                    DecisionRequestState::Pending,
+                    "{path}: {what} stays up"
+                );
+            }
+        };
+
+        ends_its_cards("released", &|session| {
+            assert!(store.release_worker_session(session).unwrap());
+        });
+        ends_its_cards("missing from the terminal host", &|session| {
+            assert_eq!(
+                store
+                    .release_missing_worker_sessions(&HashSet::from([other_session]))
+                    .unwrap(),
+                vec![session]
+            );
+        });
+    }
+
+    /// Ends a session with a bare write, as no path in the store does.
+    fn end_session_by_raw_write(store: &TaskStore, session: WorkerSessionId) {
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_sessions SET ended_at = unixepoch() WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+    }
+
     /// A grant ends with its task or with the session that asked, and is spent
     /// only by the worker it was granted to.
     #[test]
@@ -3171,7 +3620,9 @@ mod tests {
             .unwrap();
         press(file(task.id));
         let unpressed = file(task.id);
-        store.release_worker_session(asking).unwrap();
+        // Outside the paths that take its cards down (ADR 0148), so what this
+        // exercises is the resolve's own check.
+        end_session_by_raw_write(&store, asking);
         store
             .bind_worker_session(queen.id, WorkerSessionId::new())
             .unwrap();
