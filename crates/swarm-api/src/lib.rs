@@ -12322,6 +12322,12 @@ mod tests {
         assert!(!rendered.contains("RULED"), "{rendered}");
         assert!(!rendered.contains("swarm_list_decisions"), "{rendered}");
         assert!(rendered.contains("Call swarm_list_tasks now"), "{rendered}");
+        // A listing comes in pages (ADR 0147). A worker that looked only at
+        // page 0 would stop work that is on page 1.
+        assert!(
+            rendered.contains("on none of the listing's pages, stop"),
+            "{rendered}"
+        );
     }
 
     #[test]
