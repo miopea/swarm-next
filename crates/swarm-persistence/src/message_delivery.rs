@@ -325,7 +325,8 @@ impl TaskStore {
         now: i64,
     ) -> Result<bool, TaskStoreError> {
         Ok(self.connection()?.query_row(
-            "SELECT EXISTS(
+            concat!(
+                "SELECT EXISTS(
                 SELECT 1 FROM task_message_deliveries d
                 JOIN task_messages m ON m.id = d.message_id
                 JOIN tasks task ON task.id = m.task_id AND task.removed_at IS NULL
@@ -338,10 +339,13 @@ impl TaskStore {
                     OR (m.recipient = 'worker' AND m.recipient_worker_id = recipient.id))
                   AND NOT EXISTS(SELECT 1 FROM worker_engagements e
                     WHERE e.worker_id = recipient.id AND e.expires_at > ?4)
-                  AND (recipient.role = 'queen' OR NOT EXISTS(
+                  AND (recipient.role = 'queen' OR ",
+                crate::messages::handed_off_by_recipient!(),
+                " OR NOT EXISTS(
                     SELECT 1 FROM tasks ongoing WHERE ongoing.assigned_worker_id = recipient.id
                       AND ongoing.state = 'active' AND ongoing.removed_at IS NULL
-                      AND ongoing.id != m.task_id)))",
+                      AND ongoing.id != m.task_id)))"
+            ),
             params![
                 claim.message.message_id,
                 claim.claim_id,
@@ -579,7 +583,9 @@ mod tests {
     /// messages to RCG Networks on its blocked Phase E and its review task
     /// waited a day behind its Active Phase A2b (ADR 0067), and nothing said
     /// why. `held_behind` names that task on exactly the messages the
-    /// dispatcher will not claim, so the two cannot disagree.
+    /// dispatcher will not claim, so the two cannot disagree. Since ADR 0149
+    /// the review task's message is not held at all: it answers work the
+    /// worker handed off.
     #[test]
     fn a_queued_message_names_the_active_task_it_waits_behind() {
         let (store, review, worker) = fixture();
@@ -612,19 +618,24 @@ mod tests {
             .into_iter()
             .map(|task| store.task_messages(task).unwrap()[0].held_behind.clone())
             .collect();
-        assert_eq!(named, [Some(holder.clone()), Some(holder.clone()), None]);
+        assert_eq!(named, [None, Some(holder.clone()), None]);
         let claims = store.claim_task_messages(11).unwrap();
-        let claimed: Vec<_> = claims
+        let mut claimed: Vec<_> = claims
             .iter()
             .map(|c| c.message.message_id.clone())
             .collect();
-        assert_eq!(claimed, [on_current], "exactly the message nothing names");
-        store
-            .finish_task_message(&claims[0], TaskMessageResult::Delivered, 12)
-            .unwrap();
+        claimed.sort();
+        let mut unnamed = vec![on_review, on_current];
+        unnamed.sort();
+        assert_eq!(claimed, unnamed, "exactly the messages nothing names");
+        for claim in &claims {
+            store
+                .finish_task_message(claim, TaskMessageResult::Delivered, 12)
+                .unwrap();
+        }
 
         let attention = store.task_message_attention(100, 0).unwrap();
-        assert_eq!(attention.items.len(), 2, "{attention:?}");
+        assert_eq!(attention.items.len(), 1, "{attention:?}");
         for item in &attention.items {
             assert_eq!(item.held_behind, Some(holder.clone()));
             assert_eq!(item.recipient_name.as_deref(), Some("Petal"));
@@ -637,16 +648,105 @@ mod tests {
             store.task_messages(blocked.id).unwrap()[0].held_behind,
             None
         );
-        let mut released: Vec<_> = store
+        let released: Vec<_> = store
             .claim_task_messages(13)
             .unwrap()
             .into_iter()
             .map(|c| c.message.message_id)
             .collect();
-        released.sort();
-        let mut expected = vec![on_review, on_blocked];
+        assert_eq!(released, [on_blocked], "it goes once A2b leaves Active");
+    }
+
+    /// ⚠️ THE ANSWER TO HANDED-OFF WORK DOES NOT WAIT BEHIND OTHER WORK (ADR
+    /// 0149). Queen's go for a pull request, on a task in Awaiting release,
+    /// waited 3 h 39 min, 85% of it behind its worker's other Active task, and
+    /// was cancelled unread when the task closed. The worker read the go in its task history,
+    /// which its auto mode rightly does not take as Queen's word, and asked the
+    /// operator for the step instead.
+    ///
+    /// A message about the worker's own task in Review or Awaiting release is
+    /// claimed, and passes the recheck before submission, while other work is
+    /// Active. One about its Blocked work still waits, and the operator's
+    /// engagement still holds everything.
+    #[test]
+    fn the_answer_to_handed_off_work_does_not_wait_behind_other_active_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap()
+            .id;
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker, session).unwrap();
+        let task_through = |title: &str, states: &[TaskState]| {
+            let task = store.create_task(title, "/workspace").unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+            store.assign_task_to_worker(task.id, worker).unwrap();
+            for state in states {
+                store.transition_task(task.id, *state).unwrap();
+            }
+            task.id
+        };
+        let review = task_through("In review", &[TaskState::Active, TaskState::Review]);
+        let awaiting = task_through(
+            "Awaiting release",
+            &[
+                TaskState::Active,
+                TaskState::Review,
+                TaskState::AwaitingRelease,
+            ],
+        );
+        let blocked = task_through("Blocked", &[TaskState::Active, TaskState::Blocked]);
+        let current = task_through("Current work", &[]);
+
+        // The recheck before submission: claimed while nothing else was
+        // Active, then other work starts before the terminal is written.
+        let on_review = send(&store, review, worker);
+        let on_blocked = send(&store, blocked, worker);
+        let claims = store.claim_task_messages(11).unwrap();
+        assert_eq!(claims.len(), 2);
+        store.transition_task(current, TaskState::Active).unwrap();
+        for claim in &claims {
+            assert_eq!(
+                store.task_message_claim_can_submit(claim, 12).unwrap(),
+                claim.message.message_id == on_review,
+                "only the answer to handed-off work is still submitted"
+            );
+            store
+                .finish_task_message(claim, TaskMessageResult::Deferred, 12)
+                .unwrap();
+        }
+
+        // Selection, with the other work Active throughout.
+        let on_awaiting = send(&store, awaiting, worker);
+        let held: Vec<_> = [review, awaiting, blocked]
+            .into_iter()
+            .map(|task| store.task_messages(task).unwrap()[0].held_behind.clone())
+            .collect();
+        let holder = crate::HeldBehindTask {
+            task_id: current.to_string(),
+            title: "Current work".to_owned(),
+        };
+        assert_eq!(held, [None, None, Some(holder)]);
+        let claims = store.claim_task_messages(13).unwrap();
+        let mut claimed: Vec<_> = claims
+            .iter()
+            .map(|c| c.message.message_id.clone())
+            .collect();
+        claimed.sort();
+        let mut expected = vec![on_review.clone(), on_awaiting];
         expected.sort();
-        assert_eq!(released, expected, "both go once A2b leaves Active");
+        assert_eq!(claimed, expected, "the Blocked task's message still waits");
+        assert!(!claimed.contains(&on_blocked));
+
+        // The operator's engagement holds even the answer to handed-off work.
+        assert!(
+            store
+                .renew_worker_engagement(session, None, 14, 60)
+                .unwrap()
+        );
+        for claim in &claims {
+            assert!(!store.task_message_claim_can_submit(claim, 15).unwrap());
+        }
     }
 
     /// ⚠️ A MESSAGE TO A SLEEPING WORKER HAS NOWHERE TO GO, and nothing used to
