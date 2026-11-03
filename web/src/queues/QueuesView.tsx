@@ -4,7 +4,7 @@ import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStat
 import { projectReviewQueue } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
-import { prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
+import { prerequisiteOutstanding, prerequisiteSatisfied, type NextMoveOwner, type Task } from "../api/tasks";
 import { clarificationOwnsTask, groupQueueByWorker, projectTaskQueues, workerAwaitingAnswer, workerExecutionWait } from "./taskQueueProjection";
 import type { Worker } from "../api/workers";
 
@@ -152,7 +152,7 @@ function taskProgress(task: Task, now: number): string {
   // A draft behind work that can still finish is not Queen's until it does
   // (ADR 0135). The server decides that; this only says how many it waits on.
   // An abandoned or removed prerequisite never finishes, so it is not counted.
-  const waitingOn = (task.prerequisites ?? []).filter((item) => !item.removed && item.state !== "completed" && item.state !== "abandoned").length;
+  const waitingOn = (task.prerequisites ?? []).filter(prerequisiteOutstanding).length;
   if (task.next_move_owner === "blocked" && waitingOn > 0) return `Draft waiting on ${waitingOn} prerequisite${waitingOn === 1 ? "" : "s"}`;
   return "Draft · awaiting triage";
 }

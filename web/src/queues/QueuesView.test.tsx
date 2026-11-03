@@ -317,6 +317,14 @@ describe("QueuesView", () => {
     // Abandoned work never finishes, so the draft is Queen's to re-route.
     rerender(<QueuesView tasks={[{ ...waiting, next_move_owner: "queen", prerequisites: [{ ...prerequisite, state: "abandoned" }] }]} workers={[]} onOpenTask={vi.fn()} />);
     expect(screen.getByText("Draft · awaiting triage")).toBeVisible();
+    // Only work that can still finish is counted, beside work that cannot.
+    rerender(<QueuesView tasks={[{ ...waiting, prerequisites: [
+      prerequisite,
+      { ...prerequisite, prerequisite_id: "dropped", state: "abandoned" },
+      { ...prerequisite, prerequisite_id: "unlinked", removed: true },
+      { ...prerequisite, prerequisite_id: "done", state: "completed" },
+    ] }]} workers={[]} onOpenTask={vi.fn()} />);
+    expect(screen.getByText("Draft waiting on 1 prerequisite")).toBeVisible();
   });
 
   test("removed and reopened prerequisites stay visible without claiming the worker stopped", () => {
