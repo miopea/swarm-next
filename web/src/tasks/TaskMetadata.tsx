@@ -1,4 +1,5 @@
 import type { JiraTaskLink, Task, TaskPriority, TaskState } from "../api";
+import { prerequisiteOutstanding } from "../api/tasks";
 import TaskCiStatus from "./TaskCiStatus";
 import { taskAgeTitle, taskCreatedOn } from "./taskAge";
 
@@ -20,7 +21,22 @@ export const priorityLabels: Record<TaskPriority, string> = {
   urgent: "Urgent",
 };
 
+/**
+ * How many unfinished tasks hold this draft back, or 0 when nothing does.
+ *
+ * A draft cannot move to Blocked, so Queen routes one behind unfinished work
+ * and leaves it in Draft until that work finishes (ADR 0135). Read as a plain
+ * draft, it looked like work she had never touched, and the operator asked her
+ * again. The server decides whose move it is; this only counts what it waits on.
+ */
+export function draftWaitingOn(task: Task): number {
+  if (task.state !== "draft" || task.next_move_owner !== "blocked") return 0;
+  return (task.prerequisites ?? []).filter(prerequisiteOutstanding).length;
+}
+
 export function taskStateLabel(task: Task): string {
+  const waitingOn = draftWaitingOn(task);
+  if (waitingOn > 0) return `${task.assigned_worker_id ? "Routed" : "Draft"} · waiting on ${waitingOn} task${waitingOn === 1 ? "" : "s"}`;
   // Returning work to Active reserves its worker before its new briefing is
   // consumed. The lifecycle claim is not evidence of execution yet (ADR 0016).
   if (task.state === "active") {
@@ -62,7 +78,7 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira, operat
           section below keeps its label, because there it distinguishes. */}
       <section className="task-metadata-section" aria-label="Swarm details">
         <dl>
-          <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && task.closed_unverifiable ? " unverifiable" : task.state === "completed" && !task.closed_on_evidence ? " unverified" : ""}`} title={task.state === "completed" && task.closed_unverifiable ? "Finished, and recorded as impossible to verify now. Nobody established where this went; this is a record of that, not evidence that it shipped." : task.state === "completed" && !task.closed_on_evidence ? "The work is finished. Nothing has recorded where it is running, and no nothing-to-deploy claim has been approved, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
+          <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && task.closed_unverifiable ? " unverifiable" : task.state === "completed" && !task.closed_on_evidence ? " unverified" : draftWaitingOn(task) > 0 ? " waiting" : ""}`} title={task.state === "completed" && task.closed_unverifiable ? "Finished, and recorded as impossible to verify now. Nobody established where this went; this is a record of that, not evidence that it shipped." : task.state === "completed" && !task.closed_on_evidence ? "The work is finished. Nothing has recorded where it is running, and no nothing-to-deploy claim has been approved, so nothing has shown it to be live." : draftWaitingOn(task) > 0 ? "This draft waits for the unfinished tasks listed on it. It comes back to Queen when they finish; nothing is needed from you until then." : undefined}>{taskStateLabel(task)}</span></dd></div>
           <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
           {operatorToken && (task.state === "review" || task.state === "awaiting_release") && <TaskCiStatus task={task} operatorToken={operatorToken} />}
           {/* The date, with the elapsed time in the tooltip. It was the other

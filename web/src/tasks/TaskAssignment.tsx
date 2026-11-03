@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 
 import type { HeldBriefing, Task, TaskState, Worker } from "../api";
 import { holdReason } from "../orchestration/HeldBriefingList";
-import { prerequisiteSatisfied } from "../api/tasks";
+import { prerequisiteOutstanding, prerequisiteSatisfied } from "../api/tasks";
 import { workerAttention } from "../workers/workerAttention";
 
 // Both sets describe the delivery of a MESSAGE, not the state of the task.
@@ -85,7 +85,12 @@ function PrimaryTaskAction({ task, workerRunning, targetWorker, busy, onTransiti
   onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
 }) {
-  if (["draft", "ready", "blocked"].includes(task.state) && task.prerequisites?.some((item) => !prerequisiteSatisfied(item))) {
+  // A draft is held only by work that can still finish (ADR 0135), the test
+  // its status uses. Ready and Blocked work waits until each one is satisfied.
+  const waiting = task.state === "draft"
+    ? task.prerequisites?.some(prerequisiteOutstanding)
+    : ["ready", "blocked"].includes(task.state) && task.prerequisites?.some((item) => !prerequisiteSatisfied(item));
+  if (waiting) {
     return <p className="task-dispatch" role="status">Waiting for prerequisites · Queen coordinates the next move</p>;
   }
   if (task.state === "draft") return <button disabled={busy} onClick={() => void onTransition(task, "ready")}>Mark ready</button>;

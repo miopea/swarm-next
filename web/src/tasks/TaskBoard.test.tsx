@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import type { HiveIdentity, Task, TaskActivityPage, Worker } from "../api";
+import type { HiveIdentity, Task, TaskActivityPage, TaskState, Worker } from "../api";
 import TaskBoard from "./TaskBoard";
 
 afterEach(() => {
@@ -51,6 +51,33 @@ test("links prerequisites from the task card and does not offer premature resump
   rerender(<TaskBoard {...props} tasks={[{ ...blocked, prerequisites: [{ ...blocked.prerequisites[0], state: "completed" }] }]} />);
   expect(screen.getByRole("button", { name: "Mark ready" })).toBeEnabled();
   expect(screen.getByText("Prerequisites completed · Queen checks remaining blockers before resuming")).toBeVisible();
+});
+
+test("a draft Queen routed behind unfinished work reads as waiting, apart from drafts she has not touched", () => {
+  const upstream = (state: TaskState, removed = false) => ({
+    task_id: "routed", prerequisite_id: `upstream-${state}-${removed}`, title: `Upstream ${state}${removed ? " (removed)" : ""}`,
+    state, assigned_worker_id: null, removed, reason: "First", created_at: 1,
+  });
+  const routed = { ...task, id: "routed", title: "Routed behind two", assigned_worker_id: worker.id, next_move_owner: "blocked" as const,
+    prerequisites: [upstream("active"), upstream("awaiting_release"), upstream("completed"), upstream("abandoned"), upstream("ready", true)] };
+  const filed = { ...task, id: "filed", title: "Filed behind one", next_move_owner: "blocked" as const, prerequisites: [upstream("blocked")] };
+  const untouched = { ...task, id: "untouched", title: "Not yet routed", next_move_owner: "queen" as const };
+  const released = { ...task, id: "released", title: "Its only prerequisite was abandoned", assigned_worker_id: worker.id,
+    next_move_owner: "queen" as const, prerequisites: [upstream("abandoned")] };
+  const asked = { ...routed, id: "asked", title: "The operator holds this one", next_move_owner: "operator" as const };
+  renderBoard({ tasks: [routed, filed, untouched, released, asked] });
+  const card = (title: string) => within(screen.getByRole("article", { name: title }));
+
+  expect(card(routed.title).getByText("Routed · waiting on 2 tasks")).toHaveClass("task-state", "waiting");
+  expect(card(routed.title).queryByRole("button", { name: "Mark ready" })).not.toBeInTheDocument();
+  expect(card(filed.title).getByText("Draft · waiting on 1 task")).toHaveClass("task-state", "waiting");
+  expect(card(untouched.title).getByText("Draft")).not.toHaveClass("waiting");
+  expect(card(untouched.title).getByRole("button", { name: "Mark ready" })).toBeEnabled();
+  // Abandoned work never finishes, so it holds nothing (ADR 0135): the draft is Queen's.
+  expect(card(released.title).getByText("Draft")).not.toHaveClass("waiting");
+  expect(card(released.title).getByRole("button", { name: "Mark ready" })).toBeEnabled();
+  // The server never calls a draft the operator holds blocked, so neither does the card.
+  expect(card(asked.title).getByText("Draft")).not.toHaveClass("waiting");
 });
 
 test("unblocks assigned work into Ready without starting it over the worker's active task", () => {

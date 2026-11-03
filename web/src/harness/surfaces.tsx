@@ -36,7 +36,7 @@ import MemberSyncSettingsFixture from "./MemberSyncSettingsFixture";
 import ApiaryWatchFixture from "./ApiaryWatchFixture";
 import HandoffRecoveryFixture from "./HandoffRecoveryFixture";
 
-import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, HiveIdentity, UnansweredEmailTask } from "../api";
+import type { BlockedEscalation, Connection, DecisionRequest, HeldBriefing, HiveIdentity, Task, UnansweredEmailTask } from "../api";
 import { App } from "../App";
 import { SURFACE_STORAGE_KEY } from "../navigation/startSurface";
 import QueuesView from "../queues/QueuesView";
@@ -948,6 +948,35 @@ export const SURFACES: Surface[] = [
         onReorder={asyncNoop}
       />
     ),
+  },
+  {
+    id: "tasks-routed-drafts",
+    title: "Drafts Queen routed behind unfinished work",
+    why: "fictional drafts: one routed and waiting on two tasks, one filed behind one, one nobody has touched (ADR 0135)",
+    render: () => {
+      const upstream = (id: string, title: string, state: Task["state"]) => ({
+        task_id: id, prerequisite_id: `${id}-${state}`, title, state, assigned_worker_id: demoWorkers[2].id, removed: false, reason: "Builds on it", created_at: now - 600,
+      });
+      const drafts: Task[] = [
+        { ...demoTasks[3], id: "routed-draft", title: "Show the export's new columns in the report view", state: "draft", next_move_owner: "blocked", dispatch_state: null,
+          assigned_worker_id: demoWorkers[1].id, blocked_note: null, blocked_until: null,
+          prerequisites: [upstream("routed-draft", "Add the columns to the export schema", "active"), upstream("routed-draft", "Publish the export contract", "awaiting_release")] },
+        { ...demoTasks[3], id: "filed-draft", title: "Retire the old export endpoint", state: "draft", next_move_owner: "blocked", dispatch_state: null,
+          assigned_worker_id: null, blocked_note: null, blocked_until: null, prerequisites: [upstream("filed-draft", "Move every caller to the new export", "blocked")] },
+        { ...demoTasks[3], id: "untouched-draft", title: "Label the export's empty state", state: "draft", next_move_owner: "queen", dispatch_state: null,
+          assigned_worker_id: null, blocked_note: null, blocked_until: null, prerequisites: [] },
+      ];
+      return <TaskBoard tasks={drafts} jiraTaskLinks={[]} operatorToken="harness" sessions={[]} workers={demoWorkers} busy={false}
+        onCreate={asyncNoop} onUpdate={asyncNoop} onRemove={asyncNoop} onRestore={asyncNoop} onTransition={asyncNoop} onAssign={asyncNoop}
+        onStartWorker={asyncNoop} onOpenWorker={noop} onFetchActivity={async () => ({ events: [], truncated: false })}
+        onFetchJiraComments={async () => []} onAddJiraComment={async () => ({ state: "queued" })} onRetryJira={asyncNoop} onJiraImported={asyncNoop} onReorder={asyncNoop} />;
+    },
+  },
+  {
+    id: "tasks-routed-drafts-phone",
+    title: "Phone routed drafts",
+    why: "the routed-draft status in a real 390px frame, not native mobile acceptance",
+    render: () => <iframe title="Phone routed drafts preview" src="/harness.html?surface=tasks-routed-drafts" style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
     id: "task-delivery-status",

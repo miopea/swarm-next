@@ -2105,6 +2105,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    could establish where this went; rendering it like checked work would claim
    the check this control exists to avoid faking. */
 .task-state.unverifiable { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); border: 1px dashed color-mix(in srgb, var(--muted) 45%, transparent); }
+/* A draft Queen routed behind unfinished work (ADR 0135). It keeps the draft's
+   card, and its status takes the colour of work held by something else, so it
+   stands apart from a draft nobody has looked at yet. */
+.task-state.waiting { --state: var(--blocked); }
 /* The status and priority values wrap inside their own cells.
    "Finished · unverified" is 151px of unbreakable text — white-space: nowrap is
    inherited here — in a 59px cell, so it ran straight across the Priority label

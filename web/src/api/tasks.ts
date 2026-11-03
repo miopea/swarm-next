@@ -15,6 +15,17 @@ export function prerequisiteSatisfied(item: TaskPrerequisite): boolean {
   return !item.removed && item.state === "completed";
 }
 
+/**
+ * Whether a prerequisite still holds back a Draft or a Review (ADR 0135), as
+ * the server's `TaskPrerequisite::outstanding` decides it. Only work that can
+ * still finish holds it. Abandoned or removed work never will, so it holds
+ * nothing. This is not the Blocked test: a Blocked task resumes only once
+ * each prerequisite is satisfied.
+ */
+export function prerequisiteOutstanding(item: TaskPrerequisite): boolean {
+  return !item.removed && item.state !== "completed" && item.state !== "abandoned";
+}
+
 export type TaskState =
   | "draft"
   | "ready"

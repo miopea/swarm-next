@@ -35,6 +35,9 @@ test.each([
   [{ state: "completed", closed_on_evidence: false, next_move_owner: "nobody" }, "Finished · unverified", "No next move"],
   [{ state: "blocked", next_move_owner: "operator" }, "Blocked", "You"],
   [{ state: "draft" }, "Draft", "Not recorded"],
+  [{ state: "draft", assigned_worker_id: "worker-1", next_move_owner: "blocked", prerequisites: [{
+    task_id: "task-1", prerequisite_id: "upstream", title: "Upstream", state: "active", assigned_worker_id: null, removed: false, reason: "First", created_at: 1,
+  }] }, "Routed · waiting on 1 task", "Dependency or hold"],
 ])("task detail agrees with board state and preserves recorded next ownership: %j", (fields, status, nextMove) => {
   render(<TaskDetailDialog task={{ ...task, ...fields } as Task} operatorToken="token" busy={false} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />);
   const summary = screen.getByLabelText("Task summary");
