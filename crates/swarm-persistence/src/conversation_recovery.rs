@@ -138,6 +138,7 @@ impl TaskStore {
         tx.execute("UPDATE worker_sessions SET ended_at = unixepoch(),
                     ended_reason = 'native continuation could not restore context', ended_by = 'swarm_recovery'
                     WHERE session_id = ?1 AND ended_at IS NULL", [previous.to_string()])?;
+        crate::decisions::withdraw_command_requests_of_ended_session(&tx, previous)?;
         tx.execute(
             "INSERT INTO worker_sessions(session_id, worker_id) VALUES (?1, ?2)",
             params![successor.to_string(), worker],
@@ -962,6 +963,57 @@ mod tests {
             store
                 .reconcile_provider_selection(session, selection)
                 .unwrap()
+        );
+    }
+
+    /// ADR 0148: a successor does not inherit a grant (ADR 0129), so the
+    /// handover takes down the command cards the previous session left waiting.
+    #[test]
+    fn a_continuation_handover_takes_the_previous_sessions_command_cards_down() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let previous = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, previous).unwrap();
+        let task = store.create_task("Still open", "/workspace").unwrap();
+        let card = store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Run one command?",
+                summary: "One read of a count.",
+                reason: "The permission check denied it.",
+                risk: "",
+                evidence: "",
+                suggested_action: "",
+                allowed_actions: &[],
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: Some("curl -sS https://example.test/count"),
+                requested_script: None,
+            })
+            .unwrap()
+            .id;
+        let previous_attempt = attempt();
+        assert!(
+            store
+                .reconcile_continuation_successor(
+                    previous,
+                    previous_attempt,
+                    WorkerSessionId::new(),
+                    fresh_after(previous_attempt),
+                )
+                .unwrap()
+        );
+        let card = store.get_decision_request(card).unwrap();
+        assert_eq!(card.state, swarm_domain::DecisionRequestState::Withdrawn);
+        assert!(
+            card.withdrawal_reason
+                .is_some_and(|why| why.contains("session"))
         );
     }
 

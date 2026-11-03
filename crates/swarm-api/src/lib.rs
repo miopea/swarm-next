@@ -11419,6 +11419,13 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::DecisionAlreadyResolved | TaskStoreError::DecisionInboxFull => {
             ApiError::new(StatusCode::CONFLICT, "decision_conflict", error.to_string())
         }
+        // Its own code: the request was well formed, and the remedy is a
+        // different task, not a corrected call (ADR 0148).
+        TaskStoreError::CommandRequestTaskClosed => ApiError::new(
+            StatusCode::CONFLICT,
+            "command_request_task_closed",
+            error.to_string(),
+        ),
         // THREE CODES, NOT ONE, and deliberately not folded into
         // decision_conflict above. Each names a different remedy: withdraw it
         // instead; point somewhere that does not loop; file a fresh card. A

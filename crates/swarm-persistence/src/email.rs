@@ -2336,6 +2336,7 @@ fn settle_released_work(
             deployed_at
         ],
     )?;
+    crate::decisions::withdraw_command_requests_of_closed_task(transaction, task_id)?;
     transaction.execute(
         "INSERT INTO task_activity (task_id, kind, from_state, to_state, note, actor_kind)
          VALUES (?1, 'state_changed', ?2, ?3, ?4, 'system')",

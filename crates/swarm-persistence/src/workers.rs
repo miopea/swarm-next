@@ -1951,6 +1951,7 @@ impl TaskStore {
                 "DELETE FROM worker_engagements WHERE session_id = ?1",
                 [session_id.to_string()],
             )?;
+            crate::decisions::withdraw_command_requests_of_ended_session(&transaction, session_id)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
         }
@@ -2185,6 +2186,10 @@ impl TaskStore {
                 "UPDATE worker_sessions SET ended_at = unixepoch()
                  WHERE session_id = ?1 AND ended_at IS NULL",
                 [session_id.to_string()],
+            )?;
+            crate::decisions::withdraw_command_requests_of_ended_session(
+                &transaction,
+                *session_id,
             )?;
         }
         if !stale.is_empty() {

@@ -670,6 +670,12 @@ pub enum TaskStoreError {
         "a request to run a command names its task_id and carries the exact command (at most 4000 bytes, with no control or invisible characters besides newlines and tabs), and offers no buttons or questions of its own: Swarm adds the one button that grants the command, and only that button lets it run. Leave allowed_actions, operator_actions and questions empty, and set suggested_action to an empty string or \"Allow the command shown in this request\". Ask anything else in a separate request"
     )]
     InvalidCommandDecision,
+    /// A grant dies with its task (ADR 0129), so a card asking to run a
+    /// command on closed work could only ever be pressed for nothing.
+    #[error(
+        "this task is completed, abandoned or removed, and a command can be allowed only on an open task: the operator's Allow here could not let it run. Nothing was filed. Ask on the open task the command is for"
+    )]
+    CommandRequestTaskClosed,
     #[error(
         "an interview asks at most 4 questions, each with 2 to 4 unique options and a unique header, and offers no actions"
     )]
@@ -2825,6 +2831,7 @@ impl TaskStore {
                  updated_at = unixepoch() WHERE id = ?1 AND removed_at IS NULL",
             [id.to_string()],
         )?;
+        decisions::withdraw_command_requests_of_closed_task(&transaction, id)?;
         // The reason is the record. A retired task that does not say why it was
         // retired is the same dead end as one mislabelled Blocked: the next
         // reader has to guess whether it can come back.
@@ -3341,6 +3348,9 @@ impl TaskStore {
              WHERE id = ?1",
             params![id.to_string(), target.to_string(), block_deadline],
         )?;
+        if matches!(target, TaskState::Completed | TaskState::Abandoned) {
+            decisions::withdraw_command_requests_of_closed_task(&transaction, id)?;
+        }
         // Work sent back to a worker owes it a briefing again. Queen's only
         // non-completing exit from Review used to be Active, and that
         // transition enqueued nothing: the task changed column, the worker was
