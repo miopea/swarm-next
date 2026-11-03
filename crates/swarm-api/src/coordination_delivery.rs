@@ -1559,7 +1559,7 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
         cadence: if delivery.generation == 0 { Cadence::Immediate } else { Cadence::Cooled },
         busy: BusyPolicy::Wait,
         bytes: format!(
-            "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
+            "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is on none of the listing's pages, stop; its assignment changed.\r",
             delivery.task_id, title, instruction, ruling, requester,
         )
         .into_bytes(),

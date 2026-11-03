@@ -875,7 +875,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 36;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 37;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -885,16 +885,16 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 36;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 30. Update this and the revision together.
+/// The served surface as of revision 37. Update this and the revision together.
 ///
-/// ⚠️ IT LAST MOVED AT REVISION 25, and the gap is not neglect. This covers tool
-/// NAMES and ARGUMENT SCHEMAS; descriptions are stripped before hashing. So 26
-/// through 29 changed what tools SAY without changing what a session can CALL,
-/// and this value correctly stayed put through all of them. A revision bump with
-/// no fingerprint change means the wording moved; a fingerprint change always
-/// means the callable surface did.
+/// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
+/// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
+/// stripped before hashing. So 26 through 29 changed what tools SAY without
+/// changing what a session can CALL, and this value correctly stayed put
+/// through all of them. A revision bump with no fingerprint change means the
+/// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "230d03abe2e0e9a69cae30d9a47ad6cb848c7527e0045d6c07fbab0c2417a77e";
+    "6b02ef2a30fba2e9f624f4b1d1c18d76a7c5bd9d4edc2e44a3f4a22c6faae733";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1255,10 +1255,12 @@ impl AgentMcp {
             // of those to the read path would hand a board reader the authority
             // to move work it can merely see, in one line, with nothing in the
             // type system to say so.
-            "swarm_list_tasks" => self
-                .tasks
-                .list_tasks_readable_by(self.principal)
-                .and_then(|tasks| self.task_list_result(&tasks)),
+            "swarm_list_tasks" => parse::<ListTasksInput>(arguments).and_then(|input| {
+                let page = usize::try_from(input.page.unwrap_or(0)).unwrap_or(usize::MAX);
+                self.tasks
+                    .list_tasks_readable_by(self.principal)
+                    .and_then(|tasks| self.task_list_result(&tasks, page))
+            }),
             // An outside tool files and reads by intake (ADR 0126).
             "swarm_create_task" if self.tasks.files_by_intake(self.principal) => {
                 self.file_intake_task(arguments)
@@ -3489,23 +3491,33 @@ read are not wrong, they are dated — and this board moves within minutes."
         envelope
     }
 
-    /// How much of one reply the open tasks may take, serialized.
-    const BOARD_LISTING_BYTES: usize = 2 * 1024 * 1024;
-    /// How many recently closed tasks a whole-board listing names (ADR 0143).
-    /// It named as many as fit in the byte budget below, about 300 on the
-    /// operator's Hive, 68 KB of titles in every listing.
-    const CLOSED_INDEX_ENTRIES: usize = 50;
+    /// How much answer text one page of a task listing may carry, the whole
+    /// reply serialized (ADR 0147).
+    ///
+    /// ⚠️ CLAUDE CODE REFUSED A 56,215-CHARACTER LISTING OUTRIGHT on
+    /// 2026-11-02, at 61 open tasks: "exceeds maximum allowed tokens". Measured
+    /// on Claude Code 2.1.316: a reply of up to about 50,000 characters
+    /// reaches the model whole; past that it gets a 2 KB preview and a file to
+    /// read; and a JSON listing near 56,000 is refused. This leaves a fifth of
+    /// headroom under the first of those, in bytes, which are never fewer than
+    /// the characters Claude Code counts.
+    const LISTING_PAGE_BYTES: usize = 40_000;
+    /// How many recently closed tasks page 0 of a whole-board listing names
+    /// (ADR 0143, ADR 0147). Fifty were 11,507 characters of the refused
+    /// listing.
+    const CLOSED_INDEX_ENTRIES: usize = 20;
     /// How much of a blocker note a brief entry carries.
     const BRIEF_NOTE_CHARS: usize = 240;
     /// How many settled decisions one page of the decision index lists
     /// (ADR 0145). Pending ones are never paged.
     const SETTLED_DECISIONS_PER_PAGE: i64 = 20;
 
-    /// How much of one reply the one-line index of closed tasks may take.
-    const CLOSED_INDEX_BYTES: usize = 64 * 1024;
+    /// How much of page 0 the one-line index of closed tasks may take. Twenty
+    /// entries are about 4,500 bytes; this holds when titles are long.
+    const CLOSED_INDEX_BYTES: usize = 8 * 1024;
 
-    /// The board as a reader lists it: open tasks in full, closed ones as one
-    /// line each, and both bounded.
+    /// The board as a reader lists it: open tasks in full or in brief, a page
+    /// at a time, and closed ones as one line each on page 0 (ADR 0147).
     ///
     /// ⚠️ AN UNBOUNDED LISTING DISCONNECTS THE READER FROM EVERY SWARM TOOL.
     /// Queen's listing carried all 1,718 tasks with their descriptions and
@@ -3523,6 +3535,7 @@ read are not wrong, they are dated — and this board moves within minutes."
         tasks: &[swarm_domain::Task],
         scope_note: Option<&str>,
         brief: bool,
+        page: usize,
     ) -> Result<CallToolResult, ApplicationError> {
         let (mut closed, open): (Vec<&swarm_domain::Task>, Vec<&swarm_domain::Task>) = tasks
             .iter()
@@ -3533,14 +3546,9 @@ read are not wrong, they are dated — and this board moves within minutes."
         } else {
             self.tasks_with_amendments(&open)?
         };
-        let (listed, omitted) = fit_in_bytes(entries, Self::BOARD_LISTING_BYTES);
-        let omitted = open[open.len() - omitted..]
-            .iter()
-            .map(|task| json!({ "id": task.id, "title": task.title, "state": task.state }))
-            .collect::<Vec<_>>();
         closed.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
         let closed_total = closed.len();
-        let (closed, _) = fit_in_bytes(
+        let closed = fit_in_bytes(
             closed
                 .into_iter()
                 .take(Self::CLOSED_INDEX_ENTRIES)
@@ -3555,34 +3563,88 @@ read are not wrong, they are dated — and this board moves within minutes."
                 .collect(),
             Self::CLOSED_INDEX_BYTES,
         );
-        let mut listing = json!({
-            "tasks": listed,
-            "closed": closed,
-            "closed_total": closed_total,
-            "closed_note": format!(
-                "Completed and abandoned tasks are not in `tasks`. `closed` names the {} most recently closed of {closed_total}, newest first; read one in full by id with swarm_read_task_history.",
-                closed.len()
-            ),
-        });
-        if !omitted.is_empty() {
-            listing["omitted"] = json!(omitted);
-            listing["omitted_note"] = json!(format!(
-                "{} open tasks did not fit in this reply and are named in `omitted` by id. `tasks` is the board in order up to that point; read the rest by id with swarm_read_task_history.",
-                omitted.len()
-            ));
-        }
+        let mut every_page = serde_json::Map::new();
         if let Some(note) = scope_note {
-            listing["scope_note"] = json!(note);
+            every_page.insert("scope_note".into(), json!(note));
         }
         if brief {
-            listing["brief_note"] = json!(
-                "Your Active and Ready tasks are in full. Every other open task is in brief \
+            every_page.insert(
+                "brief_note".into(),
+                json!(
+                    "Your Active and Ready tasks are in full. Every other open task is in brief \
 (`brief: true`): what it is, who holds it, where it stands and why it waits. Its description, \
 amendments and Jira text are not here; `amendments` counts them. Read any task in full with \
 swarm_read_task_history before acting on it."
+                ),
             );
         }
-        structured(Self::stamped(listing))
+        let mut first_page = serde_json::Map::new();
+        first_page.insert(
+            "closed_note".into(),
+            json!(format!(
+                "Completed and abandoned tasks are not in `tasks`. `closed` names the {} most recently closed of {closed_total}, newest first; read one in full by id with swarm_read_task_history.",
+                closed.len()
+            )),
+        );
+        first_page.insert("closed".into(), json!(closed));
+        first_page.insert("closed_total".into(), json!(closed_total));
+        structured(Self::listing_page(entries, page, every_page, first_page))
+    }
+
+    /// One page of a task listing: the open-task entries, in board order,
+    /// that fit beside what the page itself says (ADR 0147).
+    ///
+    /// ⚠️ A BOUND, NOT A TRIM. Every open task is on exactly one page, and
+    /// the reply says how many pages there are and which comes next, so a
+    /// board of any size stays readable. The bound this replaced cut at 2 MB
+    /// and named the rest by id; a listing at 2.7% of it was refused.
+    ///
+    /// A page's own fields are measured at their widest, with every note it
+    /// can carry and each number as wide as the board allows, so the page
+    /// that comes back is never larger than the one that was measured.
+    fn listing_page(
+        entries: Vec<Value>,
+        page: usize,
+        every_page: serde_json::Map<String, Value>,
+        first_page: serde_json::Map<String, Value>,
+    ) -> Value {
+        let open_total = entries.len();
+        // No page is empty but a lone one, so there are never more pages than
+        // open tasks, and no page number is wider than this.
+        let widest = open_total.max(1);
+        let measured = |first: bool| {
+            let mut head = every_page.clone();
+            if first {
+                head.extend(first_page.clone());
+            }
+            let facts = PageFacts {
+                page: widest,
+                pages: widest,
+                open_total,
+                next_page: Some(widest),
+                oversized: true,
+            };
+            Self::stamped(page_envelope(head, Vec::new(), &facts))
+                .to_string()
+                .len()
+        };
+        let [first, rest] = [measured(true), measured(false)]
+            .map(|envelope| Self::LISTING_PAGE_BYTES.saturating_sub(envelope));
+        let pages = split_into_pages(entries, first, rest);
+        let count = pages.len();
+        let tasks = pages.into_iter().nth(page).unwrap_or_default();
+        let mut head = every_page;
+        if page == 0 {
+            head.extend(first_page);
+        }
+        let facts = PageFacts {
+            page,
+            pages: count,
+            open_total,
+            next_page: (page.saturating_add(1) < count).then_some(page.saturating_add(1)),
+            oversized: tasks.iter().any(|task| task["oversized"] == true),
+        };
+        Self::stamped(page_envelope(head, tasks, &facts))
     }
 
     /// Open tasks in brief, except the reader's own Active and Ready work,
@@ -3655,6 +3717,7 @@ swarm_read_task_history before acting on it."
     fn task_list_result(
         &self,
         tasks: &[swarm_domain::Task],
+        page: usize,
     ) -> Result<CallToolResult, ApplicationError> {
         // An outside tool holds no assignment, so the worker notes below would
         // tell it something untrue. Its list is what it filed (ADR 0126).
@@ -3666,27 +3729,38 @@ swarm_read_task_history before acting on it."
                     "These are the tasks you filed, newest first: open ones in full, closed ones by id and title. Read any of them in full with swarm_read_task_history. Other open work is found by title with swarm_search_tasks.",
                 ),
                 false,
+                page,
             );
         }
         if !tasks.is_empty() || self.principal.role == WorkerRole::Queen {
             if self.tasks.reads_the_board(self.principal) {
-                return self.board_listing(tasks, None, true);
+                return self.board_listing(tasks, None, true, page);
             }
             // Only work in hand in full (ADR 0145): a worker held 19 open
-            // tasks, one of them Active, and listed all 19 in full.
+            // tasks, one of them Active, and listed all 19 in full. Paged
+            // like the board (ADR 0147), so a worker's list cannot outgrow
+            // what it can read either.
             let entries = self.brief_board_entries(tasks)?;
-            let mut listing = json!({ "tasks": entries });
+            let mut every_page = serde_json::Map::new();
             if tasks
                 .iter()
                 .any(|task| !matches!(task.state, TaskState::Active | TaskState::Ready))
             {
-                listing["brief_note"] = json!(
-                    "Your Active and Ready tasks are in full. Your other open tasks are in brief \
+                every_page.insert(
+                    "brief_note".into(),
+                    json!(
+                        "Your Active and Ready tasks are in full. Your other open tasks are in brief \
 (`brief: true`): what each is, where it stands and why it waits. Read one in full with \
 swarm_read_task_history before acting on it."
+                    ),
                 );
             }
-            return structured(Self::stamped(listing));
+            return structured(Self::listing_page(
+                entries,
+                page,
+                every_page,
+                serde_json::Map::new(),
+            ));
         }
         let finished = self.tasks.tasks_this_worker_finished(self.principal)?;
         let Some(latest) = finished.first() else {
@@ -4189,21 +4263,95 @@ fn brief_board_entry(task: &swarm_domain::Task, amendments: usize, jira_changed:
     Value::Object(entry)
 }
 
-/// The leading values whose serialized size fits in `budget`, and how many
-/// were left off the end. Stops at the first that does not fit, so what is
-/// kept is always a prefix and keeps its order.
-fn fit_in_bytes(values: Vec<Value>, budget: usize) -> (Vec<Value>, usize) {
-    let total = values.len();
+/// The leading values whose serialized size fits in `budget`. Stops at the
+/// first that does not fit, so what is kept is always a prefix and keeps its
+/// order.
+fn fit_in_bytes(values: Vec<Value>, budget: usize) -> Vec<Value> {
     let mut spent = 0;
-    let kept = values
+    values
         .into_iter()
         .take_while(|value| {
             spent += value.to_string().len();
             spent <= budget
         })
-        .collect::<Vec<_>>();
-    let omitted = total - kept.len();
-    (kept, omitted)
+        .collect()
+}
+
+/// What a listing page says about where it sits among the others.
+struct PageFacts {
+    page: usize,
+    pages: usize,
+    open_total: usize,
+    next_page: Option<usize>,
+    oversized: bool,
+}
+
+/// A listing page: `head`'s fields, the page's tasks, and where it sits.
+fn page_envelope(
+    mut head: serde_json::Map<String, Value>,
+    tasks: Vec<Value>,
+    facts: &PageFacts,
+) -> Value {
+    head.insert("tasks".into(), Value::Array(tasks));
+    head.insert("page".into(), json!(facts.page));
+    head.insert("pages".into(), json!(facts.pages));
+    head.insert("open_total".into(), json!(facts.open_total));
+    if let Some(next) = facts.next_page {
+        head.insert("next_page".into(), json!(next));
+    }
+    if facts.pages > 1 {
+        head.insert(
+            "paging_note".into(),
+            json!(format!(
+                "Open tasks come a page at a time, each cut to what an agent can read in one reply. This is page {}; pages run 0 to {}, and `next_page` names the next one while there is one. Read every page before saying what the board holds. A page is cut when it is read, so a task can move between pages if the board changes in between: compare `open_total` and `observed_at` across the pages you read.",
+                facts.page,
+                facts.pages - 1
+            )),
+        );
+    }
+    if facts.oversized {
+        head.insert(
+            "oversized_note".into(),
+            json!(
+                "An entry with `oversized: true` is a task too large to list on any page, named here by id, title and state. Read it in full with swarm_read_task_history."
+            ),
+        );
+    }
+    Value::Object(head)
+}
+
+/// Open-task entries in board order, cut into pages whose entries fit, with
+/// the commas between them, in `first` bytes on page 0 and `rest` on each
+/// page after it. An entry larger than either on its own is named by id,
+/// title and state in its place, so every page fits, and no page is empty
+/// unless it is the only one.
+fn split_into_pages(entries: Vec<Value>, first: usize, rest: usize) -> Vec<Vec<Value>> {
+    let alone = first.min(rest);
+    let mut pages: Vec<Vec<Value>> = vec![Vec::new()];
+    let mut spent = 0;
+    for entry in entries {
+        let mut entry = entry;
+        let mut cost = entry.to_string().len() + 1;
+        if cost > alone {
+            entry = json!({
+                "id": entry["id"],
+                "title": entry["title"],
+                "state": entry["state"],
+                "oversized": true,
+            });
+            cost = entry.to_string().len() + 1;
+        }
+        let budget = if pages.len() == 1 { first } else { rest };
+        if spent + cost > budget && pages.last().is_some_and(|page| !page.is_empty()) {
+            pages.push(Vec::new());
+            spent = 0;
+        }
+        spent += cost;
+        if let Some(page) = pages.last_mut() {
+            page.push(entry);
+        }
+    }
+    pages
 }
 
 fn structured<T: serde::Serialize>(value: T) -> Result<CallToolResult, ApplicationError> {
@@ -4393,6 +4541,15 @@ struct HoldReviewedWorkInput {
 struct ApproveNoDeploymentInput {
     task_id: String,
     basis: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListTasksInput {
+    /// Which page of open tasks to list (ADR 0147). 0, the default, is the
+    /// top of the board.
+    #[serde(default)]
+    page: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4722,8 +4879,18 @@ fn request_decision_tool() -> Tool {
 fn list_tasks_tool() -> Tool {
     tool(
         "swarm_list_tasks",
-        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees its own open tasks, with the ones it is doing or can pick up (Active and Ready) in full and the rest in brief. A whole-board listing carries your own Active and Ready tasks in full and every other open task in brief (what it is, who holds it, where it stands, why it waits), and names the 50 most recently closed in `closed` by id and title; read any task in full with swarm_read_task_history before acting on it. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
-        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees its own open tasks, with the ones it is doing or can pick up (Active and Ready) in full and the rest in brief. A whole-board listing carries your own Active and Ready tasks in full and every other open task in brief (what it is, who holds it, where it stands, why it waits), and page 0 names the 20 most recently closed in `closed` by id and title; read any task in full with swarm_read_task_history before acting on it. Open tasks come a page at a time, in board order, each page cut to what an agent can read in one reply: `pages` says how many there are, `open_total` how many open tasks they hold, and `next_page` the page to pass next while there is one. Read every page before saying what the board holds. The reply carries `observed_at`, the unix-seconds moment it was READ: this is a snapshot and the board moves within minutes, so quote a count with its time or re-read before presenting it as current. A count that disagrees with someone else's is usually two different moments rather than two different boards.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "page": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Which page of open tasks to list. 0, the default, is the top of the list, and on a whole-board listing it also names recently closed work. A reply with `next_page` has more after it."
+                }
+            },
+            "additionalProperties": false
+        }),
         true,
     )
 }
@@ -6327,10 +6494,10 @@ mod tests {
         assert!(listing["brief_note"].is_string(), "{response}");
     }
 
-    /// ADR 0143: Queen's listing is the brief board too, and names only the
-    /// most recent closed work.
+    /// ADR 0143, ADR 0147: Queen's listing is the brief board too, and names
+    /// only the most recent closed work.
     #[tokio::test]
-    async fn queen_reads_the_board_in_brief_with_the_last_fifty_closed() {
+    async fn queen_reads_the_board_in_brief_with_the_last_twenty_closed() {
         let (bridge, store, queen_id, _, _) = setup();
         store
             .create_task_with_details(
@@ -6361,7 +6528,7 @@ mod tests {
         );
         assert_eq!(
             listing["closed"].as_array().map(Vec::len),
-            Some(50),
+            Some(20),
             "{response}"
         );
         assert_eq!(listing["closed_total"], 55, "{response}");
@@ -6420,9 +6587,14 @@ mod tests {
             !response.to_string().contains("THE FINISHED DESCRIPTION"),
             "a closed task is named, not carried: {response}"
         );
+        assert_eq!(
+            (&listing["pages"], &listing["open_total"]),
+            (&json!(1), &json!(1)),
+            "nothing open is on another page: {response}"
+        );
         assert!(
-            listing.get("omitted").is_none(),
-            "nothing open was left out: {response}"
+            listing.get("next_page").is_none() && listing.get("paging_note").is_none(),
+            "one page says nothing about paging: {response}"
         );
 
         // The note sends the reader to history for the rest, so history must
@@ -6444,17 +6616,295 @@ mod tests {
         );
     }
 
-    /// The bound keeps the board's order: a large task ends the listing rather
-    /// than being skipped for smaller ones behind it, so `tasks` is always the
-    /// top of the board and `omitted` is everything below it.
+    /// The closed index's bound keeps its order: a long entry ends the index
+    /// rather than being skipped for shorter ones behind it, so `closed` is
+    /// always the most recently closed.
     #[test]
     fn a_listing_bounded_by_size_keeps_the_top_of_the_board() {
         let values = vec![json!("a"), json!("b"), json!("c".repeat(20)), json!("d")];
 
-        let (kept, omitted) = fit_in_bytes(values, 10);
+        let kept = fit_in_bytes(values, 10);
 
         assert_eq!(kept, [json!("a"), json!("b")]);
-        assert_eq!(omitted, 2);
+    }
+
+    /// Every page of a listing, read the way the tool tells an agent to: from
+    /// page 0, following `next_page` until a page has none.
+    async fn every_listing_page(bridge: &AgentBridge, token: &str) -> Vec<Value> {
+        let mut pages = Vec::new();
+        let mut next = Some(0);
+        while let Some(page) = next {
+            let response = call_review_test_tool(
+                bridge.clone(),
+                token,
+                "swarm_list_tasks",
+                json!({ "page": page }),
+            )
+            .await;
+            next = response["result"]["structuredContent"]["next_page"].as_u64();
+            pages.push(response);
+            assert!(pages.len() <= 50, "the pages end: {:?}", pages.last());
+        }
+        pages
+    }
+
+    /// The text an agent reads from a reply, which is what Claude Code
+    /// measures, and the ids of the tasks on it.
+    fn page_text_and_ids(response: &Value) -> (usize, Vec<String>) {
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a reply has text: {response}"));
+        let ids = response["result"]["structuredContent"]["tasks"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a page lists tasks: {response}"))
+            .iter()
+            .map(|task| task["id"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        (text.len(), ids)
+    }
+
+    /// ⚠️ ADR 0147: CLAUDE CODE REFUSED A 56,215-CHARACTER LISTING at 61 open
+    /// tasks on 2026-11-02, so Queen could not read the board at all. A board
+    /// four times that size comes back in pages that each fit, that together
+    /// list every open task once in board order, and that are full enough
+    /// that the bound is not a trim in disguise.
+    #[tokio::test]
+    async fn every_page_of_a_large_board_fits_and_the_pages_list_it_once() {
+        let (bridge, store, queen_id, _, _) = setup();
+        for index in 0..240 {
+            store
+                .create_task_with_details(
+                    &format!("Open task {index}: {}", "a fictional title ".repeat(9)),
+                    "AN OPEN DESCRIPTION",
+                    swarm_domain::TaskPriority::Normal,
+                    "/workspace/fictional-repository",
+                )
+                .unwrap();
+        }
+        for index in 0..30 {
+            let closed = store
+                .create_task(&format!("Closed {index}"), "/workspace")
+                .unwrap();
+            store
+                .transition_task(closed.id, TaskState::Abandoned)
+                .unwrap();
+        }
+        let board = store
+            .list_tasks()
+            .unwrap()
+            .into_iter()
+            .filter(|task| !matches!(task.state, TaskState::Completed | TaskState::Abandoned))
+            .map(|task| task.id.to_string())
+            .collect::<Vec<_>>();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let pages = every_listing_page(&bridge, &token).await;
+
+        assert!(pages.len() >= 3, "{} pages", pages.len());
+        let mut listed = Vec::new();
+        for (number, response) in pages.iter().enumerate() {
+            let (bytes, ids) = page_text_and_ids(response);
+            assert!(
+                bytes <= AgentMcp::LISTING_PAGE_BYTES,
+                "page {number} is {bytes} bytes"
+            );
+            if number + 1 < pages.len() {
+                assert!(
+                    bytes > AgentMcp::LISTING_PAGE_BYTES * 9 / 10,
+                    "page {number} is only {bytes} bytes"
+                );
+            }
+            let listing = &response["result"]["structuredContent"];
+            assert_eq!(listing["page"], number, "{listing}");
+            assert_eq!(listing["pages"], pages.len(), "{listing}");
+            assert_eq!(listing["open_total"], 240, "{listing}");
+            assert!(listing["paging_note"].is_string(), "{listing}");
+            assert_eq!(
+                listing.get("closed").is_some(),
+                number == 0,
+                "only page 0 names closed work: {listing}"
+            );
+            listed.extend(ids);
+        }
+        assert_eq!(listed, board, "every open task once, in board order");
+        assert!(
+            !pages
+                .iter()
+                .any(|page| page.to_string().contains("oversized")),
+            "no ordinary task is cut down to its name"
+        );
+    }
+
+    /// ADR 0147: a worker's own list is paged the same way, so it cannot
+    /// outgrow what the worker can read either. Ready work is in full.
+    #[tokio::test]
+    async fn a_workers_own_list_is_paged_and_keeps_its_work_in_full() {
+        let (bridge, store, _, worker_id, _directory) = setup();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        for index in 0..60 {
+            let task = store
+                .create_task_with_details(
+                    &format!("Ready work {index}"),
+                    &format!(
+                        "READY DESCRIPTION {index}. {}",
+                        "Fictional detail. ".repeat(60)
+                    ),
+                    swarm_domain::TaskPriority::Normal,
+                    "/workspace/petal",
+                )
+                .unwrap();
+            store.assign_task_to_worker(task.id, worker_id).unwrap();
+            store.transition_task(task.id, TaskState::Ready).unwrap();
+        }
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let pages = every_listing_page(&bridge, &token).await;
+
+        assert!(pages.len() >= 2, "{} pages", pages.len());
+        let mut listed = Vec::new();
+        for (number, response) in pages.iter().enumerate() {
+            let (bytes, ids) = page_text_and_ids(response);
+            assert!(
+                bytes <= AgentMcp::LISTING_PAGE_BYTES,
+                "page {number} is {bytes} bytes"
+            );
+            listed.extend(ids);
+        }
+        assert_eq!(listed.len(), 60);
+        listed.sort();
+        listed.dedup();
+        assert_eq!(listed.len(), 60, "no task is on two pages");
+        let rendered = pages.iter().map(Value::to_string).collect::<String>();
+        for index in 0..60 {
+            assert!(
+                rendered.contains(&format!("READY DESCRIPTION {index}.")),
+                "Ready work {index} is in full"
+            );
+        }
+    }
+
+    /// A description may be 100,000 bytes, so work in hand listed in full can
+    /// be larger than a page. It is named there by id instead, and the reply
+    /// still fits.
+    #[tokio::test]
+    async fn a_task_too_large_for_a_page_is_named_and_the_page_still_fits() {
+        let (bridge, store, _, worker_id, _directory) = setup();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let huge = store
+            .create_task_with_details(
+                "Huge",
+                &"A fictional description. ".repeat(3_000),
+                swarm_domain::TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        let small = store
+            .create_task_with_details(
+                "Small",
+                "SMALL DESCRIPTION",
+                swarm_domain::TaskPriority::Normal,
+                "/workspace/petal",
+            )
+            .unwrap();
+        for task in [huge.id, small.id] {
+            store.assign_task_to_worker(task, worker_id).unwrap();
+            store.transition_task(task, TaskState::Ready).unwrap();
+        }
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let pages = every_listing_page(&bridge, &token).await;
+
+        assert_eq!(pages.len(), 1);
+        let (bytes, _) = page_text_and_ids(&pages[0]);
+        assert!(bytes <= AgentMcp::LISTING_PAGE_BYTES, "{bytes} bytes");
+        let listing = &pages[0]["result"]["structuredContent"];
+        let entry = |title: &str| {
+            listing["tasks"]
+                .as_array()
+                .and_then(|tasks| tasks.iter().find(|task| task["title"] == title))
+                .unwrap_or_else(|| panic!("{title} is listed: {listing}"))
+                .clone()
+        };
+        let named = entry("Huge");
+        assert_eq!(named["oversized"], true, "{named}");
+        assert_eq!(named["id"], huge.id.to_string(), "{named}");
+        assert!(listing["oversized_note"].is_string(), "{listing}");
+        assert_eq!(entry("Small")["description"], "SMALL DESCRIPTION");
+    }
+
+    /// A page past the last is empty and says where the board is, rather than
+    /// reading as a board with nothing on it.
+    #[tokio::test]
+    async fn a_page_past_the_last_lists_nothing_and_counts_the_pages() {
+        let (bridge, store, queen_id, _, _) = setup();
+        store
+            .create_task("The only open task", "/workspace")
+            .unwrap();
+        let closed = store.create_task("Closed", "/workspace").unwrap();
+        store
+            .transition_task(closed.id, TaskState::Abandoned)
+            .unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let response = call_review_test_tool(
+            bridge.clone(),
+            &token,
+            "swarm_list_tasks",
+            json!({ "page": 3 }),
+        )
+        .await;
+
+        let listing = &response["result"]["structuredContent"];
+        assert_eq!(listing["tasks"], json!([]), "{response}");
+        assert_eq!(
+            (&listing["page"], &listing["pages"], &listing["open_total"]),
+            (&json!(3), &json!(1), &json!(1)),
+            "{response}"
+        );
+        assert!(listing.get("closed").is_none(), "{response}");
+        assert!(listing.get("next_page").is_none(), "{response}");
+    }
+
+    /// The pages keep the board's order, start a page where the next entry
+    /// would not fit, and name an entry too large for any page by id, title
+    /// and state instead of letting it break the bound.
+    #[test]
+    fn a_page_ends_where_the_next_entry_would_not_fit() {
+        let entry = |id: &str, size: usize| json!({ "id": id, "title": "t", "state": "ready", "text": "x".repeat(size) });
+        let small = entry("a", 10).to_string().len() + 1;
+
+        let pages = split_into_pages(
+            vec![
+                entry("a", 10),
+                entry("b", 10),
+                entry("c", 10),
+                entry("huge", 5_000),
+                entry("d", 10),
+            ],
+            small * 2,
+            small * 4,
+        );
+
+        let ids = pages
+            .iter()
+            .map(|page| {
+                page.iter()
+                    .map(|task| task["id"].as_str().unwrap_or_default())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [vec!["a", "b"], vec!["c", "huge", "d"]]);
+        let named = &pages[1][1];
+        assert_eq!(named["oversized"], true, "{named}");
+        assert_eq!(
+            (&named["title"], &named["state"]),
+            (&json!("t"), &json!("ready"))
+        );
+        assert!(named.get("text").is_none(), "{named}");
     }
 
     /// ⚠️ A BRIEF THAT NAMES A RECORD BY PART OF ITS ID SENDS A WORKER SOMEWHERE
@@ -8763,6 +9213,63 @@ mod tests {
             worker["swarm_create_task"]["required"],
             json!(["title", "workspace"])
         );
+    }
+
+    /// ADR 0147: the tasks a tool filed are listed in full, so they are paged
+    /// like the board, and every page says whose list it is.
+    #[tokio::test]
+    async fn a_connections_filed_list_is_paged_like_the_board() {
+        let (bridge, store, _, _, _) = setup();
+        let state = connected_state(&store);
+        let token = crate::mcp_oauth::test_support::issue_access_token(&state, "Claude")
+            .expect("a token this Hive signed");
+        for index in 0..40 {
+            let filed = call_as(
+                &bridge,
+                &state,
+                &token,
+                "swarm_create_task",
+                json!({
+                    "title": format!("Filed {index}"),
+                    "description": format!("FILED DESCRIPTION {index}. {}", "A fictional report. ".repeat(60)),
+                }),
+            )
+            .await;
+            assert_eq!(
+                filed["result"]["structuredContent"]["state"], "draft",
+                "{filed}"
+            );
+        }
+
+        let mut listed = Vec::new();
+        let mut next = Some(0);
+        let mut pages = 0;
+        while let Some(page) = next {
+            let response = call_as(
+                &bridge,
+                &state,
+                &token,
+                "swarm_list_tasks",
+                json!({ "page": page }),
+            )
+            .await;
+            let (bytes, ids) = page_text_and_ids(&response);
+            assert!(
+                bytes <= AgentMcp::LISTING_PAGE_BYTES,
+                "page {page} is {bytes} bytes"
+            );
+            let listing = &response["result"]["structuredContent"];
+            assert!(listing["scope_note"].is_string(), "{listing}");
+            listed.extend(ids);
+            next = listing["next_page"].as_u64();
+            pages += 1;
+            assert!(pages <= 10, "the pages end");
+        }
+        assert!(pages >= 2, "{pages} pages");
+        assert_eq!(listed.len(), 40);
+        listed.sort();
+        listed.dedup();
+        assert_eq!(listed.len(), 40, "no filed task is on two pages");
     }
 
     /// ADR 0126, end to end through the tool's own token: file with no
