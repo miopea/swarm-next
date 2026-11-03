@@ -10,7 +10,7 @@ export function fixtureSettingsRestart(): { workers: WorkerBehindSettings[] } {
     workers: several
       ? [
         { worker_id: "petal", name: "Petal", settings: ["remote_control", "queen_releases"] },
-        { worker_id: "thistle", name: "Thistle", settings: ["queen_releases"] },
+        { worker_id: "thistle", name: "Thistle", settings: ["queen_releases", "task_reads"] },
         { worker_id: "clover", name: "Clover with a much longer worker name", settings: ["system_access", "worker_model"] },
       ]
       : [{ worker_id: "petal", name: "Petal", settings: ["queen_releases"] }],

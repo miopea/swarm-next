@@ -35,6 +35,7 @@ pub(crate) fn migrate_worker_launch_choices(
 pub struct LaunchChoices {
     pub remote_control: Option<bool>,
     pub queen_releases: Option<bool>,
+    pub task_reads: Option<bool>,
     pub system_access: Option<SystemAccess>,
 }
 
@@ -82,6 +83,7 @@ struct RunningClaudeWorker {
     recorded: bool,
     remote_control: Option<bool>,
     queen_releases: Option<bool>,
+    task_reads: Option<bool>,
     launched_system_access: Option<SystemAccess>,
 }
 
@@ -96,7 +98,8 @@ fn running_claude_workers(
                 (SELECT MAX(change.changed_at) FROM worker_system_access_changes AS change
                  WHERE change.worker_id = worker.id),
                 launch.session_id = session.session_id,
-                launch.remote_control, launch.queen_releases, launch.system_access
+                launch.remote_control, launch.queen_releases, launch.system_access,
+                launch.task_reads
          FROM worker_sessions AS session
          JOIN worker_profiles AS worker ON worker.id = session.worker_id
          LEFT JOIN worker_launch_choices AS launch ON launch.worker_id = session.worker_id
@@ -119,6 +122,7 @@ fn running_claude_workers(
             launched_system_access: row
                 .get::<_, Option<String>>(9)?
                 .map(|stored| SystemAccess::from_stored(&stored)),
+            task_reads: row.get(10)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -129,6 +133,7 @@ fn behind_from(connection: &Connection) -> Result<Vec<WorkerBehindSettings>, Tas
         hive_choice(connection, "worker_remote_control_settings")?;
     let (queen_releases, queen_releases_changed) =
         hive_choice(connection, "queen_release_settings")?;
+    let (task_reads, task_reads_changed) = hive_choice(connection, "task_read_settings")?;
     let short_of_model =
         worker_model::workers_short_of(connection, worker_model::effective_model(connection)?)?;
     let mut behind = Vec::new();
@@ -158,6 +163,18 @@ fn behind_from(connection: &Connection) -> Result<Vec<WorkerBehindSettings>, Tas
             )
         {
             settings.push(RestartBoundSetting::QueenReleases);
+        }
+        // Queen holds no task to read for, so the read rule does nothing for
+        // her and she is never asked to restart for it.
+        if !worker.is_queen
+            && session_behind_setting(
+                launched(worker.recorded, worker.task_reads),
+                &task_reads,
+                task_reads_changed,
+                worker.started_at,
+            )
+        {
+            settings.push(RestartBoundSetting::TaskReads);
         }
         if session_behind_setting(
             launched(worker.recorded, worker.launched_system_access),
@@ -193,21 +210,24 @@ impl TaskStore {
     ) -> Result<(), TaskStoreError> {
         self.connection()?.execute(
             "INSERT INTO worker_launch_choices
-                 (worker_id, session_id, remote_control, queen_releases, system_access, launched_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 (worker_id, session_id, remote_control, queen_releases, system_access, launched_at,
+                  task_reads)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(worker_id) DO UPDATE SET
                  session_id = excluded.session_id,
                  remote_control = excluded.remote_control,
                  queen_releases = excluded.queen_releases,
                  system_access = excluded.system_access,
-                 launched_at = excluded.launched_at",
+                 launched_at = excluded.launched_at,
+                 task_reads = excluded.task_reads",
             params![
                 worker_id.to_string(),
                 session_id.to_string(),
                 choices.remote_control,
                 choices.queen_releases,
                 choices.system_access.map(SystemAccess::as_str),
-                now
+                now,
+                choices.task_reads
             ],
         )?;
         Ok(())
@@ -253,6 +273,7 @@ mod tests {
                 LaunchChoices {
                     remote_control: Some(store.worker_remote_control().unwrap()),
                     queen_releases: Some(store.queen_releases().unwrap()),
+                    task_reads: Some(store.task_reads().unwrap()),
                     system_access: Some(store.get_worker_profile(worker).unwrap().system_access),
                 },
                 0,
@@ -322,6 +343,7 @@ mod tests {
                 LaunchChoices {
                     remote_control: Some(false),
                     queen_releases: None,
+                    task_reads: Some(false),
                     system_access: Some(SystemAccess::None),
                 },
                 0,
@@ -352,6 +374,50 @@ mod tests {
         assert_eq!(
             behind(&store),
             vec![(queen.name, vec![RestartBoundSetting::RemoteControl])]
+        );
+    }
+
+    /// ADR 0146: turning task reads on asks a running worker to restart for it,
+    /// never Queen or a stopped worker, and a launch that could not carry the
+    /// choice is not assumed to have it.
+    #[test]
+    fn task_reads_reach_running_workers_and_never_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let queen_session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, queen_session).unwrap();
+        launch(&store, (queen.id, queen_session));
+        let petal = running(&store, "petal");
+        launch(&store, petal);
+        let resting = running(&store, "resting");
+        launch(&store, resting);
+        store.release_worker_session(resting.1).unwrap();
+
+        store.set_task_reads(true, 10).unwrap();
+        assert_eq!(
+            behind(&store),
+            vec![("petal".to_owned(), vec![RestartBoundSetting::TaskReads])]
+        );
+
+        launch(&store, petal);
+        assert_eq!(behind(&store), vec![]);
+
+        store
+            .record_worker_launch_choices(
+                petal.0,
+                petal.1,
+                LaunchChoices {
+                    remote_control: Some(false),
+                    queen_releases: Some(false),
+                    task_reads: None,
+                    system_access: Some(SystemAccess::None),
+                },
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            behind(&store),
+            vec![("petal".to_owned(), vec![RestartBoundSetting::TaskReads])]
         );
     }
 

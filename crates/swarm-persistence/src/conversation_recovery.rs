@@ -563,6 +563,7 @@ mod tests {
                 crate::LaunchChoices {
                     remote_control: Some(false),
                     queen_releases: Some(false),
+                    task_reads: Some(false),
                     system_access: Some(swarm_domain::SystemAccess::None),
                 },
                 1,

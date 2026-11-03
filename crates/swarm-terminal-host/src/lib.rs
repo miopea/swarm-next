@@ -1932,7 +1932,13 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
         return base;
     };
     let remote_control = worker_remote_control_beside(Some(mcp_config));
-    let queen_releases = queen_releases_beside(mcp_config);
+    let authority = provider_settings::OperatorAuthority {
+        queen_releases: operator_choice_beside(
+            mcp_config,
+            swarm_terminal::QUEEN_RELEASES_SETTING_KEY,
+        ),
+        task_reads: operator_choice_beside(mcp_config, swarm_terminal::TASK_READS_SETTING_KEY),
+    };
     let result = std::env::current_exe()
         .map_err(|_| "helper executable unavailable".to_owned())
         .and_then(|executable| {
@@ -1941,7 +1947,7 @@ fn claude_settings_for(mcp_config: Option<&Path>) -> Option<PathBuf> {
                 mcp_config,
                 &executable,
                 remote_control,
-                queen_releases,
+                authority,
             )
         });
     if let Ok(path) = result {
@@ -2008,17 +2014,14 @@ fn worker_remote_control_beside(mcp_config: Option<&Path>) -> Option<bool> {
     document.get("remoteControlAtStartup")?.as_bool()
 }
 
-/// Whether the operator turned on "Queen releases reviewed work" (ADR 0131),
-/// from the file the API writes. Anything but an explicit `true` is off, so an
-/// older API that wrote nothing leaves the worker as it was.
-fn queen_releases_beside(mcp_config: &Path) -> bool {
+/// Whether the operator turned on one authority setting, "Queen releases
+/// reviewed work" (ADR 0131) or "Workers read production for their task" (ADR
+/// 0146), from the file the API writes. Anything but an explicit `true` is
+/// off, so an older API that wrote nothing leaves the worker as it was.
+fn operator_choice_beside(mcp_config: &Path, key: &str) -> bool {
     worker_settings_beside(mcp_config)
         .and_then(|settings| provider_settings::read_settings(&settings).ok())
-        .and_then(|document| {
-            document
-                .get(swarm_terminal::QUEEN_RELEASES_SETTING_KEY)?
-                .as_bool()
-        })
+        .and_then(|document| document.get(key)?.as_bool())
         .unwrap_or(false)
 }
 
@@ -2255,23 +2258,40 @@ mod worker_model_tests {
         assert_eq!(worker_remote_control_beside(Some(&config)), Some(true));
     }
 
-    /// ADR 0131: only an explicit yes from the API turns the rule on.
+    /// ADR 0131 and ADR 0146: only an explicit yes from the API turns a rule
+    /// on, and each setting is read under its own key.
     #[test]
     fn queen_releases_only_when_the_api_wrote_yes() {
-        let directory = tempfile::tempdir().unwrap();
-        let config = directory.path().join("worker.json");
-        std::fs::write(&config, "{}").unwrap();
-        assert!(!queen_releases_beside(&config));
-
-        let settings = directory.path().join("worker.settings.json");
-        for (written, expected) in [
-            (r#"{"model":"sonnet"}"#, false),
-            (r#"{"swarmQueenReleases":"true"}"#, false),
-            (r#"{"swarmQueenReleases":false}"#, false),
-            (r#"{"swarmQueenReleases":true}"#, true),
+        for (key, other) in [
+            (
+                swarm_terminal::QUEEN_RELEASES_SETTING_KEY,
+                swarm_terminal::TASK_READS_SETTING_KEY,
+            ),
+            (
+                swarm_terminal::TASK_READS_SETTING_KEY,
+                swarm_terminal::QUEEN_RELEASES_SETTING_KEY,
+            ),
         ] {
-            std::fs::write(&settings, written).unwrap();
-            assert_eq!(queen_releases_beside(&config), expected, "{written}");
+            let directory = tempfile::tempdir().unwrap();
+            let config = directory.path().join("worker.json");
+            std::fs::write(&config, "{}").unwrap();
+            assert!(!operator_choice_beside(&config, key));
+
+            let settings = directory.path().join("worker.settings.json");
+            for (written, expected) in [
+                (serde_json::json!({"model": "sonnet"}), false),
+                (serde_json::json!({ key: "true" }), false),
+                (serde_json::json!({ key: false }), false),
+                (serde_json::json!({ other: true }), false),
+                (serde_json::json!({ key: true }), true),
+            ] {
+                std::fs::write(&settings, written.to_string()).unwrap();
+                assert_eq!(
+                    operator_choice_beside(&config, key),
+                    expected,
+                    "{key}: {written}"
+                );
+            }
         }
     }
 }

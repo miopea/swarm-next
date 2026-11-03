@@ -70,6 +70,8 @@ export const SETTINGS_CARDS: readonly SettingsCard[] = [
     keywords: ["check gate", "ci", "checks", "github", "actions", "strictness", "require", "passing", "done", "close", "review"] },
   { id: "settings-queen-releases", section: "settings-authority", title: "Queen releases",
     keywords: ["queen releases", "release", "merge", "deploy", "ship", "auto mode", "refused", "permission denied"] },
+  { id: "settings-task-reads", section: "settings-authority", title: "Task reads",
+    keywords: ["task reads", "production reads", "read production", "read-only", "query", "logs", "auto mode", "refused", "allow this command", "command request"] },
   // Read-only. Each worker's access is still set in its own editor on the
   // roster; this is the one place that shows who holds any.
   { id: "settings-worker-access", section: "settings-authority", title: "Worker access",

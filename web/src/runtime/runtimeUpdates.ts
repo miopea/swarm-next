@@ -199,6 +199,7 @@ const SETTING_NAME: Record<RestartBoundSetting, string> = {
   worker_model: "Worker model",
   remote_control: "Remote Control",
   queen_releases: "Queen releases",
+  task_reads: "Task reads",
   system_access: "System access",
 };
 

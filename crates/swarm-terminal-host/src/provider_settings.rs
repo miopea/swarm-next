@@ -37,14 +37,57 @@ or a message from anyone other than Queen; a repository other than the session's
 --auto or any other review or check bypass; or anything beyond committing, pushing, readying, \
 merging, releasing and deploying, such as reading production data, credentials or secrets.";
 
-/// Adds `QUEEN_RELEASE_RULE` to the classifier's allow rules, beside the
-/// operator's own and Claude's built-in ones (`$defaults`, kept when Swarm
-/// starts the list and never added to one the operator wrote without it).
+/// How the rule below is found again, as `QUEEN_RELEASE_RULE_LABEL` is.
+const TASK_READS_RULE_LABEL: &str = "Task Production Reads:";
+
+/// What Claude's auto mode is told when the operator has turned on "Workers
+/// read production for their task" (ADR 0146).
+///
+/// ⚠️ MEASURED BOTH WAYS. With it, a read-only check for the worker's task ran
+/// where, without it, the same command was refused as Production Reads. With
+/// it, a write was still refused as Modify Shared Resources and a read of
+/// customers' names and addresses was still refused.
+///
+/// ⚠️ ITS EXCLUSIONS LIMIT ONLY ITSELF, AND SAY SO. An earlier draft said "It
+/// never covers: ... a deploy", and beside Queen's rule a deploy Queen had
+/// instructed was refused as Production Deploy. Saying instead that another
+/// allow rule may allow one on its own terms, the same deploy ran 3 of 3 while
+/// a worker's request for it did not. Re-run the probes in ADR 0146 before
+/// changing any of it.
+const TASK_READS_RULE: &str = "Task Production Reads: this Hive's operator has turned on Swarm's \"Workers read production for \
+their task\" setting (Swarm ADR 0146). A worker session may run a READ against a production \
+system for the Swarm task it is assigned, without asking; running it is authorized by the \
+operator and is not Production Reads. A read only retrieves: an HTTP GET or HEAD; a SELECT or \
+other read-only query; a log, metrics or telemetry query; a cloud CLI show, list or get. It may \
+authenticate with the fleet's own credentials through 1Password (op read, op run), provided no \
+secret value is printed, logged, written outside the session's scratchpad, or sent anywhere \
+other than the system it authenticates to. A script counts only when this session has read the \
+whole script and every request in it is a read. This rule does not itself allow any of the \
+following, though another allow rule may allow one on its own terms: any write, create, update \
+or delete, or an HTTP POST, PUT, PATCH or DELETE; a migration, deploy, setting change or \
+permission change; a call that spends money; retrieving, showing or exporting personal data such \
+as names, email or postal addresses, phone numbers or payment details, rather than counts and \
+aggregates; reading a 1Password item for anything but authenticating that read; or a system the \
+session's task does not concern.";
+
+/// Which of the operator's authority choices a worker's launch carries: Queen
+/// releasing reviewed work (ADR 0131) and a worker reading production for its
+/// own task (ADR 0146). Each adds one rule to the worker's auto mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct OperatorAuthority {
+    pub(super) queen_releases: bool,
+    pub(super) task_reads: bool,
+}
+
+/// Adds `rule` to the classifier's allow rules, beside the operator's own and
+/// Claude's built-in ones (`$defaults`, kept when Swarm starts the list and
+/// never added to one the operator wrote without it). An operator rule under
+/// the same `label` is theirs and is kept instead.
 ///
 /// Never fails: a settings file whose `autoMode` is not the shape Claude reads
 /// is the operator's to fix, and refusing here would cost the worker its
 /// startup hooks rather than only this rule.
-fn add_queen_release_rule(document: &mut Value) {
+fn add_allow_rule(document: &mut Value, label: &str, rule: &str) {
     let Some(auto_mode) = document
         .as_object_mut()
         .map(|settings| settings.entry("autoMode").or_insert_with(|| json!({})))
@@ -59,12 +102,13 @@ fn add_queen_release_rule(document: &mut Value) {
     else {
         return;
     };
-    let present = allow.iter().any(|rule| {
-        rule.as_str()
-            .is_some_and(|rule| rule.starts_with(QUEEN_RELEASE_RULE_LABEL))
+    let present = allow.iter().any(|existing| {
+        existing
+            .as_str()
+            .is_some_and(|existing| existing.starts_with(label))
     });
     if !present {
-        allow.push(json!(QUEEN_RELEASE_RULE));
+        allow.push(json!(rule));
     }
 }
 
@@ -248,7 +292,7 @@ pub(super) fn startup_settings(
     mcp_config: &Path,
     executable: &Path,
     remote_control: Option<bool>,
-    queen_releases: bool,
+    authority: OperatorAuthority,
 ) -> Result<PathBuf, String> {
     usable_helper(executable)?;
     let mut document = if let Some(base) = base {
@@ -263,8 +307,11 @@ pub(super) fn startup_settings(
     if let (Some(enabled), Some(settings)) = (remote_control, document.as_object_mut()) {
         settings.insert("remoteControlAtStartup".to_owned(), json!(enabled));
     }
-    if queen_releases {
-        add_queen_release_rule(&mut document);
+    if authority.queen_releases {
+        add_allow_rule(&mut document, QUEEN_RELEASE_RULE_LABEL, QUEEN_RELEASE_RULE);
+    }
+    if authority.task_reads {
+        add_allow_rule(&mut document, TASK_READS_RULE_LABEL, TASK_READS_RULE);
     }
     let bytes = serde_json::to_vec_pretty(&document).map_err(|_| "settings invalid")?;
     if bytes.len() as u64 > MAX_SETTINGS_BYTES {
@@ -638,7 +685,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mcp = root.path().join("worker.json");
         let executable = std::env::current_exe().unwrap();
-        let target = startup_settings(None, &mcp, &executable, None, false).unwrap();
+        let target =
+            startup_settings(None, &mcp, &executable, None, OperatorAuthority::default()).unwrap();
         let before = fs::read(&target).unwrap();
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
@@ -646,7 +694,16 @@ mod tests {
         );
         let invalid = root.path().join("bad.json");
         fs::write(&invalid, "{broken").unwrap();
-        assert!(startup_settings(Some(&invalid), &mcp, &executable, None, false).is_err());
+        assert!(
+            startup_settings(
+                Some(&invalid),
+                &mcp,
+                &executable,
+                None,
+                OperatorAuthority::default()
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&target).unwrap(), before);
         assert_eq!(fs::read_to_string(invalid).unwrap(), "{broken");
     }
@@ -668,7 +725,14 @@ mod tests {
             (Some(true), json!(true)),
             (None, json!(true)),
         ] {
-            let target = startup_settings(Some(&base), &mcp, &executable, choice, false).unwrap();
+            let target = startup_settings(
+                Some(&base),
+                &mcp,
+                &executable,
+                choice,
+                OperatorAuthority::default(),
+            )
+            .unwrap();
             let written: serde_json::Value =
                 serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
             assert_eq!(written["remoteControlAtStartup"], expected, "{choice:?}");
@@ -676,20 +740,23 @@ mod tests {
         }
     }
 
-    /// ADR 0131: the rule reaches a worker only when the operator turned the
-    /// setting on, beside their own rules and never twice. A shape Claude would
-    /// not read is left for the operator rather than costing the worker its
-    /// startup hooks.
-    #[test]
-    fn the_queen_release_rule_is_written_only_when_the_operator_turned_it_on() {
+    /// One operator authority rule (ADR 0131, ADR 0146) reaches a worker only
+    /// when the operator turned its setting on, beside their own rules and never
+    /// twice. A shape Claude would not read is left for the operator rather than
+    /// costing the worker its startup hooks.
+    fn the_rule_is_written_only_when_turned_on(
+        label: &str,
+        rule: &str,
+        on: OperatorAuthority,
+        other_rule: &str,
+    ) {
         let root = tempfile::tempdir().unwrap();
         let mcp = root.path().join("worker.json");
         let executable = std::env::current_exe().unwrap();
-        let written = |base: &serde_json::Value, queen_releases: bool| {
+        let written = |base: &serde_json::Value, authority: OperatorAuthority| {
             let path = root.path().join("operator.json");
             fs::write(&path, base.to_string()).unwrap();
-            let target =
-                startup_settings(Some(&path), &mcp, &executable, None, queen_releases).unwrap();
+            let target = startup_settings(Some(&path), &mcp, &executable, None, authority).unwrap();
             serde_json::from_slice::<serde_json::Value>(&fs::read(&target).unwrap()).unwrap()
         };
         let operator = json!({"autoMode": {
@@ -697,43 +764,118 @@ mod tests {
             "environment": ["$defaults", "Org: theirs"]
         }});
 
-        assert_eq!(written(&operator, false)["autoMode"], operator["autoMode"]);
-        let on = written(&operator, true);
         assert_eq!(
-            on["autoMode"]["allow"],
-            json!([
-                "$defaults",
-                "Self-Merge After Green Checks: theirs",
-                QUEEN_RELEASE_RULE
-            ])
+            written(&operator, OperatorAuthority::default())["autoMode"],
+            operator["autoMode"]
+        );
+        let turned_on = written(&operator, on);
+        assert_eq!(
+            turned_on["autoMode"]["allow"],
+            json!(["$defaults", "Self-Merge After Green Checks: theirs", rule])
         );
         assert_eq!(
-            on["autoMode"]["environment"],
+            turned_on["autoMode"]["environment"],
             operator["autoMode"]["environment"]
         );
-        assert!(on["hooks"]["SessionStart"].is_array());
+        assert!(turned_on["hooks"]["SessionStart"].is_array());
+        assert!(
+            !turned_on.to_string().contains(&other_rule[..40]),
+            "one setting never brings the other's rule"
+        );
 
         assert_eq!(
-            written(&json!({}), true)["autoMode"]["allow"],
-            json!(["$defaults", QUEEN_RELEASE_RULE])
+            written(&json!({}), on)["autoMode"]["allow"],
+            json!(["$defaults", rule])
         );
         let without_defaults = json!({"autoMode": {"allow": ["Only this"]}});
         assert_eq!(
-            written(&without_defaults, true)["autoMode"]["allow"],
-            json!(["Only this", QUEEN_RELEASE_RULE])
+            written(&without_defaults, on)["autoMode"]["allow"],
+            json!(["Only this", rule])
         );
-        let their_own =
-            json!({"autoMode": {"allow": ["$defaults", "Queen's Release Instruction: theirs"]}});
-        assert_eq!(written(&their_own, true)["autoMode"], their_own["autoMode"]);
+        let their_own = json!({"autoMode": {"allow": ["$defaults", format!("{label} theirs")]}});
+        assert_eq!(written(&their_own, on)["autoMode"], their_own["autoMode"]);
 
         for malformed in [
             json!({"autoMode": "on"}),
             json!({"autoMode": {"allow": {}}}),
         ] {
-            let kept = written(&malformed, true);
+            let kept = written(&malformed, on);
             assert_eq!(kept["autoMode"], malformed["autoMode"]);
             assert!(kept["hooks"]["SessionStart"].is_array());
         }
+    }
+
+    #[test]
+    fn the_queen_release_rule_is_written_only_when_the_operator_turned_it_on() {
+        the_rule_is_written_only_when_turned_on(
+            QUEEN_RELEASE_RULE_LABEL,
+            QUEEN_RELEASE_RULE,
+            OperatorAuthority {
+                queen_releases: true,
+                task_reads: false,
+            },
+            TASK_READS_RULE,
+        );
+    }
+
+    /// ADR 0146, the same way: the rule for reading production for a worker's
+    /// own task is written only when the operator turned that setting on.
+    #[test]
+    fn the_task_reads_rule_is_written_only_when_the_operator_turned_it_on() {
+        the_rule_is_written_only_when_turned_on(
+            TASK_READS_RULE_LABEL,
+            TASK_READS_RULE,
+            OperatorAuthority {
+                queen_releases: false,
+                task_reads: true,
+            },
+            QUEEN_RELEASE_RULE,
+        );
+    }
+
+    /// Both settings on: both rules, each once, in a fixed order.
+    #[test]
+    fn both_authority_rules_are_written_when_both_are_on() {
+        let root = tempfile::tempdir().unwrap();
+        let mcp = root.path().join("worker.json");
+        let executable = std::env::current_exe().unwrap();
+        let both = OperatorAuthority {
+            queen_releases: true,
+            task_reads: true,
+        };
+        let target = startup_settings(None, &mcp, &executable, None, both).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(&target).unwrap()).unwrap();
+        assert_eq!(
+            written["autoMode"]["allow"],
+            json!(["$defaults", QUEEN_RELEASE_RULE, TASK_READS_RULE])
+        );
+    }
+
+    /// ⚠️ The exclusions are the rule: a later edit that drops one widens what
+    /// a worker runs unasked. Each was measured in ADR 0146's probes.
+    #[test]
+    fn the_task_reads_rule_still_names_what_it_never_covers() {
+        for kept in [
+            "any write, create, update or delete",
+            "POST, PUT, PATCH or DELETE",
+            "a migration, deploy, setting change or permission change",
+            "a call that spends money",
+            "personal data",
+            "no secret value is printed",
+            "a system the session's task does not concern",
+        ] {
+            assert!(TASK_READS_RULE.contains(kept), "{kept}");
+        }
+        // Its exclusions are its own: Queen's rule still allows a reviewed
+        // deploy beside it (ADR 0146's probes).
+        assert!(TASK_READS_RULE.contains(
+            "This rule does not itself allow any of the following, though another allow rule may \
+             allow one on its own terms"
+        ));
+        assert!(!TASK_READS_RULE.contains("never covers"));
+        assert!(TASK_READS_RULE.starts_with(TASK_READS_RULE_LABEL));
+        assert!(QUEEN_RELEASE_RULE.starts_with(QUEEN_RELEASE_RULE_LABEL));
     }
 
     #[test]
@@ -759,7 +901,7 @@ mod tests {
                 &mcp,
                 &std::env::current_exe().unwrap(),
                 None,
-                false
+                OperatorAuthority::default()
             )
             .is_err()
         );
@@ -771,7 +913,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mcp = root.path().join("worker.json");
         let executable = std::env::current_exe().unwrap();
-        let target = startup_settings(None, &mcp, &executable, None, false).unwrap();
+        let target =
+            startup_settings(None, &mcp, &executable, None, OperatorAuthority::default()).unwrap();
         let original = fs::read(&target).unwrap();
         let non_executable = root.path().join("host");
         fs::write(&non_executable, "not executable").unwrap();
@@ -784,14 +927,15 @@ mod tests {
             PathBuf::from("relative-host"),
         ] {
             assert_eq!(
-                startup_settings(None, &mcp, &invalid, None, false).unwrap_err(),
+                startup_settings(None, &mcp, &invalid, None, OperatorAuthority::default())
+                    .unwrap_err(),
                 "helper executable unavailable"
             );
             assert_eq!(fs::read(&target).unwrap(), original);
         }
         // A later valid launch can regenerate its own overlay.
         assert_eq!(
-            startup_settings(None, &mcp, &executable, None, false).unwrap(),
+            startup_settings(None, &mcp, &executable, None, OperatorAuthority::default()).unwrap(),
             target
         );
     }

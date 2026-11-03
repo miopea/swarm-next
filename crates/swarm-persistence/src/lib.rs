@@ -46,6 +46,7 @@ mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod queen_releases;
 mod settings_restart;
+mod task_reads;
 pub use settings_restart::{LaunchChoices, WorkerBehindSettings};
 mod worker_model;
 mod worker_remote_control;
@@ -448,7 +449,10 @@ const DECISION_MEMBERSHIP_VIEW_SCHEMA_MARKER: i64 = 218;
 /// The coordinator's detectors read by index rather than scanning activity and
 /// attention (ADR 0138).
 const DETECTOR_INDEXES_SCHEMA_MARKER: i64 = 219;
-const CURRENT_SCHEMA_VERSION: i64 = DETECTOR_INDEXES_SCHEMA_MARKER;
+/// Whether a worker may read production for its own task unasked, and what
+/// each launch carried of it (ADR 0146).
+const TASK_READS_SCHEMA_MARKER: i64 = 220;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_READS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4960,6 +4964,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < DETECTOR_INDEXES_SCHEMA_MARKER {
         crate::coordinator::migrate_detector_indexes(transaction, DETECTOR_INDEXES_SCHEMA_MARKER)?;
+    }
+    if schema_version < TASK_READS_SCHEMA_MARKER {
+        crate::task_reads::migrate_task_reads(transaction, TASK_READS_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11213,6 +11220,18 @@ mod tests {
                 AND name IN ('task_activity_blocked_transitions',
                              'task_activity_owner_actions',
                              'coordinator_actions_by_task')",
+        },
+        // Whether a worker reads production for its own task unasked, and what
+        // each launch carried of it (ADR 0146).
+        SchemaStep {
+            table: "task_read_settings",
+            artifact: "task_reads",
+            undo_sql: "DROP TABLE task_read_settings;
+                ALTER TABLE worker_launch_choices DROP COLUMN task_reads;",
+            probe_sql: "SELECT (SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                    AND name = 'task_read_settings')
+                AND (SELECT COUNT(*) = 1 FROM pragma_table_info('worker_launch_choices')
+                    WHERE name = 'task_reads')",
         },
     ];
 

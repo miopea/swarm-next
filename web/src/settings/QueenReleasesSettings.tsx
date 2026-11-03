@@ -43,7 +43,7 @@ export default function QueenReleasesSettings({ operatorToken }: { operatorToken
         <span><strong>Queen releases reviewed work</strong><small>When Queen has reviewed a task, she tells its worker to merge and release it, and the worker does it without asking you.</small></span>
       </label>
       {enabled === true && (
-        <small className="queen-releases-cost" role="status">Queen's word is enough for a worker to merge and deploy its own task once the checks pass. You are still asked about production data, credentials, permissions, admin merges and failed checks.</small>
+        <small className="queen-releases-cost" role="status">Queen's word is enough for a worker to merge and deploy its own task once the checks pass. You are still asked about production slot swaps, production data, credentials, permissions, admin merges and failed checks.</small>
       )}
       {enabled === false && (
         <small className="queen-releases-detail">Off: a merge or deploy that Queen passes on is stopped by Claude's auto mode, and you are asked to approve it.</small>
