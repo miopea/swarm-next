@@ -195,6 +195,11 @@ pub struct QueenReviewAssessmentEvidence {
 /// reported covered (ADR 0135), so this view agrees with run coverage: an
 /// external condition saved on Review before the rule asks for a fresh check,
 /// and recording one is then refused with the move to make.
+///
+/// ⚠️ BETWEEN RUNS TOO, while the task is Queen's (ADR 0154). The queue reads
+/// `no_active_review` on an operator deferral as still applying, so a deferral
+/// saved on Review before the rule kept its task filed as "scheduled" and
+/// ordered behind real work whenever no run was open.
 #[must_use]
 pub fn queen_review_assessment_status(
     kind: QueenReviewDispositionKind,
@@ -216,6 +221,8 @@ pub fn queen_review_assessment_status(
         } else {
             QueenReviewAssessmentStatus::FreshExternalCheckRequired
         }
+    } else if owner == NextMoveOwner::Queen && !kind.covers(state, owner) {
+        QueenReviewAssessmentStatus::FreshExternalCheckRequired
     } else {
         QueenReviewAssessmentStatus::NoActiveReview
     }
@@ -435,8 +442,12 @@ impl QueenReviewDispositionInput {
                 && !matches!(state, TaskState::Completed | TaskState::Abandoned));
         if recordable {
             None
-        } else if self.kind == QueenReviewDispositionKind::ExternalCondition
-            && state == TaskState::Review
+        } else if state == TaskState::Review
+            && matches!(
+                self.kind,
+                QueenReviewDispositionKind::ExternalCondition
+                    | QueenReviewDispositionKind::OperatorDeferral
+            )
         {
             Some(REVIEW_IS_NOT_A_WAIT)
         } else {
@@ -458,7 +469,11 @@ impl QueenReviewDispositionInput {
 /// satisfied coverage, so nothing ever pushed the work on. Measured 2026-11-01:
 /// one worker had 18 approved tasks, re-noted up to 19 times each. Awaiting release
 /// is where finished, unshipped work goes, and it closes itself.
-pub const REVIEW_IS_NOT_A_WAIT: &str = "Review is not a place to wait, so an external condition is refused on a Review task (ADR 0135). If the work is approved and only waits to be merged or shipped, move it to awaiting_release with swarm_transition_task: it needs no evidence and completes itself when the deployment is recorded. If something is missing, or the work waits on an outside party or a date, hand it back with swarm_return_reviewed_work so its worker blocks it with a named wait. If it waits on another task, add that task as a prerequisite. If the operator must judge, ask with swarm_request_decision.";
+///
+/// An operator deferral is refused there too (ADR 0154). It was the one wait
+/// Review still accepted, and the one that hid work best: no wait on the board,
+/// nothing on the operator's list, and nothing that brought it back.
+pub const REVIEW_IS_NOT_A_WAIT: &str = "Review is not a place to wait, so neither an external condition nor an operator deferral is recorded on a Review task (ADR 0135, ADR 0154). If the work is approved and only waits to be merged or shipped, move it to awaiting_release with swarm_transition_task: it needs no evidence and completes itself when the deployment is recorded. If something is missing, or the work waits on an outside party, a date or the operator's word, hand it back with swarm_return_reviewed_work so its worker blocks it with a named wait the board shows. If it waits on another task, add that task as a prerequisite. If the operator must judge, ask with swarm_request_decision.";
 
 impl QueenReviewDispositionKind {
     /// Whether a saved assessment of this kind accounts for a task that is in
@@ -471,10 +486,10 @@ impl QueenReviewDispositionKind {
             && match self {
                 Self::InsufficientEvidence => false,
                 Self::ExternalCondition => state == TaskState::Blocked,
-                Self::OperatorDeferral => matches!(
-                    state,
-                    TaskState::Draft | TaskState::Blocked | TaskState::Review
-                ),
+                // NOT REVIEW (ADR 0154). Work left in Review behind the
+                // operator's "I will say when" was counted as handled in every
+                // run, shown no wait, and on nobody's list for six hours.
+                Self::OperatorDeferral => matches!(state, TaskState::Draft | TaskState::Blocked),
             }
     }
 }
@@ -575,10 +590,10 @@ mod tests {
             None
         );
 
-        // An operator's word still parks Review, and an unknown answer is still
-        // recordable there without covering anything.
+        // An operator's word no longer parks Review either (ADR 0154), and an
+        // unknown answer is still recordable there without covering anything.
         let deferral = QueenReviewDispositionKind::OperatorDeferral;
-        assert!(deferral.covers(TaskState::Review, NextMoveOwner::Queen));
+        assert!(!deferral.covers(TaskState::Review, NextMoveOwner::Queen));
         let unknown = assessment(QueenReviewDispositionKind::InsufficientEvidence);
         assert_eq!(
             unknown.refusal(TaskState::Review, NextMoveOwner::Queen),
@@ -593,6 +608,84 @@ mod tests {
         assert!(
             general.contains("not Queen-owned waiting work"),
             "{general}"
+        );
+    }
+
+    /// Measured 2026-11-04: a task waiting on the operator's "I will say when"
+    /// sat in Review for six hours, counted as handled in every run, with no
+    /// wait on the board and nothing on the operator's list (ADR 0154).
+    #[test]
+    fn an_operator_deferral_does_not_park_review_work() {
+        let mut deferral = assessment(QueenReviewDispositionKind::OperatorDeferral);
+        deferral.operator_activity_sequence = Some(1);
+        assert!(
+            deferral.validate().is_ok(),
+            "the fixture is a valid deferral"
+        );
+
+        assert!(!deferral.can_cover(TaskState::Review, NextMoveOwner::Queen));
+        let refusal = deferral
+            .refusal(TaskState::Review, NextMoveOwner::Queen)
+            .expect("an operator deferral is refused on Review");
+        for exit in [
+            "operator deferral",
+            "awaiting_release",
+            "swarm_return_reviewed_work",
+            "the operator's word",
+            "prerequisite",
+            "swarm_request_decision",
+        ] {
+            assert!(
+                refusal.contains(exit),
+                "the refusal names {exit}: {refusal}"
+            );
+        }
+
+        // Where the operator's word does belong, it still covers.
+        for state in [TaskState::Draft, TaskState::Blocked] {
+            assert!(deferral.can_cover(state, NextMoveOwner::Queen), "{state:?}");
+            assert_eq!(deferral.refusal(state, NextMoveOwner::Queen), None);
+        }
+
+        // A deferral saved on Review before the rule reads as needing a fresh
+        // look in a run AND between runs, where the queue would otherwise file
+        // it as scheduled.
+        for run in [Some("original"), Some("later"), None] {
+            assert_eq!(
+                queen_review_assessment_status(
+                    QueenReviewDispositionKind::OperatorDeferral,
+                    "original",
+                    run,
+                    true,
+                    TaskState::Review,
+                    NextMoveOwner::Queen
+                ),
+                QueenReviewAssessmentStatus::FreshExternalCheckRequired,
+                "{run:?}"
+            );
+        }
+        // Blocked is unchanged: covered in any run, and still applying between.
+        assert_eq!(
+            queen_review_assessment_status(
+                QueenReviewDispositionKind::OperatorDeferral,
+                "original",
+                Some("later"),
+                true,
+                TaskState::Blocked,
+                NextMoveOwner::Queen
+            ),
+            QueenReviewAssessmentStatus::CoveredForCurrentRun
+        );
+        assert_eq!(
+            queen_review_assessment_status(
+                QueenReviewDispositionKind::OperatorDeferral,
+                "original",
+                None,
+                true,
+                TaskState::Blocked,
+                NextMoveOwner::Queen
+            ),
+            QueenReviewAssessmentStatus::NoActiveReview
         );
     }
 

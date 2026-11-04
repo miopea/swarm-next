@@ -3035,6 +3035,88 @@ mod tests {
         ));
     }
 
+    /// Measured 2026-11-04: work waiting on the operator's "I will say when"
+    /// sat in Review for six hours behind an operator deferral that covered it
+    /// in every run, with no wait shown and nothing that would bring it back
+    /// (ADR 0154).
+    #[test]
+    fn an_operator_deferral_does_not_park_review_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = in_review(&store, "Fixture measurement after an update");
+        store
+            .append_task_correction(
+                task,
+                "Wait for a quiet point; I will say when",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        let said = store.list_task_activity(task, 1).unwrap().events[0].sequence;
+        let run_id = start_review(&store, 100);
+        let input = QueenReviewDispositionInput {
+            task_id: task,
+            run_id: run_id.clone(),
+            expected_revision: store
+                .queen_task_review_evidence(task)
+                .unwrap()
+                .evidence_revision,
+            kind: QueenReviewDispositionKind::OperatorDeferral,
+            condition: "The operator starts the fixture update and will say when".into(),
+            evidence: "Read the operator's statement on the task".into(),
+            source: "Task activity".into(),
+            operator_activity_sequence: Some(said),
+            operator_decision_id: None,
+        };
+        let refused = store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), 101)
+            .expect_err("an operator deferral is refused on Review");
+        assert!(
+            refused.to_string().contains("swarm_return_reviewed_work"),
+            "the refusal names the hand-back that lets the worker block it: {refused}"
+        );
+
+        // One saved before the rule, past the repetition bound, must not keep
+        // covering the task, in this run or between runs.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO queen_task_review_receipts
+                     (task_id, run_id, kind, accepted_revision, input_payload,
+                      recorded_sequence, recorded_at, times_seen, first_seen_at)
+                 VALUES (?1, ?2, 'operator_deferral', ?3, ?4, ?5, 100, ?6, 100)",
+                rusqlite::params![
+                    task.to_string(),
+                    run_id,
+                    input.expected_revision,
+                    serde_json::to_string(&input).unwrap(),
+                    said,
+                    MAX_UNCHANGED_REVIEW_PASSES + 10
+                ],
+            )
+            .unwrap();
+        assert_eq!(uncovered(&store, &run_id), vec![task]);
+        assert_eq!(
+            store
+                .queen_task_review_snapshot(task)
+                .unwrap()
+                .previous_assessment
+                .unwrap()
+                .status,
+            swarm_domain::QueenReviewAssessmentStatus::FreshExternalCheckRequired,
+            "a deferral saved on Review is not reported covered in a run"
+        );
+        store
+            .finish_queen_automation_run(&run_id, QueenAutomationOutcome::NoAction, 102)
+            .unwrap();
+        let between = store.queen_task_review_snapshot(task).unwrap();
+        assert!(between.current_run_id.is_none());
+        assert_eq!(
+            between.previous_assessment.unwrap().status,
+            swarm_domain::QueenReviewAssessmentStatus::FreshExternalCheckRequired,
+            "nor between runs, where the queue would file it as scheduled"
+        );
+    }
+
     /// A draft filed behind unfinished work was Queen's, no assessment could
     /// cover it, and every run read incomplete (ADR 0135). It could not move
     /// to Blocked then; since ADR 0152 it can, and one left in Draft still
