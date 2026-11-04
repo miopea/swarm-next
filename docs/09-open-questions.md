@@ -1,5 +1,26 @@
 # Open product questions
 
+## A draft parked on the operator's word — November 4, 2026
+
+ADR 0154 stops an operator deferral covering Review. It still covers Draft, as
+ADR 0135 chose. A draft covered that way has the same blind spot the Review task
+had:
+- the board shows a park and a wait only for Blocked work, so it reads "Draft,
+  Queen's move" with no reason;
+- it is not on the operator's list;
+- nothing brings it back when the operator acts.
+
+Its way out is narrower than Review's. Since ADR 0152, a draft moves to Blocked
+only behind an unfinished prerequisite or a pending decision. A resolved "later"
+is neither. So it cannot be blocked on a named operator wait.
+
+No draft carried an operator deferral when this was read on 2026-11-04, so
+nothing is sitting in it now.
+
+Open: should a draft waiting on the operator's word be able to block on a named
+operator wait, or should the board show its deferral? Not chosen silently,
+because either changes what Queen can do with drafts.
+
 ## Settlement and the answer still to come — November 3, 2026
 
 Since ADR 0150, the coordinator does not settle nothing-built Review work while
