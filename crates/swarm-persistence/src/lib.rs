@@ -525,6 +525,8 @@ pub enum TaskStoreError {
     InvalidReviewReply,
     #[error("automatic settlement is waiting for the worker's exact review answer")]
     ReviewAnswerRequired,
+    #[error("automatic settlement is waiting for a message to this task's worker to arrive")]
+    MessageOwedToAssignee,
     #[error("task persistence filesystem failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("task persistence failed: {0}")]
@@ -3268,7 +3270,7 @@ impl TaskStore {
         note: &str,
         reporting_session_id: Option<WorkerSessionId>,
         actor: &TaskActivityActor,
-        require_review_answer: bool,
+        automatic_settlement: bool,
     ) -> Result<Task, TaskStoreError> {
         if note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
             return Err(TaskStoreError::InvalidTaskActivityNote);
@@ -3285,8 +3287,11 @@ impl TaskStore {
             None
         };
         let current = reportable_task_state(&transaction, id, reporting_session_id)?;
-        if require_review_answer {
+        // What automatic settlement waits for (ADR 0066, ADR 0150), checked
+        // again here because the sweep selected this task earlier.
+        if automatic_settlement {
             review_answers::ensure_no_pending_request(&transaction, id)?;
+            message_delivery::ensure_no_message_owed_to_assignee(&transaction, id)?;
         }
         if !current.can_transition_to(target) {
             // ONLY the completed-to-completed case gets the richer answer.
