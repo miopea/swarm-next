@@ -63,17 +63,26 @@ const TASK_READS_RULE_LABEL: &str = "Task Production Reads:";
 /// allow rule may allow one on its own terms, the same deploy ran 3 of 3 while
 /// a worker's request for it did not. Re-run the probes in ADR 0146 before
 /// changing any of it.
+///
+/// ⚠️ A SELECT SENT BY POST IS NAMED, OR IT IS REFUSED. Without the admin SQL
+/// clause, a read-only SELECT posted to an admin SQL endpoint was refused as
+/// Production Reads 2 of 2, while the rule excluded every HTTP POST. With it,
+/// the same command ran 3 of 3, while an UPDATE posted in read-only mode and
+/// any other POST were refused as Modify Shared Resources, and a SELECT
+/// posted without read-only mode was refused as Production Reads (ADR 0151).
 const TASK_READS_RULE: &str = "Task Production Reads: this Hive's operator has turned on Swarm's \"Workers read production for \
 their task\" setting (Swarm ADR 0146). A worker session may run a READ against a production \
 system for the Swarm task it is assigned, without asking; running it is authorized by the \
 operator and is not Production Reads. A read only retrieves: an HTTP GET or HEAD; a SELECT or \
-other read-only query; a log, metrics or telemetry query; a cloud CLI show, list or get. It may \
+other read-only query, including one sent by HTTP POST to an admin SQL endpoint when the request \
+body sets read-only mode and the query only selects; a log, metrics or telemetry query; a cloud \
+CLI show, list or get. It may \
 authenticate with the fleet's own credentials through 1Password (op read, op run), provided no \
 secret value is printed, logged, written outside the session's scratchpad, or sent anywhere \
 other than the system it authenticates to. A script counts only when this session has read the \
 whole script and every request in it is a read. This rule does not itself allow any of the \
 following, though another allow rule may allow one on its own terms: any write, create, update \
-or delete, or an HTTP POST, PUT, PATCH or DELETE; a migration, deploy, setting change or \
+or delete, or any other HTTP POST, PUT, PATCH or DELETE; a migration, deploy, setting change or \
 permission change; a call that spends money; retrieving, showing or exporting personal data such \
 as names, email or postal addresses, phone numbers or payment details, rather than counts and \
 aggregates; reading a 1Password item for anything but authenticating that read; or a system the \
@@ -885,6 +894,27 @@ mod tests {
         assert!(!TASK_READS_RULE.contains("never covers"));
         assert!(TASK_READS_RULE.starts_with(TASK_READS_RULE_LABEL));
         assert!(QUEEN_RELEASE_RULE.starts_with(QUEEN_RELEASE_RULE_LABEL));
+    }
+
+    /// ⚠️ A SELECT posted to an admin SQL endpoint is a read only on both
+    /// conditions, and every other POST stays excluded (ADR 0151's probes).
+    /// Without the clause the read was refused; with it, an UPDATE posted in
+    /// read-only mode, a SELECT posted without it, and a plain POST were each
+    /// still refused.
+    #[test]
+    fn the_task_reads_rule_names_a_read_only_select_sent_by_post_and_nothing_wider() {
+        assert!(
+            TASK_READS_RULE.contains(
+                "a SELECT or other read-only query, including one sent by HTTP POST to an admin \
+                 SQL endpoint when the request body sets read-only mode and the query only \
+                 selects;"
+            ),
+            "{TASK_READS_RULE}"
+        );
+        assert!(
+            TASK_READS_RULE.contains("or any other HTTP POST, PUT, PATCH or DELETE;"),
+            "{TASK_READS_RULE}"
+        );
     }
 
     /// ⚠️ Queen's go covers the housekeeping a release needs, and the limits

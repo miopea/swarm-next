@@ -1018,7 +1018,7 @@ pub(super) const WORKER_RELEASE_GUIDANCE: &str = "RELEASING ON QUEEN'S INSTRUCTI
 /// A worker's paragraph for "Workers read production for their task" (ADR
 /// 0146), given only while the operator has it on. The terminal host gives the
 /// worker's auto mode the matching rule at the same start.
-pub(super) const WORKER_TASK_READS_GUIDANCE: &str = "READING PRODUCTION FOR YOUR TASK. This Hive's operator lets a worker read production for its own assigned task without asking first (ADR 0146). A read only retrieves: an HTTP GET or HEAD, a read-only query, a log, metrics or telemetry query, or a cloud CLI show, list or get, against a system your task concerns. Run it yourself; do not file a command request for it. Authenticate through 1Password as usual and never print a secret. Read counts and aggregates: names, email or postal addresses, phone numbers and payment details are not read this way. A script you wrote counts only when every request in it is a read, and you read it through before running it. Anything else is not a read, and this paragraph does not cover it: a write, create, update or delete, a migration, a deploy, a setting or permission change, a call that spends money, or personal data. Ask the operator for that one command with a command request, unless a release Queen instructed covers it. If your auto mode refuses a read anyway, ask with a command request; never reword it to get past the refusal.";
+pub(super) const WORKER_TASK_READS_GUIDANCE: &str = "READING PRODUCTION FOR YOUR TASK. This Hive's operator lets a worker read production for its own assigned task without asking first (ADR 0146). A read only retrieves: an HTTP GET or HEAD, a read-only query (including one posted to an admin SQL endpoint when the request sets read-only mode and the query only selects), a log, metrics or telemetry query, or a cloud CLI show, list or get, against a system your task concerns. Run it yourself; do not file a command request for it. Authenticate through 1Password as usual and never print a secret. Read counts and aggregates: names, email or postal addresses, phone numbers and payment details are not read this way. A script you wrote counts only when every request in it is a read, and you read it through before running it. Anything else is not a read, and this paragraph does not cover it: a write, create, update or delete, any other HTTP POST, PUT, PATCH or DELETE, a migration, a deploy, a setting or permission change, a call that spends money, or personal data. Ask the operator for that one command with a command request, unless a release Queen instructed covers it. If your auto mode refuses a read anyway, ask with a command request; never reword it to get past the refusal.";
 
 fn standing_brief(role: WorkerRole, queen_releases: bool, task_reads: bool) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
@@ -12616,8 +12616,19 @@ mod tests {
             guidance.contains("do not file a command request"),
             "{guidance}"
         );
+        // ADR 0151: the brief says what the auto-mode rule says. A SELECT
+        // posted to an admin SQL endpoint is a read on both conditions; every
+        // other POST is not.
+        assert!(
+            guidance.contains(
+                "including one posted to an admin SQL endpoint when the request sets read-only \
+                 mode and the query only selects"
+            ),
+            "{guidance}"
+        );
         for kept in [
             "a write, create, update or delete",
+            "any other HTTP POST, PUT, PATCH or DELETE",
             "a migration, a deploy, a setting or permission change",
             "a call that spends money",
             "personal data",
