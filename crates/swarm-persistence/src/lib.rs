@@ -1229,6 +1229,15 @@ impl TaskStore {
     }
 
     fn from_connection(mut connection: Connection) -> Result<Self, TaskStoreError> {
+        // EVERY TRANSACTION TAKES THE WRITE LOCK WHEN IT BEGINS (ADR 0153). A
+        // deferred one reads first and asks for the lock at its first write,
+        // and SQLite does not wait for a lock it asks for that way: while
+        // another connection holds it, the write fails "database is locked" at
+        // once, whatever the busy timeout. Asked for at BEGIN, it waits the
+        // busy timeout like any other lock. This Hive's API has one connection,
+        // so it changes nothing there; it matters to a second one, such as an
+        // operator's own writer, a tool, or a test beside a running API.
+        connection.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
@@ -7490,6 +7499,35 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    /// A move reads before it writes. While another connection holds the
+    /// write lock it waits for it, instead of failing "database is locked" at
+    /// once (ADR 0153). The other connection stands in for an API running
+    /// beside this store, as in the graceful delivery test.
+    #[test]
+    fn a_transition_waits_for_another_connection_s_write_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("shared.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        let task = store.create_task("Fixture", "/workspace").unwrap();
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            other.execute_batch("COMMIT").unwrap();
+        });
+
+        let started = std::time::Instant::now();
+        let ready = store.transition_task(task.id, TaskState::Ready);
+        let waited = started.elapsed();
+        release.join().unwrap();
+
+        assert_eq!(ready.unwrap().state, TaskState::Ready);
+        assert!(
+            waited >= std::time::Duration::from_millis(200),
+            "the move waited for the other writer: {waited:?}"
+        );
     }
 
     #[test]
