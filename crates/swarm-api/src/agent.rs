@@ -13,6 +13,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use base64ct::{Base64, Encoding as _};
 use rmcp::{
     ErrorData, ServerHandler,
     model::{
@@ -875,7 +876,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 37;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 38;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -885,7 +886,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 37;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 37. Update this and the revision together.
+/// The served surface as of revision 38. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -894,7 +895,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 37;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "6b02ef2a30fba2e9f624f4b1d1c18d76a7c5bd9d4edc2e44a3f4a22c6faae733";
+    "cbd471d17ba1cfc284d1484e97813d4e5240efb2f72cc87854714f0ab5ba6bba";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1117,6 +1118,7 @@ impl ServerHandler for AgentMcp {
             read_task_history_tool(),
             transition_task_tool(),
             list_jira_comments_tool(),
+            read_jira_attachment_tool(),
             comment_jira_task_tool(),
             record_deployment_tool(),
             record_task_commits_tool(),
@@ -1293,6 +1295,7 @@ impl AgentMcp {
             "swarm_record_task_note" => self.record_task_note(arguments),
             "swarm_retitle_task" => self.retitle_task(arguments),
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
+            "swarm_read_jira_attachment" => self.read_jira_attachment(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
             "swarm_record_task_commits" => self.record_task_commits(arguments).await,
@@ -1986,6 +1989,7 @@ impl AgentMcp {
                     && request.name.as_ref() != "swarm_read_task_history"
                     && request.name.as_ref() != "swarm_read_review_evidence"
                     && request.name.as_ref() != "swarm_list_coordination_attention"
+                    && request.name.as_ref() != "swarm_read_jira_attachment"
                 {
                     self.changed.notify_waiters();
                     self.deliver_after
@@ -2990,6 +2994,95 @@ impl AgentMcp {
             .await
             .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
         structured(json!({ "issue_key": link.issue_key, "comments": comments }))
+    }
+
+    /// Lists the files on a task's Jira issue, or shows the model one image
+    /// (ADR 0155).
+    ///
+    /// Jira text marks an image as "[attachment]" and nothing more, so a
+    /// report whose error sits only in a screenshot was unreadable to the
+    /// worker holding it. The operator's task card already fetches these bytes;
+    /// this is the same bounded fetch, scoped like `swarm_list_jira_comments`.
+    ///
+    /// ⚠️ THE ISSUE IS READ TWICE when an image is asked for. The read here
+    /// limits the id to this task's issue and refuses a missing, non-image or
+    /// oversized file with a reason. `attachment()` then reads it again and
+    /// makes the same membership check, because it is the operator route's
+    /// download too. One extra request was judged cheaper than a second
+    /// download path beside the one the task card already proves.
+    async fn read_jira_attachment(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<ReadJiraAttachmentInput>(arguments)?;
+        let task_id = self.visible_task_id(&input.task_id)?;
+        let link = self
+            .tasks
+            .store()
+            .jira_issue_link_for_task(task_id)?
+            .ok_or(ApplicationError::Store(TaskStoreError::TaskHasNoJiraIssue))?;
+        let unavailable = |error: crate::jira::JiraAdapterError| {
+            ApplicationError::IntegrationUnavailable(error.to_string())
+        };
+        let detail = self
+            .jira
+            .issue_detail(&link.issue_key)
+            .await
+            .map_err(unavailable)?;
+        let Some(wanted) = input
+            .attachment_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return structured(json!({
+                "issue_key": link.issue_key,
+                "attachments": detail.attachments,
+                "note": "Name one with is_image true as attachment_id to see it. Jira text shows an image as \"[attachment]\"; these are the files on the issue, including the ones in comments.",
+            }));
+        };
+        let attachment = detail
+            .attachments
+            .into_iter()
+            .find(|candidate| candidate.id == wanted)
+            .ok_or_else(|| {
+                ApplicationError::Refused(format!(
+                    "{} has no attachment {wanted}. Call this tool without attachment_id to list the ones it has.",
+                    link.issue_key
+                ))
+            })?;
+        if !attachment.is_image {
+            return Err(ApplicationError::Refused(format!(
+                "{} is {}. Only PNG, JPEG, GIF and WebP images can be shown this way.",
+                attachment.filename, attachment.media_type
+            )));
+        }
+        if attachment.byte_size > MAX_SHOWN_IMAGE_BYTES {
+            return Err(too_large_to_show(
+                &attachment.filename,
+                attachment.byte_size,
+            ));
+        }
+        let content = self
+            .jira
+            .attachment(&link.issue_key, &attachment.id)
+            .await
+            .map_err(unavailable)?;
+        // Jira's declared size is a claim; the bytes are the fact.
+        if content.bytes.len() > MAX_SHOWN_IMAGE_BYTES {
+            return Err(too_large_to_show(&attachment.filename, content.bytes.len()));
+        }
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(format!(
+                "{} attachment {}: {} ({}, {} bytes)",
+                link.issue_key,
+                attachment.id,
+                attachment.filename,
+                content.media_type,
+                content.bytes.len()
+            )),
+            ContentBlock::image(Base64::encode_string(&content.bytes), content.media_type),
+        ]))
     }
 
     fn comment_jira_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -4476,6 +4569,13 @@ struct JiraTaskInput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadJiraAttachmentInput {
+    task_id: String,
+    attachment_id: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct CommentJiraTaskInput {
     task_id: String,
     body: String,
@@ -5650,7 +5750,7 @@ fn transition_task_tool() -> Tool {
 fn list_jira_comments_tool() -> Tool {
     tool(
         "swarm_list_jira_comments",
-        "Read the Jira discussion for a linked task visible to this agent. Workers may read only their current assignment; Queen may read any Hive task.",
+        "Read the Jira discussion for a linked task visible to this agent. Workers may read only their current assignment; Queen may read any Hive task. An image in a comment shows as \"[attachment]\"; swarm_read_jira_attachment lists and shows them.",
         &json!({
             "type": "object",
             "properties": { "task_id": { "type": "string", "format": "uuid" } },
@@ -5659,6 +5759,39 @@ fn list_jira_comments_tool() -> Tool {
         }),
         true,
     )
+}
+
+fn read_jira_attachment_tool() -> Tool {
+    tool(
+        "swarm_read_jira_attachment",
+        "See the files on a linked task's Jira issue, where its text only says \"[attachment]\". Without attachment_id it lists them: id, filename, media_type, byte_size and is_image, including images pasted into comments. With attachment_id it shows you that image. Only PNG, JPEG, GIF and WebP images up to 3.75 MiB can be shown; anything else is refused with its type or size. Workers may read only their current assignment's issue; Queen may read any Hive task's.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "attachment_id": { "type": "string", "maxLength": 128, "description": "An id from this tool's own listing. Omit it to list." }
+            },
+            "required": ["task_id"],
+            "additionalProperties": false
+        }),
+        true,
+    )
+}
+
+/// The largest image a tool answer may carry: 3,932,160 bytes, whose base64 is
+/// exactly 5 MiB.
+///
+/// Five MiB of base64 is the per-image limit Claude Code states for the API
+/// (`maxBase64Size: 5242880`, read from the 2.1.318 binary on 2026-11-04, with
+/// `targetRawSize: 3932160` beside it). An image over it is refused here rather
+/// than handed to the worker, because an image the API rejects sits in the
+/// conversation and can fail every request after it.
+const MAX_SHOWN_IMAGE_BYTES: usize = 3_932_160;
+
+fn too_large_to_show(filename: &str, bytes: usize) -> ApplicationError {
+    ApplicationError::Refused(format!(
+        "{filename} is {bytes} bytes; at most {MAX_SHOWN_IMAGE_BYTES} can be shown to a worker. The operator can open it on the task card."
+    ))
 }
 
 fn correct_task_record_tool() -> Tool {
@@ -9619,6 +9752,223 @@ mod tests {
         );
     }
 
+    /// ADR 0155. Jira text says "[attachment]" where a screenshot sat; the
+    /// worker holding the task lists the issue's files and sees an image, and
+    /// reaches nothing on an issue that is not its own.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_worker_sees_its_own_jira_issues_images_and_no_others() {
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nscreenshot";
+        let fetched = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let issue = |key: &'static str, attachments: Value| {
+            Json(json!({
+                "id": key, "key": key,
+                "fields": {
+                    "summary": "Checkout shows an error",
+                    "description": null,
+                    "status": { "id": "1", "name": "To Do" },
+                    "assignee": null,
+                    "updated": "2026-11-04T13:00:00.000+0000",
+                    "attachment": attachments
+                }
+            }))
+        };
+        let content =
+            |fetched: Arc<std::sync::Mutex<Vec<String>>>, id: &'static str, body: Vec<u8>| {
+                get(move || {
+                    fetched.lock().unwrap().push(id.to_owned());
+                    let body = body.clone();
+                    async move { ([(header::CONTENT_TYPE, "image/png")], body) }
+                })
+            };
+        let oversized = [PNG, &vec![0_u8; MAX_SHOWN_IMAGE_BYTES]].concat();
+        let jira = Router::new()
+            .route(
+                "/rest/api/3/issue/WEB-42",
+                get(move || async move {
+                    issue("WEB-42", json!([
+                        { "id": "30001", "filename": "screenshot.png", "mimeType": "image/png", "size": PNG.len() },
+                        { "id": "30002", "filename": "error.log", "mimeType": "text/plain", "size": 40 },
+                        { "id": "30003", "filename": "huge.png", "mimeType": "image/png", "size": MAX_SHOWN_IMAGE_BYTES + 1 },
+                        { "id": "30004", "filename": "understated.png", "mimeType": "image/png", "size": 100 }
+                    ]))
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/WEB-43",
+                get(move || async move {
+                    issue("WEB-43", json!([
+                        { "id": "30009", "filename": "someone-elses.png", "mimeType": "image/png", "size": PNG.len() }
+                    ]))
+                }),
+            )
+            .route(
+                "/rest/api/3/attachment/content/30001",
+                content(fetched.clone(), "30001", PNG.to_vec()),
+            )
+            .route(
+                "/rest/api/3/attachment/content/30003",
+                content(fetched.clone(), "30003", PNG.to_vec()),
+            )
+            .route(
+                "/rest/api/3/attachment/content/30004",
+                content(fetched.clone(), "30004", oversized),
+            )
+            .route(
+                "/rest/api/3/attachment/content/30009",
+                content(fetched.clone(), "30009", PNG.to_vec()),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, jira).await.unwrap() });
+
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let bridge = bridge.with_jira(
+            crate::jira::JiraReadinessProbe::configured(
+                &format!("http://{address}"),
+                "operator@example.test",
+                "token",
+            )
+            .unwrap(),
+        );
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let snapshot = |issue_id, issue_key| JiraIssueSnapshot {
+            issue_id,
+            issue_key,
+            summary: "Checkout shows an error",
+            description: "The error is in the screenshots.",
+            status_id: "1",
+            status_name: "To Do",
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at: "2026-11-04T13:00:00.000+0000",
+            priority: TaskPriority::Normal,
+        };
+        let tasks = store
+            .sync_jira_issues(
+                binding.id,
+                &[snapshot("20042", "WEB-42"), snapshot("20043", "WEB-43")],
+            )
+            .unwrap();
+        let (own, other) = (tasks[0].id, tasks[1].id);
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        store.assign_task_to_worker(own, worker_id).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let read = |task: TaskId, attachment: Option<&str>| {
+            let mut arguments = json!({ "task_id": task });
+            if let Some(attachment) = attachment {
+                arguments["attachment_id"] = json!(attachment);
+            }
+            call_review_test_tool(
+                bridge.clone(),
+                &token,
+                "swarm_read_jira_attachment",
+                arguments,
+            )
+        };
+        let refusal = |answer: &Value| {
+            assert_eq!(answer["result"]["isError"], true, "{answer}");
+            answer["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+
+        // A read changes nothing, so it must not start a delivery pass (ADR 0138).
+        let notified = bridge.changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        // Listed: every file on the issue, images marked.
+        let listed = read(own, None).await;
+        assert_eq!(listed["result"]["isError"], false, "{listed}");
+        let listing = &listed["result"]["structuredContent"];
+        assert_eq!(listing["issue_key"], "WEB-42");
+        let ids: Vec<_> = listing["attachments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| (file["id"].as_str().unwrap(), file["is_image"] == true))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("30001", true),
+                ("30002", false),
+                ("30003", true),
+                ("30004", true)
+            ]
+        );
+
+        // Shown: the image itself, as an image the model can see.
+        let shown = read(own, Some("30001")).await;
+        assert_eq!(shown["result"]["isError"], false, "{shown}");
+        let blocks = shown["result"]["content"].as_array().unwrap();
+        assert!(
+            blocks[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("screenshot.png")
+        );
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["mimeType"], "image/png");
+        assert_eq!(blocks[1]["data"], Base64::encode_string(PNG));
+        // An id copied with spaces still names the file; an empty one lists.
+        let padded = read(own, Some(" 30001 ")).await;
+        assert_eq!(padded["result"]["content"][1]["type"], "image", "{padded}");
+        let empty = read(own, Some("")).await;
+        assert_eq!(
+            empty["result"]["structuredContent"]["attachments"]
+                .as_array()
+                .map(Vec::len),
+            Some(4),
+            "{empty}"
+        );
+
+        // Refused with the reason, before anything is downloaded.
+        assert!(refusal(&read(own, Some("30002")).await).contains("text/plain"));
+        assert!(
+            refusal(&read(own, Some("30003")).await).contains(&MAX_SHOWN_IMAGE_BYTES.to_string())
+        );
+        // Jira said 100 bytes and sent more: the bytes decide.
+        assert!(
+            refusal(&read(own, Some("30004")).await).contains(&MAX_SHOWN_IMAGE_BYTES.to_string())
+        );
+
+        // Another issue's file through its own task, and another task outright.
+        assert!(
+            refusal(&read(own, Some("30009")).await).contains("WEB-42 has no attachment 30009")
+        );
+        refusal(&read(other, None).await);
+        refusal(&read(other, Some("30009")).await);
+
+        assert_eq!(*fetched.lock().unwrap(), ["30001", "30001", "30004"]);
+        assert!(
+            futures_util::FutureExt::now_or_never(notified.as_mut()).is_none(),
+            "a read started a delivery pass"
+        );
+    }
+
     /// Criterion 8. A connection has a worker's surface and no more: approving
     /// work and assigning it stay with Queen and the operator.
     ///
@@ -10330,6 +10680,9 @@ mod tests {
                 "swarm_read_task_history",
                 "swarm_transition_task",
                 "swarm_list_jira_comments",
+                // The screenshot a report's error sits in is the worker's to
+                // read as much as the comment beside it (ADR 0155).
+                "swarm_read_jira_attachment",
                 "swarm_comment_jira_task",
                 // A worker holds every half of its own work: where the fix is
                 // running, the reply to whoever asked, and the follow-up it
