@@ -1,5 +1,23 @@
 # Open product questions
 
+## Settlement and the answer still to come — November 3, 2026
+
+Since ADR 0150, the coordinator does not settle nothing-built Review work while
+a message to its worker is still on its way. It cannot wait for a message
+nobody has sent yet. From 2026-10-20 to 2026-11-04, Queen sent 7 messages to 7
+workers within an hour after the sweep had closed their tasks. All 7 were
+cancelled unread. A worker's handoff that asks Queen to act, such as approving
+a merge, does not hold settlement.
+
+Deployment closes do not wait either. ADR 0066 keeps them closing over
+reviewer holds as an earlier operator decision. In the same period, 28 of the
+327 deployment closes cancelled 38 messages Queen had queued to the worker.
+
+Open: should a handoff that asks Queen to act hold automatic settlement until
+she answers, and should a deployment close wait for a message on its way to the
+worker? Not chosen silently, because the first keeps finished work in Review
+on every such handoff, and the second reverses an operator decision.
+
 ## Messages to a worker stopped on a rate limit — October 23, 2026
 
 Since ADR 0123 Swarm knows when a Claude worker's turn died on an API error,

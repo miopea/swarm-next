@@ -3607,7 +3607,7 @@ impl TaskStore {
     ) -> Result<ReviewedSettlementPage, TaskStoreError> {
         let candidates = {
             let connection = self.connection()?;
-            let mut statement = connection.prepare(
+            let mut statement = connection.prepare(concat!(
                 "SELECT task.id FROM tasks task
                  WHERE task.state = ?1
                    AND (?2 IS NULL OR task.id > ?2)
@@ -3624,6 +3624,11 @@ impl TaskStore {
                          AND r.request_message_id IS NOT NULL
                          AND r.request_worker_id = task.assigned_worker_id
                    )
+                   -- Closing now would cancel a message to the worker
+                   -- unread (ADR 0150). The next pass looks again.
+                   AND NOT ",
+                crate::message_delivery::message_owed_to_assignee!(),
+                "
                    -- Work carrying a deployment is the OTHER sweep's business.
                    AND NOT EXISTS (
                        SELECT 1 FROM task_deployments d WHERE d.task_id = task.id
@@ -3648,8 +3653,8 @@ impl TaskStore {
                              WHERE reply.task_id = task.id
                          )
                    )
-                 ORDER BY task.id LIMIT ?3",
-            )?;
+                 ORDER BY task.id LIMIT ?3"
+            ))?;
             let rows = statement.query_map(
                 params![
                     TaskState::Review.to_string(),
@@ -3723,6 +3728,7 @@ impl TaskStore {
                 Ok(_) => closed.push(task_id),
                 Err(
                     TaskStoreError::ReviewAnswerRequired
+                    | TaskStoreError::MessageOwedToAssignee
                     | TaskStoreError::NotFound
                     | TaskStoreError::InvalidTransition { .. }
                     | TaskStoreError::TaskPrerequisite(

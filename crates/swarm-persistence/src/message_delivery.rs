@@ -151,6 +151,49 @@ fn cancel_undeliverable_worker_messages(
     )
 }
 
+/// A message to the task's worker, about that task, that has not arrived and
+/// still could (ADR 0150). The task is aliased `task`.
+///
+/// ⚠️ AUTOMATIC SETTLEMENT CANCELLED THESE UNREAD. Closing a task makes its
+/// queued messages to the worker undeliverable, and the no-deployment sweep
+/// closes nothing-built work within a minute of Review. From 2026-10-20 to
+/// 2026-11-04, 5 of its 117 settlements cancelled a message Queen had queued to
+/// the worker; one was her go on a pull request, 72 seconds old. Pending is the
+/// set the queue limit counts. `uncertain` and `rejected` wait for Queen to
+/// reconcile them, and her attention list shows both, so nothing waits unowned.
+macro_rules! message_owed_to_assignee {
+    () => {
+        "EXISTS(SELECT 1 FROM task_messages owed
+             JOIN task_message_deliveries owed_delivery ON owed_delivery.message_id = owed.id
+             WHERE owed.task_id = task.id AND owed.recipient = 'worker'
+               AND owed.recipient_worker_id = task.assigned_worker_id
+               AND owed_delivery.state IN ('queued','dispatching','uncertain','rejected'))"
+    };
+}
+pub(crate) use message_owed_to_assignee;
+
+/// Fences automatic settlement against a message still on its way to the
+/// task's worker, inside the completion transaction, so a message queued after
+/// the sweep selected the task still holds it.
+pub(super) fn ensure_no_message_owed_to_assignee(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+) -> Result<(), TaskStoreError> {
+    let owed: bool = tx.query_row(
+        concat!(
+            "SELECT EXISTS(SELECT 1 FROM tasks task WHERE task.id = ?1 AND ",
+            message_owed_to_assignee!(),
+            ")"
+        ),
+        [task_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if owed {
+        return Err(TaskStoreError::MessageOwedToAssignee);
+    }
+    Ok(())
+}
+
 impl TaskStore {
     /// Bounded metadata for Queen's reconciliation queue; message text stays in history.
     ///
@@ -1230,5 +1273,184 @@ mod tests {
         assert_eq!(pending.delivery_state, "queued");
         assert!(pending.delivery_claim_id.is_none());
         assert_eq!(store.pending_task_message_dispatches().unwrap().len(), 1);
+    }
+
+    /// An empty commit report, which the no-deployment sweep settles on.
+    fn nothing_built(store: &TaskStore, task: TaskId) {
+        store
+            .record_task_commits(
+                task,
+                "/workspace",
+                swarm_domain::CommitRepositoryState::Read,
+                &[],
+                11,
+            )
+            .unwrap();
+    }
+
+    fn settle(store: &TaskStore, now: i64) -> Vec<TaskId> {
+        store
+            .settle_reviewed_work_without_deployment_page(now, None)
+            .unwrap()
+            .closed
+    }
+
+    fn delivery_state(store: &TaskStore, task: TaskId, message: &str) -> String {
+        store
+            .task_messages(task)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id == message)
+            .unwrap()
+            .delivery_state
+    }
+
+    /// ⚠️ QUEEN'S GO WAS CANCELLED UNREAD BY THE SETTLEMENT IT RACED (ADR
+    /// 0150). Work that built nothing settled within a minute of Review, and
+    /// closing it cancelled her queued message to its worker. It now waits for
+    /// the message to arrive, and the next pass settles it.
+    #[test]
+    fn settlement_waits_for_a_message_to_the_worker_then_settles() {
+        let (store, task, worker) = fixture();
+        nothing_built(&store, task);
+        let go = send(&store, task, worker);
+        assert!(settle(&store, 12).is_empty());
+        assert_eq!(delivery_state(&store, task, &go), "queued");
+        assert_eq!(
+            store.completion_evidence(task).unwrap(),
+            crate::CompletionEvidence::None,
+            "a held task is not selected, so nothing is claimed for it"
+        );
+        let claim = store.claim_task_messages(13).unwrap().remove(0);
+        assert!(settle(&store, 14).is_empty(), "a write in flight holds it");
+        store
+            .finish_task_message(&claim, TaskMessageResult::Delivered, 15)
+            .unwrap();
+        assert_eq!(settle(&store, 16), [task]);
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+        assert_eq!(delivery_state(&store, task, &go), "delivered");
+    }
+
+    /// A write that may or may not have landed holds the task until Queen
+    /// reconciles it. A retry still holds; closing it out as resolved releases
+    /// the task, as delivery does.
+    #[test]
+    fn an_unconfirmed_message_holds_settlement_until_queen_reconciles_it() {
+        let (store, task, worker) = fixture();
+        nothing_built(&store, task);
+        let go = send(&store, task, worker);
+        let claim = store.claim_task_messages(12).unwrap().remove(0);
+        assert_eq!(store.recover_task_message_claims(13).unwrap(), 1);
+        assert_eq!(delivery_state(&store, task, &go), "uncertain");
+        assert!(settle(&store, 14).is_empty());
+        assert!(
+            store
+                .reconcile_task_message(&go, &claim.claim_id, true, "Retry it", 15)
+                .unwrap()
+        );
+        let retry = store.claim_task_messages(16).unwrap().remove(0);
+        store
+            .finish_task_message(&retry, TaskMessageResult::Rejected, 17)
+            .unwrap();
+        assert!(
+            settle(&store, 18).is_empty(),
+            "a refused write is not final"
+        );
+        assert!(
+            store
+                .reconcile_task_message(&go, &retry.claim_id, false, "Handled directly", 19)
+                .unwrap()
+        );
+        assert_eq!(settle(&store, 20), [task]);
+    }
+
+    /// Only a message still on its way to THIS task's worker holds it. One
+    /// already cancelled, one about the worker's other task, and one to a
+    /// worker who does not hold this task do not.
+    #[test]
+    fn only_a_pending_message_to_this_tasks_worker_holds_settlement() {
+        let (store, task, worker) = fixture();
+        nothing_built(&store, task);
+        let other = store.create_task("Other work", "/workspace").unwrap();
+        store.transition_task(other.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(other.id, worker).unwrap();
+        let on_other = send(&store, other.id, worker);
+        // A review request, cancelled unsent when the worker answered it.
+        let request = store
+            .return_review_to_worker(task, "Which SHA?", 12)
+            .unwrap();
+        store
+            .message_queen_from_worker(task, worker, "Nine tests passed", Some(&request.id), 13)
+            .unwrap();
+        assert_eq!(delivery_state(&store, task, &request.id), "cancelled");
+        let bystander = store
+            .create_worker("Fern", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+        let connection = store.connection().unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_messages (id, task_id, sender, recipient, recipient_worker_id, body, created_at)
+                 VALUES ('to-bystander', ?1, 'queen', 'worker', ?2, 'Fictional aside', 13)",
+                params![task.to_string(), bystander.id.to_string()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_message_deliveries (message_id, state, updated_at)
+                 VALUES ('to-bystander', 'queued', 13)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert_eq!(settle(&store, 14), [task]);
+        assert_eq!(delivery_state(&store, other.id, &on_other), "queued");
+    }
+
+    /// The sweep selects first and completes later. A message queued in
+    /// between is caught by the completion transaction, which leaves the task
+    /// in Review and the message queued; the next pass settles once it lands.
+    #[test]
+    fn a_message_queued_after_selection_still_holds_the_completion() {
+        let (store, task, worker) = fixture();
+        nothing_built(&store, task);
+        // A selected candidate whose exemption committed before the message.
+        store
+            .claim_completion_exemption(task, "Nothing built", None, 12)
+            .unwrap();
+        store
+            .approve_completion_exemption(task, "coordinator", "Empty commit report", 12)
+            .unwrap();
+        let go = send(&store, task, worker);
+        assert!(matches!(
+            store.transition_task_guarded(
+                task,
+                TaskState::Completed,
+                "Automatic close",
+                None,
+                &crate::TaskActivityActor::system(),
+                true
+            ),
+            Err(TaskStoreError::MessageOwedToAssignee)
+        ));
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+        assert_eq!(delivery_state(&store, task, &go), "queued");
+        let claim = store.claim_task_messages(13).unwrap().remove(0);
+        store
+            .finish_task_message(&claim, TaskMessageResult::Delivered, 14)
+            .unwrap();
+        assert_eq!(settle(&store, 15), [task]);
+    }
+
+    /// The hold is the coordinator's alone. Queen or the operator closing the
+    /// task on purpose is not held, and the message is cancelled as before.
+    #[test]
+    fn an_explicit_completion_is_not_held_by_a_pending_message() {
+        let (store, task, worker) = fixture();
+        nothing_built(&store, task);
+        let go = send(&store, task, worker);
+        store.transition_task(task, TaskState::Completed).unwrap();
+        assert!(store.claim_task_messages(12).unwrap().is_empty());
+        assert_eq!(delivery_state(&store, task, &go), "cancelled");
     }
 }

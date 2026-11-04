@@ -11061,6 +11061,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "review_answer_required",
             error.to_string(),
         ),
+        TaskStoreError::MessageOwedToAssignee => ApiError::new(
+            StatusCode::CONFLICT,
+            "message_owed_to_assignee",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidReviewReply => ApiError::new(
             StatusCode::CONFLICT,
             "review_reply_conflict",
