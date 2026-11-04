@@ -451,6 +451,43 @@ pub(super) fn ensure_satisfied(
     Ok(())
 }
 
+/// What a draft's wait allows it to become (ADR 0152).
+///
+/// Blocked needs something that can still finish: a prerequisite that is
+/// neither finished, abandoned nor removed, or an operator decision still
+/// pending. A block on nothing would park the draft out of Queen's sight.
+/// Ready is refused while such a prerequisite is outstanding, and the refusal
+/// names Blocked: that refusal used to be the only answer Queen got.
+pub(super) fn ensure_draft_move_matches_its_wait(
+    connection: &Connection,
+    task: TaskId,
+    target: TaskState,
+) -> Result<(), TaskStoreError> {
+    let outstanding = read_prerequisites(connection, task)?
+        .iter()
+        .any(TaskPrerequisite::outstanding);
+    match target {
+        TaskState::Blocked if !outstanding => {
+            let pending_decision: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_decision_membership m
+                     JOIN decision_requests d ON d.id = m.decision_id
+                     WHERE m.task_id = ?1 AND d.state = 'pending')",
+                [task.to_string()],
+                |row| row.get(0),
+            )?;
+            if pending_decision {
+                Ok(())
+            } else {
+                Err(TaskPrerequisiteError::DraftBlocksOnlyBehindUnfinishedWork.into())
+            }
+        }
+        TaskState::Ready if outstanding => {
+            Err(TaskPrerequisiteError::DraftWaitsOnUnfinishedWork.into())
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(super) fn from_projection(
     row: &rusqlite::Row<'_>,
     column: usize,
@@ -478,6 +515,32 @@ mod tests {
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.transition_task(task.id, TaskState::Blocked).unwrap();
         task.id
+    }
+
+    /// A draft routed to a worker, as Queen leaves one she has assigned.
+    fn routed_draft(store: &TaskStore) -> (TaskId, swarm_domain::WorkerProfile) {
+        let worker = store
+            .create_worker(
+                "Petal",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let draft = store
+            .create_task("Fixture follow-up", "/workspace")
+            .unwrap()
+            .id;
+        store.assign_task_to_worker(draft, worker.id).unwrap();
+        (draft, worker)
+    }
+
+    /// Takes blocked work through to Completed.
+    fn finish(store: &TaskStore, id: TaskId) {
+        for state in [TaskState::Active, TaskState::Review, TaskState::Completed] {
+            store.transition_task(id, state).unwrap();
+        }
     }
 
     fn completed_contract(store: &TaskStore) -> TaskId {
@@ -1212,5 +1275,222 @@ mod tests {
                 .prerequisites,
             task.prerequisites
         );
+    }
+
+    /// A draft waits on unfinished work as Blocked with its link intact. When
+    /// that work finishes, nothing moves it: unlike other Blocked work, which
+    /// comes back to Ready by itself, it stays Blocked and its next move is
+    /// Queen's, with a worker assigned and after the resume pass (ADR 0152).
+    #[test]
+    fn a_draft_behind_unfinished_work_blocks_keeps_its_link_and_returns_to_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let (draft, worker) = routed_draft(&store);
+        // The prerequisite is itself blocked: it can still finish.
+        let upstream = blocked(&store, "Fixture contract");
+        store
+            .add_task_prerequisite(
+                draft,
+                upstream,
+                "Needs the contract first",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        // The control: ordinary work blocked behind the same task.
+        let ordinary = store
+            .create_task("Fixture ordinary consumer", "/workspace")
+            .unwrap()
+            .id;
+        store.transition_task(ordinary, TaskState::Ready).unwrap();
+        store.transition_task(ordinary, TaskState::Active).unwrap();
+        store
+            .add_task_prerequisite(
+                ordinary,
+                upstream,
+                "Needs the contract too",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        store
+            .transition_task_with_note(ordinary, TaskState::Blocked, "Waits on the contract.")
+            .unwrap();
+
+        let refused = store.transition_task(draft, TaskState::Ready).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TaskStoreError::TaskPrerequisite(TaskPrerequisiteError::DraftWaitsOnUnfinishedWork)
+            ),
+            "{refused:?}"
+        );
+        assert!(
+            refused.to_string().contains("Move it to blocked"),
+            "{refused}"
+        );
+        assert_eq!(store.get_task(draft).unwrap().state, TaskState::Draft);
+
+        store
+            .transition_task_with_note(draft, TaskState::Blocked, "Waits on the contract.")
+            .unwrap();
+        let waiting = store.get_task(draft).unwrap();
+        assert_eq!(waiting.state, TaskState::Blocked);
+        assert_eq!(
+            waiting.next_move_owner,
+            swarm_domain::NextMoveOwner::Blocked
+        );
+        let wait = waiting.wait.expect("the block names what it waits on");
+        assert_eq!(wait.kind, swarm_domain::TaskWaitKind::Task);
+        assert!(wait.entered_from_draft);
+        assert!(
+            !store
+                .get_task(ordinary)
+                .unwrap()
+                .wait
+                .unwrap()
+                .entered_from_draft
+        );
+        let links = store.task_prerequisites(draft).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].prerequisite_id, upstream);
+        assert_eq!(links[0].reason, "Needs the contract first");
+
+        finish(&store, upstream);
+        assert_eq!(
+            store.resume_cleared_waits(i64::MAX / 2).unwrap().resumed,
+            [ordinary],
+            "ordinary work comes back by itself; the former draft does not"
+        );
+        assert_eq!(store.get_task(ordinary).unwrap().state, TaskState::Ready);
+        let released = store.get_task(draft).unwrap();
+        assert_eq!(released.state, TaskState::Blocked, "never moved by itself");
+        assert_eq!(released.assigned_worker_id, Some(worker.id));
+        assert_eq!(released.next_move_owner, swarm_domain::NextMoveOwner::Queen);
+        assert_eq!(
+            store
+                .tasks_ready_after_prerequisites(20)
+                .unwrap()
+                .0
+                .iter()
+                .map(|task| task.id)
+                .collect::<Vec<_>>(),
+            vec![draft]
+        );
+        store.transition_task(draft, TaskState::Ready).unwrap();
+    }
+
+    /// Blocked has to mean waiting on something that can still finish. A draft
+    /// with nothing to wait on, or only work that is already over, is refused
+    /// and told what to name (ADR 0152).
+    #[test]
+    fn a_draft_blocks_only_behind_work_that_can_still_finish() {
+        let store = TaskStore::in_memory().unwrap();
+        let refused_as_unlinked = |task: TaskId| {
+            let refused = store.transition_task(task, TaskState::Blocked).unwrap_err();
+            assert!(
+                matches!(
+                    refused,
+                    TaskStoreError::TaskPrerequisite(
+                        TaskPrerequisiteError::DraftBlocksOnlyBehindUnfinishedWork
+                    )
+                ),
+                "{refused:?}"
+            );
+            let text = refused.to_string();
+            assert!(text.contains("prerequisite_id"), "{text}");
+            assert!(text.contains("decision_id"), "{text}");
+            assert_eq!(store.get_task(task).unwrap().state, TaskState::Draft);
+        };
+
+        let draft = store
+            .create_task("Fixture follow-up", "/workspace")
+            .unwrap()
+            .id;
+        refused_as_unlinked(draft);
+
+        let finished = completed_contract(&store);
+        store
+            .add_task_prerequisite(
+                draft,
+                finished,
+                "Finished",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        refused_as_unlinked(draft);
+        // Nothing it waits on can still finish, so Ready stays open.
+        store.transition_task(draft, TaskState::Ready).unwrap();
+
+        let other = store
+            .create_task("Fixture other follow-up", "/workspace")
+            .unwrap()
+            .id;
+        let dropped = blocked(&store, "Fixture dropped");
+        store
+            .add_task_prerequisite(
+                other,
+                dropped,
+                "Dropped",
+                &TaskActivityActor::operator(),
+                10,
+            )
+            .unwrap();
+        store
+            .transition_task(dropped, TaskState::Abandoned)
+            .unwrap();
+        refused_as_unlinked(other);
+    }
+
+    /// A draft waiting on a pending operator decision is waiting on something
+    /// that can still finish, so it may be Blocked behind that. The answer
+    /// hands it to Queen rather than bringing it back by itself (ADR 0152).
+    #[test]
+    fn a_draft_waiting_on_a_pending_decision_may_block() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let (draft, _worker) = routed_draft(&store);
+        let decision = store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(draft),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Choose the scope",
+                summary: "Scope needs judgment.",
+                reason: "Two valid approaches",
+                risk: "",
+                evidence: "",
+                suggested_action: "Proceed",
+                allowed_actions: &["Proceed".to_owned()],
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        store.transition_task(draft, TaskState::Blocked).unwrap();
+        let waiting = store.get_task(draft).unwrap();
+        assert_eq!(waiting.state, TaskState::Blocked);
+        assert_eq!(
+            waiting.next_move_owner,
+            swarm_domain::NextMoveOwner::Operator
+        );
+
+        // The answer hands it to Queen; it does not come back by itself.
+        store
+            .resolve_decision_request(decision.id, "Proceed", "", "test")
+            .unwrap();
+        assert!(
+            store
+                .resume_cleared_waits(i64::MAX / 2)
+                .unwrap()
+                .resumed
+                .is_empty()
+        );
+        let answered = store.get_task(draft).unwrap();
+        assert_eq!(answered.state, TaskState::Blocked);
+        assert_eq!(answered.next_move_owner, swarm_domain::NextMoveOwner::Queen);
     }
 }

@@ -31,6 +31,7 @@ fn local(kind: TaskWaitKind) -> TaskWaitView {
         resume_at: Some(1_800_000_000),
         done_at: None,
         cleared: false,
+        entered_from_draft: false,
     }
 }
 

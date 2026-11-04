@@ -24,8 +24,8 @@ export const priorityLabels: Record<TaskPriority, string> = {
 /**
  * How many unfinished tasks hold this draft back, or 0 when nothing does.
  *
- * A draft cannot move to Blocked, so Queen routes one behind unfinished work
- * and leaves it in Draft until that work finishes (ADR 0135). Read as a plain
+ * A draft Queen routes behind unfinished work and leaves in Draft waits until
+ * that work finishes (ADR 0135); she can also block it (ADR 0152). Read as a plain
  * draft, it looked like work she had never touched, and the operator asked her
  * again. The server decides whose move it is; this only counts what it waits on.
  */

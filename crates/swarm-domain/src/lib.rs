@@ -1051,6 +1051,12 @@ mod tests {
         assert!(TaskState::Blocked.can_transition_to(TaskState::Active));
         assert!(!TaskState::Ready.can_transition_to(TaskState::Completed));
         assert!(!TaskState::Completed.can_transition_to(TaskState::Active));
+        // A draft waiting on a task is Blocked, with its link (ADR 0152). It
+        // still cannot skip triage into work: Active and Review stay closed.
+        assert!(TaskState::Draft.can_transition_to(TaskState::Blocked));
+        assert!(!TaskState::Draft.can_transition_to(TaskState::Active));
+        assert!(!TaskState::Draft.can_transition_to(TaskState::Review));
+        assert!(!TaskState::Blocked.can_transition_to(TaskState::Draft));
     }
 
     #[test]

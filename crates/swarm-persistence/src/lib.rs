@@ -3117,7 +3117,7 @@ impl TaskStore {
         decision: DecisionRequestId,
     ) -> Result<Vec<TaskId>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(concat!(
             // ⚠️ TWO WAYS TO BE GATED, AND ONLY ONE OF THEM IS A LINK ROW. A
             // decision carries its own task_id -- PRIMARY membership -- and
             // add_task_decision_link deliberately returns Ok WITHOUT inserting
@@ -3143,8 +3143,13 @@ impl TaskStore {
                                  WHERE p.task_id = t.id
                                    AND pt.removed_at IS NULL
                                    AND pt.state NOT IN ('completed', 'abandoned'))
+                -- A block entered from Draft goes back to Queen, not to the
+                -- operator to release (ADR 0152).
+                AND NOT ",
+            crate::task_waits::block_entered_from_draft!(),
+            "
               ORDER BY t.id",
-        )?;
+        ))?;
         let rows = statement.query_map([decision.to_string()], |row| row.get::<_, String>(0))?;
         let mut parked = Vec::new();
         for row in rows {
@@ -3312,6 +3317,11 @@ impl TaskStore {
                 from: current,
                 to: target,
             });
+        }
+        // A draft blocks only behind work that can still finish, and waits as
+        // Blocked rather than Ready while it does (ADR 0152).
+        if current == TaskState::Draft {
+            task_prerequisites::ensure_draft_move_matches_its_wait(&transaction, id, target)?;
         }
         if target == TaskState::Active {
             ensure_worker_has_no_other_active_task(&transaction, id)?;

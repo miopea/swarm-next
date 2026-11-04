@@ -55,10 +55,11 @@ impl TaskPrerequisite {
 impl NextMoveOwner {
     /// Review may wait on another task without losing its finished-work state.
     ///
-    /// So may a Draft (ADR 0135). A draft cannot move to Blocked, so one filed
-    /// with an unfinished prerequisite stayed Queen's to triage, and no
-    /// assessment could cover it while it waited. Every Queen run then ended
-    /// incomplete. It comes back to Queen when the prerequisite finishes.
+    /// So may a Draft (ADR 0135). A draft filed with an unfinished
+    /// prerequisite is not Queen's to triage while it waits, or no assessment
+    /// could cover it and every Queen run ended incomplete. It comes back to
+    /// her when the prerequisite finishes. She can also move it to Blocked
+    /// (ADR 0152); this holds the drafts she has not moved.
     ///
     /// ⚠️ ONLY WORK THAT CAN STILL FINISH HOLDS IT. A prerequisite that was
     /// abandoned or removed never completes, so waiting on it would take the
@@ -109,6 +110,10 @@ pub enum TaskPrerequisiteError {
     Conflict,
     Unresolved,
     Unauthorized,
+    /// A draft asked to block on nothing that can still finish (ADR 0152).
+    DraftBlocksOnlyBehindUnfinishedWork,
+    /// A draft asked to be ready while it waits on work that can still finish.
+    DraftWaitsOnUnfinishedWork,
 }
 
 impl std::fmt::Display for TaskPrerequisiteError {
@@ -122,6 +127,8 @@ impl std::fmt::Display for TaskPrerequisiteError {
             Self::Conflict => "This prerequisite already has a different reason; remove it explicitly before replacing it",
             Self::Unresolved => "This task still has unresolved prerequisites; Queen must reconcile them before resuming work",
             Self::Unauthorized => "Only Queen or the operator may change task prerequisites",
+            Self::DraftBlocksOnlyBehindUnfinishedWork => "A draft moves to blocked only behind work that can still finish. Name the unfinished task it waits on with prerequisite_id, or the pending operator decision with decision_id, on this same call. If it waits on nothing that can still finish, make it ready (first removing any prerequisite that was abandoned or removed, which can never finish), or abandoned if it should not be done",
+            Self::DraftWaitsOnUnfinishedWork => "This draft waits on a prerequisite that can still finish, so it cannot be ready yet. Move it to blocked: its prerequisite is its link, and it comes back to Queen when that finishes. Remove the prerequisite first only if the draft does not really wait on it",
         })
     }
 }
@@ -295,10 +302,10 @@ mod tests {
         }
     }
 
-    /// A draft cannot move to Blocked, so before ADR 0135 a draft filed behind
-    /// an unfinished task stayed Queen's, uncoverable, and every run read
-    /// incomplete. It now waits like Review does and returns when the
-    /// prerequisite completes.
+    /// Before ADR 0135 a draft filed behind an unfinished task stayed Queen's,
+    /// uncoverable, and every run read incomplete, because a draft could not
+    /// move to Blocked until ADR 0152. It now waits like Review does and
+    /// returns when the prerequisite completes.
     #[test]
     fn a_draft_behind_unfinished_work_waits_and_returns_when_it_finishes() {
         let mut prerequisite = TaskPrerequisite {

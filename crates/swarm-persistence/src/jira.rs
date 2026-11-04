@@ -3509,6 +3509,101 @@ mod tests {
         assert_eq!(refreshed.description, "Refined idea.");
     }
 
+    /// A Jira status can move a draft straight to Blocked, outside the
+    /// lifecycle. That is not a draft Queen blocked behind unfinished work
+    /// (ADR 0152), so answering a decision it waits on still asks the operator
+    /// to release it, as it did before.
+    #[test]
+    fn a_draft_jira_blocks_is_still_released_by_the_operator() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "90001",
+                project_key: "FIX",
+                project_name: "Fixture project",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "Backlog".into(),
+                        task_state: TaskState::Draft,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "2".into(),
+                        jira_status_name: "On hold".into(),
+                        task_state: TaskState::Blocked,
+                    },
+                ],
+            )
+            .unwrap();
+        let issue = |status_id: &'static str,
+                     status_name: &'static str,
+                     remote_updated_at: &'static str| JiraIssueSnapshot {
+            issue_id: "90002",
+            issue_key: "FIX-1",
+            summary: "Fixture follow-up",
+            description: "",
+            status_id,
+            status_name,
+            assignee_account_id: None,
+            assignee_name: None,
+            remote_updated_at,
+            priority: TaskPriority::Normal,
+        };
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[issue("1", "Backlog", "2026-11-01T12:00:00.000+0000")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(task.state, TaskState::Draft);
+        let decision = store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(task.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Choose the scope",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Proceed",
+                allowed_actions: &["Proceed".to_owned()],
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        let held = store
+            .sync_jira_issues(
+                binding.id,
+                &[issue("2", "On hold", "2026-11-01T13:00:00.000+0000")],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(held.state, TaskState::Blocked);
+
+        store
+            .resolve_decision_request(decision.id, "Proceed", "", "test")
+            .unwrap();
+        assert_eq!(
+            store.blocks_left_parked_by_resolving(decision.id).unwrap(),
+            vec![task.id],
+            "a block Jira made is offered back to the operator as before"
+        );
+    }
+
     /// Closed work keeps the description it was closed against, because that
     /// is the record of what was done. If Jira reopens it to nobody, the text
     /// Jira was edited to meanwhile is what the next worker needs.

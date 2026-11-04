@@ -100,6 +100,23 @@ macro_rules! wait_block_entry {
 }
 pub(crate) use wait_block_entry;
 
+/// Whether task `t`'s current block was entered from Draft (ADR 0152). A draft
+/// was never made ready to start, so when its wait clears it goes back to
+/// Queen: nothing brings it back by itself and no answer asks the operator to
+/// release it. Read from the activity row that entered the block, so nothing
+/// new is stored. A Jira status that moves a draft straight to Blocked writes
+/// the same row outside the lifecycle, and is left as it was before.
+macro_rules! block_entered_from_draft {
+    () => {
+        concat!(
+            "EXISTS(SELECT 1 FROM task_activity entered WHERE entered.sequence = ",
+            crate::task_waits::wait_block_entry!(),
+            " AND entered.from_state = 'draft' AND entered.actor_kind IS NOT 'jira')"
+        )
+    };
+}
+pub(crate) use block_entered_from_draft;
+
 /// Whether task `t`'s structured gates are clear: every prerequisite done and
 /// no linked decision pending.
 macro_rules! wait_gates_clear {
@@ -126,6 +143,9 @@ macro_rules! current_wait_json {
                  'resume_at', w.resume_at, 'done_at', w.done_at,
                  'cleared', json(CASE WHEN ",
             crate::task_waits::wait_cleared!(),
+            " THEN 'true' ELSE 'false' END),
+                 'entered_from_draft', json(CASE WHEN ",
+            crate::task_waits::block_entered_from_draft!(),
             " THEN 'true' ELSE 'false' END))
               FROM task_waits w
               WHERE t.state = 'blocked' AND w.task_id = t.id AND w.block_sequence = ",
@@ -450,6 +470,8 @@ impl TaskStore {
     /// only when its gates are clear too; an untyped block never comes back by
     /// itself. A task that has already left Blocked is not a candidate, so this
     /// is safe to run on every pass and after every event that can clear a wait.
+    /// Nor is a block entered from Draft: a draft was never made ready to start,
+    /// so when its wait clears it is Queen's to move (ADR 0152).
     ///
     /// Runs in the coordination pass: every 30 seconds, and straight after a
     /// decision is answered or Done is pressed.
@@ -469,8 +491,10 @@ impl TaskStore {
                    AND (w.kind IN ('task','decision')
                      OR (w.kind = 'operator_action' AND w.done_at IS NOT NULL)
                      OR (w.kind IN ('outside','date') AND w.resume_at <= ?1))
+                   AND NOT {from_draft}
                  ORDER BY t.position, t.id LIMIT ?2",
                 gates = wait_gates_clear!(),
+                from_draft = block_entered_from_draft!(),
             ))?;
             statement
                 .query_map(params![now, MAX_RESUMED_PER_PASS], |row| {

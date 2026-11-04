@@ -340,7 +340,7 @@ pub const fn moves_off_queens_list(
 
 const REVIEW_LEAVES_YOUR_LIST: &str = "It stays yours until one of these happens. Approved and only waiting to ship: move it to awaiting_release. Finished and verified: completed. The worker still owes work or an answer: swarm_return_reviewed_work, which works again after they have answered an earlier return. Waits on another task: add that task as a prerequisite. Needs the operator's judgment: swarm_request_decision. A message or an insufficient_evidence record leaves it yours.";
 
-const DRAFT_LEAVES_YOUR_LIST: &str = "It stays yours until one of these happens. Make it ready and assign it if nobody holds it, or abandoned if it should not be done. Waits on another task: add that task as a prerequisite. Waits on the operator: ask once with swarm_request_decision, then act on the answer or cite it as an operator_deferral. An insufficient_evidence record leaves it yours.";
+const DRAFT_LEAVES_YOUR_LIST: &str = "It stays yours until one of these happens. Make it ready and assign it if nobody holds it, or abandoned if it should not be done. Waits on another task: move it to blocked naming that task with prerequisite_id. Waits on the operator: ask once with swarm_request_decision, then act on the answer or cite it as an operator_deferral. An insufficient_evidence record leaves it yours.";
 
 /// Said when Queen messages the worker on a Review task that is still hers
 /// (ADR 0135). A message never changes who owes the next move.
@@ -726,9 +726,11 @@ mod tests {
         ] {
             assert!(draft_moves.contains(exit), "{exit}: {draft_moves}");
         }
+        // A draft blocks behind the task it waits on (ADR 0152), and the hint
+        // names the link the move needs.
         assert!(
-            !draft_moves.contains("blocked"),
-            "a draft cannot be blocked, so the hint must not offer it: {draft_moves}"
+            draft_moves.contains("blocked naming that task with prerequisite_id"),
+            "{draft_moves}"
         );
 
         // Why other items are Queen's depends on facts this list does not

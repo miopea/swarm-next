@@ -3035,9 +3035,10 @@ mod tests {
         ));
     }
 
-    /// A draft cannot move to Blocked, so one filed behind unfinished work was
-    /// Queen's, no assessment could cover it, and every run read incomplete
-    /// (ADR 0135).
+    /// A draft filed behind unfinished work was Queen's, no assessment could
+    /// cover it, and every run read incomplete (ADR 0135). It could not move
+    /// to Blocked then; since ADR 0152 it can, and one left in Draft still
+    /// waits.
     #[test]
     fn a_draft_behind_unfinished_work_is_not_queens_until_that_work_finishes() {
         let store = TaskStore::in_memory().unwrap();

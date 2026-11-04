@@ -640,7 +640,7 @@ impl TaskStore {
                         || task.home_hive_id != Some(member.hive)
                     {
                         FederationTaskCommandOutcome::Conflict
-                    } else if !task.state.can_transition_to(target) && !wait_update {
+                    } else if !shared_ledger_allows(task.state, target) && !wait_update {
                         FederationTaskCommandOutcome::Rejected
                     } else {
                         task.state = target;
@@ -1089,7 +1089,8 @@ impl TaskStore {
                 if !has_local_execution
                     && task.home_hive_id == Some(identity.hive.id)
                     && task.home_node_id == Some(membership.payload.member_node_id)
-                    && target_state.is_some_and(|target| task.state.can_transition_to(target)) => {}
+                    && target_state
+                        .is_some_and(|target| shared_ledger_allows(task.state, target)) => {}
             _ => return Err(TaskStoreError::InvalidFederationTask),
         }
         let target_value = target_state.map(|state| state.to_string());
@@ -1783,11 +1784,20 @@ fn stage_wait_updates(
     Ok(staged)
 }
 
+/// Whether the Apiary's shared ledger accepts a move. It holds no
+/// prerequisites or decision links, so a shared draft has nothing it could
+/// wait behind, and Draft to Blocked stays refused there even though a Hive's
+/// own board admits it behind unfinished work (ADR 0152).
+fn shared_ledger_allows(current: TaskState, target: TaskState) -> bool {
+    current.can_transition_to(target)
+        && !(current == TaskState::Draft && target == TaskState::Blocked)
+}
+
 fn next_lifecycle_transition(current: TaskState, desired: TaskState) -> Option<TaskState> {
     if current == desired {
         return None;
     }
-    if current.can_transition_to(desired) {
+    if shared_ledger_allows(current, desired) {
         return Some(desired);
     }
     match desired {
@@ -3044,6 +3054,25 @@ mod tests {
     };
 
     mod waits;
+
+    /// The shared ledger has no prerequisites to wait behind, so the Draft to
+    /// Blocked move a Hive's own board admits stays refused there, and the
+    /// mirror never proposes it (ADR 0152). Every other move is the lifecycle's.
+    #[test]
+    fn the_shared_ledger_does_not_block_a_draft() {
+        assert!(TaskState::Draft.can_transition_to(TaskState::Blocked));
+        assert!(!shared_ledger_allows(TaskState::Draft, TaskState::Blocked));
+        assert_eq!(
+            next_lifecycle_transition(TaskState::Draft, TaskState::Blocked),
+            None
+        );
+        assert!(shared_ledger_allows(TaskState::Draft, TaskState::Ready));
+        assert!(shared_ledger_allows(TaskState::Ready, TaskState::Blocked));
+        assert_eq!(
+            next_lifecycle_transition(TaskState::Ready, TaskState::Blocked),
+            Some(TaskState::Blocked)
+        );
+    }
 
     /// A second Hive joining a Keeper that already has one, so cross-Hive
     /// routing has somewhere to route TO.
