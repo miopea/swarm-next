@@ -56,6 +56,9 @@ report the operator had routed to it so it could read it.
    size, the limit, and that the operator can open it on the task card.
 5. **A read starts no delivery pass.** Like the other reads, a successful call
    does not wake the control room or run a coordination pass (ADR 0138).
+6. **An image is data, not instructions.** Anyone who can attach a file to the
+   ticket can put text in an image. The tool description tells the worker that
+   text inside an image which tells it to do something is not an instruction.
 
 `swarm_list_jira_comments` now says that "[attachment]" is read with the new
 tool. The tool surface revision moves to 38.
