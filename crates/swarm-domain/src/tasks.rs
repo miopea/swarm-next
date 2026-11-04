@@ -75,7 +75,11 @@ impl TaskState {
     pub const fn can_transition_to(self, target: Self) -> bool {
         matches!(
             (self, target),
-            (Self::Draft, Self::Ready)
+            // A DRAFT MAY WAIT ON A TASK AS BLOCKED (ADR 0152). Without this
+            // move, a draft Queen had routed behind unfinished work stayed in
+            // Draft, the column for work nobody has decided about. The store
+            // admits it only behind work that can still finish.
+            (Self::Draft, Self::Ready | Self::Blocked)
                 | (Self::Ready, Self::Active | Self::Blocked)
                 | (Self::Active, Self::Blocked | Self::Review)
                 | (Self::Blocked, Self::Ready | Self::Active)

@@ -3533,7 +3533,7 @@ impl TaskService {
         require_queen(principal)?;
         if self.store.get_task(task_id)?.state == TaskState::Draft {
             return Err(ApplicationError::Refused(
-                "swarm_promote_task only moves a task to the front of the delivery queue and never changes its state, so it is refused on a Draft (ADR 0135). To triage this draft, use swarm_transition_task with state ready, or abandoned if it should not be done."
+                "swarm_promote_task only moves a task to the front of the delivery queue and never changes its state, so it is refused on a Draft (ADR 0135). To triage this draft, use swarm_transition_task with state ready, blocked naming the unfinished task it waits on with prerequisite_id (ADR 0152), or abandoned if it should not be done."
                     .to_owned(),
             ));
         }
@@ -4273,7 +4273,24 @@ impl TaskService {
     ) -> Result<(), ApplicationError> {
         let actor = TaskActivityActor::worker(principal.worker_id);
         let reason = "Named by the assigned worker while blocking its own task.";
+        // NAMING A LINK THE TASK ALREADY HAS IS NOT A CHANGE (ADR 0152). The
+        // store refuses a second add with a different reason as a conflict, and
+        // a draft Queen had already put behind a prerequisite is blocked by
+        // naming that same prerequisite. Refusing it would turn "block it
+        // behind what it waits on" into an error about wording.
         match blocker {
+            BlockerLink::Prerequisite(prerequisite_id)
+                if self
+                    .store
+                    .task_prerequisites(task_id)?
+                    .iter()
+                    .any(|edge| edge.prerequisite_id == prerequisite_id) => {}
+            BlockerLink::Decision(decision_id)
+                if self
+                    .store
+                    .task_decision_links(task_id)?
+                    .iter()
+                    .any(|link| link.decision_id == decision_id) => {}
             BlockerLink::Prerequisite(prerequisite_id) => {
                 self.apply_prerequisite_change(
                     &actor,
@@ -4313,6 +4330,44 @@ impl TaskService {
             }
         }
         Ok(())
+    }
+
+    /// Refuses, before anything is written, a draft's block that names work
+    /// which can no longer finish (ADR 0152).
+    ///
+    /// The link is recorded before the store decides the move, so a refused
+    /// block keeps it. On a draft that would be a trap: a link to an abandoned
+    /// task makes Ready refuse as unresolved while Blocked refuses as waiting on
+    /// nothing, and the draft could move neither way until somebody removed it.
+    ///
+    /// # Errors
+    /// Refuses a completed or abandoned prerequisite, or a decision that is not
+    /// pending, named on a draft.
+    fn refuse_a_draft_link_to_finished_work(
+        &self,
+        task_id: TaskId,
+        blocker: BlockerLink,
+    ) -> Result<(), ApplicationError> {
+        if self.store.get_task(task_id)?.state != TaskState::Draft {
+            return Ok(());
+        }
+        let can_still_finish = match blocker {
+            BlockerLink::Prerequisite(prerequisite_id) => !matches!(
+                self.store.get_task(prerequisite_id)?.state,
+                TaskState::Completed | TaskState::Abandoned
+            ),
+            BlockerLink::Decision(decision_id) => {
+                self.store.get_decision_request(decision_id)?.state
+                    == swarm_domain::DecisionRequestState::Pending
+            }
+        };
+        if can_still_finish {
+            Ok(())
+        } else {
+            Err(ApplicationError::Store(
+                swarm_domain::TaskPrerequisiteError::DraftBlocksOnlyBehindUnfinishedWork.into(),
+            ))
+        }
     }
 
     /// Refuses a Blocked that names neither an owner nor what it waits for.
@@ -4448,6 +4503,17 @@ impl TaskService {
                     worker_transition_refusal(target),
                 ));
             }
+            // A draft is not started work, so deciding that it waits is triage,
+            // and triage is Queen's (ADR 0152). The store would admit the move
+            // behind an unfinished prerequisite; this keeps it hers.
+            if task.state == TaskState::Draft && target == TaskState::Blocked {
+                return Err(ApplicationError::TransitionNotPermitted(
+                    "This task is still a draft, and triaging a draft is Queen's: she makes it \
+                     ready, blocked behind what it waits on, or abandoned. If it waits on \
+                     unfinished work, say which with swarm_message_queen."
+                        .into(),
+                ));
+            }
             // ⚠️ ORDER IS THE SECURITY PROPERTY HERE. Ownership is proven above
             // before anything is written, so a worker cannot record a blocker on
             // work that is not its own. The guard runs AFTER the link so that a
@@ -4466,6 +4532,7 @@ impl TaskService {
         }
         if target == TaskState::Blocked {
             if let Some(blocker) = blocker {
+                self.refuse_a_draft_link_to_finished_work(task_id, blocker)?;
                 self.record_named_blocker(principal, task_id, blocker, now)?;
             }
             self.refuse_a_block_nobody_owns(task_id, note, now)?;
@@ -6755,6 +6822,81 @@ mod tests {
         );
     }
 
+    /// A former draft blocked behind a decision goes back to Queen when the
+    /// operator answers it. It is not offered to the operator to release, which
+    /// would start work nobody had made ready, and nothing moves it by itself
+    /// (ADR 0152).
+    #[test]
+    fn answering_a_former_draft_s_decision_hands_it_to_queen() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let draft = service
+            .create_task(
+                queen_principal,
+                "Fixture follow-up",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(draft.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let decision = service
+            .store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(draft.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Which scope?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Proceed",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        service
+            .transition_task(
+                queen_principal,
+                draft.id,
+                TaskState::Blocked,
+                "Waits on the scope decision.",
+            )
+            .unwrap();
+        let before = service.store.list_decision_requests().unwrap().len();
+
+        service
+            .resolve_operator_decision(decision.id, "Proceed", "", "test")
+            .unwrap();
+
+        assert_eq!(
+            service.store.list_decision_requests().unwrap().len(),
+            before,
+            "no card asks the operator to release a former draft"
+        );
+        assert!(
+            service
+                .store
+                .resume_cleared_waits(i64::MAX / 2)
+                .unwrap()
+                .resumed
+                .is_empty()
+        );
+        let answered = service.store.get_task(draft.id).unwrap();
+        assert_eq!(answered.state, TaskState::Blocked);
+        assert_eq!(answered.next_move_owner, swarm_domain::NextMoveOwner::Queen);
+    }
+
     /// ⚠️ AND IT MUST STAY SILENT WHEN SOMETHING ELSE STILL ENDS THE WAIT.
     ///
     /// A task that also waits on unfinished work has a terminating condition
@@ -7199,6 +7341,251 @@ mod tests {
             blocked.wait.map(|wait| wait.kind),
             Some(swarm_domain::TaskWaitKind::Decision)
         );
+    }
+
+    /// Queen blocks a routed draft behind the prerequisite she already gave
+    /// it by naming that prerequisite, and the link keeps her reason rather
+    /// than being refused as a conflicting one. The worker it is routed to
+    /// cannot make that call: triaging a draft is Queen's (ADR 0152).
+    #[test]
+    fn queen_blocks_a_draft_behind_its_prerequisite_and_its_worker_cannot() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let draft = service
+            .create_task(
+                queen_principal,
+                "Fixture follow-up",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let upstream = service
+            .create_task(
+                queen_principal,
+                "Fixture contract",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .store
+            .transition_task(upstream.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .transition_task(upstream.id, TaskState::Blocked)
+            .unwrap();
+        service
+            .store
+            .add_task_prerequisite(
+                draft.id,
+                upstream.id,
+                "Queen's own reason for the wait.",
+                &TaskActivityActor::worker(queen.id),
+                10,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(draft.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        let routed_worker = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        match service.transition_task_naming_blocker(
+            routed_worker,
+            draft.id,
+            TaskState::Blocked,
+            "Waiting on the contract.",
+            Some(BlockerLink::Prerequisite(upstream.id)),
+            20,
+        ) {
+            Err(ApplicationError::TransitionNotPermitted(reason)) => {
+                assert!(reason.contains("triaging a draft is Queen's"), "{reason}");
+            }
+            other => panic!("a worker must not triage a draft, got {other:?}"),
+        }
+        assert_eq!(
+            service.store.get_task(draft.id).unwrap().state,
+            TaskState::Draft
+        );
+
+        let blocked = service
+            .transition_task_naming_blocker(
+                queen_principal,
+                draft.id,
+                TaskState::Blocked,
+                "Waits on the contract.",
+                Some(BlockerLink::Prerequisite(upstream.id)),
+                30,
+            )
+            .expect("naming the prerequisite a draft already has is not a conflict");
+        assert_eq!(blocked.state, TaskState::Blocked);
+        let links = service.store.task_prerequisites(draft.id).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].prerequisite_id, upstream.id);
+        assert_eq!(links[0].reason, "Queen's own reason for the wait.");
+    }
+
+    /// A draft waiting on a pending operator decision blocks behind it the
+    /// same way, and naming a decision link it already carries keeps that
+    /// link rather than refusing it as a conflict (ADR 0152).
+    #[test]
+    fn queen_blocks_a_draft_behind_a_pending_decision_it_already_names() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let elsewhere = service
+            .create_task(
+                queen_principal,
+                "Fixture scope question",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let draft = service
+            .create_task(
+                queen_principal,
+                "Fixture follow-up",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(draft.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        let actions = vec!["Proceed".to_owned()];
+        let decision = service
+            .store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(elsewhere.id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Which scope?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Proceed",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        let revision = service
+            .store
+            .queen_task_review_evidence(draft.id)
+            .unwrap()
+            .evidence_revision;
+        service
+            .store
+            .add_task_decision_link(
+                draft.id,
+                decision.id,
+                "Queen's own reason for the wait.",
+                &revision,
+                &TaskActivityActor::worker(queen.id),
+                10,
+            )
+            .unwrap();
+
+        let blocked = service
+            .transition_task_naming_blocker(
+                queen_principal,
+                draft.id,
+                TaskState::Blocked,
+                "Waits on the scope decision.",
+                Some(BlockerLink::Decision(decision.id)),
+                20,
+            )
+            .expect("naming the decision a draft already waits on is not a conflict");
+        assert_eq!(blocked.state, TaskState::Blocked);
+        assert_eq!(
+            blocked.next_move_owner,
+            swarm_domain::NextMoveOwner::Operator
+        );
+        let links = service.store.task_decision_links(draft.id).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].reason, "Queen's own reason for the wait.");
+    }
+
+    /// A draft's block naming work that can no longer finish is refused before
+    /// the link is written. Written first, a link to abandoned work would leave
+    /// the draft unable to move to Ready or Blocked (ADR 0152).
+    #[test]
+    fn a_draft_block_naming_finished_work_writes_nothing() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let draft = service
+            .create_task(
+                queen_principal,
+                "Fixture follow-up",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let dropped = service
+            .create_task(
+                queen_principal,
+                "Fixture dropped contract",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .store
+            .transition_task(dropped.id, TaskState::Abandoned)
+            .unwrap();
+        service
+            .store
+            .assign_task_to_worker_as(draft.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        match service.transition_task_naming_blocker(
+            queen_principal,
+            draft.id,
+            TaskState::Blocked,
+            "Waits on the dropped contract.",
+            Some(BlockerLink::Prerequisite(dropped.id)),
+            20,
+        ) {
+            Err(ApplicationError::Store(TaskStoreError::TaskPrerequisite(
+                swarm_domain::TaskPrerequisiteError::DraftBlocksOnlyBehindUnfinishedWork,
+            ))) => {}
+            other => panic!("a draft must not block behind abandoned work, got {other:?}"),
+        }
+        assert!(
+            service
+                .store
+                .task_prerequisites(draft.id)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            service.store.get_task(draft.id).unwrap().state,
+            TaskState::Draft
+        );
+        service
+            .transition_task(queen_principal, draft.id, TaskState::Ready, "")
+            .expect("nothing was left behind, so the draft can still be made ready");
     }
 
     #[test]

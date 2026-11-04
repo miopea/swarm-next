@@ -90,6 +90,14 @@ pub struct TaskWaitView {
     pub done_at: Option<i64>,
     /// Whether it had cleared when it was read.
     pub cleared: bool,
+    /// Whether the block was entered from Draft. A draft has never been made
+    /// ready to start, so when its wait clears it goes back to Queen to decide
+    /// rather than coming back by itself (ADR 0152). Absent in snapshots
+    /// written before this existed, which read as not. Left out when false, so
+    /// every task that is not a former draft serializes exactly as before and
+    /// no review evidence written before this changes because of it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub entered_from_draft: bool,
 }
 
 impl TaskWaitView {
@@ -116,6 +124,8 @@ impl crate::NextMoveOwner {
     /// - A cleared wait is the assigned worker's, provided its prerequisites
     ///   are done. Swarm moves it back to Ready by itself, and this is what the
     ///   board says in the moment before it does.
+    /// - Except on a block entered from Draft: that comes back to Queen, and
+    ///   nothing moves it by itself (ADR 0152).
     ///
     /// A pending decision still wins: the operator's answer is the next move.
     #[must_use]
@@ -139,7 +149,11 @@ impl crate::NextMoveOwner {
             if !prerequisites.iter().all(crate::TaskPrerequisite::satisfied) {
                 return Self::Blocked;
             }
-            return if assigned { Self::Worker } else { Self::Queen };
+            return if assigned && !wait.entered_from_draft {
+                Self::Worker
+            } else {
+                Self::Queen
+            };
         }
         match wait.kind {
             TaskWaitKind::OperatorAction => Self::Operator,
@@ -527,7 +541,31 @@ mod tests {
             resume_at: Some(NOW + 3_600),
             done_at: None,
             cleared,
+            entered_from_draft: false,
         }
+    }
+
+    /// Only a former draft's wait says so. Every other wait serializes as it
+    /// did before the flag existed, so review evidence hashed from it does not
+    /// change, and a snapshot without it reads as not (ADR 0152).
+    #[test]
+    fn only_a_former_draft_s_wait_carries_the_flag() {
+        let ordinary = serde_json::to_value(view(TaskWaitKind::Task, false)).unwrap();
+        assert!(ordinary.get("entered_from_draft").is_none(), "{ordinary}");
+        let former_draft = TaskWaitView {
+            entered_from_draft: true,
+            ..view(TaskWaitKind::Task, false)
+        };
+        let written = serde_json::to_value(&former_draft).unwrap();
+        assert_eq!(written["entered_from_draft"], true);
+        assert_eq!(
+            serde_json::from_value::<TaskWaitView>(written).unwrap(),
+            former_draft
+        );
+        assert_eq!(
+            serde_json::from_value::<TaskWaitView>(ordinary).unwrap(),
+            view(TaskWaitKind::Task, false)
+        );
     }
 
     #[test]
@@ -576,6 +614,27 @@ mod tests {
             NextMoveOwner::Queen,
             "untyped stays Queen's"
         );
+        // A block entered from Draft goes back to Queen when it clears, even
+        // with a worker assigned, and waits like any other until then
+        // (ADR 0152).
+        for kind in [TaskWaitKind::Task, TaskWaitKind::Decision] {
+            let from_draft = |cleared| TaskWaitView {
+                entered_from_draft: true,
+                ..view(kind, cleared)
+            };
+            assert_eq!(
+                base.after_wait(blocked, Some(&from_draft(true)), true, &[]),
+                NextMoveOwner::Queen
+            );
+            assert_eq!(
+                NextMoveOwner::Blocked.after_wait(blocked, Some(&from_draft(false)), true, &[]),
+                NextMoveOwner::Blocked
+            );
+            assert_eq!(
+                base.after_wait(blocked, Some(&view(kind, true)), true, &[]),
+                NextMoveOwner::Worker
+            );
+        }
         assert_eq!(
             NextMoveOwner::Operator.after_wait(
                 blocked,

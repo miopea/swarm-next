@@ -4961,7 +4961,7 @@ fn sleep_worker_tool() -> Tool {
 fn promote_task_tool() -> Tool {
     tool(
         "swarm_promote_task",
-        "Queen only: move one open task to the front of the delivery queue. THIS IS THE ONLY LEVER ON WHAT ARRIVES FIRST. Delivery order is the board's order — a task's position — and it does NOT consult priority: priority travels with the brief so the worker knows how urgent the work is, and decides nothing about sequence. So marking a task high does not move it, and a task filed last is delivered last however urgent it is. Use this rather than Blocking something else to shorten the queue ahead of it; that works, and it makes the board say a task is waiting on something when it is waiting on you. IT NEVER CHANGES A TASK'S STATE, so a Draft is refused: triage a draft with swarm_transition_task (ready or abandoned).",
+        "Queen only: move one open task to the front of the delivery queue. THIS IS THE ONLY LEVER ON WHAT ARRIVES FIRST. Delivery order is the board's order — a task's position — and it does NOT consult priority: priority travels with the brief so the worker knows how urgent the work is, and decides nothing about sequence. So marking a task high does not move it, and a task filed last is delivered last however urgent it is. Use this rather than Blocking something else to shorten the queue ahead of it; that works, and it makes the board say a task is waiting on something when it is waiting on you. IT NEVER CHANGES A TASK'S STATE, so a Draft is refused: triage a draft with swarm_transition_task (ready, blocked naming the unfinished task it waits on, or abandoned).",
         &json!({
             "type": "object",
             "properties": {
@@ -8674,6 +8674,83 @@ mod tests {
                 assert_eq!(store.get_task(task.id).unwrap().state, state);
             }
         }
+    }
+
+    /// Queen's two calls on a routed draft that waits on a blocked task, as
+    /// she made them. Ready is refused and names Blocked; Blocked, naming the
+    /// prerequisite the draft already has, succeeds and keeps the link and
+    /// its reason (ADR 0152).
+    #[tokio::test]
+    async fn queen_blocks_a_routed_draft_behind_its_blocked_prerequisite() {
+        async fn call(bridge: AgentBridge, token: &str, arguments: Value) -> Value {
+            response_json(
+                handle(
+                    bridge,
+                    plain_state(),
+                    mcp_request(
+                        Some(token),
+                        "tools/call",
+                        &json!({ "name": "swarm_transition_task", "arguments": arguments }),
+                    ),
+                )
+                .await,
+            )
+            .await
+        }
+
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let draft = store
+            .create_task("Fixture follow-up", "/workspace/petal")
+            .unwrap();
+        let upstream = store
+            .create_task("Fixture contract", "/workspace/queen")
+            .unwrap();
+        store
+            .transition_task(upstream.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(upstream.id, swarm_domain::TaskState::Blocked)
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                draft.id,
+                upstream.id,
+                "Needs the shared contract",
+                &swarm_domain::TaskActivityActor::worker(queen_id),
+                10,
+            )
+            .unwrap();
+        store.assign_task_to_worker(draft.id, worker_id).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let ready = call(
+            bridge.clone(),
+            &token,
+            json!({ "task_id": draft.id, "state": "ready" }),
+        )
+        .await;
+        assert!(ready.to_string().contains("Move it to blocked"), "{ready}");
+        assert_eq!(
+            store.get_task(draft.id).unwrap().state,
+            swarm_domain::TaskState::Draft
+        );
+
+        let blocked = call(
+            bridge.clone(),
+            &token,
+            json!({
+                "task_id": draft.id, "state": "blocked", "prerequisite_id": upstream.id,
+                "note": "Waits on the shared contract."
+            }),
+        )
+        .await;
+        let task = store.get_task(draft.id).unwrap();
+        assert_eq!(task.state, swarm_domain::TaskState::Blocked, "{blocked}");
+        assert_eq!(task.assigned_worker_id, Some(worker_id));
+        assert_eq!(task.prerequisites.len(), 1);
+        assert_eq!(task.prerequisites[0].prerequisite_id, upstream.id);
+        assert_eq!(task.prerequisites[0].reason, "Needs the shared contract");
+        assert_eq!(task.next_move_owner, swarm_domain::NextMoveOwner::Blocked);
     }
 
     #[tokio::test]
@@ -13751,6 +13828,10 @@ mod tests {
         assert_eq!(refused["result"]["isError"], true, "{refused}");
         let text = refused["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("swarm_transition_task"), "{text}");
+        assert!(
+            text.contains("blocked naming the unfinished task"),
+            "{text}"
+        );
         assert!(
             !text.contains("database"),
             "a refusal, not a damaged store: {text}"
