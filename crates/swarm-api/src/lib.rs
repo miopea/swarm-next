@@ -24552,6 +24552,185 @@ mod tests {
         let _ = server_task.await;
     }
 
+    /// A protocol migration's clock is not a verdict, because it ends this API.
+    ///
+    /// ⚠️ THE FALSE RECORD THIS PREVENTS. The package stops the API with the
+    /// engine and swaps both, and the request waiting on the swap outlived that
+    /// stop: a protocol 18 migration was written down as timed out 48 seconds
+    /// in, and the engine it asked for arrived a minute later. Only the API
+    /// that replaces this one can see how it ended.
+    #[tokio::test]
+    async fn a_migration_that_outlives_its_own_api_is_left_open_not_timed_out() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    working_directory: workspace.clone(),
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        // This engine never moves to the prepared protocol, standing in for
+        // the swap that lands after this API has already been stopped.
+        let server = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "old-host",
+            "old-engine",
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        let wanted = swarm_terminal::PROTOCOL_VERSION + 1;
+        let candidate = runtime.path().join("candidate");
+        std::fs::create_dir(&candidate).unwrap();
+        std::fs::write(candidate.join("VERSION"), "1.9.0-candidate\n").unwrap();
+        std::fs::write(candidate.join("PROTOCOL"), format!("{wanted}\n")).unwrap();
+        std::fs::write(
+            runtime.path().join("protocol-migration.pending"),
+            candidate.to_str().unwrap(),
+        )
+        .unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Dahlia",
+                ProviderKind::ClaudeCode,
+                workspace.to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session.id()).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone())
+            .with_release_paths(
+                runtime.path().to_owned(),
+                runtime.path().join("release.request"),
+            )
+            .with_maintenance_request_path(runtime.path().join("worker-engine-maintenance.request"))
+            .with_maintenance_timeout(Duration::from_millis(300));
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/terminal-host/maintenance")
+                    .header("authorization", "Bearer secret")
+                    .header("x-swarm-prepared-version", "1.9.0-candidate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // The operator is still told it has not reported in yet...
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        assert!(!session.is_running().unwrap());
+        assert_eq!(store.worker_revival_intents().unwrap(), vec![worker.id]);
+        // ...but the record does not claim an ending it cannot see.
+        let attempt = store.last_worker_engine_update().unwrap().unwrap();
+        assert_eq!(attempt.to_version, "1.9.0-candidate");
+        assert_eq!(attempt.to_protocol, Some(wanted));
+        assert_eq!(attempt.stopped_sessions, Some(1));
+        assert_eq!(attempt.outcome, None);
+        assert_eq!(attempt.finished_at, None);
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    /// The API a protocol migration put in place says how that migration went.
+    ///
+    /// Only an exact match settles it: the engine must report the release and
+    /// protocol the attempt asked for. Every other open row stays open, and an
+    /// ending already written is never rewritten.
+    #[tokio::test]
+    async fn the_api_a_migration_put_in_place_settles_it_from_the_engine() {
+        use swarm_persistence::{WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome};
+
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            Arc::new(SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace]).unwrap());
+        let socket = runtime.path().join("terminal.sock");
+        let server =
+            HostServer::bind_with_identity(&socket, registry, "1.9.0", "engine-after").unwrap();
+        let server_task = tokio::spawn(server.run());
+        let protocol = swarm_terminal::PROTOCOL_VERSION;
+
+        for (to_version, to_protocol, already, expected) in [
+            // The migration this API replaced, arrived exactly as asked.
+            (
+                "1.9.0",
+                Some(protocol),
+                None,
+                Some(WorkerEngineUpdateOutcome::Succeeded),
+            ),
+            // A different release from the one running is not that migration.
+            ("1.9.1", Some(protocol), None, None),
+            // Nor is one asking for another protocol.
+            ("1.9.0", Some(protocol - 1), None, None),
+            // An ordinary update that never ended is an API that died during
+            // it; a current engine now says nothing about why.
+            ("1.9.0", None, None, None),
+            // An ending already written stays written.
+            (
+                "1.9.0",
+                Some(protocol),
+                Some(WorkerEngineUpdateOutcome::TimedOut),
+                Some(WorkerEngineUpdateOutcome::TimedOut),
+            ),
+        ] {
+            let store = TaskStore::in_memory().unwrap();
+            let id = store
+                .begin_worker_engine_update(
+                    "1.8.0",
+                    to_version,
+                    to_protocol,
+                    Some(3),
+                    WorkerEngineUpdateInitiator::Operator,
+                    1_000,
+                )
+                .unwrap();
+            if let Some(outcome) = already {
+                store
+                    .finish_worker_engine_update(&id, outcome, "", 1_045)
+                    .unwrap();
+            }
+            let state = AppState::default()
+                .with_terminal_host(HostClient::new(&socket), "secret")
+                .with_task_store(store.clone());
+
+            state.supervise_workers().await;
+            // Once is all it takes, and a second look changes nothing.
+            state.supervise_workers().await;
+
+            let recorded = store.recent_worker_engine_updates(10).unwrap();
+            let case = format!("{to_version} {to_protocol:?} {already:?}");
+            // Settling is not noticing: no second row claims an unprompted swap.
+            assert_eq!(recorded.len(), 1, "{case}");
+            assert_eq!(recorded[0].id, id, "{case}");
+            assert_eq!(recorded[0].outcome, expected, "{case}");
+            assert_eq!(recorded[0].stopped_sessions, Some(3), "{case}");
+            assert_eq!(
+                recorded[0].initiated,
+                WorkerEngineUpdateInitiator::Operator,
+                "{case}"
+            );
+        }
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
     /// An engine replaced by something other than this API is noticed and named.
     ///
     /// ⚠️ THE PATH THE RECORD ORIGINALLY MISSED. `swarm-host-reconcile.timer`

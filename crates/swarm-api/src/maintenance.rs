@@ -854,7 +854,13 @@ async fn maintain_worker_engine_locked(
 
     let updated = await_expected_engine(state, pending_protocol).await;
     let _ = std::fs::remove_file(request_path.as_ref());
-    if updated.is_err() {
+    // A PROTOCOL MIGRATION REPLACES THIS PROCESS, so its clock is not a verdict.
+    // The package stops this API with the engine and swaps both, and this
+    // request can outlive that stop long enough to time out. A protocol 18
+    // migration was recorded "timed out" 48 seconds in, and its swap landed a
+    // minute later. The row stays open instead, and the API that replaces this
+    // one settles it from what the engine reports.
+    if updated.is_err() && pending_protocol.is_none() {
         finish_engine_update(
             state,
             attempt.as_deref(),

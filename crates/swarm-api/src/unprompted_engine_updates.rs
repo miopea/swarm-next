@@ -30,7 +30,8 @@ impl AppState {
     /// FIRST SIGHTING RECORDS NOTHING, and that is not a missed case. After this
     /// process starts there is no earlier observation to compare against, so a
     /// difference cannot be distinguished from never having looked. Claiming a
-    /// swap there would report one on every API restart.
+    /// swap there would report one on every API restart. What it can do is
+    /// settle a protocol migration that replaced the API which started it.
     pub(crate) async fn notice_unprompted_engine_update(&self) {
         // A lifecycle operation in flight is an engine change somebody ASKED
         // for, and that path writes its own record. Taking this lock is only a
@@ -53,6 +54,7 @@ impl AppState {
             Err(_) => return,
         };
         let Some(previous) = previous else {
+            settle_replaced_migration(self, &seen);
             return;
         };
         if !engine_moved(&previous, &seen) {
@@ -94,6 +96,48 @@ fn engine_moved(previous: &ObservedEngine, seen: &ObservedEngine) -> bool {
     match (&previous.build_id, &seen.build_id) {
         (Some(before), Some(after)) => before != after,
         _ => previous.host_version != seen.host_version,
+    }
+}
+
+/// Settles the protocol migration that replaced the API which started it.
+///
+/// ⚠️ THE API THAT ASKED CANNOT ANSWER. A protocol migration stops the API with
+/// the engine and swaps both, so the request waiting on it is gone, or still
+/// counting down inside a process being shut down, when the engine arrives. It
+/// therefore leaves its row open, and the first API to see the engine afterwards
+/// is the one that can say how it went.
+///
+/// ONLY ON AN EXACT MATCH. The engine must report the very release AND protocol
+/// that attempt asked for. Anything else stays open, which the card already
+/// reads as "never recorded how it ended" rather than as success. An open row
+/// with no protocol is an API that died during an ordinary update, and an
+/// engine that is current now says nothing about why that one stopped.
+fn settle_replaced_migration(state: &AppState, seen: &ObservedEngine) {
+    let Ok(store) = task_store(state) else {
+        return;
+    };
+    let Ok(Some(last)) = store.last_worker_engine_update() else {
+        return;
+    };
+    if last.outcome.is_some()
+        || last.to_protocol != Some(seen.protocol_version)
+        || last.to_version != seen.host_version
+    {
+        return;
+    }
+    match store.finish_worker_engine_update(
+        &last.id,
+        WorkerEngineUpdateOutcome::Succeeded,
+        "Settled by the Swarm that replaced the one running this migration: the engine reports the release and protocol it asked for.",
+        crate::unix_timestamp(),
+    ) {
+        Ok(()) => {
+            let _ = store.record_control_room_event(ControlRoomEventKind::RuntimeChanged);
+            state.control_room_notify.notify_waiters();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "a finished protocol migration could not be settled");
+        }
     }
 }
 
