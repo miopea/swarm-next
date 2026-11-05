@@ -57,6 +57,11 @@ step() {
 }
 
 if [ "$mode" = "rust" ] || [ "$mode" = "all" ]; then
+  # Keeps target/ under its bound before adding to it (docs/developing.md). A
+  # cache it could not trim says nothing about the change being checked, so it
+  # warns rather than failing the gate. Its own tests are a step like any other.
+  python3 scripts/prune-target.py || printf 'prune-target: exited %d; target/ was not pruned\n' "$?" >&2
+  step "prune-target test" python3 scripts/test-prune-target.py
   step "cargo fmt" cargo +1.97.1 fmt --all --check
   step "cargo clippy" cargo +1.97.1 clippy --workspace --all-targets --all-features -- -D warnings
   step "cargo test" cargo +1.97.1 test --workspace --all-features

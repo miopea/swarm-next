@@ -48,6 +48,45 @@ pnpm build
 `CARGO_INCREMENTAL=0` is required in this workspace: six rustc ICEs came from
 the incremental cache, each masking real errors.
 
+## Keeping target/ bounded
+
+Cargo writes a new build of a crate whenever its build identity changes (a
+version bump, a dependency update, other features, another toolchain) and never
+removes the old one. Every release bumps the workspace version, so each one left
+a full set of test binaries behind: on 2026-11-05 two checkouts held 90 GB of
+build output, one of them with 127 builds of swarm-api's test binary.
+
+`scripts/prune-target.py` keeps a checkout's `target/`, or `$CARGO_TARGET_DIR`,
+under 20 GiB. `scripts/verify.sh rust` and the development builder run it before
+they build, so a checkout that is worked in or reloaded from stays bounded
+without anyone remembering to run it.
+
+- It acts only when `target/` is over the bound, and then removes the least
+  recently used build units, each one whole, until `target/` is at three
+  quarters of the bound.
+- A unit any build read in the last two days is kept. When those alone exceed
+  the bound, `target/` stays over it and the script says so.
+- It never touches a profile directory cargo is compiling in. It takes cargo's
+  own locks there without waiting and leaves the directory alone if one is
+  held; a build that starts while it runs waits for it. Cargo releases those
+  locks while test binaries run, and what they run was read moments before,
+  so the two-day window keeps it.
+- It deletes only inside `target/`. It follows no link: not to a profile
+  directory, and not from a profile's `deps/`, `.fingerprint/`, `build/`,
+  `examples/` or `incremental/` to wherever that leads.
+- A failed prune warns and the build goes ahead: `target/` is a cache.
+- Each run appends its sizes before and after to `target/prune-target.log`,
+  kept to the newest thousand runs, so the bound can be checked over weeks.
+- Debug builds keep line tables rather than full debug info (`Cargo.toml`),
+  which is what lets two days of builds fit. To debug with variables, set
+  `CARGO_PROFILE_DEV_DEBUG=full`.
+
+```sh
+python3 scripts/prune-target.py --dry-run               # what it would remove
+SWARM_TARGET_LIMIT_GIB=40 sh scripts/verify.sh rust     # another bound
+python3 scripts/test-prune-target.py                    # its tests; CI runs them
+```
+
 ## Running it from a checkout
 
 The terminal host and the API are separate process owners shipped as one

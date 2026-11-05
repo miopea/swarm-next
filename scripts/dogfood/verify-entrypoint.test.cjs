@@ -18,7 +18,7 @@ function run(args, fail = '') {
     // Run the actual entrypoint against an isolated audit adapter, never the
     // network. The adapter also verifies CI's working-directory contract.
     fs.writeFileSync(path.join(bin, 'scripts/audit-web.sh'), `#!/bin/sh\n[ "$(basename "$PWD")" = web ] || exit 9\nprintf 'CALL sh ../scripts/audit-web.sh\\n'\n[ "$VERIFY_TEST_FAIL" != audit ] || exit 7\n`);
-    for (const command of ['cargo', 'pnpm']) {
+    for (const command of ['cargo', 'pnpm', 'python3']) {
       fs.writeFileSync(path.join(bin, command), `#!/bin/sh\nprintf 'CALL ${command} %s\\n' "$*"\nif [ "$*" = "$VERIFY_TEST_FAIL" ]; then exit 7; fi\n`, { mode: 0o755 });
     }
     return spawnSync(shell, ['scripts/verify.sh', ...args], {
@@ -59,6 +59,8 @@ test('Rust verification pins the toolchain and includes the optimized resize reg
   const result = run(['rust']);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.stdout.split('\n').filter(line => line.startsWith('CALL')), [
+    'CALL python3 scripts/prune-target.py',
+    'CALL python3 scripts/test-prune-target.py',
     'CALL cargo +1.97.1 fmt --all --check',
     'CALL cargo +1.97.1 clippy --workspace --all-targets --all-features -- -D warnings',
     'CALL cargo +1.97.1 test --workspace --all-features',
@@ -69,11 +71,14 @@ test('Rust verification pins the toolchain and includes the optimized resize reg
 test('the entrypoint command list matches the Rust and web CI validation steps', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8');
   const jobs = workflow.slice(workflow.indexOf('\n  rust:'), workflow.indexOf('\n  rust-audit:'));
-  const expected = [...jobs.matchAll(/^\s+- run: ((?:cargo|pnpm|sh) .+)$/gm)]
+  const expected = [...jobs.matchAll(/^\s+- run: ((?:cargo|pnpm|python3|sh) .+)$/gm)]
     .map(match => match[1]).filter(command => !command.startsWith('pnpm install '));
   const result = run(['all']);
   assert.equal(result.status, 0, result.stderr);
+  // Pruning keeps a local target/ bounded. It validates nothing, and CI
+  // starts every run from an empty target/, so CI has no such step.
   const actual = result.stdout.split('\n').filter(line => line.startsWith('CALL '))
-    .map(line => line.slice(5).replace('cargo +1.97.1 ', 'cargo '));
+    .map(line => line.slice(5).replace('cargo +1.97.1 ', 'cargo '))
+    .filter(command => command !== 'python3 scripts/prune-target.py');
   assert.deepEqual(actual, expected, 'Update local validation when CI commands change');
 });

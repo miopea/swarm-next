@@ -73,3 +73,16 @@ pedantic = { level = "warn", priority = -1 }
 # after one rebuild, so the cost is paid once rather than per run.
 [profile.dev.package."*"]
 opt-level = 2
+
+# DEBUG BUILDS KEEP LINE TABLES, NOT FULL DEBUG INFO.
+#
+# On 2026-11-05 two checkouts held 90 GB of build output, and one swarm-api test
+# binary alone was 608 MB. Line tables are what a panic's backtrace needs to name
+# a file and line; the rest of full debug info serves only a debugger inspecting
+# variables, and it is most of the size. Measured the same day, line tables only
+# took that binary to 253 MB and swarm-persistence's from 118 MB to 68 MB. scripts/prune-target.py keeps target/
+# under a bound (docs/developing.md), and smaller units are what let the builds
+# of the last two days fit inside it. To debug with variables, build with
+# CARGO_PROFILE_DEV_DEBUG=full.
+[profile.dev]
+debug = "line-tables-only"

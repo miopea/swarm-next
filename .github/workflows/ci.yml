@@ -24,6 +24,7 @@ jobs:
             sleep $((attempt * 5))
           done
       - run: rustup override set 1.97.1
+      - run: python3 scripts/test-prune-target.py
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
