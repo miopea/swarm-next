@@ -182,10 +182,13 @@ for field_tag in v0.8.17 v0.8.18 v0.8.19 v0.9.0; do
   # sessions are busy, empty host included (see "absent is not zero" in
   # test-package-lifecycle.sh). A v0.9.0 engine never can. Deferring installs
   # the release and leaves protocol-migration.pending. The Hive's own
-  # swarm-host-reconcile.timer then completes it within two minutes, still
-  # running v0.9.0's package, whose completion only waits for no session to be
-  # running. So the timer's command runs here once, read from that tag's own
-  # unit rather than assumed.
+  # swarm-host-reconcile.timer, still running v0.9.0's package, completes it on
+  # its next pass ONLY IF NO SESSION IS RUNNING: that is all v0.9.0's completion
+  # waits for. With workers loaded it never gets there, since an autostart
+  # worker is revived within seconds. The route there is v0.9.0's worker engine
+  # card, which sees the prepared migration, stops the sessions and asks the
+  # same timer to finish. This harness runs no sessions, so the timer's command
+  # runs here once, read from that tag's own unit rather than assumed.
   #
   # The 0.8.x tags hand the install to `update`, which migrates outright, and
   # they are still held to one hop: a deferral there would be a regression the
