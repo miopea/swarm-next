@@ -114,6 +114,7 @@ jobs:
       - run: cargo fetch --locked
       - run: packaging/linux/test-worker-engine-build-id.sh
       - run: packaging/linux/test-package-lifecycle.sh
+      - run: packaging/linux/test-development-builder.sh
       - run: bash packaging/linux/test-worker-return-preparation.sh
       - run: packaging/linux/test-release-preflight.sh
       - run: packaging/linux/test-operator-token-rules.sh

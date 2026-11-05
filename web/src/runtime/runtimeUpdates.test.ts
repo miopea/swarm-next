@@ -376,6 +376,28 @@ test("an install that was refused is not reported as a compile error", () => {
   expect(status.detail).not.toContain("did not compile.");
 });
 
+/**
+ * 2026-11-05: the disk filled while the compiled binaries were being copied
+ * into the bundle, and the card said the working copy did not compile.
+ */
+test("a bundle that could not be written is not reported as a compile error", () => {
+  const [status] = runtimeUpdates(undefined, undefined, {
+    enabled: true,
+    version: "0.1.0",
+    state: "failed",
+    reload_available: true,
+    deployed_source_revision: "aaaaaaaaaaaa",
+    source_revision: "bbbbbbbbbbbb",
+    source_dirty: false,
+    deployed_source_published: true,
+    failure_reason: "write-bundle",
+    failure_detail: "cp: error writing '/state/development-build/swarm-dev/bin/swarmctl': No space left on device",
+  });
+  expect(status.detail).toContain("could not write its bundle, so nothing was installed");
+  expect(status.detail).toContain("No space left on device");
+  expect(status.detail).not.toContain("did not compile");
+});
+
 test("a real compile failure still says so", () => {
   const [status] = runtimeUpdates(undefined, undefined, {
     enabled: true,

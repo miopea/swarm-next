@@ -411,6 +411,8 @@ function developmentFailureHeadline(reason?: string | null, hasDetail = false): 
   switch (reason) {
     case "build":
       return "The development working copy did not compile. The current release is still running.";
+    case "write-bundle":
+      return "The development build could not write its bundle, so nothing was installed. The current release is still running.";
     case "install":
       return "The development build compiled, but could not be installed. The current release is still running.";
     case "protocol-change":

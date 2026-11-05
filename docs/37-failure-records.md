@@ -77,7 +77,7 @@ what was left behind rather than reverting to the assumption it used to state.
 
 | Path | Steps it names |
 | --- | --- |
-| Development reload | `build`, `install`, `protocol-change` |
+| Development reload | `build`, `write-bundle` (compiled, then could not write the bundle), `source-moved`, `install`, `protocol-change` |
 | Release install | `accept`, `update`, `migrate-protocol`, with `changed` read back |
 | Pre-update backup | `backup`, and the `cp` command that moves forward |
 

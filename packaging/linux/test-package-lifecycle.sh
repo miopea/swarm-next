@@ -530,6 +530,39 @@ grep -q '^detail=.*E0433' "$SWARM_STATE_ROOT/development-reload.status" \
 grep -q '^changed=nothing$' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "a failed build did not record that nothing changed" >&2; exit 1; }
 
+# Nor is a build that COMPILES and then cannot write its bundle. On 2026-11-05
+# the disk filled while the binaries were being copied in, and the reload said
+# "did not compile". The builder exits 73 for this (test-development-builder.sh
+# holds that side). The cause is the writer's own line, which comes long after a
+# clean build's "Compiling thiserror", so it cannot be the first line that
+# mentions an error.
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+echo "   Compiling thiserror v2.0.12" >&2
+echo "    Finished \`release\` profile [optimized] target(s) in 1m 57s" >&2
+echo "cp: error writing '$1/swarm-dev/bin/swarmctl': No space left on device" >&2
+echo "swarm-build: the build compiled, but writing its bundle to $1 failed" >&2
+exit 73
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+if write_failure=$("$package" reload-development 2>&1); then
+  echo "a bundle that could not be written unexpectedly succeeded" >&2
+  exit 1
+fi
+grep -q '^step=write-bundle$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "a bundle that could not be written was not recorded as step=write-bundle" >&2; exit 1; }
+grep -q "^detail=cp: error writing '.*/swarmctl': No space left on device$" "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "the status did not carry the writer's own error" >&2; exit 1; }
+case "$write_failure" in
+  *"did not compile"*) echo "a build that compiled was reported as not compiling: $write_failure" >&2; exit 1;;
+esac
+case "$write_failure" in
+  *"swarm-package: the development build could not write its bundle to $SWARM_STATE_ROOT/development-build: cp: error writing"*"No space left on device"*) :;;
+  *) echo "the reload's own message does not name the write and its cause: $write_failure" >&2; exit 1;;
+esac
+
 # A build that COMPILES and is refused at install must not be called a compile
 # error. This is the case the operator hit.
 cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'

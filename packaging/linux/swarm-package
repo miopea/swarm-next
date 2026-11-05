@@ -344,6 +344,19 @@ last_error() {
   ' "$1" 2>/dev/null | tr -d '\r' | tr '\n' ' ' | cut -c1-300
 }
 
+# What build-development-release.sh exits when it could not prepare or write its
+# bundle, and nothing else (test-development-builder.sh holds it to that).
+builder_cannot_write=73
+
+# Why the builder could not write its bundle: the last line before its own
+# "swarm-build:" summary, which is the failing writer speaking ("No space left
+# on device"). Not last_error: its first line mentioning an error is, after a
+# clean build, "Compiling thiserror".
+builder_write_cause() {
+  awk '!/^swarm-build: / && NF { cause = $0 } END { print cause }' "$1" 2>/dev/null \
+    | tr -d '\r' | cut -c1-300
+}
+
 # Every authenticated command in this script shares this output boundary.
 #
 # WHY THIS EXISTS. e74affc made a failing step's stderr into `detail`, a field
@@ -1397,7 +1410,22 @@ Build and migrate instead, which swaps the API and the host together. It STOPS E
   # bundle matched neither. Nothing anywhere could have told them apart.
   dev_source_before=$(dev_source_fingerprint "$dev_checkout")
   fail_step=build
-  if ! bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root" 2>"$dev_log"); then
+  build_status=0
+  bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root" 2>"$dev_log") \
+    || build_status=$?
+  # A BUNDLE THAT COULD NOT BE WRITTEN IS NOT A COMPILE ERROR. On 2026-11-05 the
+  # disk filled while the compiled binaries were being copied in, and this said
+  # "did not compile" about a build that had. The builder exits 73 for exactly
+  # that, and its own summary follows the failing writer's error, so the cause
+  # is the last line that is not the summary. Named in the message itself as
+  # well as the status: that day the journal kept this line and lost the log.
+  if [ "$build_status" -eq "$builder_cannot_write" ]; then
+    fail_step=write-bundle
+    fail_detail=$(builder_write_cause "$dev_log")
+    cat "$dev_log" >&2 || true
+    die "the development build could not write its bundle to $dev_build_root: $fail_detail"
+  fi
+  if [ "$build_status" -ne 0 ]; then
     fail_detail=$(last_error "$dev_log")
     cat "$dev_log" >&2 || true
     die "the development build did not compile"
