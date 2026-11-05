@@ -726,8 +726,8 @@ export const SURFACES: Surface[] = [
   },
   {
     id: "needs-you-queen-card",
-    title: "Command card with Queen, and one she handed on",
-    why: "Invented commands: a card Queen may grant is marked With Queen and left out of the count; one she handed on says why (ADR 0158)",
+    title: "Command card Queen handed on",
+    why: "Invented commands: a card Queen may grant is given but not listed here (ADR 0159); the one she handed on says why (ADR 0158)",
     render: () => <DecisionInbox decisions={[{
       ...demoDecision,
       id: "decision-queen-card",
@@ -756,8 +756,34 @@ export const SURFACES: Surface[] = [
   {
     id: "needs-you-queen-card-phone",
     title: "Queen command cards at phone width",
-    why: "A 390px frame tests that the With Queen line and the hand-off reason wrap",
+    why: "A 390px frame tests that the hand-off reason wraps",
     render: () => <iframe title="Queen command card phone preview" src="/harness.html?surface=needs-you-queen-card"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
+  },
+  {
+    id: "queues-queen-cards",
+    title: "Command cards with Queen in her queue",
+    why: "Invented commands: Queen's cards are listed on the Queues page with their exact command and wait, with no Allow (ADR 0159)",
+    render: () => <QueuesView tasks={[]} workers={demoWorkers} onOpenTask={() => undefined}
+      recovery={{ items: [], truncated: false }} now={Date.now()} commandCards={[{
+        ...demoDecision,
+        id: "decision-queen-card",
+        task_id: demoTasks[0]?.id ?? null,
+        requesting_worker_id: demoWorkers.find((worker) => worker.role !== "queen")?.id ?? demoDecision.requesting_worker_id,
+        title: "Merge the reviewed export pull request",
+        questions: [],
+        allowed_actions: ["Allow the command shown in this request"],
+        requested_command: "gh pr merge 482 --squash --delete-branch --body \"Reviewed by Queen: export schema change, checks green on the head commit\"",
+        operator_reasons: [],
+        awaiting_queen: true,
+        created_at: Math.floor(Date.now() / 1000) - 7 * 60,
+      }]} />,
+  },
+  {
+    id: "queues-queen-cards-phone",
+    title: "Command cards with Queen at phone width",
+    why: "A 390px frame tests that a long command wraps instead of overflowing",
+    render: () => <iframe title="Queen command cards phone preview" src="/harness.html?surface=queues-queen-cards"
       style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {

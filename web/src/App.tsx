@@ -1751,6 +1751,11 @@ export function App() {
   const queuedTaskCount = useMemo(() => projectTaskQueues(tasks, heldBriefings, blockedEscalations, workers, recoveryQueue?.items).taskCount,
     [tasks, heldBriefings, blockedEscalations, workers, recoveryQueue]);
   const pendingDecisionCount = decisions.filter(needsOperatorDecision).length;
+  // Queen's to grant (ADR 0159): shown in her queue, not in Needs you.
+  const queenCommandCards = useMemo(
+    () => decisions.filter((decision) => decision.state === "pending" && decision.awaiting_queen),
+    [decisions],
+  );
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
   const pendingQueenDecisionCount = decisions.filter((decision) => decision.state === "pending" && decision.requesting_worker_id === queenWorkerId).length;
@@ -2749,6 +2754,7 @@ export function App() {
         ) : surface === "queues" ? (
           <Suspense fallback={<WorkspaceLoading label="queues" />}>
             <QueuesView
+              commandCards={queenCommandCards}
               onRetryDetails={() => { void retryQueueDetails(); }}
               reviewQueue={reviewQueue}
               onOpenWorker={(sessionId) => {

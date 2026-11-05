@@ -3527,6 +3527,19 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queue-worker-group { margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--line); min-width: 0; }
 .queue-worker-group h3 { margin: 0; font-size: .9rem; overflow-wrap: anywhere; }
 .queue-worker-group > .queue-task-meta { margin: 4px 0 6px; }
+/* A command card with Queen (ADR 0159): the exact text, wrapped, never scrolled sideways. */
+.queue-command {
+  margin: 2px 0 8px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent-strong);
+}
+.queue-command code {
+  font-family: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+  font-size: .78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .queue-group li button {
   width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 1rem;
   color: var(--text); background: none; border: 1px solid transparent; border-radius: 6px; padding: 0.35rem 0.5rem; cursor: pointer;

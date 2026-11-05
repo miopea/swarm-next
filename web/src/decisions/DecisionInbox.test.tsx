@@ -926,9 +926,10 @@ test("a command Swarm filed after a refusal says Swarm asked, not the worker", (
   expect(screen.queryByText(/Swarm filed this, not the worker/)).not.toBeInTheDocument();
 });
 
-test("a command card Queen may grant leaves Needs you and says it is with her", () => {
-  // ADR 0158: the worker said none of the operator's reasons applies, so the
-  // card is Queen's. It stays answerable, and it does not count as theirs.
+test("a command card Queen may grant is not in Needs you until she hands it on", () => {
+  // ADR 0159, amending ADR 0158: the worker said none of the operator's
+  // reasons applies, so the card is Queen's. It is in her queue, not theirs:
+  // neither counted nor listed here with an Allow.
   const withQueen: DecisionRequest = {
     ...pending,
     id: "decision-queen",
@@ -941,14 +942,14 @@ test("a command card Queen may grant leaves Needs you and says it is with her", 
   };
   const { rerender } = render(<DecisionInbox decisions={[withQueen]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
   expect(screen.getByRole("tab", { name: "Needs you 0" })).toBeInTheDocument();
-  expect(screen.getByText(/With Queen\. The worker said none of your reasons applies/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Allow the command shown in this request" })).toBeInTheDocument();
+  expect(screen.queryByText("gh pr merge 12 --squash")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Allow the command shown in this request" })).not.toBeInTheDocument();
 
   const handedOn = { ...withQueen, awaiting_queen: false, queen_handoff_reason: "It merges past a required check." };
   rerender(<DecisionInbox decisions={[handedOn]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
   expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
   expect(screen.getByText("Queen handed this to you: It merges past a required check.")).toBeInTheDocument();
-  expect(screen.queryByText(/With Queen\./)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Allow the command shown in this request" })).toBeInTheDocument();
 });
 
 test("a grant Queen made is labelled as hers in history", () => {

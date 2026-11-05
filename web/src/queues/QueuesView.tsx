@@ -1,6 +1,6 @@
 import { useId, useMemo } from "react";
 import HeldBriefingList, { BlockingTaskLink, holdReason, waitedFor, briefingWait } from "../orchestration/HeldBriefingList";
-import type { BlockedEscalation, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "../api";
+import type { BlockedEscalation, DecisionRequest, HeldBriefing, HeldDelivery, QueenAutomationStatus, RecoveryQueueItem, RecoveryQueueSnapshot, QueenReviewQueueSnapshot } from "../api";
 import { projectReviewQueue } from "./reviewQueueProjection";
 import DeliveryWaitList from "./DeliveryWaitList";
 import TaskPrerequisiteList from "./TaskPrerequisiteList";
@@ -157,12 +157,46 @@ function taskProgress(task: Task, now: number): string {
   return "Draft · awaiting triage";
 }
 
+/**
+ * Command cards that are Queen's to grant (ADR 0159). Listed with the exact
+ * command so the operator can see what waits on her, but never with an Allow:
+ * a card she hands on is theirs, and only then does it reach Needs you.
+ */
+function QueenCommandCards({ cards, workerNames, onOpenTask, id, now }: {
+  cards: DecisionRequest[];
+  workerNames: Map<string, string>;
+  onOpenTask: (taskId: string) => void;
+  id: string;
+  now: number;
+}) {
+  return <article id={id} tabIndex={-1} className="queue-group" data-owner="queen">
+    <header>
+      <h2>Command cards with Queen <span className="queue-count">{cards.length}</span></h2>
+      <p className="queue-meaning">Workers asked to run these and said none of your reasons applies. Queen grants each one for work she has reviewed, or hands it to you with her reason, and then it is in Needs you.</p>
+    </header>
+    <ul>{cards.map((card) => {
+      const taskId = card.task_id;
+      const label = <>
+        <span className="queue-task-title">{card.title}</span>
+        <span className="queue-task-meta">{workerNames.get(card.requesting_worker_id) ?? "A worker"} · waiting {waitedFor(Math.max(0, now / 1000 - card.created_at))}</span>
+      </>;
+      return <li key={card.id}>
+        {taskId
+          ? <button className="queue-task-open" type="button" onClick={() => onOpenTask(taskId)}>{label}</button>
+          : <p className="queue-task-open">{label}</p>}
+        <pre className="queue-command"><code>{card.requested_command}</code></pre>
+      </li>;
+    })}</ul>
+  </article>;
+}
+
 export default function QueuesView({
   tasks,
   workers,
   onOpenTask,
   onOpenWorker,
   onRetryDetails,
+  commandCards = [],
   heldBriefings: sourceBriefings = [],
   blockedWaits: sourceBlockedWaits = [],
   heldDeliveries = [],
@@ -179,6 +213,8 @@ export default function QueuesView({
   onOpenWorker?: (sessionId: string) => void;
   /** Refresh observations only; never dispatch work or restart a worker. */
   onRetryDetails?: () => void;
+  /** Pending command cards that are Queen's to grant (ADR 0159). */
+  commandCards?: DecisionRequest[];
   /**
    * Briefings Swarm is holding until their worker is free.
    *
@@ -234,7 +270,11 @@ export default function QueuesView({
   const retryDetails = onRetryDetails && (coordinatorUnavailable || !recovery)
     ? <button className="queue-details-retry" type="button" onClick={onRetryDetails}>Retry queue details</button> : null;
 
-  if (total === 0 && extraWaits.length === 0 && activeWork.length === 0) {
+  const queenCards = commandCards.length > 0
+    ? <QueenCommandCards cards={commandCards} workerNames={workerNames} onOpenTask={onOpenTask} id={`${queueId}-queen-cards`} now={now} />
+    : null;
+
+  if (total === 0 && extraWaits.length === 0 && activeWork.length === 0 && commandCards.length === 0) {
     return (
       <section className="queues" aria-label="Queues">
         {coordinatorUnavailable && <p role="status">Coordination status could not refresh. Showing last known work; it may have changed.</p>}
@@ -256,11 +296,15 @@ export default function QueuesView({
       {!recovery && <p role="status">Worker recovery details are unavailable; this view cannot confirm that every worker is progressing.</p>}
       {retryDetails}
       {queenWait && <p className="queue-meaning">{queenWait}</p>}
-      {groups.length > 0 && <nav className="queue-owner-index" aria-label="Jump to queue owner">
+      {(groups.length > 0 || commandCards.length > 0) && <nav className="queue-owner-index" aria-label="Jump to queue owner">
         {groups.map(group => <a key={group.owner} href={`#${queueId}-${group.owner}`} data-owner={group.owner}>
           <span>{OWNER_LABELS[group.owner]}</span><strong>{group.tasks.length}</strong>
         </a>)}
+        {commandCards.length > 0 && <a href={`#${queueId}-queen-cards`} data-owner="queen">
+          <span>Queen's cards</span><strong>{commandCards.length}</strong>
+        </a>}
       </nav>}
+      {queenCards}
       {groups.map((group) => {
         const hours = oldestAgeHours(group.tasks, now);
         const RowContainer = group.owner === "scheduled" ? "details" : "div";

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 import QueuesView from "./QueuesView";
 import type { Task } from "../api/tasks";
-import type { QueenAutomationStatus, RecoveryQueueItem } from "../api";
+import type { DecisionRequest, QueenAutomationStatus, RecoveryQueueItem } from "../api";
 import type { Worker } from "../api/workers";
 
 test("clarification names the requester and delivery problem without claiming permission", () => {
@@ -75,6 +75,27 @@ test("missing or partial recovery evidence cannot declare the fleet clear", () =
   rerender(<QueuesView {...props} recovery={{ items: [], truncated: true }} />);
   expect(screen.getByText(/Recovery details are partial/)).toBeVisible();
   expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+});
+
+test("command cards with Queen are listed in her queue, not left for the operator", () => {
+  // ADR 0159: a card the worker said none of the operator's reasons applies
+  // to is Queen's. It is shown here, with its exact command and how long it
+  // has waited, and never offers the operator an Allow.
+  const card = {
+    id: "card-1", task_id: "t1", requesting_worker_id: "w", state: "pending",
+    title: "Run one reviewed merge", requested_command: "gh pr merge 12 --squash",
+    created_at: 1_000, awaiting_queen: true, operator_reasons: [],
+  } as unknown as DecisionRequest;
+  const onOpenTask = vi.fn();
+  render(<QueuesView tasks={[]} workers={[{ id: "w", name: "Petal", position: 0 } as Worker]} onOpenTask={onOpenTask}
+    recovery={{ items: [], truncated: false }} commandCards={[card]} now={1_000_000 + 4 * 60_000} />);
+  expect(screen.getByRole("heading", { name: "Command cards with Queen 1" })).toBeVisible();
+  expect(screen.getByText("gh pr merge 12 --squash")).toBeVisible();
+  expect(screen.getByText("Petal · waiting 4 minutes")).toBeVisible();
+  expect(screen.queryByText("Nothing is waiting on anyone.")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Allow/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Run one reviewed merge/ }));
+  expect(onOpenTask).toHaveBeenCalledWith("t1");
 });
 
 function task(overrides: Partial<Task>): Task {
