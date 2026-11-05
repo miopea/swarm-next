@@ -126,6 +126,23 @@ test("adapts task rows to the board width left by the resizable worker rail", ()
   expect(stylesheet).toContain('"assignment actions"');
 });
 
+/**
+ * From 681px to about 1000px the side rail leaves a settings card as narrow as
+ * a phone's while every viewport query still says desktop, and the roster form,
+ * the Apiary summary and the runtime cards painted up to 270px past the card,
+ * over the card beside it. Only a browser shows that; this pins the rule that
+ * the browser check depends on.
+ */
+test("settings cards narrow on their own width, which the rail takes from the viewport", () => {
+  expect(stylesheet).toMatch(/\.settings-card \{[^}]*container-name: settings-card; container-type: inline-size;/);
+  const narrow = stylesheet.match(/@container settings-card \(max-width: 620px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  for (const layout of [".configure-worker-form {", ".apiary-identity-summary {", ".runtime-subsystem-grid {"]) {
+    expect(narrow).toContain(layout);
+  }
+  // A shrinkable pill let its nowrap label run over the card's edge.
+  expect(stylesheet).toMatch(/\.queen-policy-settings \.queen-automation-toggle \{[^}]*flex: none;/);
+});
+
 test("keeps the mobile settings section rail flush with its scroll viewport", () => {
   expect(stylesheet).toContain(
     ".settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; overflow-x: hidden; }",

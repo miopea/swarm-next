@@ -1609,7 +1609,7 @@ input[aria-invalid="true"] { border-color: var(--danger); }
    `min-width: 0` because a grid item defaults to min-content, and the roster's
    min-content is exactly the 622px that caused this. */
 .settings-workspace > .settings-crew-slot { grid-column: 1 / -1; min-width: 0; }
-.settings-card { display: grid; align-content: start; gap: 16px; min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
+.settings-card { display: grid; align-content: start; gap: 16px; min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); container-name: settings-card; container-type: inline-size; }
 .settings-card h3 { margin: 0; font-size: 1.08rem; }
 .settings-card > p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.55; }
 .migration-drop { display: grid; gap: 5px; padding: 22px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: var(--panel-soft); cursor: pointer; text-align: center; }
@@ -2773,10 +2773,6 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .migration-settings > .primary-action, .migration-confirmation .settings-actions, .migration-receipt > button { width: 100%; }
   .migration-confirmation .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
   .apiary-backend-choice, .apiary-readiness { grid-template-columns: minmax(0, 1fr); }
-  .apiary-identity-summary { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
-  .apiary-identity-summary > span:not(.apiary-backend-badge) { grid-column: 1; }
-  .apiary-identity-summary .apiary-backend-badge { grid-column: 2; grid-row: 1; }
-  .apiary-identity-summary button { grid-column: 2; grid-row: 2; }
   .apiary-identity-editor { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-identity-editor > button { width: 100%; }
   .apiary-identity-editor > small, .apiary-identity-editor .privacy-note { grid-column: 1; max-width: none; }
@@ -2849,8 +2845,6 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .usage-headline > small { margin-left: 0; }
   /* Only the table scrolls. The page never does. */
   .usage-detail { overflow-x: auto; }
-  .configure-worker-form { grid-template-columns: 1fr; }
-  .configure-worker-form button { width: 100%; margin-top: 0; }
   .configured-worker { grid-template-columns: 38px minmax(0, 1fr) auto; padding: 7px; }
   .worker-edit-button { padding-inline: 8px; }
   .worker-order-actions { grid-column: 2 / -1; justify-content: flex-end; }
@@ -3076,7 +3070,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-conductor-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .queen-conductor-heading > div { display: grid; min-width: 0; gap: 3px; }
 .queen-conductor-heading small, .queen-conductor-actions small, .queen-conductor-boundary { color: var(--muted); font-size: .76rem; line-height: 1.45; }
-.queen-policy-settings .queen-automation-toggle { display: flex; grid-template-columns: none; align-items: center; gap: 8px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); white-space: nowrap; }
+/* flex: none because `.queen-policy-settings label` sets min-width: 0, which let
+   the heading row squeeze the pill narrower than its nowrap text, and the text
+   ran out of the pill and over the card's edge at every desktop width. */
+.queen-policy-settings .queen-automation-toggle { display: flex; flex: none; grid-template-columns: none; align-items: center; gap: 8px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); white-space: nowrap; }
 .queen-automation-toggle input { margin: 0; accent-color: var(--honey-deep); }
 .queen-automation-status { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .queen-automation-status > span:last-child { display: grid; min-width: 0; gap: 2px; }
@@ -3302,6 +3299,21 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .runtime-summary-list > div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
   .runtime-summary-list > div:nth-child(2n) { border-right: 0; }
   .runtime-summary-list > div:nth-last-child(-n+2) { border-bottom: 0; }
+}
+/* A SETTINGS CARD IS NARROW BECAUSE OF THE RAIL, NOT ONLY THE VIEWPORT. From
+   681px to about 1000px wide the side rail takes 286px, so a card is as narrow
+   as a phone's while every viewport query still says desktop. These layouts
+   kept their desktop columns there and painted up to 270px past the card's
+   edge, over the card beside it. Each now narrows on the card's own width.
+   On a phone the card is always under this width, so phones get the same
+   layout the viewport query used to give them. */
+@container settings-card (max-width: 620px) {
+  .configure-worker-form { grid-template-columns: 1fr; }
+  .configure-worker-form button { width: 100%; margin-top: 0; }
+  .apiary-identity-summary { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .apiary-identity-summary > span:not(.apiary-backend-badge) { grid-column: 1; }
+  .apiary-identity-summary .apiary-backend-badge { grid-column: 2; grid-row: 1; }
+  .apiary-identity-summary button { grid-column: 2; grid-row: 2; }
   .runtime-subsystem-grid { grid-template-columns: 1fr; }
 }
 .maintenance-action > p { margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.5; }
