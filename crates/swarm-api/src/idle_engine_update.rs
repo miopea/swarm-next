@@ -49,24 +49,47 @@ impl IdleEngineUpdate {
 
     /// Keeps `since` while the same reason holds for the same worker, so the
     /// card can say how long it has been held up by one thing.
+    ///
+    /// The journal gets a line only when that changes, not every pass: the
+    /// card forgets on a restart or once the update lands, and this is what is
+    /// left to say why it waited.
     fn refuse(&self, reason: &'static str, worker: Option<String>, count: Option<usize>) {
-        if let Ok(mut current) = self.refusal.write() {
-            let since = current
-                .as_ref()
-                .filter(|held| held.reason == reason && held.worker == worker)
-                .map_or_else(unix_timestamp, |held| held.since);
-            *current = Some(EngineUpdateRefusal {
+        let Ok(mut current) = self.refusal.write() else {
+            return;
+        };
+        let held_since = current
+            .as_ref()
+            .filter(|held| held.reason == reason && held.worker == worker)
+            .map(|held| held.since);
+        let since = held_since.unwrap_or_else(unix_timestamp);
+        if held_since.is_none() {
+            tracing::info!(
                 reason,
-                worker,
+                worker = worker.as_deref(),
                 count,
                 since,
-            });
+                "the automatic engine update is held up"
+            );
         }
+        *current = Some(EngineUpdateRefusal {
+            reason,
+            worker,
+            count,
+            since,
+        });
     }
 
     fn clear(&self) {
-        if let Ok(mut current) = self.refusal.write() {
-            *current = None;
+        let Ok(mut current) = self.refusal.write() else {
+            return;
+        };
+        if let Some(held) = current.take() {
+            tracing::info!(
+                reason = held.reason,
+                worker = held.worker.as_deref(),
+                since = held.since,
+                "the automatic engine update is no longer held up"
+            );
         }
     }
 
@@ -731,6 +754,82 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     const OLD_ENGINE: &str = "74b1dfe239bb11a7201cbe85587a6cff1fed5a13e6d94d91952adf53940a30d9";
+
+    /// What a test's tracing subscriber wrote, as the journal would show it.
+    #[derive(Clone, Default)]
+    struct Journal(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Journal {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The refusal is held only in memory, so without a line here the first
+    /// automatic run could not be reconstructed once the update landed. One
+    /// line when it starts waiting on a reason, one each time the reason or
+    /// the worker changes, one when it clears. A pass that finds the same
+    /// thing again adds nothing, even when the busy count moves.
+    #[test]
+    fn the_journal_says_once_why_the_update_waits_and_once_when_it_stops() {
+        let journal = Journal::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let journal = journal.clone();
+                move || journal.clone()
+            })
+            .with_ansi(false)
+            .finish();
+        let update = IdleEngineUpdate::default();
+        tracing::subscriber::with_default(subscriber, || {
+            update.clear();
+            update.refuse("workers_busy", None, Some(5));
+            update.refuse("workers_busy", None, Some(5));
+            update.refuse("workers_busy", None, Some(4));
+            update.refuse("screen_not_resting", Some("ledger".to_owned()), None);
+            update.refuse("screen_not_resting", Some("ledger".to_owned()), None);
+            update.refuse("screen_not_resting", Some("pantry".to_owned()), None);
+            update.clear();
+            update.clear();
+        });
+
+        let logged = String::from_utf8(journal.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = logged.lines().collect();
+        assert_eq!(lines.len(), 4, "{logged}");
+        for (line, expected) in lines.iter().zip([
+            [
+                "the automatic engine update is held up",
+                "workers_busy",
+                "count=5",
+            ],
+            [
+                "the automatic engine update is held up",
+                "screen_not_resting",
+                "ledger",
+            ],
+            [
+                "the automatic engine update is held up",
+                "screen_not_resting",
+                "pantry",
+            ],
+            [
+                "the automatic engine update is no longer held up",
+                "screen_not_resting",
+                "pantry",
+            ],
+        ]) {
+            for part in expected {
+                assert!(line.contains(part), "{part:?} missing from {line}");
+            }
+            assert!(line.contains("since="), "{line}");
+        }
+        assert_eq!(update.refusal(), None);
+    }
 
     type Admission = Box<dyn Fn(&[WorkerSessionId]) -> MaintenanceOutcome + Send>;
 
