@@ -1265,11 +1265,13 @@ async fn conversation_choice_fence(
     {
         return Ok(None);
     }
+    // Any engine this API drives, not only one on its own protocol: the app is
+    // installed before the engine (ADR 0157), and an engine one protocol behind
+    // still fences a selection.
     if !matches!(
         request_host(state, HostRequest::Ping).await,
-        Ok(swarm_terminal::HostResponse::Pong {
-            protocol_version: swarm_terminal::PROTOCOL_VERSION
-        })
+        Ok(swarm_terminal::HostResponse::Pong { protocol_version })
+            if swarm_terminal::drives_engine(protocol_version)
     ) {
         return Ok(None);
     }
@@ -1282,6 +1284,101 @@ async fn conversation_choice_fence(
             _ => None,
         },
     )
+}
+
+#[cfg(all(test, unix))]
+mod conversation_choice_fence_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use swarm_persistence::TaskStore;
+    use swarm_terminal::{HostClient, HostResponse, OLDEST_ENGINE_PROTOCOL, PROTOCOL_VERSION};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tower::ServiceExt;
+
+    /// An engine on `protocol` that fences any selection at revision 4.
+    fn engine(socket: &Path, protocol: u16) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (reader, mut writer) = stream.into_split();
+                let mut line = String::new();
+                BufReader::new(reader).read_line(&mut line).await.unwrap();
+                let response = match serde_json::from_str::<HostRequest>(&line).unwrap() {
+                    HostRequest::Ping => HostResponse::Pong {
+                        protocol_version: protocol,
+                    },
+                    HostRequest::FenceProviderSelection { session_id } => {
+                        HostResponse::ProviderSelectionFenced {
+                            session_id,
+                            revision: 4,
+                        }
+                    }
+                    other => panic!("the fence sent an unexpected request: {other:?}"),
+                };
+                let mut payload = serde_json::to_vec(&response).unwrap();
+                payload.push(b'\n');
+                writer.write_all(&payload).await.unwrap();
+            }
+        })
+    }
+
+    /// Chooses a conversation for a running Claude worker and says whether the
+    /// live session follows the choice.
+    async fn live_selection_follows(protocol: u16) -> bool {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let host = engine(&socket, protocol);
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Pantry",
+                ProviderKind::ClaudeCode,
+                "/workspace/pantry",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let state = AppState::default()
+            .with_task_store(store)
+            .with_terminal_host(HostClient::new(socket), "test-operator");
+        let response = crate::router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/workers/{}/conversation", worker.id))
+                    .header("authorization", "Bearer test-operator")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "conversation_id": ProviderConversationId::new().to_string(),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        host.abort();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        body["live_selection_following"].as_bool().unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_engine_one_protocol_behind_still_fences_a_chosen_conversation() {
+        // The app is installed before the engine (ADR 0157), so the engine an
+        // operator's choice must reach can be on the oldest protocol this API
+        // drives. One older than that is not asked.
+        assert!(live_selection_follows(PROTOCOL_VERSION).await);
+        assert!(live_selection_follows(OLDEST_ENGINE_PROTOCOL).await);
+        assert!(!live_selection_follows(OLDEST_ENGINE_PROTOCOL - 1).await);
+    }
 }
 
 pub(super) async fn update_worker(

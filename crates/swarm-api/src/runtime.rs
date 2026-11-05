@@ -90,15 +90,32 @@ async fn engine_update_required(state: &Arc<AppState>) -> (Option<bool>, Option<
 async fn protocol_migration_required(state: &Arc<AppState>) -> Option<bool> {
     let checkout = state.development_checkout_path.as_ref()?;
     let source = std::fs::read_to_string(checkout.join("crates/swarm-terminal/src/ipc.rs")).ok()?;
-    let declared: u16 = source.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("pub const PROTOCOL_VERSION: u16 = ")?
-            .strip_suffix(';')?
-            .parse()
-            .ok()
-    })?;
+    let declared = declared_protocols(&source)?;
     let running = crate::maintenance::host_status_snapshot(state).await.ok()?;
-    Some(declared != running.protocol_version)
+    Some(!declared.contains(&running.protocol_version))
+}
+
+/// The engine protocols a checkout's API drives, read from its `ipc.rs`.
+///
+/// A checkout ahead of the running engine reloads like any other while its API
+/// still drives that engine: only the app moves, and the engine waits for the
+/// worker engine card (ADR 0157). A checkout that names no oldest engine
+/// predates that and drives only its own protocol.
+fn declared_protocols(source: &str) -> Option<std::ops::RangeInclusive<u16>> {
+    let constant = |name: &str| {
+        source.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("pub const ")?
+                .strip_prefix(name)?
+                .strip_prefix(": u16 = ")?
+                .strip_suffix(';')?
+                .parse::<u16>()
+                .ok()
+        })
+    };
+    let newest = constant("PROTOCOL_VERSION")?;
+    let oldest = constant("OLDEST_ENGINE_PROTOCOL").unwrap_or(newest);
+    Some(oldest.min(newest)..=newest)
 }
 
 #[derive(Debug, Serialize)]
@@ -1167,8 +1184,28 @@ fn worker_engine_update_message(status: &swarm_terminal::TerminalHostStatus) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::declared_protocols;
     use super::reload_state_from;
     use super::worker_engine_update_message;
+
+    #[test]
+    fn a_checkout_that_drives_the_running_engine_needs_no_migration() {
+        // The reload card reads this. An app one protocol ahead of an engine it
+        // still drives installs alone (ADR 0157), so it must not tell the
+        // operator a migration is waiting.
+        let source = include_str!("../../swarm-terminal/src/ipc.rs");
+        let declared = declared_protocols(source).expect("this checkout declares its protocols");
+        assert_eq!(
+            declared,
+            swarm_terminal::OLDEST_ENGINE_PROTOCOL..=swarm_terminal::PROTOCOL_VERSION,
+            "the card must read the same range the API drives"
+        );
+        // A checkout from before ADR 0157 names no oldest engine and drives
+        // only its own protocol, so any other engine still needs a migration.
+        let older = "pub const PROTOCOL_VERSION: u16 = 17;\n";
+        assert_eq!(declared_protocols(older), Some(17..=17));
+        assert_eq!(declared_protocols("fn main() {}"), None);
+    }
 
     fn host_status(build_id: &str, protocol: u16) -> swarm_terminal::TerminalHostStatus {
         swarm_terminal::TerminalHostStatus {

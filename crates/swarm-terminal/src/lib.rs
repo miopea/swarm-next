@@ -51,10 +51,11 @@ pub use history_retention::{
 pub use ipc::HostClient;
 pub use ipc::{
     HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
-    MAX_WRITE_AUDIT_PAGE, NativeInterviewPayload, PROTOCOL_VERSION, ProviderLifecycleCapability,
-    TerminalHostStatus, TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor,
-    TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
-    default_terminal_socket_path, supports_continuation_recovery, supports_maintenance_admission,
+    MAX_WRITE_AUDIT_PAGE, NativeInterviewPayload, OLDEST_ENGINE_PROTOCOL, PROTOCOL_VERSION,
+    ProviderLifecycleCapability, TerminalHostStatus, TerminalInputKind, TerminalTakeoverLease,
+    TerminalWriteActor, TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
+    default_terminal_socket_path, drives_engine, supports_continuation_recovery,
+    supports_maintenance_admission,
 };
 pub use ipc::{
     MAX_CONTROL_INPUT_BYTES, TERMINAL_CONTROL_PROTOCOL_VERSION, TerminalControlCommand,

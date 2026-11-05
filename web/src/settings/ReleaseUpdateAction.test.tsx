@@ -273,8 +273,11 @@ test("a protocol release says it stops the workers, not that they keep running",
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ carries_protocol_change: true }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText(/This one needs engine maintenance/)).toBeInTheDocument();
-  expect(screen.getByText(/release will be prepared and wait while workers remain loaded/)).toBeInTheDocument();
+  expect(await screen.findByText(/This one changes how the app talks to the worker engine/)).toBeInTheDocument();
+  // Both outcomes, because the Hive cannot tell before the download which one
+  // it gets: an app that drives the current engine installs alone (ADR 0157).
+  expect(screen.getByText(/only the app installs now/)).toBeInTheDocument();
+  expect(screen.getByText(/every worker session ends/)).toBeInTheDocument();
   expect(screen.queryByText(/Your workers keep running/)).not.toBeInTheDocument();
 });
 

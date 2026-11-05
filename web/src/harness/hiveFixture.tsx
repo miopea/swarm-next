@@ -173,7 +173,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       };
     // The Updates card as a Hive on the newest release sees it, with automatic
     // install on: the state the operator photographed with a button off the card.
-    case "/api/v1/runtime/release":
+    case "/api/v1/runtime/release": {
+      // ?release=protocol offers a release that changes the engine protocol,
+      // which the operator accepts and which installs the app first (ADR 0157).
+      const protocolOffer = new URLSearchParams(window.location.search).get("release") === "protocol";
       return {
         available: true,
         mode: "daily",
@@ -183,11 +186,19 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         current_version: "1.16.4",
         development_build: false,
         last_checked_at: now - 600,
-        last_outcome: "current",
-        offer: null,
-        upgrade_available: false,
-        carries_new_worker_engine: false,
-        carries_protocol_change: false,
+        last_outcome: protocolOffer ? "offered" : "current",
+        offer: protocolOffer ? {
+          version: "1.17.0",
+          protocol: "18",
+          artifact_url: "https://releases.example.invalid/swarm-1.17.0-linux-x86_64.tar.gz",
+          artifact_sha256: "0".repeat(64),
+          artifact_bytes: 41_000_000,
+          worker_engine_build_id: "1".repeat(64),
+          notes_url: null,
+        } : null,
+        upgrade_available: protocolOffer,
+        carries_new_worker_engine: protocolOffer,
+        carries_protocol_change: protocolOffer,
         commits_ahead_of_release: null,
         downloaded_version: null,
         apply_state: null,
@@ -196,6 +207,7 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         apply_detail: null,
         apply_changed: null,
       };
+    }
     case "/api/v1/workers":
       // A briefing Swarm could not confirm, which puts its warning in the
       // phone header beside the worker switcher.

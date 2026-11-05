@@ -2,6 +2,11 @@
 
 Status: **Accepted**
 
+Amended by ADR 0157 (2026-11-04): an update whose API still drives the
+installed engine's protocol installs the app alone and leaves the terminal host
+running. The engine follows from the worker engine card. Only a protocol the
+new API cannot drive is migrated with the API.
+
 ## Context
 
 The primary dogfood deployment must run beside legacy Swarm on an Ubuntu or

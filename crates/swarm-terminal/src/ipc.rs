@@ -35,7 +35,23 @@ use crate::{
 // Protocol 18 lets the API ask the engine to stop a resting set for an engine
 // update, which the engine admits only on its own evidence (ADR 0156).
 pub const PROTOCOL_VERSION: u16 = 18;
+/// The oldest engine protocol this build's API can drive (ADR 0157).
+///
+/// When the installed engine speaks anything from here up to
+/// `PROTOCOL_VERSION`, an install takes the new API alone. Workers keep
+/// running, and the engine follows through the worker engine card. Below
+/// this, the API and the engine must move together, which stops every worker.
+/// The build scripts write this into each bundle as `OLDEST_ENGINE_PROTOCOL`
+/// for `swarm-package` to read.
+pub const OLDEST_ENGINE_PROTOCOL: u16 = 17;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
+
+/// Whether this API can drive an engine that speaks `protocol`. Each request
+/// newer than the oldest protocol also has its own `supports_*` gate.
+#[must_use]
+pub fn drives_engine(protocol: u16) -> bool {
+    (OLDEST_ENGINE_PROTOCOL..=PROTOCOL_VERSION).contains(&protocol)
+}
 
 #[must_use]
 pub fn supports_continuation_recovery(protocol: u16) -> bool {
@@ -747,6 +763,98 @@ mod tests {
             "the pinned surface above belongs to protocol 18; if you changed \
              the requests, this number moves with them"
         );
+    }
+
+    /// The oldest engine this API drives is sent only requests it can read.
+    ///
+    /// ADR 0157 installs a new API in front of an engine that is still on
+    /// `OLDEST_ENGINE_PROTOCOL`. So every request added since then must sit
+    /// behind a `supports_*` gate that is closed at that protocol. This test
+    /// fails if a new request has no gate, or if the oldest protocol moves
+    /// without its pinned surface.
+    #[test]
+    fn the_oldest_engine_this_api_drives_is_sent_only_what_it_reads() {
+        // The request surface protocol 17 engines parse.
+        const AT_OLDEST: &[&str] = &[
+            "ping",
+            "host_status",
+            "provider_capabilities",
+            "begin_drain",
+            "cancel_drain",
+            "start_claude",
+            "start_codex",
+            "start_shell",
+            "start_alpha_provider",
+            "list_sessions",
+            "history_diagnostics",
+            "list_history_sessions",
+            "read_history",
+            "read",
+            "wait",
+            "write",
+            "write_audit",
+            "install_takeover",
+            "takeover_write",
+            "reclaim_takeover_and_write",
+            "release_takeover",
+            "resize",
+            "control",
+            "wait_controlled",
+            "stop",
+            "stop_retained",
+            "provider_session_start",
+            "provider_resume_end",
+            "fence_provider_selection",
+            "recover_continuation",
+            "provider_interview",
+            "read_native_interviews",
+            "acknowledge_native_interview",
+            "prepare_native_interview",
+        ];
+        type Gate = fn(u16) -> bool;
+        const ADDED_SINCE_OLDEST: &[(&str, Gate)] =
+            &[("admit_maintenance", supports_maintenance_admission)];
+        assert_eq!(
+            OLDEST_ENGINE_PROTOCOL, 17,
+            "AT_OLDEST is protocol 17's surface; move it with this number"
+        );
+
+        let error = serde_json::from_value::<HostRequest>(serde_json::json!({
+            "type": "a_request_that_does_not_exist"
+        }))
+        .expect_err("an unknown request must not parse")
+        .to_string();
+        let mut wire: Vec<String> = error
+            .split("expected one of ")
+            .nth(1)
+            .expect("serde names the variants it knows")
+            .split(", ")
+            .map(|name| name.trim().trim_matches('`').to_owned())
+            .collect();
+        wire.sort();
+        let mut expected: Vec<String> = AT_OLDEST
+            .iter()
+            .chain(ADDED_SINCE_OLDEST.iter().map(|(name, _)| name))
+            .map(|name| (*name).to_owned())
+            .collect();
+        expected.sort();
+        assert_eq!(
+            wire, expected,
+            "a request was added that an engine on OLDEST_ENGINE_PROTOCOL cannot \
+             parse; give it a supports_* gate and list it in ADDED_SINCE_OLDEST, \
+             or raise OLDEST_ENGINE_PROTOCOL with its surface"
+        );
+        for (name, gate) in ADDED_SINCE_OLDEST {
+            assert!(
+                !gate(OLDEST_ENGINE_PROTOCOL),
+                "{name} would be sent to the oldest engine, which cannot read it"
+            );
+            assert!(gate(PROTOCOL_VERSION), "{name} is never sent at all");
+        }
+        assert!(drives_engine(OLDEST_ENGINE_PROTOCOL));
+        assert!(drives_engine(PROTOCOL_VERSION));
+        assert!(!drives_engine(OLDEST_ENGINE_PROTOCOL - 1));
+        assert!(!drives_engine(PROTOCOL_VERSION + 1));
     }
 
     #[test]
