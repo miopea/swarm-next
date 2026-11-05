@@ -304,6 +304,40 @@ test("a release whose effect cannot be determined does not promise workers keep 
   expect(screen.queryByText(/This one stops your workers/)).not.toBeInTheDocument();
 });
 
+/**
+ * THE BADGE AND THE CONFIRMATION SAID IT TOO. The paragraph above learned not
+ * to promise workers keep running, while the green badge beside the title and
+ * the line in the install confirmation still said "Workers stay online" for
+ * every offer. A protocol change ends every worker session when the new app
+ * cannot drive the installed engine, and an offer this Hive cannot classify
+ * may be one.
+ */
+test("only a release known to leave the engine alone shows Workers stay online", async () => {
+  vi.mocked(api.applyRelease).mockResolvedValue(undefined);
+  for (const carries of [true, null] as const) {
+    vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+      status({ carries_protocol_change: carries, carries_new_worker_engine: true, downloaded_version: "0.2.0" }),
+    );
+    render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+    expect(await screen.findByText("Workers may restart")).toBeInTheDocument();
+    expect(screen.queryByText("Workers stay online")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Install Swarm 0.2.0" }));
+    expect(screen.getByText("Install Swarm 0.2.0 now?")).toBeInTheDocument();
+    expect(screen.queryByText(/Workers stay online/)).not.toBeInTheDocument();
+    // The engine does not wait quietly when it cannot be left behind.
+    expect(screen.queryByText(/newer worker engine waits for maintenance/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Workers may restart: the warning above says when/)).toBeInTheDocument();
+    cleanup();
+  }
+
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ carries_protocol_change: false }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText("Workers stay online")).toBeInTheDocument();
+  expect(screen.queryByText("Workers may restart")).not.toBeInTheDocument();
+});
+
 /** Downloading is reversible and installing is not, so they are two consents. */
 test("downloads and installs as two separate acts", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status());

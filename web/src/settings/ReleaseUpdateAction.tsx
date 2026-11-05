@@ -293,6 +293,11 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   const ready = status.downloaded_version !== null;
   // Only a release that keeps workers running installs itself (ADR 0110).
   const installsItself = status.auto_install && status.carries_protocol_change === false;
+  // Only an offer KNOWN not to change the engine protocol leaves every worker
+  // up. A protocol change ends their sessions when the new app cannot drive the
+  // installed engine (ADR 0157), and "cannot tell" may be one, so neither is
+  // promised what only the first earns.
+  const workersStayUp = status.carries_protocol_change === false;
 
   return (
     <article
@@ -304,7 +309,9 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           <span className="runtime-component-name">Updates</span>
           <strong>{arrived ? `Swarm ${status.current_version} is installed` : offered ? `Swarm ${status.offer?.version} is available` : status.development_build ? "This Hive builds from a working copy" : "Swarm is up to date"}</strong>
         </div>
-        {offered && <span className="runtime-status-badge safe">Workers stay online</span>}
+        {offered && (workersStayUp
+          ? <span className="runtime-status-badge safe">Workers stay online</span>
+          : <span className="runtime-status-badge attention">Workers may restart</span>)}
       </header>
 
       {arrived && (
@@ -363,7 +370,9 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
             confirming ? (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm release install">
                 <strong>Install Swarm {status.offer?.version} now?</strong>
-                <span>Workers stay online.{status.carries_new_worker_engine ? " The newer worker engine waits for maintenance while workers remain loaded." : ""} Your Hive database, tasks and settings are kept, and the previous release is restored automatically if the new one does not answer.</span>
+                <span>{workersStayUp
+                  ? `Workers stay online.${status.carries_new_worker_engine ? " The newer worker engine waits for maintenance while workers remain loaded." : ""}`
+                  : "Workers may restart: the warning above says when."} Your Hive database, tasks and settings are kept, and the previous release is restored automatically if the new one does not answer.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={disabled} onClick={() => setConfirming(false)}>Not now</button>
                   <button
