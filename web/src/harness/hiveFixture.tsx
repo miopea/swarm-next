@@ -108,6 +108,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
   if (path === "/api/v1/runtime/queen-releases") {
     return { enabled: new URLSearchParams(window.location.search).get("queenReleases") === "on" };
   }
+  // ?queenGrants=on is a Hive whose Queen grants command cards for reviewed work (ADR 0158).
+  if (path === "/api/v1/runtime/queen-grants") {
+    return { enabled: new URLSearchParams(window.location.search).get("queenGrants") === "on" };
+  }
   // ?taskReads=on is a Hive whose workers read production for their task unasked (ADR 0146).
   if (path === "/api/v1/runtime/task-reads") {
     return { enabled: new URLSearchParams(window.location.search).get("taskReads") === "on" };

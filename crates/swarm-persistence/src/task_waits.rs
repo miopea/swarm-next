@@ -321,23 +321,29 @@ fn live_gate(
             None,
         )));
     }
-    let decision: Option<String> = transaction
+    // A command card Queen may grant is hers to answer first (ADR 0158); the
+    // operator can still answer it themselves.
+    let decision: Option<(String, bool)> = transaction
         .query_row(
-            "SELECT d.title FROM task_decision_membership m
-             JOIN decision_requests d ON d.id = m.decision_id
-             WHERE m.task_id = ?1 AND d.state = 'pending'
-             ORDER BY d.created_at LIMIT 1",
+            concat!(
+                "SELECT d.title, ",
+                crate::queen_grants::queen_card!("d"),
+                " FROM task_decision_membership m
+                 JOIN decision_requests d ON d.id = m.decision_id
+                 WHERE m.task_id = ?1 AND d.state = 'pending'
+                 ORDER BY d.created_at LIMIT 1"
+            ),
             [task_id.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    Ok(decision.map(|title| {
-        (
-            TaskWaitKind::Decision,
-            bounded(&format!("The operator answers \"{title}\".")),
-            None,
-            None,
-        )
+    Ok(decision.map(|(title, queens)| {
+        let needs = if queens {
+            format!("Queen answers \"{title}\", or the operator does.")
+        } else {
+            format!("The operator answers \"{title}\".")
+        };
+        (TaskWaitKind::Decision, bounded(&needs), None, None)
     }))
 }
 

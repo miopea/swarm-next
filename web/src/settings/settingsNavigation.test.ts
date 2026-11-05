@@ -64,10 +64,10 @@ test("an older anchor still opens the section that now holds it", () => {
 test("Authority holds every rule about what happens without the operator", () => {
   const authority = SETTINGS_CARDS.filter((card) => card.section === "settings-authority").map((card) => card.id);
   expect(authority).toEqual(expect.arrayContaining([
-    "settings-queen", "settings-queen-releases", "settings-task-reads", "settings-check-gate", "settings-answers",
-    "settings-worker-access",
+    "settings-queen", "settings-queen-releases", "settings-queen-grants", "settings-task-reads", "settings-check-gate",
+    "settings-answers", "settings-worker-access",
   ]));
-  expect(authority).toHaveLength(6);
+  expect(authority).toHaveLength(7);
   expect(filterSettingsCards("authority").map((card) => card.id).sort()).toEqual([...authority].sort());
   expect(SETTINGS_CARDS.filter((card) => card.section === "settings-hive").map((card) => card.id))
     .toEqual(["settings-identity", "settings-apiary"]);
@@ -128,7 +128,9 @@ test("finds a control by the word someone would actually type", () => {
 /**
  * Other operators learn about "Ask me before resolving tickets" from the
  * release notes and then search for it in their own words. "resolve" also
- * belongs to Terminal answers, and both are right to show.
+ * belongs to Terminal answers, and both are right to show. So do "approve"
+ * and "approval" belong to Queen grants: the operator called command cards
+ * "approval clicks" (ADR 0158).
  */
 test("finds the Jira resolution setting by its label and by asking for approval", () => {
   const titles = (query: string) => filterSettingsCards(query).map((card) => card.title);
@@ -136,8 +138,8 @@ test("finds the Jira resolution setting by its label and by asking for approval"
   expect(titles("ask me before resolving tickets")).toEqual(["Jira"]);
   expect(titles("resolving")).toEqual(["Jira"]);
   expect(titles("resolve")).toEqual(["Terminal answers", "Jira"]);
-  expect(titles("approve")).toEqual(["Jira"]);
-  expect(titles("approval")).toEqual(["Jira"]);
+  expect(titles("approve")).toEqual(["Queen grants", "Jira"]);
+  expect(titles("approval")).toEqual(["Queen grants", "Jira"]);
 });
 
 test("finds the Remote Control setting by its name and by /rc", () => {

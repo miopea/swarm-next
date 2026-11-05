@@ -876,7 +876,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 38;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 39;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -886,7 +886,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 38;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 38. Update this and the revision together.
+/// The served surface as of revision 39. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -895,7 +895,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 38;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "cbd471d17ba1cfc284d1484e97813d4e5240efb2f72cc87854714f0ab5ba6bba";
+    "f9c8103945a8d0958ddee483a69ff7d81a198f9d47d3e688aaee25c308755358";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1021,7 +1021,25 @@ pub(super) const WORKER_RELEASE_GUIDANCE: &str = "RELEASING ON QUEEN'S INSTRUCTI
 /// worker's auto mode the matching rule at the same start.
 pub(super) const WORKER_TASK_READS_GUIDANCE: &str = "READING PRODUCTION FOR YOUR TASK. This Hive's operator lets a worker read production for its own assigned task without asking first (ADR 0146). A read only retrieves: an HTTP GET or HEAD, a read-only query (including one posted to an admin SQL endpoint when the request sets read-only mode and the query only selects), a log, metrics or telemetry query, or a cloud CLI show, list or get, against a system your task concerns. Run it yourself; do not file a command request for it. Authenticate through 1Password as usual and never print a secret. Read counts and aggregates: names, email or postal addresses, phone numbers and payment details are not read this way. A script you wrote counts only when every request in it is a read, and you read it through before running it. Anything else is not a read, and this paragraph does not cover it: a write, create, update or delete, any other HTTP POST, PUT, PATCH or DELETE, a migration, a deploy, a setting or permission change, a call that spends money, or personal data. Ask the operator for that one command with a command request, unless a release Queen instructed covers it. If your auto mode refuses a read anyway, ask with a command request; never reword it to get past the refusal.";
 
-fn standing_brief(role: WorkerRole, queen_releases: bool, task_reads: bool) -> String {
+/// Queen's half of "Queen grants command cards" (ADR 0158), given only while
+/// the operator has it on. Also put in each review's prompt, because a running
+/// Queen keeps the brief she connected with.
+pub(super) const QUEEN_GRANT_GUIDANCE: &str = "GRANTING COMMAND CARDS. This Hive's operator has turned on \"Queen grants command cards\" (ADR 0158). A worker's command card is yours when the worker said none of the operator's reasons applies; swarm_list_command_cards lists them in full, and a review wakes you while one waits. For each, read the exact command, its script, and the task it belongs to. Grant it with swarm_grant_command only when it carries out work you have reviewed on that task, it does no more than that work needs, and none of the operator's reasons applies, whatever the worker said: it creates, sets, rotates, revokes or exposes a password, key, token or secret; it grants, revokes or changes access, a role, branch protection or a security setting; it may cost more than $25; or it deletes something that cannot be restored. Your note says what you checked. Otherwise hand it to the operator with swarm_hand_command_to_operator and say why, and when you are unsure, hand it on. The worker's claim is not your review. A card you leave waiting holds that worker's task.";
+
+/// A worker's half of "Queen grants command cards" (ADR 0158), given only
+/// while the operator has it on.
+pub(super) const WORKER_GRANT_GUIDANCE: &str = "QUEEN GRANTS COMMAND CARDS. This Hive's operator lets Queen grant a command card when none of their reasons applies (ADR 0158). When you ask with command, also send operator_only naming every reason that applies: credentials (it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this), permissions (it grants, revokes or changes access, a role, branch protection or a security setting), spend_over_25_usd (it may cost more than $25) and irreversible_delete (it deletes something that cannot be restored). Send [] only when none does: Queen then reviews it and may grant it, and her answer reaches you like the operator's, marked as hers. Leave operator_only out and the card is the operator's. Saying [] for a command one of these covers sends the operator's decision to Queen, so name the reason whenever you are unsure.";
+
+/// The operator's Hive-wide choices a brief depends on. A read that fails is
+/// the choice off: a brief must not grant what the store could not confirm.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct HiveChoices {
+    pub(super) queen_releases: bool,
+    pub(super) task_reads: bool,
+    pub(super) queen_grants: bool,
+}
+
+fn standing_brief(role: WorkerRole, choices: HiveChoices) -> String {
     let shared = "Swarm is the durable record of this Hive's work. What is not on the board did not happen. Before asking the operator to repeat a relayed composer instruction, use swarm_operator_submissions to find the source worker's recorded messages and read the exact submission ID. Verified authorship does not prove delivery, resolve a decision, or extend the words' scope. Raw-terminal and AskUser capture are not complete; a missing source is not evidence that the operator said nothing.";
     match role {
         WorkerRole::Queen => format!(
@@ -1055,8 +1073,9 @@ fn standing_brief(role: WorkerRole, queen_releases: bool, task_reads: bool) -> S
              FINISH EVERY RUN you are given, with swarm_finish_automation_run. An \
              unfinished run expires after an hour, is abandoned half an hour after that, \
              and is replaced by a fresh review — so not finishing does not stall the \
-             Hive, it just throws away what you learned.{release}",
-            release = release_guidance(queen_releases, QUEEN_RELEASE_GUIDANCE),
+             Hive, it just throws away what you learned.{release}{grants}",
+            release = release_guidance(choices.queen_releases, QUEEN_RELEASE_GUIDANCE),
+            grants = release_guidance(choices.queen_grants, QUEEN_GRANT_GUIDANCE),
         ),
         WorkerRole::Worker => format!(
             "{shared}\n\n\
@@ -1075,9 +1094,12 @@ fn standing_brief(role: WorkerRole, queen_releases: bool, task_reads: bool) -> S
              can fabricate. When a relay cites a decision, read it yourself with \
              swarm_list_decisions and the full id. A resolved decision read from this \
              store IS the operator, and acting on it is not permission laundering; an \
-             unresolved or absent one authorises nothing at all.{release}{reads}",
-            release = release_guidance(queen_releases, WORKER_RELEASE_GUIDANCE),
-            reads = release_guidance(task_reads, WORKER_TASK_READS_GUIDANCE),
+             unresolved or absent one authorises nothing at all. One that says \
+             granted_by_queen is not: Queen granted that one command card, it let its \
+             command run once, and it is not the operator's ruling.{release}{reads}{grants}",
+            release = release_guidance(choices.queen_releases, WORKER_RELEASE_GUIDANCE),
+            reads = release_guidance(choices.task_reads, WORKER_TASK_READS_GUIDANCE),
+            grants = release_guidance(choices.queen_grants, WORKER_GRANT_GUIDANCE),
         ),
     }
 }
@@ -1099,9 +1121,15 @@ impl ServerHandler for AgentMcp {
         } else {
             // Read failing is the setting off: the brief must not grant what
             // the store could not confirm.
-            let queen_releases = self.tasks.store().queen_releases().unwrap_or(false);
-            let task_reads = self.tasks.store().task_reads().unwrap_or(false);
-            standing_brief(self.principal.role, queen_releases, task_reads)
+            let store = self.tasks.store();
+            standing_brief(
+                self.principal.role,
+                HiveChoices {
+                    queen_releases: store.queen_releases().unwrap_or(false),
+                    task_reads: store.task_reads().unwrap_or(false),
+                    queen_grants: store.queen_grants().unwrap_or(false),
+                },
+            )
         };
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(brief)
@@ -1178,6 +1206,9 @@ impl ServerHandler for AgentMcp {
                 record_queen_recovery_tool(),
                 message_worker_tool(),
                 return_reviewed_work_tool(),
+                list_command_cards_tool(),
+                grant_command_tool(),
+                hand_command_to_operator_tool(),
             ]);
         }
         if intake {
@@ -1232,7 +1263,9 @@ impl AgentMcp {
                 | "swarm_record_review_disposition"
                 | "swarm_record_recovery_assessment"
                 | "swarm_transition_task"
-                | "swarm_reconcile_task_message" => QueenActionClass::Coordinate,
+                | "swarm_reconcile_task_message"
+                | "swarm_grant_command"
+                | "swarm_hand_command_to_operator" => QueenActionClass::Coordinate,
                 "swarm_create_apiary_task"
                 | "swarm_relocate_tasks_to_apiary"
                 | "swarm_claim_apiary_task"
@@ -1302,6 +1335,9 @@ impl AgentMcp {
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_withdraw_no_deployment" => self.withdraw_no_deployment(arguments),
             "swarm_withdraw_decision" => self.withdraw_decision(arguments),
+            "swarm_list_command_cards" => self.list_command_cards(),
+            "swarm_grant_command" => self.grant_command(arguments).await,
+            "swarm_hand_command_to_operator" => self.hand_command_to_operator(arguments),
             "swarm_supersede_decision" => self.supersede_decision(arguments),
             "swarm_read_clarifications" => parse::<ClarificationHistoryInput>(arguments).and_then(|input| {
                 let history = self.tasks.clarification_history(Some(self.principal), input.decision_id)?;
@@ -1798,10 +1834,13 @@ impl AgentMcp {
                                 })
                         })
                         .transpose()?;
+                    let operator_reasons =
+                        operator_reasons(input.operator_only, input.command.is_some())?;
                     self.tasks
                         .create_decision(
                             self.principal,
                             &DecisionRequestInput {
+                                operator_reasons,
                                 task_id,
                                 kind: input.kind,
                                 urgency: input.urgency,
@@ -1990,6 +2029,7 @@ impl AgentMcp {
                     && request.name.as_ref() != "swarm_read_review_evidence"
                     && request.name.as_ref() != "swarm_list_coordination_attention"
                     && request.name.as_ref() != "swarm_read_jira_attachment"
+                    && request.name.as_ref() != "swarm_list_command_cards"
                 {
                     self.changed.notify_waiters();
                     self.deliver_after
@@ -2578,9 +2618,14 @@ impl AgentMcp {
             Err(error) => return Err(ApplicationError::Store(error)),
         };
         let resolved = decision.state == DecisionRequestState::Resolved;
+        // ADR 0158. Queen's grant is resolved and is NOT the operator. It lets
+        // its one command run once, and it is never evidence of their ruling.
+        let by_queen = resolved && decision.granted_by_queen.is_some();
         structured(json!({
             "decision_id": decision.id,
-            "verified": resolved,
+            "verified": resolved && !by_queen,
+            "granted_by_queen": decision.granted_by_queen,
+            "awaiting_queen": decision.awaiting_queen,
             "state": decision.state.to_string(),
             "withdrawn_at": decision.withdrawn_at,
             "withdrawn_by_worker_id": decision.withdrawn_by_worker_id,
@@ -2617,6 +2662,8 @@ impl AgentMcp {
             // field and removes the need to know anything.
             "answered_how": if decision.state == DecisionRequestState::Withdrawn {
                 "withdrawn_without_operator_answer"
+            } else if by_queen {
+                "granted_by_queen"
             } else if !resolved {
                 "unresolved"
             } else if decision.resolution_action.as_deref()
@@ -2645,6 +2692,10 @@ impl AgentMcp {
             }),
             "reason": if decision.state == DecisionRequestState::Withdrawn {
                 "The request was withdrawn. No operator answer or permission was recorded."
+            } else if by_queen {
+                "Queen granted this command card under the operator's \"Queen grants command cards\" setting; the operator did not answer it. It let its one command run once, in the session that asked, and it is not an operator ruling: it authorises nothing else, and it is not evidence of what the operator wants."
+            } else if decision.awaiting_queen {
+                "This command card is waiting for Queen, who may grant it or hand it to the operator. It authorises nothing yet."
             } else if resolved {
                 "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ answered_how FIRST: chose_an_offered_action means resolution_action is their answer; in_their_own_words means resolution_action is a placeholder and their actual words are in resolution_answers. Reading the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
             } else {
@@ -3214,6 +3265,95 @@ impl AgentMcp {
         structured(json!({"decision_id":decision.id, "state":decision.state,
             "withdrawal_reason":decision.withdrawal_reason, "withdrawn_at":decision.withdrawn_at,
             "operator_approval":false}))
+    }
+
+    /// The command cards waiting for Queen, each in full (ADR 0158).
+    fn list_command_cards(&self) -> Result<CallToolResult, ApplicationError> {
+        let cards = self.tasks.queen_command_cards(self.principal)?;
+        let enabled = self
+            .tasks
+            .store()
+            .queen_grants()
+            .map_err(ApplicationError::Store)?;
+        structured(json!({
+            "queen_grants_enabled": enabled,
+            "cards": cards,
+            "operator_approval": false,
+            "note": if enabled {
+                "Grant one only for work you have reviewed and only when none of the operator's reasons applies; otherwise hand it to them. At most 50 are listed, oldest first."
+            } else {
+                "The operator's \"Queen grants command cards\" setting is off: every command card is theirs, and none is yours to grant."
+            },
+        }))
+    }
+
+    /// Queen grants a command card that is hers (ADR 0158), then wakes the
+    /// worker that asked, as the operator's Allow does. The answer itself is
+    /// delivered after this call, like every other change an agent makes.
+    async fn grant_command(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<GrantCommandInput>(arguments)?;
+        let id = DecisionRequestId::from_str(&input.decision_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("decision id"))?;
+        let decision = self
+            .tasks
+            .grant_command_as_queen(self.principal, id, &input.note)?;
+        tracing::info!(
+            decision_id = %id,
+            worker_id = %decision.requesting_worker_id,
+            "Queen granted a command card"
+        );
+        // A failed wake stays visible on the worker, and the queued answer
+        // stays durable for a later pass; the grant is never lost.
+        if let Err(error) = crate::worker_runtime::start_queen_worker_process(
+            &self.state,
+            decision.requesting_worker_id,
+            swarm_terminal::TerminalSize::default(),
+        )
+        .await
+        {
+            self.state
+                .worker_errors
+                .write()
+                .await
+                .insert(decision.requesting_worker_id, error.message.clone());
+            tracing::warn!(
+                decision_id = %id,
+                worker_id = %decision.requesting_worker_id,
+                message = %error.message,
+                "command card requester could not be woken after Queen's grant"
+            );
+        }
+        structured(json!({
+            "decision_id": decision.id,
+            "state": decision.state,
+            "granted_command": decision.requested_command,
+            "granted_by_queen": decision.granted_by_queen,
+            "operator_approval": false,
+            "note": "Granted: the worker may run that exact text once, in the session that asked, and is told so with your note. The grant is recorded as yours, not the operator's.",
+        }))
+    }
+
+    /// Queen hands a command card to the operator, saying why (ADR 0158).
+    fn hand_command_to_operator(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<HandCommandInput>(arguments)?;
+        let id = DecisionRequestId::from_str(&input.decision_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("decision id"))?;
+        let decision = self.tasks.hand_command_to_operator(
+            self.principal,
+            id,
+            &input.reason,
+            crate::unix_timestamp(),
+        )?;
+        structured(json!({
+            "decision_id": decision.id,
+            "state": decision.state,
+            "awaiting_queen": decision.awaiting_queen,
+            "operator_approval": false,
+            "note": "The card is in the operator's Needs you with your reason, and it is theirs now: do not grant it, and do not ask them about it again.",
+        }))
     }
 
     /// Records that a resolved decision was replaced by a better-framed one.
@@ -4825,6 +4965,11 @@ struct RequestDecisionInput {
     /// The absolute path of the local script `command` runs, if it runs one.
     #[serde(default)]
     script: Option<String>,
+    /// Which of the operator's reasons apply to `command` (ADR 0158). Read as
+    /// names and checked by `operator_reasons`, so an unknown one is refused
+    /// with the list rather than as a deserialization failure.
+    #[serde(default)]
+    operator_only: Option<Vec<String>>,
     kind: DecisionRequestKind,
     #[serde(default)]
     urgency: DecisionUrgency,
@@ -4855,6 +5000,46 @@ struct RequestDecisionInput {
     #[serde(default)]
     questions: Vec<swarm_domain::DecisionQuestion>,
     deadline: Option<i64>,
+}
+
+/// What the asker said of the operator's reasons, checked (ADR 0158). Only a
+/// command card carries it, and every name must be one of the four: a name
+/// Swarm does not know is refused, because dropping it would read as "none".
+fn operator_reasons(
+    named: Option<Vec<String>>,
+    has_command: bool,
+) -> Result<Option<Vec<swarm_domain::OperatorReason>>, ApplicationError> {
+    let Some(named) = named else {
+        return Ok(None);
+    };
+    if !has_command {
+        return Err(ApplicationError::Refused(
+            "operator_only belongs with command: it says which of the operator's reasons apply to the command you are asking to run. Leave it out of any other request.".into(),
+        ));
+    }
+    named
+        .iter()
+        .map(|name| {
+            swarm_domain::OperatorReason::parse(name).ok_or_else(|| {
+                ApplicationError::Refused(format!(
+                    "operator_only names {name:?}, which is not one of the operator's reasons. Use only credentials, permissions, spend_over_25_usd or irreversible_delete, or [] when none applies."
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+#[derive(Deserialize)]
+struct GrantCommandInput {
+    decision_id: String,
+    note: String,
+}
+
+#[derive(Deserialize)]
+struct HandCommandInput {
+    decision_id: String,
+    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -4895,6 +5080,10 @@ fn decision_index_entry(decision: &swarm_domain::DecisionRequest) -> Value {
         "withdrawn_by_worker_id": decision.withdrawn_by_worker_id,
         "withdrawal_reason": decision.withdrawal_reason,
         "resolution_action": decision.resolution_action,
+        // ADR 0158: a card Queen granted, or one waiting for her, is not the
+        // operator's answer, and the index says so before anyone opens it.
+        "granted_by_queen": decision.granted_by_queen,
+        "awaiting_queen": decision.awaiting_queen,
         // Whether the act it authorised has evidence of having happened. Absent
         // until it resolves, because an unanswered question authorises no act.
         // "unknown" means no task names this decision, so neither answer is
@@ -4968,7 +5157,8 @@ fn request_decision_tool() -> Tool {
                 "operator_actions": { "type": "array", "maxItems": 6, "uniqueItems": true, "description": "The subset of allowed_actions that the OPERATOR carries out themselves rather than authorising you to proceed. Mark an option here when answering it leaves THEM owing the action -- filing something in a console, setting a credential, pressing something only they can reach. Picking one parks this task and shows it under Needs you / Parked, still assigned to you, until they clear it; without the mark the task returns to you the moment they answer, and goes stale because you cannot act. Marking is an offer, not an authority: the park fires on their choice, never on this list, so it cannot be used to park your own work. Every entry must exactly match an allowed_actions value.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] },
                 "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you need the operator to allow, verbatim and complete. Send it whenever a permission check or the auto-mode classifier denied a command you need. Swarm offers the operator its own grant button for it; pressing that button lets you run exactly this text once, straight away in this session, while the task is on the board. With a command, give task_id and leave allowed_actions, operator_actions and questions empty and suggested_action an empty string: a button you write could never grant it, so one is refused. Send the command you will actually run, not a pattern or a shortened version: the operator reads this exact text, and any other text is not covered. Omit this for an ordinary approval that authorises no execution." },
-                "script": { "type": ["string", "null"], "maxLength": 4096, "description": "When command runs a local script or program file (./deploy.sh, /srv/app/release), its absolute path. Swarm hashes the file now and shows the hash to the operator; the grant then lets the command run only while the file is unchanged. Omit it when the command runs no local file, such as gh pr merge 689." }
+                "script": { "type": ["string", "null"], "maxLength": 4096, "description": "When command runs a local script or program file (./deploy.sh, /srv/app/release), its absolute path. Swarm hashes the file now and shows the hash to the operator; the grant then lets the command run only while the file is unchanged. Omit it when the command runs no local file, such as gh pr merge 689." },
+                "operator_only": { "type": ["array", "null"], "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "enum": ["credentials", "permissions", "spend_over_25_usd", "irreversible_delete"] }, "description": "With command only: which of the operator's reasons apply to it. credentials: it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this. permissions: it grants, revokes or changes someone's access, a role, branch protection or a security setting. spend_over_25_usd: it may cost more than $25. irreversible_delete: it deletes something that cannot be restored. Name every one that applies, and send [] only when none does: then, while the operator lets Queen grant command cards, Queen reviews the work and may grant it instead. Leave it out and the card is the operator's. Saying [] for a command one of these covers sends the operator's decision to Queen." }
             },
             "required": ["kind", "title", "summary", "reason", "suggested_action"],
             "additionalProperties": false
@@ -5985,6 +6175,39 @@ fn withdraw_decision_tool() -> Tool {
         &json!({"type":"object","properties":{
             "decision_id":{"type":"string","format":"uuid"},
             "reason":{"type":"string","minLength":1,"maxLength":4000}},
+            "required":["decision_id","reason"],"additionalProperties":false}),
+        false,
+    )
+}
+
+fn list_command_cards_tool() -> Tool {
+    tool(
+        "swarm_list_command_cards",
+        "The command cards that are yours to grant or hand to the operator, oldest first, each in full: the exact command, the script and its hash, the task, the asking worker, and its reason, risk and evidence. A card is here only while the operator's \"Queen grants command cards\" setting is on and its worker said none of the operator's reasons applies (credentials, permissions, spend over $25, an irreversible delete). Every other card is the operator's, and you cannot grant it.",
+        &json!({"type":"object","properties":{},"additionalProperties":false}),
+        true,
+    )
+}
+
+fn grant_command_tool() -> Tool {
+    tool(
+        "swarm_grant_command",
+        "Grant one command card from swarm_list_command_cards: the asking worker may then run that exact command once, in the session that asked, while its task is on the board. The same grant the operator's Allow mints, recorded as yours and never as theirs. Grant only when you have read the command and its script, it carries out work you have reviewed on that task, and none of the operator's reasons applies whatever the worker said: it creates, changes or exposes a credential; changes access, roles, protection or a security setting; may cost more than $25; or deletes something that cannot be restored. If any applies, or you are unsure, use swarm_hand_command_to_operator instead. The worker's own claim is not your review.",
+        &json!({"type":"object","properties":{
+            "decision_id":{"type":"string","format":"uuid","description":"The card's full id. A prefix is refused."},
+            "note":{"type":"string","minLength":1,"maxLength":2000,"description":"What you checked: the reviewed work this command carries out, and why none of the operator's reasons applies. The worker reads it, and it stays on the record."}},
+            "required":["decision_id","note"],"additionalProperties":false}),
+        false,
+    )
+}
+
+fn hand_command_to_operator_tool() -> Tool {
+    tool(
+        "swarm_hand_command_to_operator",
+        "Hand a command card from swarm_list_command_cards to the operator instead of granting it, saying why. It joins their Needs you and notifies them as a new card would, and it is theirs from then on: you cannot grant it afterwards. Use it when one of the operator's reasons applies after all, when the command does more than the reviewed work needs, or when you cannot tell.",
+        &json!({"type":"object","properties":{
+            "decision_id":{"type":"string","format":"uuid","description":"The card's full id. A prefix is refused."},
+            "reason":{"type":"string","minLength":1,"maxLength":2000,"description":"Why the operator should decide this one. They read it on the card."}},
             "required":["decision_id","reason"],"additionalProperties":false}),
         false,
     )
@@ -8614,6 +8837,248 @@ mod tests {
         assert!(
             missing.to_string().contains("could not read the script"),
             "{missing}"
+        );
+    }
+
+    /// ADR 0158 over the real tools. A worker that says none of the
+    /// operator's reasons applies sends its card to Queen once the operator
+    /// lets her grant; her grant lets the command run once, is recorded as
+    /// hers, and never reads as the operator's ruling. A worker cannot grant,
+    /// a reason Swarm does not know is refused rather than dropped, and a card
+    /// naming a reason or handed on stays the operator's.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn queen_grants_a_card_whose_worker_names_no_operator_reason() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task("Merge reviewed work", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let queen = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let ask = |command: &str, operator_only: Value| {
+            call_review_test_tool(
+                bridge.clone(),
+                &worker,
+                "swarm_request_decision",
+                json!({
+                    "task_id": task.id.to_string(),
+                    "keep_working": true,
+                    "kind": "approval",
+                    "title": "Run one reviewed command",
+                    "summary": "The classifier denied it.",
+                    "reason": "Queen reviewed the work it carries out.",
+                    "suggested_action": "",
+                    "command": command,
+                    "operator_only": operator_only,
+                }),
+            )
+        };
+        let text = |response: &Value| response["result"]["content"][0]["text"].to_string();
+
+        let unknown = ask("gh pr merge 11", json!(["production"])).await;
+        assert_eq!(unknown["result"]["isError"], true, "{unknown}");
+        assert!(
+            text(&unknown).contains("not one of the operator's reasons"),
+            "{unknown}"
+        );
+        let no_command = call_review_test_tool(
+            bridge.clone(),
+            &worker,
+            "swarm_request_decision",
+            json!({
+                "task_id": task.id.to_string(),
+                "keep_working": true,
+                "kind": "input",
+                "title": "Pick one",
+                "summary": "Which way.",
+                "reason": "Two ways remain.",
+                "suggested_action": "",
+                "allowed_actions": ["One", "Other"],
+                "operator_only": [],
+            }),
+        )
+        .await;
+        assert_eq!(no_command["result"]["isError"], true, "{no_command}");
+        assert!(
+            text(&no_command).contains("operator_only belongs with command"),
+            "{no_command}"
+        );
+
+        let card = ask("gh pr merge 12 --squash", json!([])).await;
+        assert_eq!(card["result"]["isError"], false, "{card}");
+        let id = card["result"]["structuredContent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            card["result"]["structuredContent"]["awaiting_queen"], false,
+            "{card}"
+        );
+        let off = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": id, "note": "Reviewed."}),
+        )
+        .await;
+        assert_eq!(off["result"]["isError"], true, "{off}");
+        assert!(text(&off).contains("setting is off"), "{off}");
+
+        store.set_queen_grants(true, 10).unwrap();
+        let listed = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_list_command_cards",
+            json!({}),
+        )
+        .await;
+        let cards = &listed["result"]["structuredContent"]["cards"];
+        assert_eq!(cards.as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(cards[0]["id"], id.as_str(), "{listed}");
+        assert_eq!(
+            cards[0]["requested_command"], "gh pr merge 12 --squash",
+            "{listed}"
+        );
+        assert_eq!(cards[0]["awaiting_queen"], true, "{listed}");
+
+        let by_worker = call_review_test_tool(
+            bridge.clone(),
+            &worker,
+            "swarm_grant_command",
+            json!({"decision_id": id, "note": "Mine."}),
+        )
+        .await;
+        assert_eq!(by_worker["result"]["isError"], true, "{by_worker}");
+        assert!(
+            store
+                .live_command_grant(worker_id, "gh pr merge 12 --squash")
+                .unwrap()
+                .is_none(),
+            "a worker's own call grants nothing"
+        );
+
+        let granted = call_review_test_tool(bridge.clone(),
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": id, "note": "Reviewed the pull request; a squash merge on green checks, and none of the operator's reasons applies."}),
+        )
+        .await;
+        assert_eq!(granted["result"]["isError"], false, "{granted}");
+        assert_eq!(
+            granted["result"]["structuredContent"]["granted_by_queen"],
+            queen_id.to_string(),
+            "{granted}"
+        );
+        assert!(
+            store
+                .live_command_grant(worker_id, "gh pr merge 12 --squash")
+                .unwrap()
+                .is_some(),
+            "Queen's grant is the operator's kind of grant: exact text, once"
+        );
+        let twice = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": id, "note": "Again."}),
+        )
+        .await;
+        assert_eq!(twice["result"]["isError"], true, "{twice}");
+
+        let read = call_review_test_tool(
+            bridge.clone(),
+            &worker,
+            "swarm_list_decisions",
+            json!({"decision_id": id}),
+        )
+        .await;
+        let read = &read["result"]["structuredContent"];
+        assert_eq!(read["verified"], false, "{read}");
+        assert_eq!(read["answered_how"], "granted_by_queen", "{read}");
+        assert!(
+            read["reason"]
+                .as_str()
+                .unwrap()
+                .contains("not an operator ruling"),
+            "{read}"
+        );
+
+        // A card naming a reason is the operator's, and so is one Queen hands on.
+        let named = ask(
+            "gh api -X PUT repos/o/r/branches/main/protection",
+            json!(["permissions"]),
+        )
+        .await;
+        let named_id = named["result"]["structuredContent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            named["result"]["structuredContent"]["awaiting_queen"], false,
+            "{named}"
+        );
+        let refused = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": named_id, "note": "Reviewed."}),
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert!(
+            text(&refused).contains("named one of the operator's reasons"),
+            "{refused}"
+        );
+
+        let handed = ask("gh pr merge 13 --squash", json!([])).await;
+        let handed_id = handed["result"]["structuredContent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            handed["result"]["structuredContent"]["awaiting_queen"], true,
+            "{handed}"
+        );
+        let on = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_hand_command_to_operator",
+            json!({"decision_id": handed_id, "reason": "It merges past a required check."}),
+        )
+        .await;
+        assert_eq!(on["result"]["isError"], false, "{on}");
+        assert_eq!(
+            on["result"]["structuredContent"]["awaiting_queen"], false,
+            "{on}"
+        );
+        let after = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": handed_id, "note": "Reviewed."}),
+        )
+        .await;
+        assert_eq!(after["result"]["isError"], true, "{after}");
+        assert!(
+            text(&after).contains("you handed this card to the operator"),
+            "{after}"
+        );
+        let left = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_list_command_cards",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            left["result"]["structuredContent"]["cards"],
+            json!([]),
+            "nothing is left for Queen: {left}"
         );
     }
 
@@ -12724,7 +13189,7 @@ mod tests {
 
     #[test]
     fn queen_is_briefed_on_what_she_owns_and_on_capabilities_that_are_not_tools() {
-        let brief = standing_brief(WorkerRole::Queen, false, false);
+        let brief = standing_brief(WorkerRole::Queen, HiveChoices::default());
         assert!(brief.contains(QUEEN_JUDGMENT_GUIDANCE));
         assert!(brief.contains(QUEEN_EVIDENCE_GUIDANCE));
         assert!(brief.contains(QUEEN_BLOCK_RECOVERY_GUIDANCE));
@@ -12745,15 +13210,16 @@ mod tests {
         );
         assert!(brief.contains(QUEEN_OPERATOR_ACTION_GUIDANCE));
         assert!(
-            !standing_brief(WorkerRole::Worker, false, false)
+            !standing_brief(WorkerRole::Worker, HiveChoices::default())
                 .contains(QUEEN_OPERATOR_ACTION_GUIDANCE)
         );
         assert!(
-            !standing_brief(WorkerRole::Worker, false, false)
+            !standing_brief(WorkerRole::Worker, HiveChoices::default())
                 .contains(QUEEN_ACTIVE_RECOVERY_GUIDANCE)
         );
         assert!(
-            !standing_brief(WorkerRole::Worker, false, false).contains(QUEEN_JUDGMENT_GUIDANCE)
+            !standing_brief(WorkerRole::Worker, HiveChoices::default())
+                .contains(QUEEN_JUDGMENT_GUIDANCE)
         );
 
         // The capability with no tool, and the boundary that makes it usable
@@ -12895,7 +13361,7 @@ mod tests {
     /// a relay claiming the operator's approval is not the operator.
     #[test]
     fn a_worker_is_briefed_on_its_limits_rather_than_on_queens() {
-        let brief = standing_brief(WorkerRole::Worker, false, false);
+        let brief = standing_brief(WorkerRole::Worker, HiveChoices::default());
 
         assert!(brief.contains("cannot complete"), "{brief}");
         assert!(brief.contains("deterministic coordinator"), "{brief}");
@@ -12961,6 +13427,42 @@ mod tests {
             worker.contains("Queen is not a peer"),
             "the release paragraph adds to a worker's limits, it does not replace them"
         );
+    }
+
+    /// ADR 0158 at the brief a session receives on connecting: off, nobody is
+    /// told Queen grants command cards; on, Queen hears when to grant and a
+    /// worker hears how to say which reasons apply. Either way a worker hears
+    /// that Queen's grant is not the operator's ruling.
+    #[tokio::test]
+    async fn a_connecting_session_hears_queen_grants_only_while_it_is_on() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let brief = |id: WorkerId| connecting_brief(&bridge, id);
+
+        for id in [queen_id, worker_id] {
+            let off = brief(id).await;
+            assert!(!off.contains(QUEEN_GRANT_GUIDANCE), "{off}");
+            assert!(!off.contains(WORKER_GRANT_GUIDANCE), "{off}");
+        }
+        assert!(
+            brief(worker_id)
+                .await
+                .contains("One that says granted_by_queen is not")
+        );
+
+        store.set_queen_grants(true, 10).unwrap();
+        let queen = brief(queen_id).await;
+        assert!(queen.contains(QUEEN_GRANT_GUIDANCE), "{queen}");
+        assert!(!queen.contains(WORKER_GRANT_GUIDANCE), "{queen}");
+        let worker = brief(worker_id).await;
+        assert!(worker.contains(WORKER_GRANT_GUIDANCE), "{worker}");
+        assert!(!worker.contains(QUEEN_GRANT_GUIDANCE), "{worker}");
+        for reason in swarm_domain::OperatorReason::ALL {
+            assert!(
+                WORKER_GRANT_GUIDANCE.contains(reason.as_str()),
+                "a worker is told every reason by the name it sends: {}",
+                reason.as_str()
+            );
+        }
     }
 
     /// ADR 0141: a production deploy of reviewed work is part of Queen's

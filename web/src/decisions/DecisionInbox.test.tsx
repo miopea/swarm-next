@@ -926,6 +926,45 @@ test("a command Swarm filed after a refusal says Swarm asked, not the worker", (
   expect(screen.queryByText(/Swarm filed this, not the worker/)).not.toBeInTheDocument();
 });
 
+test("a command card Queen may grant leaves Needs you and says it is with her", () => {
+  // ADR 0158: the worker said none of the operator's reasons applies, so the
+  // card is Queen's. It stays answerable, and it does not count as theirs.
+  const withQueen: DecisionRequest = {
+    ...pending,
+    id: "decision-queen",
+    kind: "approval",
+    questions: [],
+    requested_command: "gh pr merge 12 --squash",
+    allowed_actions: ["Allow the command shown in this request"],
+    operator_reasons: [],
+    awaiting_queen: true,
+  };
+  const { rerender } = render(<DecisionInbox decisions={[withQueen]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByRole("tab", { name: "Needs you 0" })).toBeInTheDocument();
+  expect(screen.getByText(/With Queen\. The worker said none of your reasons applies/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Allow the command shown in this request" })).toBeInTheDocument();
+
+  const handedOn = { ...withQueen, awaiting_queen: false, queen_handoff_reason: "It merges past a required check." };
+  rerender(<DecisionInbox decisions={[handedOn]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
+  expect(screen.getByText("Queen handed this to you: It merges past a required check.")).toBeInTheDocument();
+  expect(screen.queryByText(/With Queen\./)).not.toBeInTheDocument();
+});
+
+test("a grant Queen made is labelled as hers in history", () => {
+  const granted: DecisionRequest = {
+    ...resolved,
+    id: "decision-queen-granted",
+    requested_command: "gh pr merge 12 --squash",
+    resolution_action: "Allow the command shown in this request",
+    resolved_by_operator_id: null,
+    granted_by_queen: "queen-1",
+  };
+  render(<DecisionInbox decisions={[granted]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Show history" }));
+  expect(screen.getByText(/Granted by Queen:/)).toBeInTheDocument();
+});
+
 test("an ordinary decision shows no command block", () => {
   // A grant panel on a decision that grants nothing is noise, and noise is how
   // an operator learns to skip past the one card where it mattered.

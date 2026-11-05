@@ -5026,6 +5026,10 @@ fn api_router(state: AppState) -> Router {
             get(provider_updates::task_reads).put(provider_updates::set_task_reads),
         )
         .route(
+            "/api/v1/runtime/queen-grants",
+            get(provider_updates::queen_grants).put(provider_updates::set_queen_grants),
+        )
+        .route(
             "/api/v1/runtime/terminal-history",
             get(terminal_history_routes::terminal_history)
                 .put(terminal_history_routes::set_terminal_history),
@@ -11440,6 +11444,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::DecisionAlreadyResolved | TaskStoreError::DecisionInboxFull => {
             ApiError::new(StatusCode::CONFLICT, "decision_conflict", error.to_string())
         }
+        TaskStoreError::QueenGrantRefused(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "queen_grant_refused",
+            error.to_string(),
+        ),
         // Its own code: the request was well formed, and the remedy is a
         // different task, not a corrected call (ADR 0148).
         TaskStoreError::CommandRequestTaskClosed => ApiError::new(
@@ -12039,6 +12048,7 @@ mod tests {
             answers: std::collections::BTreeMap::new(),
             command: swarm_persistence::CommandGrantOutcome::NotRequested,
             approval: false,
+            granted_by_queen: false,
         };
         let message = decision_delivery_message(&delivery).bytes;
         assert_eq!(message.last(), Some(&b'\r'));
@@ -12062,6 +12072,7 @@ mod tests {
                 answers: std::collections::BTreeMap::new(),
                 command,
                 approval,
+                granted_by_queen: false,
             };
             String::from_utf8(decision_delivery_message(&delivery).bytes).unwrap()
         };
@@ -12125,6 +12136,46 @@ mod tests {
         }
     }
 
+    /// ADR 0158: a worker told "Operator note" for Queen's grant would read
+    /// her words as the operator's ruling.
+    #[test]
+    fn a_grant_queen_made_is_named_as_hers() {
+        let say = |granted_by_queen: bool| {
+            String::from_utf8(
+                decision_delivery_message(&DecisionDispatch {
+                    decision_id: DecisionRequestId::new(),
+                    worker_id: WorkerId::new(),
+                    session_id: WorkerSessionId::new(),
+                    action: "Allow the command shown in this request".into(),
+                    note: "Reviewed the merge; nothing the operator keeps.".into(),
+                    answers: std::collections::BTreeMap::new(),
+                    command: swarm_persistence::CommandGrantOutcome::Granted {
+                        command: "gh pr merge 12".into(),
+                    },
+                    approval: false,
+                    granted_by_queen,
+                })
+                .bytes,
+            )
+            .unwrap()
+        };
+        let queens = say(true);
+        assert!(
+            queens.contains(
+                "Queen granted this; the operator did not see it. Queen's note: Reviewed the merge"
+            ),
+            "{queens}"
+        );
+        assert!(!queens.contains("Operator note"), "{queens}");
+        assert!(queens.contains("Granted: you may now run"), "{queens}");
+        let operators = say(false);
+        assert!(
+            operators.contains("Operator note: Reviewed the merge"),
+            "{operators}"
+        );
+        assert!(!operators.contains("Queen"), "{operators}");
+    }
+
     #[test]
     fn an_answered_interview_states_its_answers_in_the_delivery() {
         // A worker that held its session waiting for an answer should not have
@@ -12145,6 +12196,7 @@ mod tests {
             answers,
             command: swarm_persistence::CommandGrantOutcome::NotRequested,
             approval: false,
+            granted_by_queen: false,
         };
 
         let message = decision_delivery_message(&delivery).bytes;
@@ -15874,6 +15926,13 @@ mod tests {
     #[tokio::test]
     async fn only_the_operators_credential_turns_on_task_reads() {
         only_the_operators_credential_turns_on("/api/v1/runtime/task-reads").await;
+    }
+
+    /// ADR 0158: a worker must not be able to send its own command cards to
+    /// Queen by turning her grants on from this machine.
+    #[tokio::test]
+    async fn only_the_operators_credential_turns_on_queen_grants() {
+        only_the_operators_credential_turns_on("/api/v1/runtime/queen-grants").await;
     }
 
     /// ⚠️ ADR 0156: a waiting engine update applies itself until the operator

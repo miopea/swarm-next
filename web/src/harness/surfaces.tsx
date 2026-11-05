@@ -15,6 +15,7 @@ import ProviderUpdatesFixture from "./ProviderUpdatesFixture";
 import SettingsRestartFixture from "./SettingsRestartFixture";
 import QueenReleasesSettings from "../settings/QueenReleasesSettings";
 import TaskReadsSettings from "../settings/TaskReadsSettings";
+import QueenGrantsSettings from "../settings/QueenGrantsSettings";
 import WorkerRemoteControlSettings from "../settings/WorkerRemoteControlSettings";
 import TerminalHistorySettings from "../settings/TerminalHistorySettings";
 import TerminalPoolFixture from "./TerminalPoolFixture";
@@ -305,6 +306,7 @@ export const SURFACES: Surface[] = [
   { id: "worker-model", title: "Worker model", why: "Fictional model with three workers still on another; add ?workerModel=locked for a member whose Apiary sets it. Nothing is saved.", render: () => <WorkerModelSettings operatorToken="fixture" /> },
   { id: "worker-remote-control", title: "Remote Control", why: "Off, as a Hive starts; add ?remoteControl=on for one whose workers connect to it. Nothing is saved.", render: () => <WorkerRemoteControlSettings operatorToken="fixture" /> },
   { id: "queen-releases", title: "Queen releases", why: "Off, as a Hive starts; add ?queenReleases=on for one where Queen's review releases code. Nothing is saved.", render: () => <QueenReleasesSettings operatorToken="fixture" /> },
+  { id: "queen-grants", title: "Queen grants", why: "Off, as a Hive starts; add ?queenGrants=on for one whose Queen grants command cards for reviewed work. Nothing is saved.", render: () => <QueenGrantsSettings operatorToken="fixture" /> },
   { id: "task-reads", title: "Task reads", why: "Off, as a Hive starts; add ?taskReads=on for one whose workers read production for their task unasked. Nothing is saved.", render: () => <TaskReadsSettings operatorToken="fixture" /> },
   { id: "settings-restart", title: "Settings need a restart", why: "One worker started before Queen releases was turned on; ?settings=several for three workers behind five settings. Nothing is restarted.", render: () => <SettingsRestartFixture /> },
   { id: "engine-auto-update", title: "Worker engine updates itself", why: "A waiting engine update held up by a worker mid-turn; ?state=off, ?state=updated, ?state=partway or ?state=day for the other states and the Needs you item. Nothing is stopped.", render: () => <EngineAutoUpdateFixture /> },
@@ -721,6 +723,42 @@ export const SURFACES: Surface[] = [
       requested_command: "cd /srv/orchard && ./scripts/release.sh --service export --slot staging --wait 300 && echo released",
       requested_script: { path: "/srv/orchard/scripts/release.sh", sha256: "4f1c9a7be2d03865c1f0e9a4b7d26c58e13a90f4d2b6c7e8a5f3019d4c2b7e61" },
     }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} />,
+  },
+  {
+    id: "needs-you-queen-card",
+    title: "Command card with Queen, and one she handed on",
+    why: "Invented commands: a card Queen may grant is marked With Queen and left out of the count; one she handed on says why (ADR 0158)",
+    render: () => <DecisionInbox decisions={[{
+      ...demoDecision,
+      id: "decision-queen-card",
+      title: "Merge the reviewed export pull request",
+      summary: "The auto-mode classifier denied the merge. Queen reviewed the change; checks are green.",
+      questions: [],
+      suggested_action: "",
+      allowed_actions: ["Allow the command shown in this request"],
+      requested_command: "gh pr merge 482 --squash --delete-branch",
+      operator_reasons: [],
+      awaiting_queen: true,
+    }, {
+      ...demoDecision,
+      id: "decision-queen-handed-on",
+      title: "Re-run the export migration on staging",
+      summary: "The classifier denied the migration command.",
+      questions: [],
+      suggested_action: "",
+      allowed_actions: ["Allow the command shown in this request"],
+      requested_command: "cd /srv/orchard && ./scripts/migrate.sh --slot staging",
+      operator_reasons: [],
+      awaiting_queen: false,
+      queen_handoff_reason: "A migration is yours under the release rules, and this one drops a column that cannot be restored.",
+    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} />,
+  },
+  {
+    id: "needs-you-queen-card-phone",
+    title: "Queen command cards at phone width",
+    why: "A 390px frame tests that the With Queen line and the hand-off reason wrap",
+    render: () => <iframe title="Queen command card phone preview" src="/harness.html?surface=needs-you-queen-card"
+      style={{ display: "block", width: 390, height: 844, border: 0 }} />,
   },
   {
     id: "needs-you-command-grant-phone",

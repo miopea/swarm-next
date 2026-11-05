@@ -920,6 +920,13 @@ const ACTIONABLE_TASKS: &str = concat!("task.removed_at IS NULL
                      WHERE p.task_id = task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')
                  ))
                  OR (task.state = 'ready' AND task.assigned_worker_id IS NULL)
+                 -- A command card that is Queen's to grant waits on nobody else
+                 -- (ADR 0158), whatever state its task is in.
+                 OR EXISTS (
+                     SELECT 1 FROM task_decision_membership membership
+                     JOIN decision_requests card ON card.id = membership.decision_id
+                     WHERE membership.task_id = task.id AND card.state = 'pending'
+                       AND ", crate::queen_grants::queen_card!("card"), ")
                  OR (task.state = 'ready'
                      AND task.assigned_worker_id IS NOT NULL
                      AND NOT EXISTS (
@@ -929,7 +936,10 @@ const ACTIONABLE_TASKS: &str = concat!("task.removed_at IS NULL
                      ))
              )");
 
-fn actionable_count(connection: &rusqlite::Connection, now: i64) -> Result<i64, rusqlite::Error> {
+pub(crate) fn actionable_count(
+    connection: &rusqlite::Connection,
+    now: i64,
+) -> Result<i64, rusqlite::Error> {
     let task_count: i64 = connection.query_row(
         &format!("SELECT COUNT(*) FROM tasks task WHERE {ACTIONABLE_TASKS}"),
         rusqlite::named_params! {":now": now},

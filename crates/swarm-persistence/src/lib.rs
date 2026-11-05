@@ -44,6 +44,7 @@ pub use check_gate::{CheckGateSetting, CiCandidate};
 mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
+mod queen_grants;
 mod queen_releases;
 mod settings_restart;
 mod task_reads;
@@ -457,7 +458,10 @@ const TASK_READS_SCHEMA_MARKER: i64 = 220;
 /// Whether a waiting worker engine update applies by itself, how long one has
 /// waited, and who each update stopped (ADR 0156).
 const IDLE_ENGINE_UPDATE_SCHEMA_MARKER: i64 = 221;
-const CURRENT_SCHEMA_VERSION: i64 = IDLE_ENGINE_UPDATE_SCHEMA_MARKER;
+/// Whether Queen may grant a worker's command card, what each card's worker
+/// said of the operator's reasons, and Queen's grants and hand-offs (ADR 0158).
+const QUEEN_GRANTS_SCHEMA_MARKER: i64 = 222;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_GRANTS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -703,6 +707,10 @@ pub enum TaskStoreError {
     InvalidDecisionResolution,
     #[error("this Hive already has the maximum number of pending decisions")]
     DecisionInboxFull,
+    /// Queen asked to grant, or hand on, a command card that is not hers
+    /// (ADR 0158). The text names what would make it hers.
+    #[error("{0}")]
+    QueenGrantRefused(&'static str),
     #[error("this Hive already has the maximum number of pending task briefings")]
     TaskDispatchQueueFull,
     #[error("this Hive already tracks the maximum of 16 presence devices")]
@@ -2380,9 +2388,12 @@ impl TaskStore {
                    -- Reviewed work waiting on a ruling is the OPERATOR's, not
                    -- Queen's. Read from the decision rather than stored beside
                    -- it, so it unsets itself the moment they answer.
+                   -- A command card Queen may grant is hers, not theirs
+                   -- (ADR 0158).
                    EXISTS(SELECT 1 FROM decision_requests dr
                           WHERE dr.id IN (SELECT decision_id FROM task_decision_membership WHERE task_id=t.id)
-                            AND dr.state = 'pending'),
+                            AND dr.state = 'pending'
+                            AND NOT ", crate::queen_grants::queen_card!("dr"), "),
                    review_message.id, review_message.body,
                    CASE WHEN t.state = 'blocked' THEN
                      coalesce((SELECT assessment.reason FROM task_block_reassessments assessment
@@ -5009,6 +5020,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < IDLE_ENGINE_UPDATE_SCHEMA_MARKER {
         crate::worker_engine_auto_update::migrate(transaction, IDLE_ENGINE_UPDATE_SCHEMA_MARKER)?;
+    }
+    if schema_version < QUEEN_GRANTS_SCHEMA_MARKER {
+        crate::queen_grants::migrate_queen_grants(transaction, QUEEN_GRANTS_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11313,6 +11327,22 @@ mod tests {
                 DROP TABLE worker_engine_update_workers;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('worker_engine_auto_update', 'worker_engine_update_workers')",
+        },
+        // Whether Queen grants command cards, and on each decision what the
+        // worker said of the operator's reasons and what Queen did (ADR 0158).
+        SchemaStep {
+            table: "queen_grant_settings",
+            artifact: "operator_reasons",
+            undo_sql: "DROP TABLE queen_grant_settings;
+                ALTER TABLE decision_requests DROP COLUMN operator_reasons;
+                ALTER TABLE decision_requests DROP COLUMN granted_by_queen;
+                ALTER TABLE decision_requests DROP COLUMN queen_handoff_at;
+                ALTER TABLE decision_requests DROP COLUMN queen_handoff_reason;",
+            probe_sql: "SELECT (SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                    AND name = 'queen_grant_settings')
+                AND (SELECT COUNT(*) = 4 FROM pragma_table_info('decision_requests')
+                    WHERE name IN ('operator_reasons', 'granted_by_queen',
+                                   'queen_handoff_at', 'queen_handoff_reason'))",
         },
     ];
 
