@@ -170,6 +170,11 @@ struct DevelopmentRuntimeResponse {
     /// read. Neither is a claim that the last update went well.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_worker_engine_update: Option<swarm_persistence::WorkerEngineUpdateAttempt>,
+    /// Whether a waiting engine update applies by itself, why it has not yet,
+    /// and whom the last update stopped (ADR 0156). Absent when the store
+    /// could not be read, which is not a claim that it is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_engine_auto_update: Option<crate::idle_engine_update::AutoUpdateView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -393,6 +398,10 @@ pub(super) async fn development(
     // the two cannot disagree on the screen that shows them together.
     let engine_update = engine_update_required(&state).await;
     let source_aligned = source.as_ref().is_some_and(|status| status.aligned);
+    let last_update = crate::task_store(&state)
+        .ok()
+        .and_then(|store| store.last_worker_engine_update().ok())
+        .flatten();
     let state_name = if source.is_some() && !source_aligned {
         "source_mismatch"
     } else {
@@ -423,10 +432,11 @@ pub(super) async fn development(
                 .map(|(_, version)| version),
             failure_reason: development_status_field(&state, "step="),
             failure_detail: development_status_field(&state, "detail="),
-            last_worker_engine_update: crate::task_store(&state)
-                .ok()
-                .and_then(|store| store.last_worker_engine_update().ok())
-                .flatten(),
+            worker_engine_auto_update: crate::idle_engine_update::view(
+                &state,
+                last_update.as_ref(),
+            ),
+            last_worker_engine_update: last_update,
         }),
     )
         .into_response())

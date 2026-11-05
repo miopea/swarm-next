@@ -45,6 +45,7 @@ mod feedback;
 mod github_device;
 mod github_feedback;
 mod hive_capability;
+mod idle_engine_update;
 mod jira;
 mod maintenance;
 mod mcp_oauth;
@@ -427,6 +428,9 @@ pub struct AppState {
     /// engine, and which internal path happened to notice it is not something
     /// the journal should have to explain.
     engine_drift_reported: Arc<std::sync::atomic::AtomicBool>,
+    /// The latest reason a waiting engine update did not apply itself, and
+    /// when it last asked (ADR 0156).
+    idle_engine_update: Arc<idle_engine_update::IdleEngineUpdate>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     /// What each agent tool has cost to answer since this process started
     /// (ADR 0144). Bounded by tool name.
@@ -630,6 +634,7 @@ impl AppState {
             agent_tool_surfaces: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             engine_drift_reported: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            idle_engine_update: Arc::default(),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             agent_tool_costs: Arc::default(),
             provider_screens: Arc::default(),
@@ -1820,6 +1825,12 @@ impl AppState {
             }
         }
         if !recovery_started {
+            self.revive_workers_owed_a_return().await;
+        }
+        // After the returns already owed, so a worker brought back this pass is
+        // counted as running, and before any delivery, so nothing is handed to
+        // a session about to be stopped (ADR 0156).
+        if idle_engine_update::advance(self).await {
             self.revive_workers_owed_a_return().await;
         }
         // Before delivering anything new, settle a review Swarm could not
@@ -5004,6 +5015,11 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/runtime/queen-releases",
             get(provider_updates::queen_releases).put(provider_updates::set_queen_releases),
+        )
+        .route(
+            "/api/v1/runtime/worker-engine-auto-update",
+            get(provider_updates::worker_engine_auto_update)
+                .put(provider_updates::set_worker_engine_auto_update),
         )
         .route(
             "/api/v1/runtime/task-reads",
@@ -15858,6 +15874,68 @@ mod tests {
     #[tokio::test]
     async fn only_the_operators_credential_turns_on_task_reads() {
         only_the_operators_credential_turns_on("/api/v1/runtime/task-reads").await;
+    }
+
+    /// ⚠️ ADR 0156: a waiting engine update applies itself until the operator
+    /// turns that off, and only the operator's credential turns it back on,
+    /// because on lets Swarm stop resting workers.
+    #[tokio::test]
+    async fn only_the_operators_credential_turns_automatic_engine_updates_back_on() {
+        let path = "/api/v1/runtime/worker-engine-auto-update";
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let on = authorized_get(app.clone(), path).await;
+        assert_eq!(on.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(on).await,
+            serde_json::json!({ "enabled": true }),
+            "on until the operator says otherwise"
+        );
+
+        let off = send_json(
+            app.clone(),
+            "PUT",
+            path,
+            serde_json::json!({ "enabled": false }),
+        )
+        .await;
+        assert_eq!(off.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(off).await,
+            serde_json::json!({ "enabled": false })
+        );
+
+        let from_this_machine = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(path)
+                    .header("host", "127.0.0.1:8420")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "enabled": true }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(from_this_machine.status(), StatusCode::UNAUTHORIZED);
+        let still_off = authorized_get(app.clone(), path).await;
+        assert_eq!(
+            response_json(still_off).await,
+            serde_json::json!({ "enabled": false })
+        );
+
+        let back_on = send_json(app, "PUT", path, serde_json::json!({ "enabled": true })).await;
+        assert_eq!(back_on.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(back_on).await,
+            serde_json::json!({ "enabled": true })
+        );
     }
 
     /// ⚠️ THE CHECK GATE AT THE OPERATOR'S OWN CLOSE (ADR 0115, decision

@@ -15,7 +15,7 @@ use swarm_terminal::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(3);
-const STARTUP_PROTOCOL: u16 = 17;
+const STARTUP_PROTOCOL: u16 = 18;
 
 fn unavailable() -> io::Error {
     io::Error::other("provider startup evidence unavailable")
@@ -250,8 +250,11 @@ async fn send(client: &HostClient, request: &HostRequest) -> io::Result<()> {
 // Startup/resume evidence already existed in16. A replaced helper must retain
 // those callbacks while the independent engine still runs16. Only the new native
 // interview handshake requires17; future unknown protocols remain unsupported.
+// Protocol 18 changed nothing a helper sends: a 17 engine still takes all of it
+// and reads less of a turn report, so the reload that stages 18 leaves the
+// running engine's turn reports working until the engine is swapped.
 fn supports_request(protocol: u16, request: &HostRequest) -> bool {
-    protocol == STARTUP_PROTOCOL
+    (17..=STARTUP_PROTOCOL).contains(&protocol)
         || (protocol == 16
             && matches!(
                 request,
@@ -292,7 +295,7 @@ mod tests {
             );
             assert_eq!(
                 supports_request(protocol, &interview),
-                protocol == STARTUP_PROTOCOL
+                (17..=STARTUP_PROTOCOL).contains(&protocol)
             );
         }
     }
@@ -499,7 +502,15 @@ mod tests {
             io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
             net::UnixListener,
         };
-        for protocol_version in (0..STARTUP_PROTOCOL).chain(std::iter::once(STARTUP_PROTOCOL + 1)) {
+        let incompatible = (0..=STARTUP_PROTOCOL + 1)
+            .filter(|protocol| !supports_request(*protocol, &HostRequest::Ping))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            incompatible.len(),
+            18,
+            "every engine before 17, and one newer"
+        );
+        for protocol_version in incompatible {
             let directory = tempfile::tempdir().unwrap();
             let socket = directory.path().join("engine.sock");
             let listener = UnixListener::bind(&socket).unwrap();

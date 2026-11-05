@@ -181,6 +181,7 @@ import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { hasActiveModal, useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { useRuntimeUpdate } from "./runtime/useRuntimeUpdate";
+import WorkerEngineAttentionCard from "./runtime/WorkerEngineAttentionCard";
 import { useVisiblePolling } from "./runtime/useVisiblePolling";
 import {
   detachedSurface,
@@ -332,7 +333,7 @@ export function App() {
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
-  const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  const { runtimeUpdates, developmentMode, refreshRuntimeUpdate, engineAttention } = useRuntimeUpdate(operatorToken || undefined);
   const dogfoodCollection = useDogfoodCollection(operatorToken, developmentMode, import.meta.env.VITE_SWARM_BUILD_VERSION);
   const [whatsNew, setWhatsNew] = useState<ReleaseVersionNotes[]>([]);
   const [whatsNewTruncated, setWhatsNewTruncated] = useState(false);
@@ -1770,6 +1771,7 @@ export function App() {
   // One per task, because each is a separate thing only the operator can do.
   const operatorWaitAttentionCount = operatorWaits.length;
   const workerReturnAttentionCount = workers.some((worker) => worker.return_attention) ? 1 : 0;
+  const workerEngineAttentionCount = engineAttention ? 1 : 0;
   // A worker whose automatic recovery gave up is stopped until a person acts,
   // and used to say so only on a roster chip and in the journal. Queen was down
   // for ten minutes that way, with the coordination layer stopped behind her.
@@ -1823,6 +1825,7 @@ export function App() {
     + heldDeliveryAttentionCount
     + operatorWaitAttentionCount
     + workerReturnAttentionCount
+    + workerEngineAttentionCount
     + workerCannotRunCount
     + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
@@ -2692,11 +2695,12 @@ export function App() {
               busy={busy || databaseRecoveryRequired}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerEngineAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length}
               attentionCards={<>
                 {databaseRecoveryRequired && <DatabaseRecoveryCard />}
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
                 <WorkerReturnAttentionCard workers={workers} onReview={() => { setSettingsQuery(""); openSettings("settings-maintenance"); }} />
+                <WorkerEngineAttentionCard attention={engineAttention} onReview={() => { setSettingsQuery(""); openSettings("settings-updates"); }} />
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onRetryReply={(replyId) => void retryAwaitingReply(replyId)} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />

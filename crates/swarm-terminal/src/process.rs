@@ -309,6 +309,10 @@ pub struct ProcessTerminalSession {
     /// Claude's own report of its current turn (ADR 0123). `None` until the
     /// first hook lands, which is what an older engine's sessions always say.
     provider_turn: Mutex<Option<crate::ProviderTurn>>,
+    /// What maintenance admission may believe about this session's turns and
+    /// the input written since them (ADR 0156). Taken after `provider_turn`,
+    /// and after `writer`; never before either.
+    turn_ledger: Mutex<crate::turn_ledger::TurnLedger>,
     control: TerminalControlGate,
     control_changes: watch::Sender<()>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -513,6 +517,7 @@ impl ProcessTerminalSession {
             recovery_successor: OnceLock::new(),
             provider_lifecycle: Mutex::new(provider_lifecycle),
             provider_turn: Mutex::new(None),
+            turn_ledger: Mutex::new(crate::turn_ledger::TurnLedger::default()),
             control_changes: watch::channel(()).0,
             child: Mutex::new(child),
             writer: Mutex::new(writer),
@@ -698,9 +703,14 @@ impl ProcessTerminalSession {
             tracing::warn!(session_id = %self.id, "turn report refused: it belongs to another conversation");
             return Ok(false);
         }
-        lock(&self.provider_turn)?
-            .get_or_insert_with(crate::ProviderTurn::default)
+        let mut turn = lock(&self.provider_turn)?;
+        turn.get_or_insert_with(crate::ProviderTurn::default)
             .apply(&observation.event);
+        lock(&self.turn_ledger)?.observe(
+            &observation.event,
+            observation.prompt.as_deref(),
+            observation.scheduled,
+        );
         Ok(true)
     }
 
@@ -773,10 +783,56 @@ impl ProcessTerminalSession {
                 "session is stopped pending context release".into(),
             ));
         }
-        // Disarm before attempting bytes: a failed write may have been partial.
+        // Disarm and count before attempting bytes: a failed write may have
+        // been partial.
         lock(&self.startup_failure)?.disarm();
+        lock(&self.turn_ledger)?.observe_write(bytes);
         writer.write_all(bytes).map_err(terminal_error)?;
         writer.flush().map_err(terminal_error)
+    }
+
+    /// Whether stopping this session now can lose nothing (ADR 0156).
+    ///
+    /// Called by maintenance admission while it holds this session's control
+    /// guard, so no input can land between this answer and the stop. Each
+    /// check can only refuse: none of them can make another one pass.
+    fn maintenance_settled(&self) -> Result<(), crate::MaintenanceRefusal> {
+        use crate::{MaintenanceRefusal, ProviderTurnPhase};
+        let poisoned = |_| MaintenanceRefusal::LockPoisoned;
+        if self.provider != Some(ProviderKind::ClaudeCode) {
+            return Err(MaintenanceRefusal::NotClaude);
+        }
+        // Startup evidence proves Swarm's hooks run in this process. Without
+        // it, no turn report arriving proves nothing.
+        if lock(&self.provider_lifecycle)
+            .map_err(poisoned)?
+            .as_ref()
+            .and_then(crate::ProviderLifecycleGate::selection)
+            .is_none()
+        {
+            return Err(MaintenanceRefusal::ProviderEvidenceUnavailable);
+        }
+        if let Some(turn) = lock(&self.provider_turn).map_err(poisoned)?.as_ref() {
+            match turn.phase {
+                ProviderTurnPhase::Working => return Err(MaintenanceRefusal::TurnInProgress),
+                ProviderTurnPhase::Failed => return Err(MaintenanceRefusal::TurnFailed),
+                ProviderTurnPhase::Ended => {}
+            }
+            if turn.waiting.is_some() || turn.denial.is_some() {
+                return Err(MaintenanceRefusal::WaitingOnOperator);
+            }
+        }
+        lock(&self.turn_ledger).map_err(poisoned)?.settled()?;
+        // A Stop hook that continues the turn sends nothing first; Claude's
+        // working footer stays up until every Stop hook has returned.
+        let snapshot = lock(&self.terminal_state).map_err(poisoned)?.snapshot();
+        match classify_provider_activity(ProviderKind::ClaudeCode, &snapshot) {
+            ProviderActivity::Resting => Ok(()),
+            ProviderActivity::AwaitingOperator => Err(MaintenanceRefusal::WaitingOnOperator),
+            ProviderActivity::Active | ProviderActivity::Unknown => {
+                Err(MaintenanceRefusal::ScreenNotResting)
+            }
+        }
     }
 
     /// Commits a new non-zero terminal size.
@@ -2103,8 +2159,9 @@ impl SessionRegistry {
 
     /// Stops only an atomically admitted complete running set. The trusted API
     /// must first durably record return obligations for these exact identities.
-    /// This is NOT enabled for current providers: native settled-turn and
-    /// background-work evidence is still unavailable (ADR 0085).
+    /// Every session must be a Claude session whose turns, input, background
+    /// work and screen all say it is resting (ADR 0156); anything else refuses
+    /// the whole set before any stop.
     ///
     /// # Errors
     /// Registry poisoning or a failed process-status observation refuses the
@@ -2184,7 +2241,7 @@ impl SessionRegistry {
                 {
                     Err(MaintenanceRefusal::InteractiveOwner)
                 } else {
-                    Err(MaintenanceRefusal::ProviderEvidenceUnavailable)
+                    running[index].maintenance_settled()
                 }
             },
             |index| {
@@ -2320,6 +2377,10 @@ fn terminal_error(error: impl std::fmt::Display) -> SessionRegistryError {
 #[path = "native_interview_process_tests.rs"]
 mod native_interview_tests;
 
+#[cfg(all(test, unix))]
+#[path = "maintenance_process_tests.rs"]
+mod maintenance_process_tests;
+
 #[cfg(all(test, any(unix, windows)))]
 pub(crate) mod control_tests {
     use super::*;
@@ -2404,10 +2465,7 @@ pub(crate) mod control_tests {
         }
         assert_eq!(
             registry.admit_maintenance(&[session.id]).unwrap(),
-            MaintenanceOutcome::refused(
-                MaintenanceRefusal::ProviderEvidenceUnavailable,
-                Some(session.id)
-            )
+            MaintenanceOutcome::refused(MaintenanceRefusal::NotClaude, Some(session.id))
         );
         assert!(session.is_running().unwrap());
         assert!(!session.stop_pending_release.load(Ordering::Acquire));

@@ -1,4 +1,4 @@
-import type { WorkerEngineUpdateAttempt } from "../api";
+import type { StoppedWorker, WorkerEngineUpdateAttempt } from "../api";
 
 /**
  * What happened the last time this Hive replaced its worker engine.
@@ -15,6 +15,7 @@ import type { WorkerEngineUpdateAttempt } from "../api";
 export function engineUpdateHistory(
   attempt: WorkerEngineUpdateAttempt | null | undefined,
   now: number,
+  workers: StoppedWorker[] = [],
 ): string | null {
   if (!attempt) return null;
   const when = startedAgo(attempt.started_at, now);
@@ -31,6 +32,20 @@ export function engineUpdateHistory(
   // are this one — a timer takes the workers down whenever none reports
   // mid-turn — and the previous sentence read as a record of something the
   // operator had done.
+  // The automatic path that counts and names what it stopped (ADR 0156): it
+  // applies an update itself once every worker rests.
+  if (attempt.initiated === "automatic" && typeof attempt.stopped_sessions === "number") {
+    switch (attempt.outcome) {
+      case "succeeded":
+        return `Swarm updated the worker engine by itself ${when}, moving ${move}, while every worker was resting. ${whoCameBack(workers, stopped)}`;
+      case "timed_out":
+        return `Swarm updated the worker engine by itself ${when}, moving ${move}; it ${stopped}, and the engine never reported the new release. Those workers are owed a return.`;
+      case "failed":
+        return `Swarm tried to update the worker engine by itself ${when} and stopped: ${attempt.detail || "no reason was recorded"}`;
+      default:
+        return `Swarm started updating the worker engine by itself ${when}, moving ${move}, and ${stopped}, and never recorded how it ended.`;
+    }
+  }
   if (attempt.initiated === "automatic") {
     return `Swarm replaced the worker engine on its own ${when}, moving ${move}. Nobody was asked and nobody chose the moment; it goes ahead whenever no worker reports being mid-turn, and it ${stopped}.${protocolNote}`;
   }
@@ -48,6 +63,29 @@ export function engineUpdateHistory(
       // running, which is expected — and is still not the same as success.
       return `A worker engine update ${when} started moving ${move} and ${stopped}, and never recorded how it ended. That is what a protocol migration looks like when it replaces Swarm itself; it is not confirmation that it worked.${protocolNote}`;
   }
+}
+
+/**
+ * Names the workers an automatic update stopped and says whether each is back,
+ * because the operator was not there to see it (ADR 0156).
+ */
+function whoCameBack(workers: StoppedWorker[], stopped: string): string {
+  if (workers.length === 0) return `It ${stopped}.`;
+  const named = (status: StoppedWorker["status"]) =>
+    workers.filter((worker) => worker.status === status).map((worker) => worker.name);
+  const all = listed(workers.map((worker) => worker.name));
+  const returning = named("returning");
+  const missing = named("needs_you");
+  if (returning.length === 0 && missing.length === 0) return `It stopped ${all} and brought ${workers.length === 1 ? "it" : "them"} back.`;
+  const parts = [`It stopped ${all}.`];
+  if (returning.length > 0) parts.push(`${listed(returning)} ${returning.length === 1 ? "is" : "are"} still coming back.`);
+  if (missing.length > 0) parts.push(`${listed(missing)} ${missing.length === 1 ? "was" : "were"} not brought back and ${missing.length === 1 ? "is" : "are"} in Needs you.`);
+  return parts.join(" ");
+}
+
+function listed(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /**

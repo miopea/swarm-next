@@ -93,14 +93,16 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   const lastEngineUpdate = engineUpdateHistory(
     runtime.last_worker_engine_update,
     Math.floor(Date.now() / 1000),
+    runtime.worker_engine_auto_update?.last_update_workers,
   );
   const engineHistory = lastEngineUpdate ? (
     <p className="runtime-engine-history" role="status">{lastEngineUpdate}</p>
   ) : null;
   const engineBehind = runtime.worker_engine_update_required === true ? (
     <p className="runtime-engine-behind">
-      <strong>The worker engine is behind this build. Automatic replacement waits while workers
-      remain loaded.</strong> A resting terminal is not proof that work has finished. The manual
+      <strong>The worker engine is behind this build. {runtime.worker_engine_auto_update?.enabled === false
+        ? "Automatic engine updates are off, so it waits for you."
+        : "It updates by itself once every worker is resting; the worker engine card says what it is waiting for."}</strong> A resting terminal is not proof that work has finished. The manual
       engine maintenance action stops{" "}
       {typeof runningSessions === "number"
         ? `all ${runningSessions} running worker session${runningSessions === 1 ? "" : "s"}`

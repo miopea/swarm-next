@@ -1269,6 +1269,22 @@ pub(super) async fn stop_worker_session_preserving_context(
             "Worker engine did not confirm retained stop.",
         ));
     }
+    if !retained {
+        tracing::warn!(%session_id, protocol_version, "legacy engine stop can preserve only the pre-stop conversation snapshot");
+    }
+    release_stopped_session(state, session_id, retained).await
+}
+
+/// Saves a stopped session's final context and lets the engine release it.
+///
+/// `retained` says the engine froze the session's evidence when it stopped it:
+/// a retained stop, or maintenance admission, which stops the same way
+/// (ADR 0156).
+pub(super) async fn release_stopped_session(
+    state: &AppState,
+    session_id: WorkerSessionId,
+    retained: bool,
+) -> Result<(), ApiError> {
     let HostResponse::Sessions { sessions } =
         stop_context_request(state, HostRequest::ListSessions).await?
     else {
@@ -1296,9 +1312,6 @@ pub(super) async fn stop_worker_session_preserving_context(
         ));
     }
     reconcile_worker_context(state, session)?;
-    if !retained {
-        tracing::warn!(%session_id, protocol_version, "legacy engine stop can preserve only the pre-stop conversation snapshot");
-    }
     match stop_context_request(state, HostRequest::Stop { session_id }).await? {
         HostResponse::Acknowledged => Ok(()),
         _ => Err(ApiError::new(

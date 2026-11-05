@@ -509,6 +509,35 @@ pub(super) async fn set_queen_releases(
     Ok(session_choice(enabled))
 }
 
+/// Whether a waiting worker engine update applies by itself (ADR 0156).
+pub(super) async fn worker_engine_auto_update(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .worker_engine_auto_update()
+        .map_err(|error| task_store_error(&error))?
+        .enabled;
+    Ok(session_choice(enabled))
+}
+
+/// The operator turning automatic engine updates on or off. Turning it on lets
+/// Swarm stop resting workers, so it needs the operator's own credential: a
+/// worker on this machine must not be able to switch it.
+pub(super) async fn set_worker_engine_auto_update(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetSessionChoiceRequest>,
+) -> Result<Response, ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .set_worker_engine_auto_update(request.enabled, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(session_choice(enabled))
+}
+
 /// Whether a worker may read production for its own task unasked (ADR 0146).
 pub(super) async fn task_reads(
     State(state): State<Arc<AppState>>,

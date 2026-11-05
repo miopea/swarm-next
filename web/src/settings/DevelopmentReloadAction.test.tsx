@@ -312,7 +312,7 @@ test("says the worker engine is behind even when the app matches the checkout", 
   }} />);
 
   expect(screen.getByText(/The worker engine is behind this build/)).toBeInTheDocument();
-  expect(screen.getByText(/Automatic replacement waits while workers remain loaded/)).toBeInTheDocument();
+  expect(screen.getByText(/It updates by itself once every worker is resting/)).toBeInTheDocument();
 });
 
 test("says the worker engine is behind while a reload is also available", () => {
@@ -444,10 +444,10 @@ test("a checkout on the same protocol says nothing about migrating", () => {
  * brevity would drop exactly those.
  */
 test("the engine-behind notice says the swap happens without being asked", () => {
-  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+  const runtime = {
     enabled: true,
     version: "0.1.0-dev-123456789abc-20260815040000-10",
-    state: "idle",
+    state: "idle" as const,
     reload_available: false,
     deployed_source_revision: "76543210fedc",
     source_revision: "76543210fedc",
@@ -455,9 +455,16 @@ test("the engine-behind notice says the swap happens without being asked", () =>
     deployed_source_published: true,
     worker_engine_update_required: true,
     running_worker_sessions: 11,
-  }} />);
-  expect(screen.getByText(/Automatic replacement waits while workers remain loaded/)).toBeInTheDocument();
+  };
+  const { rerender } = render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={runtime} />);
+  expect(screen.getByText(/It updates by itself once every worker is resting/)).toBeInTheDocument();
   expect(screen.getByText(/resting terminal is not proof that work has finished/)).toBeInTheDocument();
+  // Switched off on the worker engine card (ADR 0156): it waits for the operator.
+  rerender(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    ...runtime,
+    worker_engine_auto_update: { enabled: false, last_update_workers: [] },
+  }} />);
+  expect(screen.getByText(/Automatic engine updates are off, so it waits for you/)).toBeInTheDocument();
 });
 
 test("it names how many sessions the swap will stop", () => {

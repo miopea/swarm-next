@@ -35,6 +35,7 @@ pub const TASK_READS_SETTING_KEY: &str = "swarmTaskReads";
 mod resources;
 mod startup_failure;
 mod state;
+mod turn_ledger;
 
 pub use control_protocol::dispatch_terminal_control;
 pub use history::{
@@ -53,7 +54,7 @@ pub use ipc::{
     MAX_WRITE_AUDIT_PAGE, NativeInterviewPayload, PROTOCOL_VERSION, ProviderLifecycleCapability,
     TerminalHostStatus, TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor,
     TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
-    default_terminal_socket_path, supports_continuation_recovery,
+    default_terminal_socket_path, supports_continuation_recovery, supports_maintenance_admission,
 };
 pub use ipc::{
     MAX_CONTROL_INPUT_BYTES, TERMINAL_CONTROL_PROTOCOL_VERSION, TerminalControlCommand,

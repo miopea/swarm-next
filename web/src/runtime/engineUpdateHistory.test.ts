@@ -109,3 +109,33 @@ describe("engineUpdateHistory, for updates nobody asked for", () => {
     expect(sentence).not.toContain("on its own");
   });
 });
+
+describe("engineUpdateHistory, for the update Swarm applies once every worker rests", () => {
+  const counted: WorkerEngineUpdateAttempt = { ...base, initiated: "automatic", stopped_sessions: 2 };
+
+  it("names who it stopped and says whether each is back", () => {
+    // ADR 0156: the notice names the workers and the engine version.
+    expect(engineUpdateHistory(counted, 1_600, [
+      { name: "Ledger", status: "back" }, { name: "Pantry", status: "back" },
+    ])).toBe("Swarm updated the worker engine by itself 10 minutes ago, moving from 1.8.1 to 1.9.0, while every worker was resting. It stopped Ledger and Pantry and brought them back.");
+    const pending = engineUpdateHistory(counted, 1_600, [
+      { name: "Ledger", status: "back" }, { name: "Pantry", status: "returning" }, { name: "Spare", status: "needs_you" },
+    ]);
+    expect(pending).toContain("It stopped Ledger, Pantry and Spare.");
+    expect(pending).toContain("Pantry is still coming back.");
+    expect(pending).toContain("Spare was not brought back and is in Needs you.");
+  });
+
+  it("says why it stopped when it stopped partway", () => {
+    const sentence = engineUpdateHistory(
+      { ...counted, outcome: "failed", detail: "Stopped Ledger while resting, then could not stop Pantry." },
+      1_600,
+    );
+    expect(sentence).toContain("Swarm tried to update the worker engine by itself");
+    expect(sentence).toContain("could not stop Pantry");
+  });
+
+  it("still counts when the names could not be read", () => {
+    expect(engineUpdateHistory(counted, 1_600)).toContain("It stopped 2 worker sessions.");
+  });
+});

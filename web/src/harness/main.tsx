@@ -92,6 +92,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       else init.signal?.addEventListener("abort", abort, { once: true });
     });
   }
+  // The engine card's switch (ADR 0156) echoes what it was set to.
+  if (path === "/api/v1/runtime/worker-engine-auto-update" && init?.method === "PUT" && typeof init.body === "string") {
+    return json(JSON.parse(init.body));
+  }
   const recovery = sessionRecoveryResponse(path);
   if (recovery) return recovery;
   const preview = taskPreviewFixtureResponse(path, init);

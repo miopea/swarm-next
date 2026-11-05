@@ -21,6 +21,7 @@ pub const MAX_PROVIDER_TURN_INPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DENIED_TOOL_CHARS: usize = 64;
 const MAX_DENIAL_REASON_CHARS: usize = 160;
 const MAX_TOOL_CALL_ID_CHARS: usize = 64;
+const MAX_PROMPT_ID_CHARS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -155,6 +156,13 @@ pub struct ProviderTurnObservation {
     pub event: ProviderTurnEvent,
     /// The hook also feeds native interview capture, which must still see it.
     pub interview: bool,
+    /// Claude's `prompt_id`: the prompt a submit was taken under, or the one a
+    /// `Stop` ended. Bounded, and never the prompt's text. Only maintenance
+    /// admission reads it (ADR 0156).
+    pub prompt: Option<String>,
+    /// How many session crons a `Stop` listed. `None` when the hook did not
+    /// say, which is unknown rather than none.
+    pub scheduled: Option<u16>,
 }
 
 impl ProviderTurn {
@@ -236,6 +244,10 @@ struct ClaudeHook<'a> {
     reason: Option<Cow<'a, str>>,
     #[serde(default, borrow)]
     background_tasks: Option<Vec<ClaudeBackgroundTask<'a>>>,
+    #[serde(default, borrow)]
+    prompt_id: Option<Cow<'a, str>>,
+    #[serde(default)]
+    session_crons: Option<Vec<serde::de::IgnoredAny>>,
     // Prompts, messages, tool inputs and responses, paths and every future
     // field are skipped unread.
 }
@@ -320,10 +332,19 @@ pub fn read_claude_turn_event(input: &[u8]) -> Option<ProviderTurnObservation> {
         ),
         _ => return None,
     };
+    let scheduled = matches!(event, ProviderTurnEvent::Ended { .. })
+        .then(|| {
+            hook.session_crons
+                .as_ref()
+                .map(|crons| u16::try_from(crons.len()).unwrap_or(u16::MAX))
+        })
+        .flatten();
     Some(ProviderTurnObservation {
         conversation,
         event,
         interview,
+        prompt: hook.prompt_id.as_deref().map(prompt_key),
+        scheduled,
     })
 }
 
@@ -335,7 +356,7 @@ pub fn read_claude_turn_event(input: &[u8]) -> Option<ProviderTurnObservation> {
 #[must_use]
 pub fn compact_turn_payload(observation: &ProviderTurnObservation) -> Option<String> {
     let session_id = observation.conversation.to_string();
-    let payload = match &observation.event {
+    let mut payload = match &observation.event {
         ProviderTurnEvent::Submitted => {
             serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": session_id})
         }
@@ -381,6 +402,16 @@ pub fn compact_turn_payload(observation: &ProviderTurnObservation) -> Option<Str
         // These reach the host through the interview hook, unchanged.
         ProviderTurnEvent::Resolved | ProviderTurnEvent::BatchResolved { .. } => return None,
     };
+    if let Some(prompt) = &observation.prompt {
+        payload["prompt_id"] = prompt.as_str().into();
+    }
+    if let (ProviderTurnEvent::Ended { .. }, Some(count)) =
+        (&observation.event, observation.scheduled)
+    {
+        payload["session_crons"] = std::iter::repeat_n(serde_json::json!({}), usize::from(count))
+            .collect::<Vec<_>>()
+            .into();
+    }
     Some(payload.to_string())
 }
 
@@ -427,6 +458,12 @@ const fn failure_name(failure: ProviderTurnFailure) -> &'static str {
 /// Bounded the same way on both sides, so a refusal and its batch still match.
 fn call_id(id: &str) -> String {
     bounded(id, MAX_TOOL_CALL_ID_CHARS)
+}
+
+/// Claude's prompt ids are UUIDs; anything longer is cut the same way on the
+/// helper and the host, so a submit and its `Stop` still match.
+fn prompt_key(id: &str) -> String {
+    bounded(id, MAX_PROMPT_ID_CHARS)
 }
 
 fn bounded(text: &str, limit: usize) -> String {
@@ -671,6 +708,53 @@ mod tests {
             read_claude_turn_event(compact.as_bytes()),
             Some(observation)
         );
+    }
+
+    /// Measured on Claude Code 2.1.318 on 2026-11-05 (ADR 0156): a submit and
+    /// the `Stop` that ends its turn carry the same `prompt_id`, and every
+    /// `Stop` lists `session_crons`. Maintenance admission needs both, so both
+    /// must survive the helper's compact form.
+    #[test]
+    fn a_stop_names_its_prompt_and_its_crons_and_both_survive_the_compact_form() {
+        let observed = |value: &serde_json::Value| {
+            let observation = read(value).unwrap();
+            (observation.prompt, observation.scheduled)
+        };
+        let prompt = Some("550e8400-e29b-41d4-a716-446655440000".to_owned());
+        assert_eq!(observed(&hook("UserPromptSubmit")), (prompt.clone(), None));
+
+        let mut stop = hook("Stop");
+        assert_eq!(
+            observed(&stop),
+            (prompt.clone(), None),
+            "no list is unknown"
+        );
+        stop["session_crons"] = serde_json::json!([]);
+        assert_eq!(observed(&stop), (prompt.clone(), Some(0)));
+        stop["session_crons"] = serde_json::json!([
+            {"id": "c1", "cron": "*/5 * * * *", "prompt": "private"},
+            {"id": "c2", "cron": "0 9 * * *", "prompt": "private"},
+        ]);
+        assert_eq!(observed(&stop), (prompt.clone(), Some(2)));
+        let observation = read(&stop).unwrap();
+        let compact = compact_turn_payload(&observation).unwrap();
+        assert!(!compact.contains("private"), "{compact}");
+        assert_eq!(
+            read_claude_turn_event(compact.as_bytes()),
+            Some(observation)
+        );
+
+        // Only a Stop's list means "scheduled after this turn".
+        let mut denied = hook("PermissionDenied");
+        denied["tool_name"] = "Bash".into();
+        denied["session_crons"] = serde_json::json!([{"id": "c1"}]);
+        assert_eq!(observed(&denied), (prompt, None));
+
+        let mut long = hook("UserPromptSubmit");
+        long["prompt_id"] = "p".repeat(500).into();
+        assert_eq!(observed(&long).0.map(|id| id.len()), Some(64));
+        long.as_object_mut().unwrap().remove("prompt_id");
+        assert_eq!(observed(&long), (None, None));
     }
 
     /// Measured on live workers on 2026-10-24: Swarm Next listed one MCP
