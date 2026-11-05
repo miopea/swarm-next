@@ -13,7 +13,28 @@ pub enum MaintenanceRefusal {
     LockPoisoned,
     SessionChanged,
     InteractiveOwner,
+    /// No startup evidence: Swarm cannot tell the provider's hooks run.
     ProviderEvidenceUnavailable,
+    /// Only Claude's turns are measured well enough to stop it unattended
+    /// (ADR 0156).
+    NotClaude,
+    /// A turn, or a message queued behind one, has not ended.
+    TurnInProgress,
+    /// The last turn failed and said nothing about what it left.
+    TurnFailed,
+    /// A question, a permission prompt or a menu is waiting for someone.
+    WaitingOnOperator,
+    /// The turn reports do not add up, so nothing they say is believed until
+    /// the session restarts.
+    TurnCountUnknown,
+    /// The last turn left background work running, or could not list it.
+    BackgroundWork,
+    /// The last turn left a session cron, or did not say.
+    ScheduledWork,
+    /// Something was typed that Claude has not taken as a prompt.
+    UnsentInput,
+    /// The screen does not show Claude resting at its prompt.
+    ScreenNotResting,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -32,12 +32,21 @@ use crate::{
 // Protocol 15 retains stopped-session evidence until the API persists it.
 // Protocol 16 owns an idempotent Continue-to-Fresh successor in the engine.
 // Protocol 17 adds private, retained native-interview evidence and acknowledgement.
-pub const PROTOCOL_VERSION: u16 = 17;
+// Protocol 18 lets the API ask the engine to stop a resting set for an engine
+// update, which the engine admits only on its own evidence (ADR 0156).
+pub const PROTOCOL_VERSION: u16 = 18;
 pub const TERMINAL_CONTROL_PROTOCOL_VERSION: u16 = 11;
 
 #[must_use]
 pub fn supports_continuation_recovery(protocol: u16) -> bool {
     (16..=PROTOCOL_VERSION).contains(&protocol)
+}
+
+/// Whether an engine speaking `protocol` takes `HostRequest::AdmitMaintenance`.
+/// An older one cannot read the request, so it is never sent one.
+#[must_use]
+pub fn supports_maintenance_admission(protocol: u16) -> bool {
+    (18..=PROTOCOL_VERSION).contains(&protocol)
 }
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
@@ -169,6 +178,12 @@ pub enum HostRequest {
     ProviderCapabilities,
     BeginDrain,
     CancelDrain,
+    /// Stops exactly these sessions, which must be every running one, if each
+    /// is resting by the engine's own evidence; otherwise stops none. Only
+    /// while draining. The API records their returns first (ADR 0156).
+    AdmitMaintenance {
+        sessions: Vec<WorkerSessionId>,
+    },
     StartClaude {
         workspace: PathBuf,
         size: TerminalSize,
@@ -471,6 +486,9 @@ impl TerminalHostStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostResponse {
+    Maintenance {
+        outcome: crate::MaintenanceOutcome,
+    },
     NativeInterviewPrepared {
         ticket: swarm_domain::OperatorSubmissionId,
     },
@@ -674,6 +692,7 @@ mod tests {
             "provider_capabilities",
             "begin_drain",
             "cancel_drain",
+            "admit_maintenance",
             "start_claude",
             "start_codex",
             "start_shell",
@@ -724,8 +743,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 17,
-            "the pinned surface above belongs to protocol 17; if you changed \
+            PROTOCOL_VERSION, 18,
+            "the pinned surface above belongs to protocol 18; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -834,7 +853,7 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 17);
+        assert_eq!(PROTOCOL_VERSION, 18);
     }
 
     #[test]
@@ -845,6 +864,35 @@ mod tests {
         assert!(supports_continuation_recovery(16));
         assert!(supports_continuation_recovery(PROTOCOL_VERSION));
         assert!(!supports_continuation_recovery(PROTOCOL_VERSION + 1));
+    }
+
+    /// An engine before 18 cannot parse the request, so it is never sent one.
+    #[test]
+    fn maintenance_admission_is_asked_only_of_an_engine_that_can_read_it() {
+        for version in 0..18 {
+            assert!(!supports_maintenance_admission(version));
+        }
+        assert!(supports_maintenance_admission(18));
+        assert!(!supports_maintenance_admission(PROTOCOL_VERSION + 1));
+        let request = HostRequest::AdmitMaintenance {
+            sessions: vec![WorkerSessionId::new()],
+        };
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["type"], "admit_maintenance");
+        assert!(matches!(
+            serde_json::from_value::<HostRequest>(encoded).unwrap(),
+            HostRequest::AdmitMaintenance { sessions } if sessions.len() == 1
+        ));
+        let response = HostResponse::Maintenance {
+            outcome: crate::MaintenanceOutcome::Refused {
+                reason: crate::MaintenanceRefusal::UnsentInput,
+                session_id: None,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&response).unwrap()["outcome"]["reason"],
+            "unsent_input"
+        );
     }
 
     #[test]

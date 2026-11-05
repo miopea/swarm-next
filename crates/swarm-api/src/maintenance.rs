@@ -895,7 +895,7 @@ async fn maintain_worker_engine_locked(
 /// return the instant the drain cleared — reporting success while the old
 /// protocol was still serving. The host's own `protocol_version` is the fact that
 /// actually changes, so that is what is waited on.
-async fn await_expected_engine(
+pub(crate) async fn await_expected_engine(
     state: &AppState,
     pending_protocol: Option<u16>,
 ) -> Result<TerminalHostStatus, tokio::time::error::Elapsed> {

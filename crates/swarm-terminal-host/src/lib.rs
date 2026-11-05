@@ -766,6 +766,10 @@ fn dispatch_blocking(
             .and_then(|()| terminal_host_status(registry, host_version, host_build_id))
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
+        HostRequest::AdmitMaintenance { sessions } => registry
+            .admit_maintenance(&sessions)
+            .map(|outcome| HostResponse::Maintenance { outcome })
+            .map_err(|error| error.to_string()),
         HostRequest::RecoverContinuation {
             session_id,
             attempt,

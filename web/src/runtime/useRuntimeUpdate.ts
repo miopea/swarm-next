@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { fetchDevelopmentRuntime, fetchHealth, fetchProviderCapabilities, fetchSettingsRestart, fetchTerminalHostStatus } from "../api";
+import { fetchDevelopmentRuntime, fetchHealth, fetchProviderCapabilities, fetchSettingsRestart, fetchTerminalHostStatus, type DevelopmentRuntime } from "../api";
+import { engineUpdateAttention } from "./engineAutoUpdate";
 import { nextRuntimeUpdates, type RuntimeUpdateSummary } from "./runtimeUpdates";
 import { useVisiblePolling } from "./useVisiblePolling";
 
@@ -28,6 +29,8 @@ export function useRuntimeUpdate(
   // to see that without opening Settings, because it changes what every other
   // line here means.
   const [developmentMode, setDevelopmentMode] = useState(false);
+  // The last runtime that answered, for Needs you's engine item (ADR 0156).
+  const [developmentRuntime, setDevelopmentRuntime] = useState<DevelopmentRuntime>();
 
   const poll = useCallback(async (signal: AbortSignal) => {
     if (!operatorToken) return;
@@ -40,7 +43,10 @@ export function useRuntimeUpdate(
     ]);
     if (signal.aborted) return;
     // An API restart is unknown status, not a switch to a release installation.
-    if (development) setDevelopmentMode(development.enabled);
+    if (development) {
+      setDevelopmentMode(development.enabled);
+      setDevelopmentRuntime(development);
+    }
     setUpdates((previous) =>
       nextRuntimeUpdates(previous, health, host, development, providers ? providers.superseded ?? [] : undefined, settingsRestart?.workers));
   }, [operatorToken]);
@@ -51,9 +57,15 @@ export function useRuntimeUpdate(
     if (!operatorToken) {
       setUpdates(undefined);
       setDevelopmentMode(false);
+      setDevelopmentRuntime(undefined);
       return;
     }
   }, [operatorToken]);
 
-  return { runtimeUpdates: updates ?? [], developmentMode, refreshRuntimeUpdate: refresh };
+  return {
+    runtimeUpdates: updates ?? [],
+    developmentMode,
+    refreshRuntimeUpdate: refresh,
+    engineAttention: engineUpdateAttention(developmentRuntime, Math.floor(Date.now() / 1000)),
+  };
 }

@@ -6,6 +6,10 @@ return records are implemented locally. Native evidence, admission/return receip
 integration, negotiated IPC/package activation and live validation remain
 incomplete. The release gate remains open.
 
+Amended by ADR 0156 (2026-11-04): admission is enabled for Claude sessions
+from native turn, input, background and screen evidence over protocol 18, and
+the API drives it while every worker rests. Live validation is still open.
+
 ## Incident and requirement
 
 On September 7 at 23:38 Eastern, the automatic package reconciler replaced the

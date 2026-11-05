@@ -521,6 +521,8 @@ fn turn(
         conversation,
         event,
         interview: false,
+        prompt: None,
+        scheduled: None,
     }
 }
 

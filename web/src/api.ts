@@ -524,6 +524,34 @@ export type DevelopmentRuntime = {
    * claim that the last one went well.
    */
   last_worker_engine_update?: WorkerEngineUpdateAttempt | null;
+  /**
+   * Whether a waiting worker engine update applies by itself, why it has not
+   * yet, and whom the last update stopped (ADR 0156). Absent when the store
+   * could not be read, which is not a claim that it is off.
+   */
+  worker_engine_auto_update?: WorkerEngineAutoUpdateView | null;
+};
+
+/** Why a waiting worker engine update has not applied itself (ADR 0156). */
+export type EngineUpdateRefusal = {
+  reason: string;
+  /** The worker whose session held it up, when one did. */
+  worker?: string | null;
+  /** How many sessions the engine counted as busy, when that held it up. */
+  count?: number | null;
+  /** Since when this same reason has held it up. */
+  since: number;
+};
+
+/** A worker an engine update stopped, and whether it is back. */
+export type StoppedWorker = { name: string; status: "back" | "returning" | "needs_you" };
+
+export type WorkerEngineAutoUpdateView = {
+  enabled: boolean;
+  /** When Swarm first saw the current engine update waiting. */
+  waiting_since?: number | null;
+  refusal?: EngineUpdateRefusal | null;
+  last_update_workers: StoppedWorker[];
 };
 
 /**
@@ -2822,6 +2850,18 @@ export async function setQueenReleases(operatorToken: string, enabled: boolean):
     body: JSON.stringify({ enabled }),
   });
   return response.json() as Promise<QueenReleases>;
+}
+
+/** Whether a waiting worker engine update applies by itself (ADR 0156). */
+export type WorkerEngineAutoUpdate = { enabled: boolean };
+
+export async function setWorkerEngineAutoUpdate(operatorToken: string, enabled: boolean): Promise<WorkerEngineAutoUpdate> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/worker-engine-auto-update", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<WorkerEngineAutoUpdate>;
 }
 
 /** Whether a worker reads production for its own task without asking (ADR 0146). */

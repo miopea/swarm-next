@@ -41,6 +41,8 @@ import LegacyMigrationSettings from "./LegacyMigrationSettings";
 import UsageSettings from "./UsageSettings";
 import WorkerAccessSettings from "./WorkerAccessSettings";
 import WorkerSettings, { workerRowId } from "./WorkerSettings";
+import WorkerEngineAutoUpdate from "./WorkerEngineAutoUpdate";
+import { engineUpdateHistory } from "../runtime/engineUpdateHistory";
 import { compactRuntimeVersion, runtimeVersionIdentity } from "./runtimeVersion";
 
 type Props = {
@@ -652,6 +654,20 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                 ) : null}
                 <small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small>
               </>}
+              {/* ADR 0156. The history line lives on the App and API card on a
+                  development Hive, so it is shown here only on the others. */}
+              {workerEngineState !== "checking" && workerEngineState !== "unavailable" ? (
+                <WorkerEngineAutoUpdate
+                  operatorToken={operatorToken}
+                  view={developmentRuntime?.worker_engine_auto_update}
+                  behind={workerEngineUpdateRequired(health, terminalHostStatus)}
+                  history={developmentRuntime?.enabled ? null : engineUpdateHistory(
+                    developmentRuntime?.last_worker_engine_update,
+                    Math.floor(Date.now() / 1000),
+                    developmentRuntime?.worker_engine_auto_update?.last_update_workers,
+                  )}
+                />
+              ) : null}
               {/* ALWAYS AVAILABLE, INCLUDING WHEN THE ENGINE IS CURRENT — that
                   is the whole reason it exists. A worker caches its MCP tool
                   list when it connects, so a change to the agent tool surface

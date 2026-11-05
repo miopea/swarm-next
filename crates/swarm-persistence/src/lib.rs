@@ -59,6 +59,7 @@ mod queen_review;
 mod queen_review_focus;
 mod queen_run_history;
 mod review_return_history;
+mod worker_engine_auto_update;
 mod worker_engine_returns;
 mod worker_engine_updates;
 mod worker_recovery;
@@ -182,6 +183,7 @@ pub use email::{
 pub use email_outcomes::{EmailDraftPlan, EmailDraftTarget, EmailReplyOutcome};
 pub use night_watch::NightWatchConfiguration;
 pub use presence::PresenceMutation;
+pub use worker_engine_auto_update::WorkerEngineAutoUpdate;
 pub use worker_engine_updates::{
     WorkerEngineUpdateAttempt, WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome,
 };
@@ -452,7 +454,10 @@ const DETECTOR_INDEXES_SCHEMA_MARKER: i64 = 219;
 /// Whether a worker may read production for its own task unasked, and what
 /// each launch carried of it (ADR 0146).
 const TASK_READS_SCHEMA_MARKER: i64 = 220;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_READS_SCHEMA_MARKER;
+/// Whether a waiting worker engine update applies by itself, how long one has
+/// waited, and who each update stopped (ADR 0156).
+const IDLE_ENGINE_UPDATE_SCHEMA_MARKER: i64 = 221;
+const CURRENT_SCHEMA_VERSION: i64 = IDLE_ENGINE_UPDATE_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5001,6 +5006,9 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < TASK_READS_SCHEMA_MARKER {
         crate::task_reads::migrate_task_reads(transaction, TASK_READS_SCHEMA_MARKER)?;
+    }
+    if schema_version < IDLE_ENGINE_UPDATE_SCHEMA_MARKER {
+        crate::worker_engine_auto_update::migrate(transaction, IDLE_ENGINE_UPDATE_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11295,6 +11303,16 @@ mod tests {
                     AND name = 'task_read_settings')
                 AND (SELECT COUNT(*) = 1 FROM pragma_table_info('worker_launch_choices')
                     WHERE name = 'task_reads')",
+        },
+        // Whether a waiting engine update applies by itself, and who each
+        // update stopped (ADR 0156).
+        SchemaStep {
+            table: "worker_engine_auto_update",
+            artifact: "",
+            undo_sql: "DROP TABLE worker_engine_auto_update;
+                DROP TABLE worker_engine_update_workers;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
+                AND name IN ('worker_engine_auto_update', 'worker_engine_update_workers')",
         },
     ];
 
