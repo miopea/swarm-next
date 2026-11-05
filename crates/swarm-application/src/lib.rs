@@ -45,6 +45,8 @@ use swarm_persistence::{
 };
 use thiserror::Error;
 
+mod conversation_rotation;
+pub use conversation_rotation::{QUEEN_CONVERSATION_SECONDS, conversation_due_for_rotation};
 mod decision_clarification;
 mod workspace_settings;
 pub use workspace_settings::WorkspaceSettingsService;

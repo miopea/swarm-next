@@ -41,6 +41,8 @@ mod hive_usage;
 pub use hive_usage::StoredHiveUsage;
 mod check_gate;
 pub use check_gate::{CheckGateSetting, CiCandidate};
+mod conversation_rotations;
+pub use conversation_rotations::{ConversationRotation, RotationHold};
 mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
@@ -461,7 +463,9 @@ const IDLE_ENGINE_UPDATE_SCHEMA_MARKER: i64 = 221;
 /// Whether Queen may grant a worker's command card, what each card's worker
 /// said of the operator's reasons, and Queen's grants and hand-offs (ADR 0158).
 const QUEEN_GRANTS_SCHEMA_MARKER: i64 = 222;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_GRANTS_SCHEMA_MARKER;
+/// When Swarm moved a worker onto a new conversation at a start (ADR 0160).
+const CONVERSATION_ROTATIONS_SCHEMA_MARKER: i64 = 223;
+const CURRENT_SCHEMA_VERSION: i64 = CONVERSATION_ROTATIONS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -4994,6 +4998,18 @@ fn migrate_fleet_health_schema_steps(
     if schema_version < COMMAND_REFUSAL_SCHEMA_MARKER {
         crate::decisions::migrate_command_refusals(transaction, COMMAND_REFUSAL_SCHEMA_MARKER)?;
     }
+    migrate_queen_release_schema_steps(transaction, schema_version)
+}
+
+/// The steps from Queen's releases onwards.
+///
+/// Split from `migrate_fleet_health_schema_steps` for the reason that one was
+/// split from the function before it: adding a step took it past the length
+/// limit.
+fn migrate_queen_release_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
     if schema_version < QUEEN_RELEASES_SCHEMA_MARKER {
         crate::queen_releases::migrate_queen_releases(transaction, QUEEN_RELEASES_SCHEMA_MARKER)?;
     }
@@ -5023,6 +5039,12 @@ fn migrate_fleet_health_schema_steps(
     }
     if schema_version < QUEEN_GRANTS_SCHEMA_MARKER {
         crate::queen_grants::migrate_queen_grants(transaction, QUEEN_GRANTS_SCHEMA_MARKER)?;
+    }
+    if schema_version < CONVERSATION_ROTATIONS_SCHEMA_MARKER {
+        crate::conversation_rotations::migrate_conversation_rotations(
+            transaction,
+            CONVERSATION_ROTATIONS_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -11343,6 +11365,15 @@ mod tests {
                 AND (SELECT COUNT(*) = 4 FROM pragma_table_info('decision_requests')
                     WHERE name IN ('operator_reasons', 'granted_by_queen',
                                    'queen_handoff_at', 'queen_handoff_reason'))",
+        },
+        // When Swarm moved a worker onto a new conversation at a start
+        // (ADR 0160).
+        SchemaStep {
+            table: "worker_conversation_rotations",
+            artifact: "worker_conversation_rotations",
+            undo_sql: "DROP TABLE worker_conversation_rotations;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'worker_conversation_rotations'",
         },
     ];
 

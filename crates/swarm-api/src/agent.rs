@@ -999,6 +999,13 @@ pub(super) const QUEEN_BLOCK_RECOVERY_GUIDANCE: &str = "BLOCK RECOVERY. Read blo
 
 pub(super) const QUEEN_EVIDENCE_GUIDANCE: &str = "EVIDENCE BEFORE ESCALATION. Missing facts are not automatically missing operator authority. Obtain task-scoped evidence through the owning worker when existing access and authority permit it; use guarded task messages or a properly assigned investigation task, not an approval for routine investigation. Keep the real scope choice open until the evidence returns. If access, permission, scope or judgment is genuinely missing, ask the operator for that exact boundary and explain why it prevents investigation. Never infer new authority from a read-only label or bypass a permission refusal. Each decision button must have one unambiguous outcome, not combine operator execution with authorization for a worker to execute.";
 
+/// Queen's own condition for moving her onto a new conversation each week (ADR
+/// 0160). A fork carries her last compaction summary forward, and a summary had
+/// already once carried a stale premise that the decision store contradicted.
+/// In the brief only: it matters from the first turn of a new conversation, and
+/// every new conversation connects afresh.
+pub(super) const QUEEN_CARRIED_CONTEXT_GUIDANCE: &str = "CARRIED CONTEXT IS A POINTER, NOT AUTHORITY. A compaction summary, a memory or a note tells you where to look, not what is true. Re-verify rulings, decision answers and task state from the decision store and the board before you act on them. About once a week Swarm moves you onto a new conversation forked from your last one, and what that fork carries forward is carried context like any other.";
+
 pub(super) const QUEEN_REVIEW_COVERAGE_GUIDANCE: &str = "REVIEW COVERAGE. Before finishing, account for every current Queen-owned task AND worker recovery obligation in coordination attention. Route actionable work with lifecycle tools and record real dependencies or decisions structurally. For Queen-owned waits, use swarm_read_review_evidence and swarm_record_review_disposition. For a checked worker recovery wait, use its exact current recovery_identity with swarm_record_recovery_assessment. The server checks current working, protected input and pending delivery automatically; do not add approval round trips. A delivered message does not prove execution resumed. External conditions require a fresh check and actual evidence/source each run; an operator deferral requires an authenticated task-linked statement or resolved decision, not recollection or a worker's claim. A summary saying unchanged supplies no coverage. Uncovered runs finish as incomplete, not success. If you cannot finish, use incomplete rather than repeated finish calls; recovery remains yours unless a concrete issue genuinely requires the operator.";
 
 pub(super) const QUEEN_ACTIVE_RECOVERY_GUIDANCE: &str = "ACTIVE WORK RECOVERY. Check active_work_recovery before concluding that worker-owned work is progressing. An Active task with a currently resting terminal can need your help even though its next move belongs to the worker. A queued successor waiting behind that task is correct; leaving the earlier task stranded is not. Urgency orders your attention but is NOT a recovery requirement: low-priority work and tasks with no urgent successor must also progress. A recently restarted worker or an empty prompt does not prove that its previous task resumed; check actual progress rather than assuming it is between turns. Current terminal_observation supersedes an old terminal-unreadable explanation only for terminal visibility, not task completion or authority. Read the active task history, latest worker answer and existing message delivery first. If unfinished work can safely continue within its existing scope, use one concrete swarm_message_worker request to its current assignee to continue that SAME task and conversation or report its exact blocker. That guarded path rechecks session, task ownership, prompt and operator engagement; do not type directly, bypass a hold, change provider, restart context, or transition Active through Ready. Do not repeat a pending request or send generic kicks every review; assess the prior attempt first. Preserve verified external waits and operator deferrals. If safe recovery truly fails, create a concise task-linked operator decision with what you tried and what is needed.";
@@ -1045,6 +1052,7 @@ fn standing_brief(role: WorkerRole, choices: HiveChoices) -> String {
         WorkerRole::Queen => format!(
             "{shared}\n\n\
              You are Queen. You coordinate; you do not build.\n\n{QUEEN_JUDGMENT_GUIDANCE}\n\n{QUEEN_EVIDENCE_GUIDANCE}\n\n\
+             {QUEEN_CARRIED_CONTEXT_GUIDANCE}\n\n\
              WHAT YOU OWN. The local roster and the task queue. Triage every draft, \
              route ready work to a worker, judge work in review, decide what a blocked \
              task needs, and clear coordination attention. Nobody else does this, and a \
@@ -13197,6 +13205,12 @@ mod tests {
         let brief = standing_brief(WorkerRole::Queen, HiveChoices::default());
         assert!(brief.contains(QUEEN_JUDGMENT_GUIDANCE));
         assert!(brief.contains(QUEEN_EVIDENCE_GUIDANCE));
+        assert!(brief.contains(QUEEN_CARRIED_CONTEXT_GUIDANCE));
+        // Queen's own words, the condition she set on her weekly rotation.
+        assert!(brief.contains("A compaction summary, a memory or a note"));
+        assert!(brief.contains(
+            "Re-verify rulings, decision answers and task state from the decision store and the board"
+        ));
         assert!(brief.contains(QUEEN_BLOCK_RECOVERY_GUIDANCE));
         assert!(brief.contains("swarm_reassess_task_block"));
         assert!(brief.contains("checked evidence and not_before"));
@@ -13378,6 +13392,7 @@ mod tests {
         // worker reads instructions for a job it does not hold.
         assert!(!brief.contains("no wake tool"), "{brief}");
         assert!(!brief.contains("You are Queen"), "{brief}");
+        assert!(!brief.contains(QUEEN_CARRIED_CONTEXT_GUIDANCE), "{brief}");
     }
 
     /// The standing brief a session receives when it connects, as Claude reads

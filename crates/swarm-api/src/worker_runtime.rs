@@ -4,7 +4,9 @@ use std::{
 };
 
 use axum::http::StatusCode;
-use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerSessionId};
+use swarm_domain::{
+    ProviderConversationId, ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+};
 use swarm_terminal::{
     ClaudeConversationStart, CodexConversationStart, HostRequest, HostResponse, TerminalSize,
 };
@@ -318,7 +320,8 @@ pub(super) async fn start_worker_process_unlocked(
         _ => None,
     };
 
-    let request = provider_start_request(state, worker_id, &profile, size, mcp_config)?;
+    let fork = queen_conversation_fork(state, &profile).await;
+    let request = provider_start_request(state, worker_id, &profile, size, mcp_config, fork)?;
     let response = request_host(state, request).await.map_err(|error| {
         host_too_old_for(&error, "start this worker's provider").unwrap_or(error)
     })?;
@@ -528,12 +531,79 @@ fn write_claude_launch_settings(
     })
 }
 
+/// A start that moves Queen onto a new conversation forked from her current
+/// one (ADR 0160). The pin is already on `into` when this exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConversationFork {
+    from: ProviderConversationId,
+    into: ProviderConversationId,
+}
+
+/// Rotates Queen's conversation at this start when its week is up (ADR 0160).
+///
+/// A Claude conversation file only ever grows, and one resumed at every start
+/// is never old enough for Claude to clean up. So once a week, at a start that
+/// is already happening, Queen forks: a new file that begins where the old one
+/// stands, while the old one stops being written.
+///
+/// ⚠️ NEVER FAILS THE START. Every refusal here resumes her conversation as
+/// before, and the next start asks again. The engine is asked only once the
+/// rotation is otherwise due, so no other start pays for the question.
+async fn queen_conversation_fork(
+    state: &AppState,
+    profile: &WorkerProfile,
+) -> Option<ConversationFork> {
+    if profile.role != WorkerRole::Queen {
+        return None;
+    }
+    let store = task_store(state).ok()?;
+    let now = crate::unix_timestamp();
+    let (rotated_at, hold) = match (
+        store.pinned_conversation_rotated_at(profile.id),
+        store.queen_rotation_hold(now),
+    ) {
+        (Ok(rotated_at), Ok(hold)) => (rotated_at, hold),
+        (Err(error), _) | (_, Err(error)) => {
+            tracing::warn!(%error, "could not read whether Queen's conversation is due to rotate");
+            return None;
+        }
+    };
+    if let Some(hold) = hold {
+        tracing::info!(
+            ?hold,
+            "Queen's conversation rotation waits for a later start"
+        );
+    }
+    let from = swarm_application::conversation_due_for_rotation(profile, rotated_at, hold, now)?;
+    match request_host(state, HostRequest::Ping).await {
+        Ok(HostResponse::Pong { protocol_version })
+            if swarm_terminal::supports_conversation_fork(protocol_version) => {}
+        _ => {
+            tracing::info!(
+                "Queen's conversation is due to rotate, but the worker engine cannot fork \
+                 yet; resuming it until the engine update applies"
+            );
+            return None;
+        }
+    }
+    let into = ProviderConversationId::new();
+    match store.rotate_conversation(profile.id, from, into, now) {
+        Ok(true) => Some(ConversationFork { from, into }),
+        Ok(false) => None,
+        Err(error) => {
+            tracing::warn!(%error, "could not rotate Queen's conversation; resuming it");
+            None
+        }
+    }
+}
+
 fn provider_start_request(
     state: &AppState,
     worker_id: WorkerId,
     profile: &WorkerProfile,
     size: TerminalSize,
     mcp_config: Option<PathBuf>,
+    fork: Option<ConversationFork>,
 ) -> Result<HostRequest, ApiError> {
     let (checkout, allow_outside_roots) = workspace_and_root_override(state, &profile.workspace);
     let worker_workspace = session_workspace(state, worker_id, checkout);
@@ -574,13 +644,22 @@ fn provider_start_request(
                 workspace: worker_workspace.clone(),
                 size,
                 conversation: match (
+                    fork,
                     profile.provider_conversation_id,
                     profile.has_session_history,
                 ) {
-                    (Some(session_id), false) => ClaudeConversationStart::New { session_id },
-                    (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
-                    (None, true) => ClaudeConversationStart::Continue,
-                    (None, false) => {
+                    (Some(ConversationFork { from, into }), _, _) => {
+                        ClaudeConversationStart::Fork {
+                            from,
+                            session_id: into,
+                        }
+                    }
+                    (None, Some(session_id), false) => ClaudeConversationStart::New { session_id },
+                    (None, Some(session_id), true) => {
+                        ClaudeConversationStart::Resume { session_id }
+                    }
+                    (None, None, true) => ClaudeConversationStart::Continue,
+                    (None, None, false) => {
                         let session_id = task_store(state)?
                             .assign_provider_conversation(worker_id)
                             .map_err(|error| task_store_error(&error))?;
@@ -2427,6 +2506,7 @@ mod tests {
                 &profile,
                 TerminalSize::default(),
                 None,
+                None,
             )
             .unwrap();
             let HostRequest::StartCodex { conversation, .. } = request else {
@@ -2465,6 +2545,7 @@ mod tests {
             &profile,
             TerminalSize::default(),
             None,
+            None,
         )
         .unwrap();
         assert!(matches!(
@@ -2486,6 +2567,7 @@ mod tests {
             &returning,
             TerminalSize::default(),
             None,
+            None,
         )
         .unwrap();
         assert!(matches!(
@@ -2495,6 +2577,173 @@ mod tests {
                 ..
             } if session_id == conversation
         ));
+    }
+
+    #[test]
+    fn a_rotating_start_asks_claude_to_fork_into_the_conversation_swarm_pinned() {
+        use swarm_terminal::{ClaudeConversationStart, HostRequest, TerminalSize};
+
+        let root = tempfile::tempdir().unwrap();
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let profile = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                &root.path().to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        let state = crate::AppState::default()
+            .with_workspace_roots(vec![root.path().to_path_buf()])
+            .with_task_store(store);
+        let fork = super::ConversationFork {
+            from: swarm_domain::ProviderConversationId::new(),
+            into: swarm_domain::ProviderConversationId::new(),
+        };
+
+        let request = super::provider_start_request(
+            &state,
+            profile.id,
+            &profile,
+            TerminalSize::default(),
+            None,
+            Some(fork),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            request,
+            HostRequest::StartClaude {
+                conversation: ClaudeConversationStart::Fork { from, session_id },
+                ..
+            } if from == fork.from && session_id == fork.into
+        ));
+    }
+
+    /// Queen after a conversation of hers has run, so her next start resumes it.
+    fn queen_who_has_run(store: &swarm_persistence::TaskStore) -> swarm_domain::WorkerProfile {
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+        store.get_worker_profile(queen.id).unwrap()
+    }
+
+    /// Whether Queen's start forks, against an engine that answers a ping with
+    /// `protocol_version`. `asked` says whether the engine must be pinged; one
+    /// that is not is simply never answered.
+    async fn fork_against_engine(
+        store: &swarm_persistence::TaskStore,
+        queen: &swarm_domain::WorkerProfile,
+        protocol_version: u16,
+        asked: bool,
+    ) -> Option<super::ConversationFork> {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("engine.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_terminal_host(swarm_terminal::HostClient::new(&socket), "fixture");
+        let engine = tokio::spawn(async move {
+            reply_to_recovery_request(
+                &listener,
+                HostRequest::Ping,
+                Some(HostResponse::Pong { protocol_version }),
+            )
+            .await;
+        });
+        let fork = super::queen_conversation_fork(&state, queen).await;
+        if asked {
+            engine.await.unwrap();
+        } else {
+            engine.abort();
+        }
+        fork
+    }
+
+    #[tokio::test]
+    async fn a_due_queen_forks_on_an_engine_that_can_read_the_fork() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let queen = queen_who_has_run(&store);
+        let pinned = queen.provider_conversation_id.unwrap();
+
+        let fork = fork_against_engine(&store, &queen, swarm_terminal::PROTOCOL_VERSION, true)
+            .await
+            .expect("a conversation no rotation started is due");
+
+        assert_eq!(fork.from, pinned);
+        assert_ne!(fork.into, pinned);
+        assert_eq!(
+            store
+                .get_worker_profile(queen.id)
+                .unwrap()
+                .provider_conversation_id,
+            Some(fork.into),
+            "the pin moves before the launch, so the start is recorded on the new conversation"
+        );
+        let rotations = store.conversation_rotations(queen.id).unwrap();
+        assert_eq!(rotations.len(), 1);
+        assert_eq!(
+            (rotations[0].previous, rotations[0].conversation),
+            (pinned, fork.into)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_due_queen_resumes_on_an_engine_too_old_to_fork() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let queen = queen_who_has_run(&store);
+
+        let fork = fork_against_engine(&store, &queen, 18, true).await;
+
+        assert_eq!(fork, None);
+        assert_eq!(
+            store
+                .get_worker_profile(queen.id)
+                .unwrap()
+                .provider_conversation_id,
+            queen.provider_conversation_id
+        );
+        assert!(store.conversation_rotations(queen.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_conversation_rotated_this_week_is_resumed() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let queen = queen_who_has_run(&store);
+        let fork = fork_against_engine(&store, &queen, swarm_terminal::PROTOCOL_VERSION, true)
+            .await
+            .unwrap();
+        let rotated = store.get_worker_profile(queen.id).unwrap();
+
+        let again =
+            fork_against_engine(&store, &rotated, swarm_terminal::PROTOCOL_VERSION, false).await;
+
+        assert_eq!(again, None);
+        assert_eq!(rotated.provider_conversation_id, Some(fork.into));
+        assert_eq!(store.conversation_rotations(queen.id).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_automation_run_that_reached_queen_puts_her_rotation_off() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        // The run reaches her in one session, and that session ends before
+        // the run finishes: the start that follows is the one that must wait.
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, 99).unwrap();
+        store.request_queen_automation_run(100).unwrap();
+        store.claim_queen_automation(101).unwrap().unwrap();
+        store.release_worker_session(session).unwrap();
+        let queen = store.get_worker_profile(queen.id).unwrap();
+
+        let fork =
+            fork_against_engine(&store, &queen, swarm_terminal::PROTOCOL_VERSION, false).await;
+
+        assert_eq!(fork, None);
+        assert!(store.conversation_rotations(queen.id).unwrap().is_empty());
     }
 
     /// ⚠️ THE CHAIN, NOT THE LINKS. The last fix in this session passed a test
@@ -2554,20 +2803,22 @@ mod tests {
             .with_workspace_roots(vec![home.path().to_path_buf()])
             .with_task_store(store.clone());
 
-        let HostRequest::StartClaude {
-            workspace: held, ..
-        } = provider_start_request(&state, older.id, &older, TerminalSize::default(), None)
-            .unwrap()
-        else {
-            panic!("a Claude worker starts with StartClaude");
+        let workspace_of = |profile: &WorkerProfile| {
+            let request = provider_start_request(
+                &state,
+                profile.id,
+                profile,
+                TerminalSize::default(),
+                None,
+                None,
+            );
+            let HostRequest::StartClaude { workspace, .. } = request.unwrap() else {
+                panic!("a Claude worker starts with StartClaude");
+            };
+            workspace
         };
-        let HostRequest::StartClaude {
-            workspace: moved, ..
-        } = provider_start_request(&state, newer.id, &newer, TerminalSize::default(), None)
-            .unwrap()
-        else {
-            panic!("a Claude worker starts with StartClaude");
-        };
+        let held = workspace_of(&older);
+        let moved = workspace_of(&newer);
 
         assert_eq!(
             held, checkout,
@@ -2810,8 +3061,15 @@ mod tests {
             )
             .unwrap();
         let state = state.with_task_store(store);
-        match provider_start_request(&state, profile.id, &profile, TerminalSize::default(), None)
-            .unwrap()
+        match provider_start_request(
+            &state,
+            profile.id,
+            &profile,
+            TerminalSize::default(),
+            None,
+            None,
+        )
+        .unwrap()
         {
             HostRequest::StartCodex {
                 allow_outside_roots,

@@ -434,7 +434,9 @@ impl ProcessTerminalSession {
         let mut command_builder = CommandBuilder::new(&command.executable);
         command_builder.args(&command.arguments);
         command_builder.cwd(&command.working_directory);
-        let provider_lifecycle = configure_provider_lifecycle(id, provider, &mut command_builder)?;
+        let fork = command.forked_conversation();
+        let provider_lifecycle =
+            configure_provider_lifecycle(id, provider, fork, &mut command_builder)?;
         configure_terminal_environment(&mut command_builder, &command.executable);
         let mut reader = pair.master.try_clone_reader().map_err(terminal_error)?;
         let writer = pair.master.take_writer().map_err(terminal_error)?;
@@ -1173,9 +1175,13 @@ fn is_claude_executable(executable: &std::path::Path) -> bool {
         .is_some_and(|name| name == "claude" || name == "claude.exe")
 }
 
+/// `fork` is the conversation a Claude process is launched to fork into. Its
+/// startup reports that fork, so the gate is told the id before the process
+/// exists (ADR 0160).
 fn configure_provider_lifecycle(
     session: WorkerSessionId,
     provider: Option<ProviderKind>,
+    fork: Option<swarm_domain::ProviderConversationId>,
     command: &mut CommandBuilder,
 ) -> Result<Option<crate::ProviderLifecycleGate>, SessionRegistryError> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -1199,7 +1205,11 @@ fn configure_provider_lifecycle(
         .collect();
     command.env("SWARM_PROVIDER_SESSION", session.to_string());
     command.env("SWARM_PROVIDER_START_CAPABILITY", encoded);
-    Ok(Some(crate::ProviderLifecycleGate::new(session, secret)))
+    let gate = crate::ProviderLifecycleGate::new(session, secret);
+    Ok(Some(match fork {
+        Some(into) => gate.expecting_fork(into),
+        None => gate,
+    }))
 }
 
 fn resume_has_output(resume: &Resume) -> bool {
@@ -2777,6 +2787,7 @@ mod lifecycle_environment_tests {
         let gate = super::configure_provider_lifecycle(
             session,
             Some(swarm_domain::ProviderKind::ClaudeCode),
+            None,
             &mut command,
         )
         .unwrap();
@@ -2798,12 +2809,48 @@ mod lifecycle_environment_tests {
         assert!(secret.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert!(!format!("{gate:?}").contains(secret));
         assert!(
-            super::configure_provider_lifecycle(session, None, &mut command)
+            super::configure_provider_lifecycle(session, None, None, &mut command)
                 .unwrap()
                 .is_none()
         );
         assert!(command.get_env("SWARM_PROVIDER_SESSION").is_none());
         assert!(command.get_env("SWARM_PROVIDER_START_CAPABILITY").is_none());
+    }
+
+    /// A Claude launched to fork reports its startup as that fork and nothing
+    /// else, so the gate its process gets must already know the id (ADR 0160).
+    #[test]
+    fn a_process_launched_as_a_fork_settles_its_startup_on_that_fork() {
+        let session = swarm_domain::WorkerSessionId::new();
+        let into = swarm_domain::ProviderConversationId::new();
+        let mut command = portable_pty::CommandBuilder::new("unused");
+        let mut gate = super::configure_provider_lifecycle(
+            session,
+            Some(swarm_domain::ProviderKind::ClaudeCode),
+            Some(into),
+            &mut command,
+        )
+        .unwrap()
+        .unwrap();
+        // The capability the process is handed, as its hook would present it.
+        let encoded = command.get_env("SWARM_PROVIDER_START_CAPABILITY").unwrap();
+        let mut capability = [0_u8; 32];
+        for (byte, pair) in capability
+            .iter_mut()
+            .zip(encoded.to_str().unwrap().as_bytes().chunks(2))
+        {
+            *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+
+        let fork = crate::ProviderSessionStartObservation {
+            conversation: into,
+            kind: swarm_domain::ProviderSessionStartKind::Forked,
+        };
+        assert_eq!(
+            gate.observe(session, &capability, fork),
+            crate::ProviderLifecycleAcceptance::Accepted
+        );
+        assert_eq!(gate.selection().unwrap().conversation, into);
     }
 }
 
@@ -2826,6 +2873,52 @@ mod tests {
             arguments: vec!["-lc".into(), script.into()],
             working_directory: env::temp_dir(),
         }
+    }
+
+    /// The spawn reads the fork from the command it launches, so the gate a
+    /// forking Claude reports to already knows the id (ADR 0160).
+    #[test]
+    fn a_spawned_fork_settles_its_startup_on_the_fork_it_reports() {
+        let into = swarm_domain::ProviderConversationId::new();
+        let mut command = shell_command(
+            "printf 'capability=%s.end' \"$SWARM_PROVIDER_START_CAPABILITY\"; read value",
+        );
+        // `sh -c` takes what follows its script as positional arguments, so
+        // the fork's own arguments ride along unused.
+        command.arguments.extend([
+            "--resume".into(),
+            swarm_domain::ProviderConversationId::new().to_string(),
+            "--fork-session".into(),
+            "--session-id".into(),
+            into.to_string(),
+        ]);
+        let session = ProcessTerminalSession::spawn_with_history(
+            WorkerSessionId::new(),
+            &command,
+            JournalLimits::new(4096, 64),
+            TerminalSize::default(),
+            None,
+            Some(ProviderKind::ClaudeCode),
+        )
+        .unwrap();
+        let output = output_until(&session, ".end");
+        let start = output.find("capability=").unwrap() + "capability=".len();
+        let mut capability = [0_u8; 32];
+        for (byte, pair) in capability
+            .iter_mut()
+            .zip(output.as_bytes()[start..start + 64].chunks(2))
+        {
+            *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+        }
+
+        let fork = crate::ProviderSessionStartObservation {
+            conversation: into,
+            kind: swarm_domain::ProviderSessionStartKind::Forked,
+        };
+        assert_eq!(
+            session.observe_provider_start(&capability, fork).unwrap(),
+            crate::ProviderLifecycleAcceptance::Accepted
+        );
     }
 
     #[test]

@@ -11,6 +11,8 @@ pub struct ProviderLifecycleGate {
     revoked: bool,
     observation: Option<ProviderSessionStartObservation>,
     selection: Option<swarm_domain::ConversationSelection>,
+    /// The conversation this process was launched to fork into (ADR 0160).
+    expected_fork: Option<swarm_domain::ProviderConversationId>,
 }
 
 impl std::fmt::Debug for ProviderLifecycleGate {
@@ -45,7 +47,20 @@ impl ProviderLifecycleGate {
             revoked: false,
             observation: None,
             selection: None,
+            expected_fork: None,
         }
+    }
+
+    /// A process launched as a fork reports its startup as a fork, under the
+    /// new conversation's id. Set when the process is created, from the
+    /// arguments it was given, so it cannot race the report.
+    #[must_use]
+    pub const fn expecting_fork(
+        mut self,
+        conversation: swarm_domain::ProviderConversationId,
+    ) -> Self {
+        self.expected_fork = Some(conversation);
+        self
     }
 
     /// Caller holds the engine session lifecycle lock and confirms it is live.
@@ -104,6 +119,17 @@ impl ProviderLifecycleGate {
                 | ProviderSessionStartKind::Reset
         ) {
             return match self.selection.as_mut() {
+                // ⚠️ THE ONE FORK THAT IS A STARTUP (ADR 0160): the one this
+                // process was launched as, into the id Swarm chose for it.
+                // Claude reports such a start as source "fork", not "startup"
+                // or "resume", and it is the only startup that process will
+                // ever report. Any other fork before startup settles still
+                // establishes nothing.
+                None if observation.kind == ProviderSessionStartKind::Forked
+                    && self.expected_fork == Some(observation.conversation) =>
+                {
+                    self.settle(observation)
+                }
                 // Before any startup has settled there is nothing to move, and
                 // a fork cannot establish identity on its own.
                 None => ProviderLifecycleAcceptance::IgnoredLifecycle,
@@ -140,14 +166,19 @@ impl ProviderLifecycleGate {
                 ProviderLifecycleAcceptance::Duplicate
             }
             Some(_) => ProviderLifecycleAcceptance::ConflictingStartup,
-            None => {
-                self.observation = Some(observation);
-                self.selection = Some(swarm_domain::ConversationSelection::new(
-                    observation.conversation,
-                ));
-                ProviderLifecycleAcceptance::Accepted
-            }
+            None => self.settle(observation),
         }
+    }
+
+    fn settle(
+        &mut self,
+        observation: ProviderSessionStartObservation,
+    ) -> ProviderLifecycleAcceptance {
+        self.observation = Some(observation);
+        self.selection = Some(swarm_domain::ConversationSelection::new(
+            observation.conversation,
+        ));
+        ProviderLifecycleAcceptance::Accepted
     }
 
     /// Called only for an authenticated provider SessionEnd(reason=resume).
@@ -229,6 +260,78 @@ fn matches_capability(expected: &[u8; 32], supplied: &[u8; 32]) -> bool {
 mod tests {
     use super::*;
     use swarm_domain::ProviderConversationId;
+
+    fn forked(conversation: ProviderConversationId) -> ProviderSessionStartObservation {
+        ProviderSessionStartObservation {
+            conversation,
+            kind: ProviderSessionStartKind::Forked,
+        }
+    }
+
+    /// Claude launched with `--fork-session` reports source "fork" under the
+    /// new id, and nothing else, so without this the start would never settle.
+    #[test]
+    fn the_fork_a_process_was_launched_as_is_its_startup() {
+        let session = WorkerSessionId::new();
+        let into = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [7; 32]).expecting_fork(into);
+
+        assert_eq!(
+            gate.observe(session, &[7; 32], forked(into)),
+            ProviderLifecycleAcceptance::Accepted
+        );
+        assert_eq!(gate.observation(), Some(forked(into)));
+        assert_eq!(gate.selection().unwrap().conversation, into);
+        assert_eq!(gate.selection().unwrap().revision, 1);
+        assert_eq!(
+            gate.observe(session, &[7; 32], forked(into)),
+            ProviderLifecycleAcceptance::Duplicate
+        );
+    }
+
+    /// Only the id Swarm launched the fork into establishes anything, and only
+    /// with the process's own capability.
+    #[test]
+    fn no_other_fork_establishes_a_startup() {
+        let session = WorkerSessionId::new();
+        let into = ProviderConversationId::new();
+
+        let mut expecting = ProviderLifecycleGate::new(session, [7; 32]).expecting_fork(into);
+        assert_eq!(
+            expecting.observe(session, &[7; 32], forked(ProviderConversationId::new())),
+            ProviderLifecycleAcceptance::IgnoredLifecycle
+        );
+        assert_eq!(
+            expecting.observe(session, &[8; 32], forked(into)),
+            ProviderLifecycleAcceptance::Denied
+        );
+        assert_eq!(expecting.observation(), None);
+
+        let mut not_launched_as_a_fork = ProviderLifecycleGate::new(session, [7; 32]);
+        assert_eq!(
+            not_launched_as_a_fork.observe(session, &[7; 32], forked(into)),
+            ProviderLifecycleAcceptance::IgnoredLifecycle
+        );
+        assert_eq!(not_launched_as_a_fork.observation(), None);
+    }
+
+    /// After the fork settled, a later fork moves the selection as any fork
+    /// does; it does not replace the startup.
+    #[test]
+    fn a_later_fork_after_a_forked_startup_is_a_conversation_change() {
+        let session = WorkerSessionId::new();
+        let into = ProviderConversationId::new();
+        let mut gate = ProviderLifecycleGate::new(session, [7; 32]).expecting_fork(into);
+        gate.observe(session, &[7; 32], forked(into));
+
+        let later = ProviderConversationId::new();
+        assert_eq!(
+            gate.observe(session, &[7; 32], forked(later)),
+            ProviderLifecycleAcceptance::ConversationChanged
+        );
+        assert_eq!(gate.observation(), Some(forked(into)));
+        assert_eq!(gate.selection().unwrap().conversation, later);
+    }
 
     #[test]
     fn paired_interactive_resume_changes_selection_without_rewriting_startup() {

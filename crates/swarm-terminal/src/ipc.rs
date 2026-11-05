@@ -34,7 +34,8 @@ use crate::{
 // Protocol 17 adds private, retained native-interview evidence and acknowledgement.
 // Protocol 18 lets the API ask the engine to stop a resting set for an engine
 // update, which the engine admits only on its own evidence (ADR 0156).
-pub const PROTOCOL_VERSION: u16 = 18;
+// Protocol 19 starts Claude as a fork of an existing conversation (ADR 0160).
+pub const PROTOCOL_VERSION: u16 = 19;
 /// The oldest engine protocol this build's API can drive (ADR 0157).
 ///
 /// When the installed engine speaks anything from here up to
@@ -63,6 +64,14 @@ pub fn supports_continuation_recovery(protocol: u16) -> bool {
 #[must_use]
 pub fn supports_maintenance_admission(protocol: u16) -> bool {
     (18..=PROTOCOL_VERSION).contains(&protocol)
+}
+
+/// Whether an engine speaking `protocol` can start Claude with
+/// `ClaudeConversationStart::Fork`. An older one cannot read that start, so it
+/// is never sent one, and the worker resumes its conversation as before.
+#[must_use]
+pub fn supports_conversation_fork(protocol: u16) -> bool {
+    (19..=PROTOCOL_VERSION).contains(&protocol)
 }
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
@@ -759,8 +768,8 @@ mod tests {
              anyone -- bump it, then update this list."
         );
         assert_eq!(
-            PROTOCOL_VERSION, 18,
-            "the pinned surface above belongs to protocol 18; if you changed \
+            PROTOCOL_VERSION, 19,
+            "the pinned surface above belongs to protocol 19; if you changed \
              the requests, this number moves with them"
         );
     }
@@ -961,7 +970,39 @@ mod tests {
             variants,
             ["status", "claim", "renew", "release", "input", "resize"]
         );
-        assert_eq!(PROTOCOL_VERSION, 18);
+        assert_eq!(PROTOCOL_VERSION, 19);
+    }
+
+    /// A start mode is wire surface too. An engine before 19 cannot parse a
+    /// fork, which `a_new_host_request_requires_a_protocol_bump` cannot see
+    /// because the request it travels in, `start_claude`, is not new.
+    #[test]
+    fn claude_start_modes_are_part_of_the_pinned_protocol() {
+        let error =
+            serde_json::from_value::<ClaudeConversationStart>(serde_json::json!({ "mode": "x" }))
+                .unwrap_err()
+                .to_string();
+        let modes: Vec<_> = error
+            .split("expected one of ")
+            .nth(1)
+            .unwrap()
+            .split(", ")
+            .map(|name| name.trim().trim_matches('`'))
+            .collect();
+        assert_eq!(modes, ["new", "resume", "continue", "fork"]);
+        assert_eq!(PROTOCOL_VERSION, 19, "fork arrived in protocol 19");
+    }
+
+    /// An engine before 19 is never sent a fork; the worker resumes instead.
+    #[test]
+    fn a_fork_is_asked_only_of_an_engine_that_can_read_it() {
+        for version in 0..19 {
+            assert!(!supports_conversation_fork(version));
+        }
+        assert!(supports_conversation_fork(19));
+        assert!(!supports_conversation_fork(PROTOCOL_VERSION + 1));
+        // The oldest engine this API drives predates it, so the API must ask.
+        assert!(!supports_conversation_fork(OLDEST_ENGINE_PROTOCOL));
     }
 
     #[test]
