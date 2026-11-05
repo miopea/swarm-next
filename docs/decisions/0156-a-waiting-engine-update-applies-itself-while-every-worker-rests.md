@@ -168,6 +168,10 @@ The admission request is new, so the terminal-host protocol moves from 17 to 18.
   applies it.
 - From then on, a same-protocol engine update applies by itself.
 
+Amended by ADR 0157: the first engine on 18 no longer needs a migration. An API
+on 18 drives an engine on 17, so the app installs alone and the operator moves
+the engine once from the card.
+
 The Claude hook helper accepts hosts on 17 and 18. Its requests are unchanged,
 so an engine still on 17 keeps receiving turn reports after a reload has
 installed 18.

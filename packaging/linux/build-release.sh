@@ -94,8 +94,9 @@ fi
 
 release_verifying_key=$(cat "$repo_root/packaging/release-verifying-key" 2>/dev/null | tr -d "\r\n")
 protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' "$repo_root/crates/swarm-terminal/src/ipc.rs" | tr -d '\r')
+oldest_engine_protocol=$(sed -n 's/^pub const OLDEST_ENGINE_PROTOCOL: u16 = \([0-9][0-9]*\);/\1/p' "$repo_root/crates/swarm-terminal/src/ipc.rs" | tr -d '\r')
 worker_engine_build_id=$(sh "$repo_root/packaging/linux/worker-engine-build-id.sh" "$repo_root")
-[ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$source_revision" ] && [ -n "$protocol" ] && [ -n "$worker_engine_build_id" ] || { echo "could not determine package metadata" >&2; exit 1; }
+[ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$source_revision" ] && [ -n "$protocol" ] && [ -n "$oldest_engine_protocol" ] && [ -n "$worker_engine_build_id" ] || { echo "could not determine package metadata" >&2; exit 1; }
 case "$source_revision" in
   *[!0-9a-fA-F]*)
     echo "source revision must be exactly 12 hexadecimal characters" >&2
@@ -264,6 +265,9 @@ chmod 0755 "$bundle/swarm-package"
 printf '%s\n' "$version" > "$bundle/VERSION"
 printf '%s\n' "$source_revision" > "$bundle/SOURCE_REVISION"
 printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
+# The oldest engine this API drives. swarm-package installs this app alone in
+# front of such an engine, and leaves the engine for the card (ADR 0157).
+printf '%s\n' "$oldest_engine_protocol" > "$bundle/OLDEST_ENGINE_PROTOCOL"
 # Recorded so the release manifest can say whether installing this stops
 # workers, at the moment of consent rather than after a reconcile timer.
 printf '%s\n' "$worker_engine_build_id" > "$bundle/WORKER_ENGINE_BUILD_ID"

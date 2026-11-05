@@ -953,6 +953,27 @@ validate_bundle() {
   (cd "$bundle" && sha256sum -c SHA256SUMS >/dev/null) || die "release checksum verification failed"
 }
 
+# Whether the API in release $1 can drive a terminal host speaking protocol $2.
+#
+# THE APP IS INSTALLED BEFORE THE ENGINE (ADR 0157). A protocol bump used to
+# swap the API and the host together, which ends every worker session on the
+# install itself. A bundle now names the oldest engine protocol its API still
+# drives, and while the installed host is inside that range only the API moves.
+# The engine follows when the operator applies the worker engine update.
+#
+# A bundle without the file predates this and keeps the old rule: equal or
+# migrate. So does anything unreadable, because guessing "compatible" would pair
+# an API with a host it cannot talk to.
+api_drives_engine() {
+  [ -f "$1/OLDEST_ENGINE_PROTOCOL" ] && [ -f "$1/PROTOCOL" ] || return 1
+  drives_oldest=$(tr -d '\r\n' < "$1/OLDEST_ENGINE_PROTOCOL")
+  drives_newest=$(tr -d '\r\n' < "$1/PROTOCOL")
+  for drives_value in "$drives_oldest" "$drives_newest" "$2"; do
+    case "$drives_value" in *[!0-9]*|"") return 1;; esac
+  done
+  [ "$drives_oldest" -le "$2" ] && [ "$2" -le "$drives_newest" ]
+}
+
 validate_config() {
   config_file="$config_root/swarm.env"
   [ -f "$config_file" ] || die "configuration file is missing"
@@ -1266,9 +1287,24 @@ reload_development() {
   # with what that command costs.
   dev_protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' \
     "$dev_checkout/crates/swarm-terminal/src/ipc.rs" 2>/dev/null | tr -d '\r')
+  # A checkout whose API still drives the installed engine reloads like any
+  # other: only the app moves and the engine waits for its card (ADR 0157).
+  dev_oldest_engine=$(sed -n 's/^pub const OLDEST_ENGINE_PROTOCOL: u16 = \([0-9][0-9]*\);/\1/p' \
+    "$dev_checkout/crates/swarm-terminal/src/ipc.rs" 2>/dev/null | tr -d '\r')
   dev_host_release=$(release_from_link "$install_root/host-current")
+  dev_drives_host=0
+  if [ -n "$dev_protocol" ] && [ -n "$dev_oldest_engine" ] && [ -n "$dev_host_release" ] \
+    && [ -f "$dev_host_release/PROTOCOL" ]; then
+    dev_host_protocol=$(tr -d '\r\n' < "$dev_host_release/PROTOCOL")
+    case "$dev_host_protocol" in
+      *[!0-9]*|"") :;;
+      *) [ "$dev_oldest_engine" -le "$dev_host_protocol" ] && [ "$dev_host_protocol" -le "$dev_protocol" ] \
+           && dev_drives_host=1;;
+    esac
+  fi
   if [ -n "$dev_protocol" ] && [ -n "$dev_host_release" ] && [ -f "$dev_host_release/PROTOCOL" ] \
     && [ "$(cat "$dev_host_release/PROTOCOL")" != "$dev_protocol" ] \
+    && [ "$dev_drives_host" != "1" ] \
     && [ "$dev_operation" != "prepare-protocol" ]; then
     fail_status=$dev_status_path
     fail_stamp="revision=$(git -C "$dev_checkout" rev-parse --short=12 HEAD 2>/dev/null)"
@@ -1413,8 +1449,11 @@ apply_release() {
   # the time anybody read it.
   migration_marker=
   host_release=$(release_from_link "$install_root/host-current")
+  # An app that drives the installed engine installs alone, so it is no
+  # migration and the status does not say it was one (ADR 0157).
   if [ -n "$host_release" ] && [ -f "$host_release/PROTOCOL" ] \
-    && [ "$(cat "$host_release/PROTOCOL")" != "$(cat "$requested/PROTOCOL")" ]; then
+    && [ "$(cat "$host_release/PROTOCOL")" != "$(cat "$requested/PROTOCOL")" ] \
+    && ! api_drives_engine "$requested" "$(cat "$host_release/PROTOCOL")"; then
     migration_marker='protocol_migration=1
 '
     printf 'state=installing\nversion=%s\n%s' "$requested_version" "$migration_marker" > "$status_path"
@@ -1516,7 +1555,18 @@ install_or_update() {
     #
     # A procedure nobody can find from the error is barely better than one that
     # does not exist.
-    if [ "$host_protocol" != "$protocol" ]; then
+    #
+    # THE APP GOES FIRST WHEN IT CAN (ADR 0157). If this API still drives the
+    # installed engine, the install below is an ordinary one: the API restarts
+    # and the host, with every worker attached to it, is left alone. The engine
+    # follows when the operator applies the worker engine update, and once the
+    # engine can check its own workers, idle updates take it from there. Only a
+    # protocol change this API cannot drive falls into the migration.
+    if [ "$host_protocol" != "$protocol" ] && api_drives_engine "$new_release" "$host_protocol"; then
+      printf 'swarm-package: this app speaks terminal-host protocol %s and still drives the installed engine on protocol %s.\n' \
+        "$protocol" "$host_protocol" >&2
+      printf 'swarm-package: only the app is installed now, so workers keep running. The engine moves when you apply the worker engine update.\n' >&2
+    elif [ "$host_protocol" != "$protocol" ]; then
       # UPDATE DOES THE MIGRATION RATHER THAN REFUSING IT, and that is the
       # difference between a release a Hive can take and one that strands it.
       #
@@ -1672,7 +1722,9 @@ rollback() {
   [ -n "$previous" ] || die "no previous release is retained"
   [ -n "$current" ] || die "no current release is installed"
   [ -n "$host_release" ] || die "no terminal host release is installed"
-  [ "$(cat "$previous/PROTOCOL")" = "$(cat "$host_release/PROTOCOL")" ] || die "rollback API is incompatible with the active terminal host"
+  [ "$(cat "$previous/PROTOCOL")" = "$(cat "$host_release/PROTOCOL")" ] \
+    || api_drives_engine "$previous" "$(cat "$host_release/PROTOCOL")" \
+    || die "rollback API is incompatible with the active terminal host"
   # ROLLBACK IS NOT ONLY A BINARY. An update migrates the database before it
   # can fail, so moving the symlink back gives an older API a newer schema,
   # which it refuses -- correctly -- and the unit crash-loops. The operation
@@ -1778,7 +1830,12 @@ reconcile_host() {
   # LOUDLY when a migration is already prepared and waiting for idle workers,
   # because this runs on a 2-minute timer and would otherwise fill the journal
   # with a failure for a state that is progressing normally.
-  if [ "$(cat "$current/PROTOCOL")" != "$(cat "$host_release/PROTOCOL")" ]; then
+  #
+  # AN ENGINE THE API DRIVES IS NOT THAT PAIR (ADR 0157). After an app-first
+  # install the API is a protocol ahead of the host it drives, and moving the
+  # host onto the API's own release closes the gap rather than opening one.
+  if [ "$(cat "$current/PROTOCOL")" != "$(cat "$host_release/PROTOCOL")" ] \
+    && ! api_drives_engine "$current" "$(cat "$host_release/PROTOCOL")"; then
     if pending_protocol_release >/dev/null 2>&1; then
       printf 'Terminal host reconciliation is waiting on the prepared protocol migration\n'
       return

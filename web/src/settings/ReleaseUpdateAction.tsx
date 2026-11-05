@@ -78,10 +78,11 @@ function installConsequence(carriesProtocolChange: boolean | null) {
   if (carriesProtocolChange === true) {
     return (
       <p className="form-error" role="alert">
-        <strong>This one needs engine maintenance.</strong> The app and engine must move
-        together. The release will be prepared and wait while workers remain loaded.
-        The separate maintenance action stops workers and brings them back afterwards;
-        unsent terminal input can be lost.
+        <strong>This one changes how the app talks to the worker engine.</strong> When the
+        new app can still drive your current engine, only the app installs now: workers stay
+        up, and the engine waits for the worker engine update. When it cannot, the app and
+        engine move together, every worker session ends, and Swarm brings the workers back
+        afterwards; unsent terminal input can be lost.
       </p>
     );
   }

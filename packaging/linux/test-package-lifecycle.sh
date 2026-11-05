@@ -230,6 +230,9 @@ done
 make_bundle() {
   version=$1
   protocol=${2:-5}
+  # The oldest engine protocol the bundle's API drives (ADR 0157). Left out, the
+  # bundle predates that and drives only its own protocol.
+  oldest_engine=${3:-}
   bundle="$test_root/bundle-$version"
   mkdir -p "$bundle/bin" "$bundle/web/assets" "$bundle/systemd-user"
   for binary in swarm-api swarm-terminal-host swarmctl; do
@@ -283,6 +286,7 @@ EOF
   chmod +x "$bundle/swarm-package"
   printf '%s\n' "$version" > "$bundle/VERSION"
   printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
+  [ -z "$oldest_engine" ] || printf '%s\n' "$oldest_engine" > "$bundle/OLDEST_ENGINE_PROTOCOL"
   (cd "$bundle" && find bin web systemd-user -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS && sha256sum swarm-package >> SHA256SUMS)
 }
 
@@ -441,6 +445,19 @@ esac
   || { echo "protocol refusal changed a service" >&2; exit 1; }
 grep -q '^step=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
   || { echo "the status did not record why the reload was refused" >&2; exit 1; }
+# A CHECKOUT WHOSE API STILL DRIVES THE INSTALLED ENGINE IS NOT REFUSED (ADR
+# 0157). It reloads like any other: the app moves, the engine waits for its
+# card. The builder here still exits 1, so reaching it is the whole proof.
+printf 'pub const PROTOCOL_VERSION: u16 = 99;\npub const OLDEST_ENGINE_PROTOCOL: u16 = %s;\n' \
+  "$(cat "$SWARM_INSTALL_ROOT/host-current/PROTOCOL")" > "$dev_checkout/crates/swarm-terminal/src/ipc.rs"
+rm -f "$HOME/the-builder-ran"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+drives_reload=$("$package" reload-development 2>&1 || true)
+[ -f "$HOME/the-builder-ran" ] \
+  || { echo "a checkout that drives the installed engine was refused before the build: $drives_reload" >&2; exit 1; }
+! grep -q '^step=protocol-change$' "$SWARM_STATE_ROOT/development-reload.status" \
+  || { echo "a checkout that drives the installed engine was recorded as a protocol change" >&2; exit 1; }
+printf 'pub const PROTOCOL_VERSION: u16 = 99;\n' > "$dev_checkout/crates/swarm-terminal/src/ipc.rs"
 # An explicit preparation request builds and stages through the same service,
 # but does not activate a package or contact a running worker engine.
 export SWARM_TEST_PREPARE_BUNDLE="$test_root/bundle-4.0.0"
@@ -1392,4 +1409,148 @@ fi
 [ ! -e "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 [ -f "$SWARM_STATE_ROOT/operator-data" ]
 [ -f "$SWARM_CONFIG_ROOT/swarm.env" ]
+
+# --- THE APP GOES FIRST, AND THE ENGINE FOLLOWS ON THE CARD (ADR 0157) ------
+#
+# The operator, after a protocol migration ended every worker on install: "the
+# migration and app should update and then the users do the one manual worker
+# upgrade. After that then idle workers can update automatically."
+#
+# So a release whose API still drives the installed engine installs the app
+# alone and leaves every attached worker running, and the engine moves when the
+# card asks. Only a protocol the new API cannot drive still migrates in one hop.
+# Run on a fresh Hive so nothing above leaks into it.
+(
+  app_first_fail() { printf 'app-first: %s\n' "$1" >&2; exit 1; }
+  export HOME="$test_root/app-first"
+  export SWARM_INSTALL_ROOT="$HOME/.local/lib/swarm"
+  export SWARM_CONFIG_ROOT="$HOME/.config/swarm"
+  export SWARM_STATE_ROOT="$HOME/.local/state/swarm"
+  export SWARM_SYSTEMD_USER_ROOT="$HOME/.config/systemd/user"
+  export SWARM_BIN_ROOT="$HOME/.local/bin"
+  export SWARM_WORKSPACE_ROOT="$HOME/workspaces"
+  mkdir -p "$HOME"
+  make_bundle 20.0.0 7
+  make_bundle 21.0.0 8 7
+  make_bundle 22.0.0 10 9
+  "$package" install "$test_root/bundle-20.0.0" >/dev/null
+  printf 'database-v20\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+  # Workers are attached to the engine, and stay attached.
+  printf '3\n' > "$HOME/running-sessions"
+  printf '0\n' > "$HOME/busy-sessions"
+  printf '0\n' > "$HOME/unreadable-sessions"
+  : > "$HOME/systemctl.log"
+  : > "$HOME/swarmctl.log"
+
+  app_first_out=$("$package" update "$test_root/bundle-21.0.0" 2>&1) \
+    || app_first_fail "an app that drives the installed engine did not install: $app_first_out"
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "21.0.0" ] \
+    || app_first_fail "the app was not installed"
+  [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "20.0.0" ] \
+    || app_first_fail "the engine moved with the app, which is what ends every worker"
+  ! grep -q 'swarm-terminal-host' "$HOME/systemctl.log" \
+    || app_first_fail "the install touched the terminal host: $(cat "$HOME/systemctl.log")"
+  ! grep -qx 'drain' "$HOME/swarmctl.log" \
+    || app_first_fail "the install drained the engine the workers are attached to"
+  case "$app_first_out" in
+    *"still drives the installed engine on protocol 7"*) :;;
+    *) app_first_fail "the install did not say why the engine stayed: $app_first_out";;
+  esac
+  case "$app_first_out" in
+    *"worker engine update"*) :;;
+    *) app_first_fail "the install did not name the step that moves the engine: $app_first_out";;
+  esac
+  case "$app_first_out" in
+    *"every worker session ends"*) app_first_fail "an app-only install announced a migration: $app_first_out";;
+  esac
+  [ -d "$SWARM_INSTALL_ROOT/releases/20.0.0" ] \
+    || app_first_fail "the release the running engine came from was pruned"
+  [ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+    || app_first_fail "an app-only install left a migration waiting"
+
+  # THE TIMER LEAVES LOADED WORKERS ALONE. It used to die "terminal host
+  # protocol migration is required" on every pass in this state.
+  "$package" reconcile-host-requested >/dev/null 2>&1 \
+    || app_first_fail "the reconcile timer failed on an app one protocol ahead of its engine"
+  [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "20.0.0" ] \
+    || app_first_fail "the timer moved the engine under loaded workers"
+
+  # A SECOND APP BEFORE THE CARD, accepted in the control room. This Hive's own
+  # apply-release records it as an install, not a protocol migration.
+  make_bundle 26.0.0 8 7
+  mkdir -p "$SWARM_STATE_ROOT/downloads"
+  cp -r "$test_root/bundle-26.0.0" "$SWARM_STATE_ROOT/downloads/26.0.0"
+  printf '%s\n' "$SWARM_STATE_ROOT/downloads/26.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+  sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1 \
+    || app_first_fail "a second app before the card did not install: $(cat "$SWARM_STATE_ROOT/release-apply.log" 2>/dev/null)"
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "26.0.0" ] \
+    && [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "20.0.0" ] \
+    || app_first_fail "a second app before the card moved the engine"
+  grep -q '^state=installed$' "$SWARM_STATE_ROOT/release-apply.status" \
+    || app_first_fail "the second app was not reported installed"
+  ! grep -q 'protocol_migration' "$SWARM_STATE_ROOT/release-apply.status" \
+    || app_first_fail "an app-only install was reported as a protocol migration"
+
+  # AND ROLLBACK STILL WORKS. The previous app speaks 8 and the engine 7, which
+  # used to read as an incompatible pair.
+  "$package" rollback >/dev/null 2>&1 \
+    || app_first_fail "rollback refused a previous app that drives the running engine"
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "21.0.0" ] \
+    && [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "20.0.0" ] \
+    || app_first_fail "rollback did not return to the previous app alone"
+
+  # THE CARD MOVES IT. The card stops the workers itself and then asks.
+  printf '0\n' > "$HOME/running-sessions"
+  printf 'requested_at=%s\ntarget_version=21.0.0\n' "$(date +%s)" \
+    > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+  "$package" reconcile-host-requested >/dev/null 2>&1 \
+    || app_first_fail "the card could not move an engine the app drives"
+  [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "21.0.0" ] \
+    || app_first_fail "the card did not move the engine onto the app's release"
+  [ ! -f "$SWARM_STATE_ROOT/worker-engine-maintenance.request" ] \
+    || app_first_fail "the card's request was left behind"
+
+  # A PROTOCOL THE NEW API CANNOT DRIVE STILL MIGRATES IN ONE HOP. 22.0.0
+  # drives 9 and 10; the engine is on 8.
+  incompatible_out=$("$package" update "$test_root/bundle-22.0.0" 2>&1) \
+    || app_first_fail "an incompatible protocol change did not install: $incompatible_out"
+  case "$incompatible_out" in
+    *"changes the terminal-host protocol from 8 to 10"*) :;;
+    *) app_first_fail "an incompatible protocol change did not migrate: $incompatible_out";;
+  esac
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "22.0.0" ] \
+    && [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "22.0.0" ] \
+    || app_first_fail "an incompatible protocol change left the app and engine apart"
+
+  # AND A HIVE IN THE FIELD GETS THE SAME. Other Hives install from the control
+  # room through their OWN, older apply-release, which hands the install to the
+  # new bundle's `update`. Driven here with the real script from the last tag
+  # before this change, as swarm-release-apply.service would run it.
+  field_package="$test_root/app-first-field-swarm-package"
+  git -C "$repo_root" show v1.17.10:packaging/linux/swarm-package > "$field_package" 2>/dev/null \
+    || app_first_fail "could not extract the v1.17.10 swarm-package; is the tag fetched?"
+  rm -rf "$SWARM_INSTALL_ROOT" "$SWARM_STATE_ROOT"
+  make_bundle 23.0.0 17
+  make_bundle 24.0.0 18 17
+  "$package" install "$test_root/bundle-23.0.0" >/dev/null
+  printf 'database-v23\n' > "$SWARM_STATE_ROOT/swarm.sqlite3"
+  cp "$field_package" "$SWARM_INSTALL_ROOT/current/swarm-package"
+  chmod +x "$SWARM_INSTALL_ROOT/current/swarm-package"
+  printf '3\n' > "$HOME/running-sessions"
+  mkdir -p "$SWARM_STATE_ROOT/downloads"
+  cp -r "$test_root/bundle-24.0.0" "$SWARM_STATE_ROOT/downloads/24.0.0"
+  printf '%s\n' "$SWARM_STATE_ROOT/downloads/24.0.0" > "$SWARM_STATE_ROOT/release-apply.request"
+  : > "$HOME/systemctl.log"
+  sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1 \
+    || app_first_fail "a v1.17.10 Hive could not take an app that drives its engine: $(cat "$SWARM_STATE_ROOT/release-apply.log" 2>/dev/null)"
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "24.0.0" ] \
+    || app_first_fail "a v1.17.10 Hive did not install the app"
+  [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "23.0.0" ] \
+    || app_first_fail "a v1.17.10 Hive swapped the engine with the app"
+  ! grep -q 'swarm-terminal-host' "$HOME/systemctl.log" \
+    || app_first_fail "a v1.17.10 Hive restarted the engine its workers are attached to"
+  grep -q '^state=installed$' "$SWARM_STATE_ROOT/release-apply.status" \
+    || app_first_fail "a v1.17.10 Hive did not report the install: $(cat "$SWARM_STATE_ROOT/release-apply.status")"
+)
+printf 'app-first protocol upgrade passed\n'
 printf 'package lifecycle smoke passed\n'

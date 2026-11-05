@@ -2,7 +2,7 @@
 use std::{sync::Arc, time::Duration};
 use swarm_application::TaskService;
 use swarm_domain::MAX_NATIVE_INTERVIEW_BATCH;
-use swarm_terminal::{HostClient, HostRequest, HostResponse, PROTOCOL_VERSION};
+use swarm_terminal::{HostClient, HostRequest, HostResponse, drives_engine};
 use tokio::sync::Semaphore;
 
 #[derive(Debug, Default)]
@@ -118,7 +118,9 @@ async fn collect_once(
             .await
             .map_err(|_| IntakeError::Unavailable)?
         {
-            HostResponse::Pong { protocol_version } if protocol_version == PROTOCOL_VERSION => {}
+            // An engine one protocol behind still hands over its interviews:
+            // the app is installed before the engine (ADR 0157).
+            HostResponse::Pong { protocol_version } if drives_engine(protocol_version) => {}
             HostResponse::Pong { .. } => return Err(IntakeError::Unsupported),
             _ => return Err(IntakeError::Malformed),
         }
@@ -213,6 +215,7 @@ mod tests {
         OperatorSubmissionId, PresenceDeviceId, ProviderConversationId, WorkerSessionId,
     };
     use swarm_persistence::TaskStore;
+    use swarm_terminal::{OLDEST_ENGINE_PROTOCOL, PROTOCOL_VERSION};
     use tokio::{
         io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
         net::UnixListener,
@@ -418,6 +421,35 @@ mod tests {
         assert_eq!(result.acknowledged, 1);
         assert!(store.native_interview(invalid.id).unwrap().is_none());
         assert_eq!(engine.entries.lock().unwrap().len(), 1);
+        engine.stop().await;
+    }
+
+    /// ADR 0157: the app is installed before the engine, so for a while the
+    /// engine speaks the oldest protocol this API drives. Its interviews must
+    /// still be collected, or every operator answer goes unseen until the
+    /// worker engine update.
+    #[tokio::test]
+    async fn an_engine_on_the_oldest_driven_protocol_still_hands_over_its_interviews() {
+        let store = TaskStore::in_memory().unwrap();
+        let evidence = source(&store);
+        let engine = FakeEngine::start(
+            store.clone(),
+            vec![evidence.clone()],
+            OLDEST_ENGINE_PROTOCOL,
+            None,
+            false,
+        );
+        let result = collect_once(
+            &engine.client,
+            TaskService::new(store.clone()),
+            Arc::new(Semaphore::new(1)),
+            100,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.stored, 1);
+        assert_eq!(engine.reads.load(Ordering::SeqCst), 1);
         engine.stop().await;
     }
 
