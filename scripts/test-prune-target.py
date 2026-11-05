@@ -318,6 +318,31 @@ class PruneTarget(unittest.TestCase):
 
         self.assertEqual(exists(outside), [True] * 4)
 
+    def test_a_unit_directory_reached_through_a_link_is_left_alone(self) -> None:
+        """A real profile's deps/ or incremental/ could itself be a link that
+        leads out of target/; what it leads to is not this target's to prune."""
+        elsewhere = os.path.join(self.scratch.name, "elsewhere")
+        outside = [
+            os.path.join(elsewhere, ".fingerprint", "far-000000000000000f"),
+            os.path.join(elsewhere, "deps", "libfar-000000000000000f.rlib"),
+            os.path.join(elsewhere, "build", "far-000000000000000f"),
+            os.path.join(elsewhere, "examples", "far-000000000000000f"),
+            os.path.join(elsewhere, "incremental", "far-0nlww68p5n0hb"),
+        ]
+        for path in outside:
+            write(os.path.join(path, "data") if not path.endswith(".rlib") else path, UNIT_BYTES)
+        age([elsewhere], 10 * DAY)
+        release = os.path.join(self.target, "release")
+        os.makedirs(release)
+        for name in (".fingerprint", "deps", "build", "examples", "incremental"):
+            os.symlink(os.path.join(elsewhere, name), os.path.join(release, name))
+        inside = unit(self.debug, "a", "000000000000000a", used_days_ago=10)
+
+        self.prune(limit=1)
+
+        self.assertEqual(exists(outside), [True] * 5)
+        self.assertEqual(exists(inside), [False] * 4)
+
     def test_a_missing_target_is_not_an_error(self) -> None:
         out = io.StringIO()
         with redirect_stdout(out):

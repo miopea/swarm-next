@@ -127,7 +127,8 @@ def profile_units(profile: str) -> list[Unit]:
     by_hash: dict[str, Unit] = {}
     for directory in HASHED_DIRS:
         root = os.path.join(profile, directory)
-        if not os.path.isdir(root):
+        # A link could lead out of target/, so only what is really here.
+        if os.path.islink(root) or not os.path.isdir(root):
             continue
         for name in os.listdir(root):
             match = HASHED.search(name)
@@ -135,7 +136,7 @@ def profile_units(profile: str) -> list[Unit]:
                 describe(os.path.join(root, name), by_hash.setdefault(match.group(1), Unit()))
     units = list(by_hash.values())
     incremental = os.path.join(profile, "incremental")
-    if os.path.isdir(incremental):
+    if os.path.isdir(incremental) and not os.path.islink(incremental):
         for name in os.listdir(incremental):
             unit = Unit()
             describe(os.path.join(incremental, name), unit)

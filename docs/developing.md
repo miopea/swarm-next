@@ -71,6 +71,9 @@ without anyone remembering to run it.
   held; a build that starts while it runs waits for it. Cargo releases those
   locks while test binaries run, and what they run was read moments before,
   so the two-day window keeps it.
+- It deletes only inside `target/`. It follows no link: not to a profile
+  directory, and not from a profile's `deps/`, `.fingerprint/`, `build/`,
+  `examples/` or `incremental/` to wherever that leads.
 - A failed prune warns and the build goes ahead: `target/` is a cache.
 - Each run appends its sizes before and after to `target/prune-target.log`,
   kept to the newest thousand runs, so the bound can be checked over weeks.
