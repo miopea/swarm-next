@@ -9,6 +9,7 @@ use swarm_api::{
 };
 use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
+use tokio::sync::watch;
 use tracing::info;
 use tracing_subscriber::{
     EnvFilter, Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _,
@@ -178,8 +179,26 @@ fn configure_github_issue_intake(state: AppState) -> AppState {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// How long a blocking job may outlive the API before the process leaves anyway.
+///
+/// ⚠️ DROPPING A TOKIO RUNTIME WAITS FOR EVERY RUNNING BLOCKING JOB, WITH NO
+/// LIMIT. A background pass that was aborted at shutdown stops waiting for its
+/// `spawn_blocking` job, but the job itself (a `gh` call, a release sweep, an
+/// integrity check) keeps its thread, and the runtime would wait for it.
+/// Everything that matters has been told to stop before this, so what is left
+/// is abandoned here.
+const BLOCKING_WORK_SHUTDOWN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(run());
+    runtime.shutdown_timeout(BLOCKING_WORK_SHUTDOWN_BUDGET);
+    result
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Two consumers with their own filters: the journal follows RUST_LOG, and
     // the shared log keeps a fixed set whatever RUST_LOG says (ADR 0112).
     let diagnostics = std::sync::Arc::new(DiagnosticLog::new());
@@ -331,22 +350,100 @@ async fn serve_control_room(
         (Some(root), None) => router_with_web_root(state, root),
         (None, _) => router(state),
     };
-    let serving = axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            stop_background.send_replace(true);
-            let _ = stop_integrity.send(());
-        })
-        .await;
-    background.shutdown().await;
-    if let Err(error) = support_sender.await {
-        tracing::warn!(%error, "central support sender did not join during shutdown");
+    // ⚠️ EVERY WAIT BELOW IS BOUNDED, AND THE BOUNDS SUM TO LESS THAN THE 90
+    // SECONDS systemd ALLOWS BEFORE IT KILLS THE PROCESS. axum's graceful
+    // shutdown waits for every in-flight request with no limit, and a request
+    // to a terminal host that is draining for an update gets no answer: one
+    // such request held a protocol migration's API until systemd killed it,
+    // which skipped everything here. Background shutdown also used to start only
+    // after the requests were done, so its own budget was added to theirs.
+    let (draining, drain_started) = watch::channel(false);
+    let mut background_drain = drain_started.clone();
+    let background_shutdown = tokio::spawn(async move {
+        // The budget runs from the signal, beside the request drain. axum
+        // keeps the signal future in a task of its own, so the channel closes
+        // unsent only if that future is dropped, and axum drains then as well.
+        let _ = background_drain.wait_for(|draining| *draining).await;
+        background.shutdown().await;
+    });
+    let serving = axum::serve(listener, app).with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        stop_background.send_replace(true);
+        let _ = stop_integrity.send(());
+        draining.send_replace(true);
+    });
+    let served = drain_within(serving.into_future(), drain_started, REQUEST_DRAIN_BUDGET).await;
+    if served.is_none() {
+        tracing::warn!(
+            budget_secs = REQUEST_DRAIN_BUDGET.as_secs(),
+            "requests still open after the stop signal were closed rather than waited on"
+        );
     }
-    if let Err(error) = integrity_monitor.await {
-        tracing::warn!(%error, "database integrity monitor could not join during shutdown");
+    if let Err(error) = background_shutdown.await {
+        tracing::warn!(%error, "background services did not join during shutdown");
     }
-    serving?;
+    join_within("central support sender", support_sender, HELPER_JOIN_BUDGET).await;
+    join_within(
+        "database integrity monitor",
+        integrity_monitor,
+        HELPER_JOIN_BUDGET,
+    )
+    .await;
+    if let Some(serving) = served {
+        serving?;
+    }
     Ok(())
+}
+
+/// How long requests still in flight at the stop signal are given to finish.
+///
+/// Anything open after this is closed, not waited on: a request waiting on a
+/// terminal host that is draining would otherwise hold the process until it is
+/// killed. A browser reconnects to the API that replaces this one.
+const REQUEST_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How long each helper that was told to stop at the signal may take to join.
+const HELPER_JOIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `serving` to completion, or until `budget` after the drain starts.
+///
+/// `None` means the budget ran out first and `serving` was dropped. Before the
+/// drain starts there is no deadline. A channel that closes unsent starts it
+/// too: axum runs the signal future in a task of its own, and if that task
+/// ends without the future finishing, axum drains its connections exactly as
+/// it does on the signal.
+async fn drain_within<F: std::future::IntoFuture>(
+    serving: F,
+    mut drain_started: watch::Receiver<bool>,
+    budget: std::time::Duration,
+) -> Option<F::Output> {
+    let deadline = async move {
+        let _ = drain_started.wait_for(|draining| *draining).await;
+        tokio::time::sleep(budget).await;
+    };
+    tokio::select! {
+        output = serving.into_future() => Some(output),
+        () = deadline => None,
+    }
+}
+
+/// Joins a helper that was told to stop, abandoning it after `budget`.
+async fn join_within<T>(name: &str, task: tokio::task::JoinHandle<T>, budget: std::time::Duration) {
+    let abort = task.abort_handle();
+    match tokio::time::timeout(budget, task).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(%error, task = name, "did not join cleanly during shutdown");
+        }
+        Err(_) => {
+            abort.abort();
+            tracing::warn!(
+                task = name,
+                budget_secs = budget.as_secs(),
+                "did not stop within its shutdown budget and was abandoned"
+            );
+        }
+    }
 }
 
 fn configure_ops_integrations(state: AppState) -> AppState {
@@ -981,6 +1078,87 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    /// A request that never finishes no longer holds the process.
+    ///
+    /// Measured before this existed: one request waiting on a terminal host
+    /// that did not answer kept the API alive past 100 seconds after SIGTERM,
+    /// and systemd kills at 90.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_that_never_finishes_is_dropped_after_the_drain_budget() {
+        let (draining, drain_started) = watch::channel(false);
+        let drained = tokio::spawn(drain_within(
+            std::future::pending::<()>(),
+            drain_started,
+            Duration::from_secs(10),
+        ));
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert!(!drained.is_finished(), "no deadline before the stop signal");
+
+        draining.send_replace(true);
+        let signalled = Instant::now();
+        assert_eq!(drained.await.unwrap(), None);
+        let waited = signalled.elapsed();
+        assert!(
+            waited >= Duration::from_secs(10) && waited < Duration::from_secs(11),
+            "dropped at the budget, not before or long after: {waited:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn serving_that_finishes_inside_the_budget_keeps_its_result() {
+        let (draining, drain_started) = watch::channel(false);
+        draining.send_replace(true);
+        let served = drain_within(
+            async {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                7
+            },
+            drain_started,
+            Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(served, Some(7));
+    }
+
+    /// A signal future dropped before it finished is a stop to axum, which
+    /// drains on it, so it starts the deadline too rather than leaving the
+    /// drain unbounded.
+    #[tokio::test(start_paused = true)]
+    async fn a_signal_dropped_unsent_still_starts_the_deadline() {
+        let (draining, drain_started) = watch::channel(false);
+        drop(draining);
+        let started = Instant::now();
+        let served = drain_within(
+            std::future::pending::<()>(),
+            drain_started,
+            Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(served, None);
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_secs(10) && waited < Duration::from_secs(11),
+            "dropped at the budget: {waited:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_helper_that_ignores_its_stop_is_abandoned_after_its_budget() {
+        let helper = tokio::spawn(std::future::pending::<()>());
+        let abort = helper.abort_handle();
+        let started = Instant::now();
+        join_within("test helper", helper, Duration::from_secs(5)).await;
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_secs(5) && waited < Duration::from_secs(6),
+            "abandoned at the budget: {waited:?}"
+        );
+        tokio::task::yield_now().await;
+        assert!(abort.is_finished(), "the abandoned helper is aborted");
+    }
 
     /// ⚠️ A TYPO IN THE DEFAULT ORIGIN DEGRADES EVERY INSTALL AT ONCE.
     ///
