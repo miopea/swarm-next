@@ -566,6 +566,34 @@ pub(super) async fn set_task_reads(
     Ok(session_choice(enabled))
 }
 
+/// Whether Queen may grant a worker's command card (ADR 0158).
+pub(super) async fn queen_grants(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .queen_grants()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(session_choice(enabled))
+}
+
+/// The operator letting Queen grant command cards, or taking it back. It
+/// needs the operator's own credential: a worker on this machine must not be
+/// able to send its own cards to Queen with a loopback request.
+pub(super) async fn set_queen_grants(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetSessionChoiceRequest>,
+) -> Result<Response, ApiError> {
+    crate::auth::authorize_operator_credential(&state, &headers)?;
+    let enabled = task_store(&state)?
+        .set_queen_grants(request.enabled, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(session_choice(enabled))
+}
+
 #[cfg(test)]
 mod tests {
     use swarm_terminal::BackgroundWork;

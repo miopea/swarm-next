@@ -793,6 +793,25 @@ pub struct DecisionRequest {
     /// changed (ADR 0129).
     #[serde(default)]
     pub requested_script: Option<RequestedScript>,
+    /// Which of the operator's own reasons the asking worker said apply to
+    /// `requested_command` (ADR 0158). `None` means it said nothing, and such
+    /// a card is the operator's; `Some` and empty means none applies, which is
+    /// what lets Queen grant it while the operator's setting is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_reasons: Option<Vec<OperatorReason>>,
+    /// The Queen who granted `requested_command`, when she did rather than the
+    /// operator (ADR 0158). Written only by Swarm's Queen grant, so it is
+    /// evidence of who allowed the command, unlike `resolution_surface`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_by_queen: Option<WorkerId>,
+    /// Why Queen handed this card to the operator instead of granting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queen_handoff_reason: Option<String>,
+    /// A pending command card that is Queen's to grant now (ADR 0158). It is
+    /// shown to the operator but is not theirs to act on, so it is not counted
+    /// in Needs you.
+    #[serde(default)]
+    pub awaiting_queen: bool,
     /// Present when Swarm filed this request itself, because the worker's
     /// Claude reported that auto mode refused `requested_command` after the
     /// operator approved something on the task (ADR 0130). The worker wrote
@@ -875,6 +894,49 @@ pub struct RequestedScript {
     pub path: String,
     /// Lowercase hex sha256 of the file's bytes.
     pub sha256: String,
+}
+
+/// What keeps a command card with the operator even while Queen may grant
+/// cards (ADR 0158). The operator named exactly these on 2026-11-05.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorReason {
+    /// Creates, sets, rotates, revokes or exposes a credential or secret.
+    /// Authenticating through 1Password without printing one is not this.
+    Credentials,
+    /// Grants, removes or changes a permission or role.
+    Permissions,
+    /// Expected to cost more than $25, the limit the operator chose.
+    #[serde(rename = "spend_over_25_usd")]
+    SpendOver25Usd,
+    /// Deletes something that cannot be brought back.
+    IrreversibleDelete,
+}
+
+impl OperatorReason {
+    pub const ALL: [Self; 4] = [
+        Self::Credentials,
+        Self::Permissions,
+        Self::SpendOver25Usd,
+        Self::IrreversibleDelete,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Credentials => "credentials",
+            Self::Permissions => "permissions",
+            Self::SpendOver25Usd => "spend_over_25_usd",
+            Self::IrreversibleDelete => "irreversible_delete",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str() == value)
+    }
 }
 
 /// Why Swarm filed a command request on a worker's behalf (ADR 0130).

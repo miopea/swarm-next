@@ -14,6 +14,7 @@ import CheckGateSettings from "./CheckGateSettings";
 import WorkerModelSettings from "./WorkerModelSettings";
 import QueenReleasesSettings from "./QueenReleasesSettings";
 import TaskReadsSettings from "./TaskReadsSettings";
+import QueenGrantsSettings from "./QueenGrantsSettings";
 import WorkerRemoteControlSettings from "./WorkerRemoteControlSettings";
 import TerminalHistorySettings from "./TerminalHistorySettings";
 import { deviceClass } from "../presence/PresenceController";
@@ -470,6 +471,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
         </section>
       )}
       {shows("settings-queen-releases") && operatorToken && <QueenReleasesSettings operatorToken={operatorToken} />}
+      {shows("settings-queen-grants") && operatorToken && <QueenGrantsSettings operatorToken={operatorToken} />}
       {shows("settings-task-reads") && operatorToken && <TaskReadsSettings operatorToken={operatorToken} />}
       {shows("settings-check-gate") && operatorToken && <CheckGateSettings operatorToken={operatorToken} />}
       {shows("settings-answers") && operatorToken && <NativeAnswerResolution operatorToken={operatorToken} />}

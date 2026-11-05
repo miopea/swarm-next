@@ -409,6 +409,19 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             your approval on this task.
                           </p>
                         ) : null}
+                        {decision.awaiting_queen ? (
+                          // ADR 0158. Said on the card because it is why this
+                          // card is not counted in Needs you.
+                          <p className="decision-command-origin decision-command-queen">
+                            With Queen. The worker said none of your reasons applies (credentials,
+                            permissions, spend over $25, an irreversible delete), so Queen reviews it
+                            and may grant it. You can still answer it yourself.
+                          </p>
+                        ) : decision.queen_handoff_reason ? (
+                          <p className="decision-command-origin decision-command-queen">
+                            Queen handed this to you: {decision.queen_handoff_reason}
+                          </p>
+                        ) : null}
                         <pre><code>{decision.requested_command}</code></pre>
                         {decision.requested_script ? (
                           <dl className="decision-command-script">
@@ -496,7 +509,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 ) : decision.state === "withdrawn" ? (
                   <div className="decision-resolved"><p><strong>Withdrawn</strong>{decision.withdrawal_reason ? ` · ${decision.withdrawal_reason}` : ""}</p><span>No operator decision or approval was recorded.</span></div>
                 ) : (
-                  <div className="decision-resolved"><p><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
+                  <div className="decision-resolved"><p>{decision.granted_by_queen ? "Granted by Queen: " : null}<strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
                 )}
                 {decision.state === "pending" && submissionErrors[decision.id] && <p className="field-error" role="alert">{submissionErrors[decision.id]}</p>}
                 <details className="decision-argument">

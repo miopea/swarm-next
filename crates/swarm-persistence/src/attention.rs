@@ -115,12 +115,15 @@ fn pending_decisions(
     transaction: &Transaction<'_>,
 ) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {
     let clarifications = crate::decision_clarification::summaries_from(transaction)?;
-    let mut statement = transaction.prepare(
-        "SELECT id, created_at, urgency FROM decision_requests
-         WHERE state = 'pending' AND hive_id = (
+    // A command card Queen may grant is not the operator's to answer, so it
+    // is not in Needs you and does not notify them (ADR 0158).
+    let mut statement = transaction.prepare(concat!(
+        "SELECT d.id, d.created_at, d.urgency FROM decision_requests d
+         WHERE d.state = 'pending' AND d.hive_id = (
              SELECT hive_id FROM local_hive_identity WHERE singleton = 1
-         )",
-    )?;
+         ) AND NOT ",
+        crate::queen_grants::queen_card!("d")
+    ))?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

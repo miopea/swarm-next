@@ -4722,7 +4722,7 @@ impl TaskService {
                 block_own_active_task = Some((task_id, session_id));
             }
         }
-        let decision = self.store.create_decision_request(&NewDecisionRequest {
+        let request = NewDecisionRequest {
             requesting_worker_id: principal.worker_id,
             task_id: input.task_id,
             kind: input.kind,
@@ -4739,18 +4739,30 @@ impl TaskService {
             deadline: input.deadline,
             requested_command: input.requested_command.as_deref(),
             requested_script: input.requested_script.as_ref(),
-        })?;
+        };
+        // ADR 0158. Saying which of the operator's reasons apply is what a
+        // command card carries; any other request that says it is refused
+        // rather than silently ignored.
+        let decision = match &input.operator_reasons {
+            Some(reasons) => self.store.create_command_request(&request, reasons)?,
+            None => self.store.create_decision_request(&request)?,
+        };
         // ADR 0119 Decision 5. A worker that asks about its own Active task is
         // waiting on the answer, and Active work that is waiting holds its
         // slot: its next briefing and every message about its other tasks
         // queue behind it. Blocked on the decision, it frees the slot and
-        // comes back by itself when the operator answers.
+        // comes back by itself when the answer arrives.
         if let Some((task_id, session_id)) = block_own_active_task {
+            let who = if decision.awaiting_queen {
+                "Queen's"
+            } else {
+                "the operator's"
+            };
             self.store.transition_worker_task(
                 task_id,
                 TaskState::Blocked,
                 &format!(
-                    "Waiting on the operator's answer to \"{}\". It comes back to this worker by \
+                    "Waiting on {who} answer to \"{}\". It comes back to this worker by \
                      itself when they answer. Asked with swarm_request_decision; keep_working: true \
                      would have kept it Active.",
                     decision.title
@@ -4759,6 +4771,53 @@ impl TaskService {
             )?;
         }
         Ok(decision)
+    }
+
+    /// Queen grants a worker's command card that is hers to grant (ADR 0158).
+    ///
+    /// # Errors
+    /// `NotAuthorized` for anyone but Queen; the store says why a card is not
+    /// hers, or is already answered.
+    pub fn grant_command_as_queen(
+        &self,
+        principal: AgentPrincipal,
+        id: DecisionRequestId,
+        note: &str,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        require_queen(principal)?;
+        Ok(self
+            .store
+            .grant_command_as_queen(principal.worker_id, id, note)?)
+    }
+
+    /// Queen hands a command card she will not grant to the operator.
+    ///
+    /// # Errors
+    /// `NotAuthorized` for anyone but Queen; the store says why a card is not
+    /// hers, or is already answered.
+    pub fn hand_command_to_operator(
+        &self,
+        principal: AgentPrincipal,
+        id: DecisionRequestId,
+        reason: &str,
+        now: i64,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        require_queen(principal)?;
+        Ok(self
+            .store
+            .hand_command_to_operator(principal.worker_id, id, reason, now)?)
+    }
+
+    /// The command cards waiting for Queen, oldest first.
+    ///
+    /// # Errors
+    /// `NotAuthorized` for anyone but Queen, or a persistence failure.
+    pub fn queen_command_cards(
+        &self,
+        principal: AgentPrincipal,
+    ) -> Result<Vec<DecisionRequest>, ApplicationError> {
+        require_queen(principal)?;
+        Ok(self.store.queen_command_cards()?)
     }
 
     /// Answers a pending interview as the authenticated local operator.
@@ -5163,6 +5222,11 @@ pub struct DecisionRequestInput {
     /// The local script the command runs, hashed by the caller when the
     /// request is filed (ADR 0129).
     pub requested_script: Option<swarm_domain::RequestedScript>,
+    /// Which of the operator's reasons the asker says apply to its command
+    /// (ADR 0158). `Some(empty)` says none does, which makes the card Queen's
+    /// while the operator lets her grant; `None` says nothing, and the card
+    /// stays the operator's. Only a command card may carry it.
+    pub operator_reasons: Option<Vec<swarm_domain::OperatorReason>>,
     /// A worker asking about its own Active task blocks that task on the
     /// answer unless this is set (ADR 0119). Ignored for Queen and for work
     /// that is not Active.
@@ -7588,6 +7652,72 @@ mod tests {
             .expect("nothing was left behind, so the draft can still be made ready");
     }
 
+    /// ADR 0158: only Queen grants, hands on or lists command cards. A worker
+    /// is refused here, before the store is asked.
+    #[test]
+    fn only_queen_grants_hands_on_or_lists_command_cards() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Merge it");
+        service.store.set_queen_grants(true, 10).unwrap();
+        let mut input = decision_input(Some(task), DecisionRequestKind::Approval, "Run it", &[""]);
+        input.allowed_actions = Vec::new();
+        input.requested_command = Some("gh pr merge 12 --squash".into());
+        input.operator_reasons = Some(Vec::new());
+        input.keep_working = true;
+        let card = service.create_decision(principal, &input).unwrap();
+        assert!(card.awaiting_queen);
+
+        assert!(matches!(
+            service.grant_command_as_queen(principal, card.id, "Mine."),
+            Err(ApplicationError::NotAuthorized)
+        ));
+        assert!(matches!(
+            service.hand_command_to_operator(principal, card.id, "Theirs.", 20),
+            Err(ApplicationError::NotAuthorized)
+        ));
+        assert!(matches!(
+            service.queen_command_cards(principal),
+            Err(ApplicationError::NotAuthorized)
+        ));
+
+        let queen = AgentPrincipal::from(&queen);
+        assert_eq!(service.queen_command_cards(queen).unwrap().len(), 1);
+        let granted = service
+            .grant_command_as_queen(queen, card.id, "Reviewed the merge.")
+            .unwrap();
+        assert_eq!(granted.granted_by_queen, Some(queen.worker_id));
+    }
+
+    /// ADR 0119 with a card that is Queen's: the worker's own Active task
+    /// waits on her answer, and its note says whose answer it waits on.
+    #[test]
+    fn a_task_blocked_on_a_card_with_queen_says_it_waits_on_queen() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Merge it");
+        service.store.set_queen_grants(true, 10).unwrap();
+        let mut input = decision_input(Some(task), DecisionRequestKind::Approval, "Run it", &[""]);
+        input.allowed_actions = Vec::new();
+        input.requested_command = Some("gh pr merge 12 --squash".into());
+        input.operator_reasons = Some(Vec::new());
+        service.create_decision(principal, &input).unwrap();
+        let blocked = service.store.get_task(task).unwrap();
+        assert_eq!(blocked.state, TaskState::Blocked);
+        let history = service.store.list_task_activity(task, 50).unwrap().events;
+        assert!(
+            history
+                .iter()
+                .any(|entry| entry.note.contains("Waiting on Queen's answer")),
+            "{history:?}"
+        );
+        let wait = blocked.wait.expect("the task records what it waits on");
+        assert_eq!(wait.kind, swarm_domain::TaskWaitKind::Decision);
+        assert!(
+            wait.needs.starts_with("Queen answers \"Run it\""),
+            "the board names who answers: {}",
+            wait.needs
+        );
+    }
+
     #[test]
     fn keep_working_keeps_the_task_active_and_queen_is_never_blocked() {
         let (service, queen, worker) = setup();
@@ -8000,6 +8130,7 @@ mod tests {
             deadline: None,
             requested_command: None,
             requested_script: None,
+            operator_reasons: None,
             keep_working: false,
         }
     }
@@ -8578,6 +8709,7 @@ mod tests {
                     deadline: None,
                     requested_command: None,
                     requested_script: None,
+                    operator_reasons: None,
                     keep_working: false,
                 },
             ),

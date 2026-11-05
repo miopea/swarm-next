@@ -1415,11 +1415,18 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Coordina
             .join(" | ");
         format!("Answers: {answers}.")
     };
+    // ADR 0158. Queen's grant is hers, and the worker is told so: a note
+    // labelled the operator's would read as their ruling.
+    let author = if delivery.granted_by_queen {
+        "Queen granted this; the operator did not see it. Queen's note:"
+    } else {
+        "Operator note:"
+    };
     CoordinationMessage {
         cadence: Cadence::Immediate,
         busy: BusyPolicy::Wait,
         bytes: format!(
-            "[Swarm decision {} resolved] {}{} Operator note: {} Use swarm_list_decisions for the full request context.\r",
+            "[Swarm decision {} resolved] {}{} {author} {} Use swarm_list_decisions for the full request context.\r",
             delivery.decision_id,
             outcome,
             command_grant_sentence(delivery),
@@ -1710,6 +1717,16 @@ pub(super) fn queen_review_focus_message(
     if store.queen_releases()? {
         let release = format!("{}\n\n", crate::agent::QUEEN_RELEASE_GUIDANCE);
         message.bytes.splice(0..0, release.bytes());
+    }
+    // ADR 0158, for the same reason: the operator turning it on reaches a
+    // running Queen here. The count says whether this review owes any.
+    if store.queen_grants()? {
+        let waiting = store.queen_command_cards()?.len();
+        let grants = format!(
+            "{} Command cards waiting for you now: {waiting}.\n\n",
+            crate::agent::QUEEN_GRANT_GUIDANCE
+        );
+        message.bytes.splice(0..0, grants.bytes());
     }
     if !ids.is_empty() {
         let focus = format!(
@@ -3912,6 +3929,7 @@ mod tests {
                     answers: std::collections::BTreeMap::default(),
                     command: CommandGrantOutcome::NotRequested,
                     approval: false,
+                    granted_by_queen: false,
                 })
                 .cadence,
             ),
@@ -4032,6 +4050,7 @@ mod tests {
                     answers: std::collections::BTreeMap::default(),
                     command: CommandGrantOutcome::NotRequested,
                     approval: false,
+                    granted_by_queen: false,
                 }),
             ),
             (
@@ -4314,6 +4333,16 @@ mod tests {
                 .unwrap();
         assert!(released.starts_with("CURRENT REVIEW FOCUS:"));
         assert!(released.contains(crate::agent::QUEEN_RELEASE_GUIDANCE));
+        // ADR 0158: the same for "Queen grants command cards", with how many
+        // cards this review owes.
+        assert!(!released.contains(crate::agent::QUEEN_GRANT_GUIDANCE));
+        store.set_queen_grants(true, 201).unwrap();
+        let granting =
+            String::from_utf8(queen_review_focus_message(&store, &delivery).unwrap().bytes)
+                .unwrap();
+        assert!(granting.starts_with("CURRENT REVIEW FOCUS:"));
+        assert!(granting.contains(crate::agent::QUEEN_GRANT_GUIDANCE));
+        assert!(granting.contains("Command cards waiting for you now: 0."));
         let missing = QueenAutomationDelivery {
             worker_id: WorkerId::new(),
             ..delivery

@@ -1310,6 +1310,20 @@ export type DecisionRequest = {
   resolution_answers?: Record<string, string[]>;
   resolution_note: string;
   resolved_by_operator_id: string | null;
+  /**
+   * Which of the operator's reasons the asking worker said apply to its
+   * command (ADR 0158). Empty says none; absent says nothing.
+   */
+  operator_reasons?: ("credentials" | "permissions" | "spend_over_25_usd" | "irreversible_delete")[] | null;
+  /** Queen granted this command card, not the operator (ADR 0158). */
+  granted_by_queen?: string | null;
+  /** Why Queen handed this card to the operator instead of granting it. */
+  queen_handoff_reason?: string | null;
+  /**
+   * Pending and Queen's to grant right now, so it is not in the operator's
+   * Needs you. They can still answer it themselves.
+   */
+  awaiting_queen?: boolean;
   created_at: number;
   updated_at: number;
   resolved_at: number | null;
@@ -2879,6 +2893,23 @@ export async function setTaskReads(operatorToken: string, enabled: boolean): Pro
     body: JSON.stringify({ enabled }),
   });
   return response.json() as Promise<TaskReads>;
+}
+
+/** Whether Queen may grant a worker's command card for reviewed work (ADR 0158). */
+export type QueenGrants = { enabled: boolean };
+
+export async function fetchQueenGrants(operatorToken: string, signal?: AbortSignal): Promise<QueenGrants> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/queen-grants", { signal });
+  return response.json() as Promise<QueenGrants>;
+}
+
+export async function setQueenGrants(operatorToken: string, enabled: boolean): Promise<QueenGrants> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/queen-grants", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<QueenGrants>;
 }
 
 /** Days of terminal history a Hive keeps (ADR 0118). */

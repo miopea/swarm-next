@@ -304,6 +304,9 @@ pub struct DecisionDispatch {
     pub command: CommandGrantOutcome,
     /// Whether the request was filed as an approval.
     pub approval: bool,
+    /// Queen granted this command card, not the operator (ADR 0158), so the
+    /// note the worker reads is hers.
+    pub granted_by_queen: bool,
 }
 
 /// A grant that is unspent, whose task is still on the board, and whose
@@ -455,18 +458,20 @@ pub enum RefusedCommandFiling {
 }
 
 impl TaskStore {
-    /// Returns the workers with an unresolved explicit operator decision.
+    /// Returns the workers with an unresolved explicit operator decision. A
+    /// command card that is Queen's to grant is hers, not theirs (ADR 0158).
     ///
     /// # Errors
     /// Returns database or persisted-identity failures.
     pub fn workers_awaiting_operator(&self) -> Result<HashSet<WorkerId>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(concat!(
             "SELECT DISTINCT d.requesting_worker_id
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
-             WHERE d.state = 'pending'",
-        )?;
+             WHERE d.state = 'pending' AND NOT ",
+            crate::queen_grants::queen_card!("d")
+        ))?;
         statement
             .query_map([], |row| row.get::<_, String>(0))?
             .map(|result| -> Result<WorkerId, TaskStoreError> {
@@ -563,14 +568,7 @@ impl TaskStore {
         &self,
         request: &NewDecisionRequest<'_>,
     ) -> Result<DecisionRequest, TaskStoreError> {
-        validate_new_request(request)?;
-        let id = DecisionRequestId::new();
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        insert_decision_request(&transaction, request, id)?;
-        transaction.commit()?;
-        drop(connection);
-        self.get_decision_request(id)
+        create_with_reasons_option(self, request, None)
     }
 
     /// Puts Swarm's grant button up for a command Claude's auto mode refused,
@@ -650,7 +648,7 @@ impl TaskStore {
         };
         validate_new_request(&request)?;
         let id = DecisionRequestId::new();
-        insert_decision_request(&transaction, &request, id)?;
+        insert_decision_request(&transaction, &request, id, None)?;
         // The session is the one that was refused, already checked above as
         // this worker's and running, rather than whichever the insert found.
         transaction.execute(
@@ -1214,34 +1212,7 @@ impl TaskStore {
             // resolution_action to the action being written, which is the same
             // string by construction and would therefore have granted on ANY
             // resolution -- including a refusal.
-            //
-            // A decision with no task grants nothing: a grant dies with its
-            // task, and one with nothing to die with is a standing rule.
-            //
-            // Nor does one whose task has left the board, or whose asking
-            // session has ended: the grant is for that task and the session
-            // that asked (ADR 0129), and a later session would inherit a
-            // permission it never requested. Either way the resolution is
-            // delivered as "no grant was made", rather than as a grant that
-            // could never run.
-            transaction.execute(
-                "INSERT INTO decision_command_grants (
-                     decision_id, task_id, worker_id, command, script_path, script_sha256,
-                     session_id
-                 )
-                 SELECT d.id, d.task_id, d.requesting_worker_id, d.requested_command,
-                        d.requested_script_path, d.requested_script_sha256,
-                        d.requested_session_id
-                 FROM decision_requests d
-                 WHERE d.id = ?1
-                   AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = d.task_id
-                                 AND t.removed_at IS NULL
-                                 AND t.state NOT IN ('completed','abandoned'))
-                   AND EXISTS (SELECT 1 FROM worker_sessions s
-                               WHERE s.session_id = d.requested_session_id
-                                 AND s.ended_at IS NULL)",
-                [id.to_string()],
-            )?;
+            mint_command_grant(&transaction, id)?;
         }
         // ⚠️ THE PARK, AND IT FIRES ONLY ON THE OPERATOR'S OWN CHOICE. Same
         // shape as the grant above and for the same reason: an EQUALITY check
@@ -1359,7 +1330,7 @@ impl TaskStore {
                         d.requested_command,
                         EXISTS (SELECT 1 FROM decision_command_grants g
                                 WHERE g.decision_id = d.id),
-                        d.kind = 'approval'
+                        d.kind = 'approval', d.granted_by_queen IS NOT NULL
                  FROM decision_deliveries dd
                  JOIN decision_requests d ON d.id = dd.decision_id
                  JOIN worker_sessions ws ON ws.worker_id = dd.worker_id AND ws.ended_at IS NULL
@@ -1387,6 +1358,7 @@ impl TaskStore {
                             (Some(command), false) => CommandGrantOutcome::NotGranted { command },
                         },
                         approval: row.get(8)?,
+                        granted_by_queen: row.get(9)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?
@@ -1647,11 +1619,76 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     Ok(())
 }
 
+/// Files a command card carrying what its worker said of the operator's
+/// reasons, as stored by `queen_grants::encode_reasons` (ADR 0158).
+pub(crate) fn create_with_reasons(
+    store: &TaskStore,
+    request: &NewDecisionRequest<'_>,
+    reasons: &str,
+) -> Result<DecisionRequest, TaskStoreError> {
+    create_with_reasons_option(store, request, Some(reasons))
+}
+
+fn create_with_reasons_option(
+    store: &TaskStore,
+    request: &NewDecisionRequest<'_>,
+    reasons: Option<&str>,
+) -> Result<DecisionRequest, TaskStoreError> {
+    validate_new_request(request)?;
+    let id = DecisionRequestId::new();
+    let mut connection = store.connection()?;
+    let transaction = connection.transaction()?;
+    insert_decision_request(&transaction, request, id, reasons)?;
+    transaction.commit()?;
+    drop(connection);
+    store.get_decision_request(id)
+}
+
+/// Mints the grant a resolution with Swarm's grant button carries (ADR 0129),
+/// whoever pressed it: the operator, or Queen while the operator lets her
+/// (ADR 0158).
+///
+/// A decision with no task grants nothing: a grant dies with its task, and
+/// one with nothing to die with is a standing rule. Nor does one whose task
+/// has left the board, or whose asking session has ended: the grant is for
+/// that task and the session that asked, and a later session would inherit a
+/// permission it never requested. Either way the resolution is delivered as
+/// "no grant was made", rather than as a grant that could never run.
+pub(crate) fn mint_command_grant(
+    transaction: &rusqlite::Transaction<'_>,
+    id: DecisionRequestId,
+) -> Result<(), TaskStoreError> {
+    transaction.execute(
+        "INSERT INTO decision_command_grants (
+             decision_id, task_id, worker_id, command, script_path, script_sha256,
+             session_id
+         )
+         SELECT d.id, d.task_id, d.requesting_worker_id, d.requested_command,
+                d.requested_script_path, d.requested_script_sha256,
+                d.requested_session_id
+         FROM decision_requests d
+         WHERE d.id = ?1
+           AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = d.task_id
+                         AND t.removed_at IS NULL
+                         AND t.state NOT IN ('completed','abandoned'))
+           AND EXISTS (SELECT 1 FROM worker_sessions s
+                       WHERE s.session_id = d.requested_session_id
+                         AND s.ended_at IS NULL)",
+        [id.to_string()],
+    )?;
+    Ok(())
+}
+
 /// Writes one validated request, its inbox event and its notifications.
+///
+/// `operator_reasons` is what a command card's worker said of the operator's
+/// reasons (ADR 0158); `None` for every other request. A card that is Queen's
+/// to grant notifies nobody here: it is not the operator's to answer.
 fn insert_decision_request(
     transaction: &rusqlite::Transaction<'_>,
     request: &NewDecisionRequest<'_>,
     id: DecisionRequestId,
+    operator_reasons: Option<&str>,
 ) -> Result<(), TaskStoreError> {
     let questions = serde_json::to_string(request.questions)
         .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
@@ -1704,14 +1741,16 @@ fn insert_decision_request(
             id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
             risk, evidence, suggested_action, allowed_actions, deadline, questions,
             summary, requested_command, operator_action_labels,
-            requested_script_path, requested_script_sha256, requested_session_id
+            requested_script_path, requested_script_sha256, requested_session_id,
+            operator_reasons
          )
          SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
                 ?17, ?18,
                 CASE WHEN ?15 IS NOT NULL THEN (
                     SELECT s.session_id FROM worker_sessions s
                     WHERE s.worker_id = w.id AND s.ended_at IS NULL
-                ) END
+                ) END,
+                CASE WHEN ?15 IS NOT NULL THEN ?19 END
          FROM worker_profiles w
          JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
          WHERE w.id = ?2
@@ -1739,13 +1778,21 @@ fn insert_decision_request(
             request
                 .requested_script
                 .map(|script| script.sha256.as_str()),
+            operator_reasons,
         ],
     )?;
     if inserted == 0 {
         return Err(TaskStoreError::WorkerNotFound);
     }
     insert_control_room_event(transaction, ControlRoomEventKind::DecisionsChanged)?;
-    super::notifications::enqueue_decision_notifications(transaction, id, request.urgency, now)?;
+    if !crate::queen_grants::is_queen_card(transaction, id)? {
+        super::notifications::enqueue_decision_notifications(
+            transaction,
+            id,
+            request.urgency,
+            now,
+        )?;
+    }
     Ok(())
 }
 
@@ -2229,7 +2276,7 @@ pub(super) fn decision_inbox_sql() -> String {
     )
 }
 
-const DECISION_COLUMNS: &str =
+pub(crate) const DECISION_COLUMNS: &str = concat!(
     "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
                     reason, risk, evidence, suggested_action, allowed_actions, deadline,
                     state, resolution_action, resolution_note, resolved_by_operator_id,
@@ -2281,7 +2328,12 @@ const DECISION_COLUMNS: &str =
                                          ORDER BY depth DESC LIMIT 1)
                             AND t.state = 'resolved')),
                      d.requested_script_path, d.requested_script_sha256,
-                     d.refusal_reason, d.refusal_follows_decision_id";
+                     d.refusal_reason, d.refusal_follows_decision_id,
+                     -- QUEEN'S CARDS (ADR 0158), appended for the same reason.
+                     d.operator_reasons, d.granted_by_queen, d.queen_handoff_reason,
+                     d.state = 'pending' AND ",
+    crate::queen_grants::queen_card!("d")
+);
 
 /// The approval a refused command follows: the latest action the operator
 /// pressed on the worker's task in the refused session, or why there is none
@@ -2447,6 +2499,13 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
             .zip(row.get::<_, Option<String>>(39)?)
             .map(|(path, sha256)| swarm_domain::RequestedScript { path, sha256 }),
         command_refusal: command_refusal_from_row(row)?,
+        operator_reasons: crate::queen_grants::decode_reasons(row.get(42)?),
+        granted_by_queen: row
+            .get::<_, Option<String>>(43)?
+            .map(|value| parse_id(&value))
+            .transpose()?,
+        queen_handoff_reason: row.get(44)?,
+        awaiting_queen: row.get::<_, Option<bool>>(45)?.unwrap_or(false),
         // Worked out after the read, over every row at once: see `read_decisions`.
         discharge: None,
     })
