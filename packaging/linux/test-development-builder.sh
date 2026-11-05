@@ -18,12 +18,13 @@ trap 'rm -rf -- "$scratch"' EXIT HUP INT TERM
 checkout="$scratch/checkout"
 stubs="$scratch/stubs"
 mkdir -p "$checkout/packaging/linux" "$checkout/packaging/systemd-user" \
-  "$checkout/crates/swarm-terminal/src" "$stubs"
+  "$checkout/crates/swarm-terminal/src" "$checkout/scripts" "$stubs"
 cp "$repo_root/Cargo.toml" "$checkout/"
 cp "$repo_root/crates/swarm-terminal/src/ipc.rs" "$checkout/crates/swarm-terminal/src/"
 cp "$repo_root/packaging/linux/build-development-release.sh" "$repo_root/packaging/linux/swarm-package" \
   "$checkout/packaging/linux/"
 cp "$repo_root/packaging/systemd-user/"*.in "$checkout/packaging/systemd-user/"
+cp "$repo_root/scripts/prune-target.py" "$checkout/scripts/"
 # The engine fingerprint runs the real `cargo tree`; it has its own test.
 printf '#!/bin/sh\necho test-engine-build-id\n' > "$checkout/packaging/linux/worker-engine-build-id.sh"
 git -C "$checkout" init -q
@@ -119,4 +120,32 @@ build "$scratch/a-file/out"
 grep -q '^swarm-build: could not prepare the bundle directory in .*; nothing was compiled$' "$scratch/stderr" \
   || fail "a prepare failure did not say nothing was compiled"
 
+
+# 6. The builder prunes target/ before compiling, which is what keeps the
+# checkout a reload builds from under its bound.
+stale="$checkout/target/release/.fingerprint/swarm-api-0123456789abcdef"
+mkdir -p "$stale"
+printf 'fingerprint\n' > "$stale/bin-swarm-api"
+touch -d '2026-01-01 00:00:00' "$stale/bin-swarm-api" "$stale"
+SWARM_TARGET_LIMIT_GIB=0.000001
+export SWARM_TARGET_LIMIT_GIB
+build "$scratch/out"
+unset SWARM_TARGET_LIMIT_GIB
+[ "$build_status" -eq 0 ] || fail "a build that pruned exited $build_status"
+[ ! -e "$stale" ] || fail "the builder left a stale build unit in a target/ over its bound"
+[ "$(wc -l < "$scratch/stdout")" -eq 1 ] || fail "pruning wrote to stdout, which carries only the bundle path"
+
+# 7. A prune that fails warns and builds anyway: target/ is a cache, and a
+# reload must not fail because one could not be trimmed.
+cp "$checkout/scripts/prune-target.py" "$scratch/prune-target.py"
+printf 'import sys\nsys.exit(3)\n' > "$checkout/scripts/prune-target.py"
+build "$scratch/out"
+cp "$scratch/prune-target.py" "$checkout/scripts/prune-target.py"
+[ "$build_status" -eq 0 ] || fail "a failed prune failed the build with exit $build_status"
+[ -f "$marks/compiled" ] || fail "a failed prune stopped the build compiling"
+grep -q '^prune-target: exited 3; target/ was not pruned$' "$scratch/stderr" \
+  || fail "a failed prune did not say so"
+! grep -q '^swarm-build:' "$scratch/stderr" || fail "a failed prune was reported as a build failure"
+
 echo "development builder tells a write failure from a compile failure"
+echo "development builder prunes target/, and a prune that fails does not fail it"

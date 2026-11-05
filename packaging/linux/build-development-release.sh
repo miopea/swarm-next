@@ -42,6 +42,13 @@ trap finish EXIT
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
+# Keep target/ under its bound before adding a build to it (docs/developing.md).
+# A reload must not fail because a cache could not be trimmed, and its output
+# goes to stderr because stdout is the bundle path.
+# It runs where cargo runs, so a relative CARGO_TARGET_DIR names the same place.
+(cd "$repo_root" && python3 scripts/prune-target.py) >&2 \
+  || echo "prune-target: exited $?; target/ was not pruned" >&2
+
 phase=compile
 (cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" cargo build --release --locked --workspace) >&2
 (cd "$repo_root" && VITE_SWARM_BUILD_VERSION="$version" "${SWARM_PNPM_BIN:-pnpm}" --dir web build) >&2
