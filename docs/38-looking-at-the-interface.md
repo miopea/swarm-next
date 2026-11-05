@@ -207,6 +207,13 @@ all have to tell one story.
     # then, at 1440x900, select Orchard Web in the roster:
     http://127.0.0.1:5199/harness.html?surface=app&screen=workers
 
+**A capture names the release it was taken from.** The harness config reads the
+version from the workspace `Cargo.toml`, and the fixtures answer `/health` and
+the Updates card with it, so the rail's Runtime label is this checkout's. It
+also loads the app's two fonts and `xterm.css` in `main.tsx`'s order, which a
+test holds it to: the README pictures were once taken without them, in a system
+font with an unstyled terminal, and labelled Runtime 1.0.0.
+
 **Two Needs-you surfaces exist, and the difference matters.** `needs-you` is
 transcribed from the operator's real screen, which is what makes it useful for
 debugging and unpublishable: it carries their name, a real reply, real project

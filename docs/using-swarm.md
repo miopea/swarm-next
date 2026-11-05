@@ -10,33 +10,36 @@ at.
 
 ## The screens
 
-The rail on the left is the whole product. You will see four of these; the fifth
-appears only once you federate.
+The rail on the left is the whole product. You will see five of these; the
+sixth appears only once you federate.
 
 **Needs you** — the one queue. Everything waiting on your judgment: a worker's
 question, an email nobody has answered, a Queen review that stopped. Routine
 work never appears here. When it is empty, nothing needs you, and that is the
 answer rather than an absence of one.
 
-![Needs you: one worker question with its three answers, and nothing else competing for attention.](images/needs-you.png)
+![Needs you: one worker question with its answers, the one the worker recommends marked, and nothing else in the queue.](images/needs-you.png)
 
 **Tasks** — the board. Work that survives sessions and restarts. A task carries
 its own description, its state, and who owns it. Tasks come from you, from Jira,
 from an imported email, or from a worker that found follow-up work.
 
-![The task board: five tasks in progress, assigned, ready, review and draft, each showing its owner and the single action available next.](images/tasks.png)
+![The task board: active work in progress, assigned, blocked and in review, each showing its worker and the single action available next.](images/tasks.png)
+
+**Queues** — the same work, grouped by who has the next move: you, Queen or a
+worker, then what is blocked on something else, waiting to ship, or parked on
+purpose. The board says what work exists; Queues says where it is waiting.
 
 **Workers** — the roster and the terminals. Every worker is a real provider
 process in a real repository. Selecting one shows its live terminal; you can
 type into it exactly as you would in a shell.
 
-![The worker roster: four workers buzzing, resting and sleeping, each with the work it holds.](images/workers.png)
+![The Workers screen: the roster on the left, and Orchard Web's terminal working through a redirect loop.](images/workers.png)
 
-The terminal is empty in that picture because these screenshots are taken
-against fixtures rather than a running Hive — there is no real session behind
-them, deliberately. A terminal is an xterm canvas, so unlike the rest of a
-screenshot its contents cannot be redacted; see
-[docs/38](38-looking-at-the-interface.md).
+That session never happened. These screenshots are taken against fixtures
+rather than a running Hive, and the transcript is invented, deliberately: a
+terminal is an xterm canvas, so unlike the rest of a screenshot its contents
+cannot be redacted; see [docs/38](38-looking-at-the-interface.md).
 
 **Apiary** — other Hives. It is not in the rail at all until this Hive
 federates, so on one machine there is nothing here to ignore.

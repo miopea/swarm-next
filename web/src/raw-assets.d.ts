@@ -24,3 +24,9 @@ declare module "*.tsx?raw" {
   const source: string;
   export default source;
 }
+
+/** The workspace manifest, read by the harness test for its version. */
+declare module "*.toml?raw" {
+  const source: string;
+  export default source;
+}

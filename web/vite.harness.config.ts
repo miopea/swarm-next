@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { workspaceVersion } from "./src/harness/workspaceVersion";
 
 /**
  * The harness runs on a config that CANNOT reach a Hive.
@@ -69,6 +71,14 @@ function harnessEntryOnly(): Plugin {
 
 export default defineConfig({
   plugins: [react(), harnessEntryOnly()],
+  // The fixtures answer /health and the Updates card with this checkout's own
+  // version, so a capture names the release it shows rather than a number
+  // written into the fixture once and left to age.
+  define: {
+    "import.meta.env.VITE_SWARM_HARNESS_VERSION": JSON.stringify(
+      workspaceVersion(readFileSync(new URL("../Cargo.toml", import.meta.url), "utf8")),
+    ),
+  },
   // Without this, vite's SPA fallback serves index.html for EVERY unmatched
   // path — so blocking "/" and "/index.html" left the production app reachable
   // at /health, /anything, or a typo. Measured: /health returned the product's
