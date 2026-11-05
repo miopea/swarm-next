@@ -1,6 +1,7 @@
 import { demoDecision, demoTasks, demoWorkers } from "./productFixtures";
 import type { TaskActivityPage } from "../api";
 import { fixtureSettingsRestart } from "./SettingsRestartFixture";
+import { nextMinor } from "./workspaceVersion";
 
 /**
  * Enough of a Hive for the real App to mount against.
@@ -20,6 +21,14 @@ import { fixtureSettingsRestart } from "./SettingsRestartFixture";
  * because it IS the real shell.
  */
 const now = Math.floor(Date.now() / 1000);
+
+/**
+ * The release this checkout is, read from Cargo.toml by vite.harness.config.ts,
+ * so the rail's Runtime label and the Updates card name the release a capture
+ * was taken from. "1.0.0" only where the harness config did not run.
+ */
+const VERSION = import.meta.env.VITE_SWARM_HARNESS_VERSION ?? "1.0.0";
+const OFFERED_VERSION = nextMinor(VERSION);
 
 export function hiveFixture(path: string, query = new URLSearchParams()): unknown | undefined {
   if (path === "/api/v1/decisions" && new URLSearchParams(window.location.search).get("decisionHistory") === "1") return [
@@ -157,14 +166,14 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
   const updatesPending = new URLSearchParams(window.location.search).get("updates") === "pending";
   switch (path) {
     case "/health":
-      return { status: "ok", version: "1.0.0", degraded: [], ...(updatesPending ? { worker_engine_build_id: "engine-new" } : {}) };
+      return { status: "ok", version: VERSION, degraded: [], ...(updatesPending ? { worker_engine_build_id: "engine-new" } : {}) };
     case "/api/v1/runtime/terminal-host":
       return updatesPending
-        ? { type: "host_status", status: { protocol_version: 17, host_version: "1.0.0", host_build_id: "engine-old", draining: false, running_sessions: 8, retained_sessions: 8 } }
+        ? { type: "host_status", status: { protocol_version: 17, host_version: VERSION, host_build_id: "engine-old", draining: false, running_sessions: 8, retained_sessions: 8 } }
         : undefined;
     case "/api/v1/runtime/development":
       return updatesPending
-        ? { enabled: true, version: "1.0.0", state: "idle", reload_available: true, deployed_source_revision: "e46308f51643", source_revision: "f15be478a2c1", source_dirty: false, deployed_source_published: true }
+        ? { enabled: true, version: VERSION, state: "idle", reload_available: true, deployed_source_revision: "e46308f51643", source_revision: "f15be478a2c1", source_dirty: false, deployed_source_published: true }
         : undefined;
     // Answering this at all is what unlocks the app: App.tsx restores a browser
     // session before it will render anything but the token form.
@@ -187,14 +196,14 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         auto_install: new URLSearchParams(window.location.search).get("autoInstall") !== "off",
         // ?apiaryRequires=autoInstall shows the card as a Hive whose Apiary locks it.
         auto_install_required_by_apiary: new URLSearchParams(window.location.search).get("apiaryRequires") === "autoInstall",
-        current_version: "1.16.4",
+        current_version: VERSION,
         development_build: false,
         last_checked_at: now - 600,
         last_outcome: protocolOffer ? "offered" : "current",
         offer: protocolOffer ? {
-          version: "1.17.0",
+          version: OFFERED_VERSION,
           protocol: "18",
-          artifact_url: "https://releases.example.invalid/swarm-1.17.0-linux-x86_64.tar.gz",
+          artifact_url: `https://releases.example.invalid/swarm-${OFFERED_VERSION}-linux-x86_64.tar.gz`,
           artifact_sha256: "0".repeat(64),
           artifact_bytes: 41_000_000,
           worker_engine_build_id: "1".repeat(64),

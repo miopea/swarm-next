@@ -1,6 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+// The app's fonts and terminal stylesheet, in src/main.tsx's order, so the
+// components render here as they do in the app. Without them every capture fell
+// back to a system font and an unstyled terminal (harnessEntry.test.ts).
+import "@fontsource-variable/atkinson-hyperlegible-mono";
+import "@fontsource-variable/atkinson-hyperlegible-next";
+import "@xterm/xterm/css/xterm.css";
 import "../styles.css";
 import { hiveFixture } from "./hiveFixture";
 import { FixtureWebSocket, fixtureTranscript } from "./terminalFixture";
