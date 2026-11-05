@@ -14,12 +14,39 @@ worker_engine_build_id=$(sh "$repo_root/packaging/linux/worker-engine-build-id.s
 
 output=${1:?development output directory is required}
 bundle="$output/swarm-$version-linux-x86_64"
+
+# WRITING THE BUNDLE IS NOT COMPILING IT. On 2026-11-05 the disk under the
+# output filled while the compiled binaries were being copied in, and the
+# reload said "the development build did not compile" about a build that had.
+# A failure while preparing or writing the bundle exits 73 (EX_CANTCREAT) and
+# says which; nothing else exits 73, so swarm-package can tell the two apart.
+# The failing command's own error, such as the disk being full, is the line
+# just before the "swarm-build:" summary.
+cannot_write=73
+phase=prepare
+finish() {
+  status=$?
+  [ "$status" -ne 0 ] || return 0
+  case "$phase" in
+    prepare)
+      echo "swarm-build: could not prepare the bundle directory in $output; nothing was compiled" >&2
+      exit "$cannot_write";;
+    write)
+      echo "swarm-build: the build compiled, but writing its bundle to $output failed" >&2
+      exit "$cannot_write";;
+    *) [ "$status" -ne "$cannot_write" ] || exit 1;;
+  esac
+}
+trap finish EXIT
+
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
+phase=compile
 (cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" cargo build --release --locked --workspace) >&2
 (cd "$repo_root" && VITE_SWARM_BUILD_VERSION="$version" "${SWARM_PNPM_BIN:-pnpm}" --dir web build) >&2
 [ -f "$repo_root/web/dist/index.html" ] || { echo "compiled web assets are missing" >&2; exit 1; }
+phase='write'
 cp "$repo_root/target/release/swarm-api" "$bundle/bin/"
 cp "$repo_root/target/release/swarm-terminal-host" "$bundle/bin/"
 cp "$repo_root/target/release/swarmctl" "$bundle/bin/"

@@ -231,6 +231,8 @@ function developmentFailureMessage(runtime?: DevelopmentRuntime): string {
   switch (runtime?.failure_reason) {
     case "build":
       return `The development working copy did not compile. The current release is still running.${said}`;
+    case "write-bundle":
+      return `The development build could not write its bundle, so nothing was installed. The current release is still running.${said}`;
     case "install":
       return `The development build compiled, but could not be installed. The current release is still running.${said}`;
     case "protocol-change":
