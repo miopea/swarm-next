@@ -92,6 +92,11 @@ for argument in "$@"; do
       [ ! -f "$HOME/return-record-fails" ] || exit 22
       printf 'recorded\n' >> "$HOME/return-record.log"
       exit 0;;
+    # The switch, as the API answers it. No file is an API that refuses.
+    */api/v1/runtime/worker-engine-auto-update)
+      [ -f "$HOME/auto-update" ] || exit 22
+      printf '{"enabled":%s}\n' "$(cat "$HOME/auto-update")"
+      exit 0;;
   esac
   if [ "$previous" = "--output" ]; then output=$argument; fi
   previous=$argument
@@ -796,6 +801,52 @@ printf '%s' "$race_out" | grep -q 'deferred; it cannot apply itself while worker
 printf '3\n' > "$HOME/running-sessions"
 grep -q '^cancel-drain$' "$HOME/swarmctl.log" \
   || { echo "a deferred reconcile left the host drained" >&2; exit 1; }
+
+# 1c. AN ENGINE THAT CAN STOP WORKERS ITSELF IS NOT HELD BY THE REASON ABOVE.
+#     The API applies the update once every worker rests (ADR 0156), so "the
+#     running engine cannot yet stop them" is false there, and sending the
+#     operator to the card is the step their ruling says should not be needed.
+#     What the API says about the switch decides the text. The test bundles
+#     speak protocol 5, so the first protocol that admits maintenance is moved
+#     to 5 here; a Rust test holds the real one to the engine's own.
+printf '3\n' > "$HOME/running-sessions"
+printf '1\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+
+restore_pending_engine_change
+printf 'true\n' > "$HOME/auto-update"
+: > "$HOME/swarmctl.log"
+waits_out=$(SWARM_MAINTENANCE_ADMISSION_PROTOCOL=5 "$package" reconcile-host-if-idle 2>&1) \
+  || { echo "an engine waiting for rest failed the timer: $waits_out" >&2; exit 1; }
+printf '%s' "$waits_out" | grep -q 'deferred; it waits for every worker to rest (1 busy now); Swarm then applies it by itself' \
+  || { echo "an engine the API updates by itself was not said to wait for rest: $waits_out" >&2; exit 1; }
+! printf '%s' "$waits_out" | grep -q -e 'cannot yet stop them' -e 'Apply it from the worker engine card' \
+  || { echo "the timer gave the old reason, or the card, for an engine that updates by itself: $waits_out" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ] \
+  || { echo "the timer swapped an engine with a loaded worker" >&2; exit 1; }
+grep -q '^cancel-drain$' "$HOME/swarmctl.log" \
+  || { echo "a deferred reconcile left the host drained" >&2; exit 1; }
+
+restore_pending_engine_change
+printf 'false\n' > "$HOME/auto-update"
+off_out=$(SWARM_MAINTENANCE_ADMISSION_PROTOCOL=5 "$package" reconcile-host-if-idle 2>&1) \
+  || { echo "a switched-off update failed the timer: $off_out" >&2; exit 1; }
+printf '%s' "$off_out" | grep -q 'deferred; automatic engine updates are off (Settings, Maintenance)\. Apply it from the worker engine card' \
+  || { echo "a switched-off update did not name the switch and the card: $off_out" >&2; exit 1; }
+! printf '%s' "$off_out" | grep -q 'cannot yet stop them' \
+  || { echo "the timer blamed the engine for a switch the operator turned off: $off_out" >&2; exit 1; }
+
+restore_pending_engine_change
+rm -f "$HOME/auto-update"
+unknown_out=$(SWARM_MAINTENANCE_ADMISSION_PROTOCOL=5 "$package" reconcile-host-if-idle 2>&1) \
+  || { echo "an API that did not answer failed the timer: $unknown_out" >&2; exit 1; }
+printf '%s' "$unknown_out" | grep -q 'deferred; it could not tell whether automatic engine updates are on' \
+  || { echo "an unanswered switch was presented as known: $unknown_out" >&2; exit 1; }
+printf '%s' "$unknown_out" | grep -q 'If they are off, apply it from the worker engine card' \
+  || { echo "an unanswered switch left the operator no route: $unknown_out" >&2; exit 1; }
+# The question carries the operator token, so nothing of it may stay behind.
+! ls "$SWARM_STATE_ROOT"/.auto-update-auth-* >/dev/null 2>&1 \
+  || { echo "the switch query left its credential file behind" >&2; exit 1; }
 
 # 2. RESTING IS NOT ATOMIC ADMISSION. Loaded legacy sessions must survive.
 restore_pending_engine_change

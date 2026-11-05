@@ -55,6 +55,7 @@ update_rollback=
 update_schema_before=
 update_auth=
 return_auth=
+auto_auth=
 update_incoming=
 dev_config="$config_root/swarm-dev.env"
 dev_reload_started=
@@ -255,6 +256,51 @@ loaded_workers_hold() {
   printf 'it cannot apply itself while workers are loaded (%s are), because the running engine cannot yet stop them safely on its own (ADR 0085)' "$loaded"
 }
 engine_card_route='Apply it from the worker engine card, which stops the workers and tries to bring them back'
+
+# AN ENGINE THAT CAN STOP WORKERS ITSELF IS NOT HELD BY THAT REASON (ADR 0156).
+#
+# From this protocol on, the engine admits maintenance itself, and the API
+# applies a waiting update once every worker rests. The timer still cannot land
+# it, but "the running engine cannot yet stop them" is then false, and sending
+# the operator to the card is the step their ruling ("keep it automatic") says
+# should not be needed. A Rust test holds this number to the engine's own
+# swarm_terminal::supports_maintenance_admission. Overridable only so the
+# package tests, whose bundles speak protocol 5, can reach this path.
+maintenance_admission_protocol=${SWARM_MAINTENANCE_ADMISSION_PROTOCOL:-18}
+
+# Whether the running engine is one the API can stop workers on: at or past the
+# first protocol that admits maintenance, and not past what the API speaks.
+engine_admits_maintenance() {
+  engine_protocol=$(printf '%s\n' "$1" | sed -n 's/.*"protocol_version":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  api_protocol=$(tr -d '\r\n' 2>/dev/null < "$current/PROTOCOL") || api_protocol=
+  case "$engine_protocol" in *[!0-9]*|"") return 1;; esac
+  case "$api_protocol" in *[!0-9]*|"") return 1;; esac
+  [ "$engine_protocol" -ge "$maintenance_admission_protocol" ] && [ "$engine_protocol" -le "$api_protocol" ]
+}
+
+# Sets auto_updates to on, off or unknown, AS THE API ANSWERS IT. Asked rather
+# than read from the database, which only the persistence boundary opens. The
+# question carries the operator token, so it goes the way every authenticated
+# call here does, and its file is removed here or by on_exit.
+read_automatic_engine_updates() {
+  auto_updates=unknown
+  [ -f "$config_root/swarm.env" ] || return 0
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
+  [ -n "$token" ] || return 0
+  mkdir -p "$state_root"
+  auto_auth="$state_root/.auto-update-auth-$$"
+  umask 077
+  printf 'header = "Authorization: Bearer %s"\n' "$token" > "$auto_auth"
+  auto_answer=$(authenticated_curl "$auto_auth" --fail --silent --show-error \
+    --connect-timeout 3 --max-time 10 \
+    "${health_url%/health}/api/v1/runtime/worker-engine-auto-update") || auto_answer=
+  rm -f "$auto_auth"
+  auto_auth=
+  case "$auto_answer" in
+    *'"enabled":true'*) auto_updates=on;;
+    *'"enabled":false'*) auto_updates=off;;
+  esac
+}
 
 # WHAT IS BUSY AND WHAT COULD NOT BE READ, from one status payload.
 #
@@ -461,6 +507,7 @@ on_exit() {
   [ -z "$daily_auth" ] || rm -f "$daily_auth"
   [ -z "$update_auth" ] || rm -f "$update_auth"
   [ -z "$return_auth" ] || rm -f "$return_auth"
+  [ -z "$auto_auth" ] || rm -f "$auto_auth"
   [ -z "$update_incoming" ] || rm -f "$update_incoming"
   if [ -n "$restore_rollback" ] && [ -f "$restore_rollback" ]; then
     if rollback_restore_database; then
@@ -1867,8 +1914,34 @@ reconcile_host() {
     SWARM_TERMINAL_SOCKET=$(terminal_socket) \
       "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
     drain_release=
-    printf 'Terminal host update deferred; %s. %s.\n' "$reconcile_blocked" "$engine_card_route"
-    note_deferral host-reconcile "the worker engine update" "$reconcile_blocked. $engine_card_route"
+    reconcile_route=$engine_card_route
+    if engine_admits_maintenance "$status"; then
+      read_automatic_engine_updates
+      case "$auto_updates" in
+        on)
+          # Busy and unreadable both hold the API's own admission back.
+          resting_wait=''
+          case "$busy" in *[!0-9]*|"") ;; *)
+            case "$unreadable" in *[!0-9]*|"") ;; *)
+              resting_wait=" ($((busy + unreadable)) busy now)";;
+            esac;;
+          esac
+          reconcile_blocked="it waits for every worker to rest$resting_wait; Swarm then applies it by itself, and the worker engine card shows what holds it (ADR 0156)"
+          reconcile_route=;;
+        off)
+          reconcile_blocked='automatic engine updates are off (Settings, Maintenance)';;
+        *)
+          reconcile_blocked='it could not tell whether automatic engine updates are on; if they are, Swarm applies it by itself once every worker rests (ADR 0156)'
+          reconcile_route='If they are off, apply it from the worker engine card, which stops the workers and tries to bring them back';;
+      esac
+    fi
+    if [ -n "$reconcile_route" ]; then
+      printf 'Terminal host update deferred; %s. %s.\n' "$reconcile_blocked" "$reconcile_route"
+      note_deferral host-reconcile "the worker engine update" "$reconcile_blocked. $reconcile_route"
+    else
+      printf 'Terminal host update deferred; %s.\n' "$reconcile_blocked"
+      note_deferral host-reconcile "the worker engine update" "$reconcile_blocked"
+    fi
     return
   fi
 
