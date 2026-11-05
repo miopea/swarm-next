@@ -89,7 +89,13 @@ jobs:
   linux-package:
     runs-on: ubuntu-latest
     steps:
+      # The lifecycle test drives the real swarm-package from a released tag,
+      # because that older script is what installs a release on a Hive in the
+      # field. A shallow checkout has no tags, and the test fails rather than
+      # skip that case.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # THE FINGERPRINT TEST NEEDS THE REGISTRY, AND WITHOUT THIS THE JOB WAS
       # PASSING WITHOUT MEASURING ANYTHING.
       #
@@ -111,3 +117,7 @@ jobs:
       - run: bash packaging/linux/test-worker-return-preparation.sh
       - run: packaging/linux/test-release-preflight.sh
       - run: packaging/linux/test-operator-token-rules.sh
+      # The releases a field Hive installs with its OWN older swarm-package.
+      # It failed on main unnoticed because nothing ran it. It needs the tags
+      # fetched above.
+      - run: packaging/linux/test-field-upgrade.sh
