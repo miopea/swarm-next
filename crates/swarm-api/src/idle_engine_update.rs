@@ -1277,4 +1277,25 @@ mod tests {
             assert_eq!(hive.store().last_worker_engine_update().unwrap(), None);
         }
     }
+
+    /// The package timer says a waiting update applies itself only on an
+    /// engine this path can stop workers on. Its first such protocol is
+    /// written in the script, so it is held here to the engine's own answer.
+    #[test]
+    fn the_package_timer_names_the_first_engine_this_path_can_stop() {
+        let script = include_str!("../../../packaging/linux/swarm-package");
+        let first: u16 = script
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix(
+                    "maintenance_admission_protocol=${SWARM_MAINTENANCE_ADMISSION_PROTOCOL:-",
+                )
+            })
+            .and_then(|rest| rest.strip_suffix('}'))
+            .and_then(|number| number.parse().ok())
+            .expect("swarm-package declares the first protocol that admits maintenance");
+
+        assert!(swarm_terminal::supports_maintenance_admission(first));
+        assert!(!swarm_terminal::supports_maintenance_admission(first - 1));
+    }
 }
