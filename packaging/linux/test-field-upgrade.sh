@@ -173,7 +173,40 @@ for field_tag in v0.8.17 v0.8.18 v0.8.19 v0.9.0; do
 
   # Driven by that vintage's script, exactly as swarm-release-apply.service would.
   sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1 \
-    || fail "a $field_tag Hive could not install a protocol-bumping release in one hop"
+    || fail "a $field_tag Hive could not install a protocol-bumping release"
+
+  # v0.9.0 TAKES TWO STEPS, AND THAT IS ITS REAL PATH RATHER THAN A FAILURE.
+  #
+  # Its apply_release picks migrate-protocol-if-idle for a protocol change, and
+  # the new bundle defers that whenever the running engine cannot say which
+  # sessions are busy, empty host included (see "absent is not zero" in
+  # test-package-lifecycle.sh). A v0.9.0 engine never can. Deferring installs
+  # the release and leaves protocol-migration.pending. The Hive's own
+  # swarm-host-reconcile.timer then completes it within two minutes, still
+  # running v0.9.0's package, whose completion only waits for no session to be
+  # running. So the timer's command runs here once, read from that tag's own
+  # unit rather than assumed.
+  #
+  # The 0.8.x tags hand the install to `update`, which migrates outright, and
+  # they are still held to one hop: a deferral there would be a regression the
+  # timer step must not paper over.
+  case "$field_tag" in
+    v0.9.0)
+      [ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+        || fail "$field_tag: expected the migration to be prepared and deferred, as its engine cannot report busy sessions"
+      git -C "$repo_root" show "$field_tag:packaging/systemd-user/swarm-host-reconcile.service.in" \
+        | grep -q 'swarm-package reconcile-host-requested$' \
+        || fail "$field_tag: its reconcile timer no longer runs reconcile-host-requested"
+      sh "$SWARM_INSTALL_ROOT/current/swarm-package" reconcile-host-requested >/dev/null 2>&1 \
+        || fail "$field_tag: its own reconcile timer could not complete the prepared migration"
+      ;;
+    *)
+      [ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+        || fail "$field_tag: the protocol change was deferred instead of installed in one hop"
+      ;;
+  esac
+  [ ! -f "$SWARM_STATE_ROOT/protocol-migration.pending" ] \
+    || fail "$field_tag: a protocol migration is still pending"
 
   [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ] \
     || fail "$field_tag: the API was not upgraded by the field install"
