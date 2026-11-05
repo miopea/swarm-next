@@ -1,6 +1,7 @@
 # 0158 — Queen grants a command for reviewed work
 
-- Status: Accepted
+- Status: Accepted; amended by ADR 0159 (Queen's cards are listed in her
+  queue, not the operator's inbox, and a command card must say)
 - Date: 2026-11-05
 - Decided by: the operator, 2026-11-05. They said they had been pressing
   Allow on command cards without reading them, and that the ones they did

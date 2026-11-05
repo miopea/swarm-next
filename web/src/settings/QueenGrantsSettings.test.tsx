@@ -23,7 +23,8 @@ test("turning Queen grants on says which cards still come to the operator", asyn
   expect(status).toHaveTextContent("touches credentials or permissions");
   expect(status).toHaveTextContent("may cost more than $25");
   expect(status).toHaveTextContent("deletes something that cannot be restored");
-  expect(status).toHaveTextContent("you can still answer it yourself");
+  expect(status).toHaveTextContent("listed on the Queues page, not in Needs you");
+  expect(status).toHaveTextContent("must say which of your reasons apply");
   expect(String(fetch.mock.calls[1]?.[0])).toContain("/api/v1/runtime/queen-grants");
   expect(fetch.mock.calls[1]?.[1].body).toBe(JSON.stringify({ enabled: true }));
   expect(toggle).toBeChecked();

@@ -6,6 +6,10 @@
 const PARKED_WORK_QUESTION_TITLE: &str = "Work left parked by an answer";
 const RELEASE_PARKED_WORK_ACTION: &str = "Release them to the queue";
 
+/// Why a command card that says nothing of the operator's reasons is refused
+/// while Queen grants command cards (ADR 0159), and how to ask instead.
+const OPERATOR_ONLY_REQUIRED: &str = "This Hive's operator lets Queen grant command cards (ADR 0158), so a command card must say which of the operator's reasons apply. Ask again with operator_only naming every one that applies: credentials (it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this), permissions (it grants, revokes or changes access, a role, branch protection or a security setting), spend_over_25_usd (it may cost more than $25) and irreversible_delete (it deletes something that cannot be restored). Send [] only when none does. Naming any reason keeps the card the operator's; name one whenever you are unsure.";
+
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinLink,
@@ -4722,6 +4726,16 @@ impl TaskService {
                 block_own_active_task = Some((task_id, session_id));
             }
         }
+        // ADR 0159. While Queen grants command cards, a worker's command card
+        // says which of the operator's reasons apply, so silence never decides
+        // whose card it is. Queen's own card is the operator's either way.
+        if principal.role != WorkerRole::Queen
+            && input.requested_command.is_some()
+            && input.operator_reasons.is_none()
+            && self.store.queen_grants()?
+        {
+            return Err(ApplicationError::Refused(OPERATOR_ONLY_REQUIRED.into()));
+        }
         let request = NewDecisionRequest {
             requesting_worker_id: principal.worker_id,
             task_id: input.task_id,
@@ -7686,6 +7700,47 @@ mod tests {
             .grant_command_as_queen(queen, card.id, "Reviewed the merge.")
             .unwrap();
         assert_eq!(granted.granted_by_queen, Some(queen.worker_id));
+    }
+
+    /// ADR 0159: while Queen grants command cards, a worker's command card
+    /// says which of the operator's reasons apply, so silence never decides
+    /// whose it is. With the setting off, and for Queen's own card, it need
+    /// not: those are the operator's either way.
+    #[test]
+    fn a_command_card_must_say_which_operator_reasons_apply_while_queen_grants() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Merge it");
+        let mut input = decision_input(Some(task), DecisionRequestKind::Approval, "Run it", &[""]);
+        input.allowed_actions = Vec::new();
+        input.requested_command = Some("gh pr merge 12 --squash".into());
+        input.keep_working = true;
+        let silent = service.create_decision(principal, &input).unwrap();
+        assert_eq!(silent.operator_reasons, None, "off: it may say nothing");
+
+        service.store.set_queen_grants(true, 10).unwrap();
+        match service.create_decision(principal, &input) {
+            Err(ApplicationError::Refused(why)) => {
+                assert!(why.contains("operator_only"), "{why}");
+                assert!(why.contains("irreversible_delete"), "{why}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        let mut reasoned = input.clone();
+        reasoned.operator_reasons = Some(vec![swarm_domain::OperatorReason::Permissions]);
+        assert!(
+            !service
+                .create_decision(principal, &reasoned)
+                .unwrap()
+                .awaiting_queen,
+            "a named reason is the operator's"
+        );
+        let queens = service
+            .create_decision(AgentPrincipal::from(&queen), &input)
+            .unwrap();
+        assert_eq!(
+            queens.operator_reasons, None,
+            "Queen's own card is the operator's"
+        );
     }
 
     /// ADR 0119 with a card that is Queen's: the worker's own Active task

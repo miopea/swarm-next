@@ -95,7 +95,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   // Resolved history keeps the server's order, which is the useful one there.
   const pendingOrder = useRef<string[]>([]);
   const visible = useMemo(() => {
-    const shown = decisions.filter((decision) => showResolved || decision.state === "pending");
+    // A command card Queen may grant is hers (ADR 0159): it is listed in her
+    // queue on the Queues page, and joins this list only if she hands it on.
+    const shown = decisions.filter((decision) => (showResolved || decision.state === "pending")
+      && !(decision.state === "pending" && decision.awaiting_queen));
     const stillPending = new Set(
       shown.filter((decision) => decision.state === "pending").map((decision) => decision.id),
     );
@@ -409,15 +412,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             your approval on this task.
                           </p>
                         ) : null}
-                        {decision.awaiting_queen ? (
-                          // ADR 0158. Said on the card because it is why this
-                          // card is not counted in Needs you.
-                          <p className="decision-command-origin decision-command-queen">
-                            With Queen. The worker said none of your reasons applies (credentials,
-                            permissions, spend over $25, an irreversible delete), so Queen reviews it
-                            and may grant it. You can still answer it yourself.
-                          </p>
-                        ) : decision.queen_handoff_reason ? (
+                        {decision.queen_handoff_reason ? (
                           <p className="decision-command-origin decision-command-queen">
                             Queen handed this to you: {decision.queen_handoff_reason}
                           </p>

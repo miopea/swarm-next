@@ -43,7 +43,7 @@ export default function QueenGrantsSettings({ operatorToken }: { operatorToken: 
         <span><strong>Queen grants command cards</strong><small>When a worker asks to run a command and says none of your reasons applies, Queen reads it and may allow it once instead of asking you.</small></span>
       </label>
       {enabled === true && (
-        <small className="queen-grants-cost" role="status">Queen allows a command only for work she has reviewed. You still get every card that touches credentials or permissions, may cost more than $25, or deletes something that cannot be restored, and every card Queen hands to you. A card with Queen stays in your inbox marked With Queen, and you can still answer it yourself.</small>
+        <small className="queen-grants-cost" role="status">Queen allows a command only for work she has reviewed. You still get every card that touches credentials or permissions, may cost more than $25, or deletes something that cannot be restored, and every card Queen hands to you. A card with Queen is listed on the Queues page, not in Needs you, and a worker must say which of your reasons apply before it can ask.</small>
       )}
       {enabled === false && (
         <small className="queen-grants-detail">Off: every command card comes to you.</small>
