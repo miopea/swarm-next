@@ -136,6 +136,7 @@ export function refusalSentence(refusal: EngineUpdateRefusal): string {
     case "stopped_partway": return `the last try stopped some workers and could not stop ${worker}, so it is not tried again by itself`;
     case "swap_not_requested": return "the last try stopped workers and could not ask for the swap, so it is not tried again by itself";
     case "engine_draining": return "the engine is already draining for an update";
+    case "package_operation_active": return "an install or another package step is running, and the engine swap waits for it to finish";
     case "engine_unreachable": return "the engine did not answer";
     case "answer_lost": return "the engine's answer to the last try was lost; any worker it stopped comes back once the engine is updated";
     case "engine_not_managed": return "this installation does not replace its own worker engine";

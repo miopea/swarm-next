@@ -15,9 +15,21 @@
 //! rest, on the same pass. The swap restarts every worker anyway, so nobody is
 //! restarted first to be checked. When anything else holds the update, Swarm
 //! stops nobody and the card says who holds it and why.
+//!
+//! It never runs before the API listens, nor while swarm-package holds its
+//! lifecycle lock, and a drain nothing owns any more is lifted (ADR 0164). An
+//! install holds that lock while it waits on this API's health, and the swap
+//! needs it, so an update tried during an install waits on the install while
+//! the install gives up on this API.
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Mutex, RwLock},
+    fs::{File, TryLockError},
+    io,
+    path::Path,
+    sync::{
+        Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -70,6 +82,10 @@ const REREAD_TIMEOUT: Duration = Duration::from_secs(2);
 /// More restarts than one waiting update could make: one per worker.
 const RESTARTED_KEPT: usize = 64;
 
+/// The file swarm-package locks, in its state root, for the whole of an
+/// install, a reload, an engine swap or a protocol migration (ADR 0164).
+pub const PACKAGE_LIFECYCLE_LOCK: &str = ".package-lifecycle.lock";
+
 /// What this process knows about the automatic path that the database does not.
 #[derive(Default)]
 pub(crate) struct IdleEngineUpdate {
@@ -80,6 +96,8 @@ pub(crate) struct IdleEngineUpdate {
     holders: Mutex<Vec<EngineHolder>>,
     /// Who Swarm restarted while an update waited, until each is told.
     restarted: Mutex<Vec<Restarted>>,
+    /// Whether the API listens yet (ADR 0164). Nothing is tried before then.
+    listening: AtomicBool,
 }
 
 /// A session the engine refused, and what Swarm does about it.
@@ -110,6 +128,14 @@ struct Restarted {
 }
 
 impl IdleEngineUpdate {
+    pub(crate) fn note_listening(&self) {
+        self.listening.store(true, Ordering::Release);
+    }
+
+    fn listening(&self) -> bool {
+        self.listening.load(Ordering::Acquire)
+    }
+
     pub(crate) fn refusal(&self) -> Option<EngineUpdateRefusal> {
         self.refusal.read().ok().and_then(|refusal| refusal.clone())
     }
@@ -347,6 +373,11 @@ pub(crate) async fn advance(
     state: &AppState,
     observed: &HashMap<WorkerSessionId, ProviderSignals>,
 ) -> bool {
+    // The pass before the API listens is awaited before it can answer an
+    // install's health check (ADR 0164).
+    if !state.idle_engine_update.listening() {
+        return false;
+    }
     let Ok(status) = host_status_snapshot(state).await else {
         return false;
     };
@@ -358,6 +389,10 @@ pub(crate) async fn advance(
         store.note_worker_engine_waiting(behind.then(worker_engine_build_id), unix_timestamp())
     {
         tracing::warn!(message = %error, "how long the engine update has waited could not be recorded");
+    }
+    if status.draining && lift_stale_drain(state).await {
+        publish_runtime_change(state);
+        return true;
     }
     if !behind {
         state.idle_engine_update.clear();
@@ -380,15 +415,79 @@ pub(crate) async fn advance(
     drop(lifecycle);
     if replaced {
         state.idle_engine_update.clear();
-        if let Ok(store) = task_store(state)
-            && let Err(error) =
-                store.record_control_room_event(ControlRoomEventKind::RuntimeChanged)
-        {
-            tracing::warn!(message = %error, "the automatic engine update could not publish its runtime event");
-        }
-        state.control_room_notify.notify_waiters();
+        publish_runtime_change(state);
     }
     replaced
+}
+
+fn publish_runtime_change(state: &AppState) {
+    if let Ok(store) = task_store(state)
+        && let Err(error) = store.record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+    {
+        tracing::warn!(message = %error, "the automatic engine update could not publish its runtime event");
+    }
+    state.control_room_notify.notify_waiters();
+}
+
+/// Lifts a drain that nothing still running owns (ADR 0164).
+///
+/// The engine drains until someone cancels it, and an attempt cancels its own
+/// drain only if it lives to finish. An install that restarts this API in the
+/// middle of an attempt, and the rollback after a failed install, leave it on,
+/// and the engine then refuses every start. A drain is owned while this
+/// process holds the worker lifecycle (an attempt or the card), while
+/// swarm-package holds its lock (an install, a reload or a swap), or while a
+/// swap is asked for and not yet taken. With none of those, nobody is left to
+/// cancel it, so Swarm does. Workers owed a return come back once it lifts.
+async fn lift_stale_drain(state: &AppState) -> bool {
+    let Ok(_lifecycle) = state.worker_lifecycle.try_lock() else {
+        return false;
+    };
+    if !matches!(package_operation_active(state), Ok(false)) {
+        return false;
+    }
+    if state
+        .maintenance_request_path
+        .as_ref()
+        .is_some_and(|path| path.exists())
+    {
+        return false;
+    }
+    if !matches!(
+        request_host(state, HostRequest::CancelDrain).await,
+        Ok(HostResponse::HostStatus { .. })
+    ) {
+        return false;
+    }
+    tracing::warn!(
+        "the worker engine was left draining by an update that is no longer running; Swarm lifted it so workers can start"
+    );
+    true
+}
+
+/// Whether swarm-package holds its lifecycle lock now (ADR 0164).
+///
+/// Asked with a shared lock taken and dropped at once, so it never holds an
+/// install up. A package step that tries for the lock in that instant defers
+/// and runs again on its timer. No lock file means no package step has run.
+fn package_operation_active(state: &AppState) -> io::Result<bool> {
+    state
+        .package_lifecycle_lock_path
+        .as_deref()
+        .map_or(Ok(false), |path| lock_is_held(path))
+}
+
+fn lock_is_held(path: &Path) -> io::Result<bool> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false),
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(TryLockError::Error(error)) => Err(error),
+    }
 }
 
 /// What Swarm reads of one session the engine refused (ADR 0163).
@@ -756,6 +855,16 @@ fn ready(
     }
     if !swarm_terminal::supports_maintenance_admission(status.protocol_version) {
         return Err(("engine_cannot_check_workers", None));
+    }
+    // An install, a reload or a swap holds the lock the swap needs. One that
+    // cannot be read is not taken to be free.
+    match package_operation_active(state) {
+        Ok(false) => {}
+        Ok(true) => return Err(("package_operation_active", None)),
+        Err(error) => {
+            tracing::warn!(message = %error, "the package lifecycle lock could not be read");
+            return Err(("package_operation_active", None));
+        }
     }
     // An attempt at this same update that stopped workers and did not finish,
     // whether the operator's or this path's, is not repeated by itself:
@@ -1468,6 +1577,18 @@ mod tests {
         lose_answer: bool,
         /// And then stops answering anything at all.
         gone: bool,
+        /// When the engine is replaced once the request file appears.
+        swap: Swap,
+    }
+
+    /// When the fake engine is replaced.
+    #[derive(Default)]
+    enum Swap {
+        /// As soon as the package layer's request file appears.
+        #[default]
+        OnRequest,
+        /// Not yet: the request is written and the swap not taken.
+        Pending,
     }
 
     struct Hive {
@@ -1475,6 +1596,9 @@ mod tests {
         engine: Arc<Mutex<Engine>>,
         ledger: (WorkerId, WorkerSessionId),
         pantry: (WorkerId, WorkerSessionId),
+        /// swarm-package's lifecycle lock, in the same state root.
+        package_lock: std::path::PathBuf,
+        request: std::path::PathBuf,
         _directory: tempfile::TempDir,
     }
 
@@ -1539,16 +1663,21 @@ mod tests {
                     let _ = reader.get_mut().write_all(&bytes).await;
                 }
             });
+            let package_lock = directory.path().join(PACKAGE_LIFECYCLE_LOCK);
             let state = AppState::default()
                 .with_terminal_host(crate::HostClient::new(socket), "fixture-only")
                 .with_task_store(store)
-                .with_maintenance_request_path(request_path)
+                .with_maintenance_request_path(request_path.clone())
+                .with_package_lifecycle_lock_path(package_lock.clone())
                 .with_maintenance_timeout(Duration::from_secs(3));
+            state.note_api_listening();
             Self {
                 state,
                 engine,
                 ledger,
                 pantry,
+                package_lock,
+                request: request_path,
                 _directory: directory,
             }
         }
@@ -1606,7 +1735,7 @@ mod tests {
                 .unwrap()
                 .to_owned(),
         );
-        let swapped = request_path.exists();
+        let swapped = request_path.exists() && matches!(engine.swap, Swap::OnRequest);
         let status = |engine: &Engine| TerminalHostStatus {
             protocol_version: protocol,
             host_version: if swapped {
@@ -1757,6 +1886,107 @@ mod tests {
         Box::new(|sessions| MaintenanceOutcome::Stopped {
             session_ids: sessions.to_vec(),
         })
+    }
+
+    /// ADR 0164, from 2026-11-06: a Hive installing a release while every
+    /// worker rested never came up. The pass awaited before the API listens
+    /// stopped a worker and waited for a swap the install held up, while the
+    /// install waited on this API's health. Nothing is tried before it listens.
+    #[tokio::test]
+    async fn the_engine_update_waits_until_the_api_listens() {
+        let hive = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
+        hive.state
+            .idle_engine_update
+            .listening
+            .store(false, Ordering::Release);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
+        assert!(
+            hive.engine.lock().unwrap().requests.is_empty(),
+            "the engine is not even asked"
+        );
+        assert!(hive.owed().is_empty());
+
+        hive.state.note_api_listening();
+        assert!(
+            advance(&hive.state, &HashMap::new()).await,
+            "and then it applies"
+        );
+    }
+
+    /// ADR 0164: an install, a reload or a swap holds swarm-package's lock,
+    /// and the swap the update asks for needs it. Nothing is drained or
+    /// stopped while it is held, and the update applies once it is let go.
+    #[tokio::test]
+    async fn nothing_is_stopped_while_a_package_operation_holds_its_lock() {
+        let hive = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
+        let install = File::create(&hive.package_lock).unwrap();
+        install.lock().unwrap();
+        assert!(!advance(&hive.state, &HashMap::new()).await);
+        assert_eq!(hive.refusal(), Some(("package_operation_active", None)));
+        assert_eq!(hive.asked("begin_drain"), 0);
+        assert!(hive.engine.lock().unwrap().stopped.is_empty());
+        assert!(hive.owed().is_empty());
+        assert_eq!(hive.store().last_worker_engine_update().unwrap(), None);
+
+        drop(install);
+        hive.rearm();
+        assert!(
+            advance(&hive.state, &HashMap::new()).await,
+            "applies once it is let go"
+        );
+    }
+
+    /// ADR 0164, from 2026-11-06: the failed install rolled back and left the
+    /// engine draining, and it refused every start until the machine was
+    /// restarted. A drain nothing owns any more is lifted. One that an
+    /// install, a swap not yet taken, or this process still owns is not.
+    #[tokio::test]
+    async fn a_drain_nothing_owns_any_more_is_lifted() {
+        let hive = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
+        hive.engine.lock().unwrap().draining = true;
+
+        let install = File::create(&hive.package_lock).unwrap();
+        install.lock().unwrap();
+        assert!(!advance(&hive.state, &HashMap::new()).await);
+        drop(install);
+
+        hive.engine.lock().unwrap().swap = Swap::Pending;
+        std::fs::write(&hive.request, "requested_at=0\n").unwrap();
+        assert!(!advance(&hive.state, &HashMap::new()).await);
+        std::fs::remove_file(&hive.request).unwrap();
+        hive.engine.lock().unwrap().swap = Swap::OnRequest;
+
+        let card = hive.state.worker_lifecycle.lock().await;
+        assert!(!advance(&hive.state, &HashMap::new()).await);
+        drop(card);
+        assert_eq!(hive.asked("cancel_drain"), 0, "owned each time");
+        assert_eq!(hive.asked("begin_drain"), 0);
+
+        assert!(
+            advance(&hive.state, &HashMap::new()).await,
+            "workers owed a return may come back"
+        );
+        assert_eq!(hive.asked("cancel_drain"), 1);
+        assert!(!hive.engine.lock().unwrap().draining);
+        assert_eq!(hive.store().last_worker_engine_update().unwrap(), None);
+
+        hive.rearm();
+        assert!(
+            advance(&hive.state, &HashMap::new()).await,
+            "the update still waiting applies on a later pass"
+        );
+        let last = hive.store().last_worker_engine_update().unwrap().unwrap();
+        assert_eq!(last.outcome, Some(WorkerEngineUpdateOutcome::Succeeded));
+    }
+
+    /// The API looks for the lock swarm-package takes, by the same name in
+    /// the same state root as the database (ADR 0164).
+    #[test]
+    fn the_api_reads_the_lock_swarm_package_takes() {
+        let package = include_str!("../../../packaging/linux/swarm-package");
+        assert!(package.contains(&format!("exec 7>\"$state_root/{PACKAGE_LIFECYCLE_LOCK}\"")));
+        let unit = include_str!("../../../packaging/systemd-user/swarm-api.service.in");
+        assert!(unit.contains("SWARM_DATABASE_PATH=@STATE_ROOT@/swarm.sqlite3"));
     }
 
     /// The operator's ruling: it applies by itself, and says so, naming the

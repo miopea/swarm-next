@@ -38,6 +38,7 @@ mod watch_producer;
 mod watch_relay;
 pub use diagnostic_log::{DiagnosticLog, diagnostic_layer};
 pub use federation_events::{MemberEventBackoff, poll_member_events};
+pub use idle_engine_update::PACKAGE_LIFECYCLE_LOCK;
 mod check_gate_routes;
 mod ci_checks;
 pub mod federation_http;
@@ -526,6 +527,9 @@ pub struct AppState {
     legacy_database_path: Option<Arc<PathBuf>>,
     workspace_roots: Arc<Vec<PathBuf>>,
     maintenance_request_path: Option<Arc<PathBuf>>,
+    /// The lock swarm-package holds for an install, a reload or an engine swap
+    /// (ADR 0164). Read, never held: the engine update waits while it is taken.
+    package_lifecycle_lock_path: Option<Arc<PathBuf>>,
     development_reload_request_path: Option<Arc<PathBuf>>,
     development_reload_status_path: Option<Arc<PathBuf>>,
     development_checkout_path: Option<Arc<PathBuf>>,
@@ -676,6 +680,7 @@ impl AppState {
             legacy_database_path: None,
             workspace_roots: Arc::new(Vec::new()),
             maintenance_request_path: None,
+            package_lifecycle_lock_path: None,
             development_reload_request_path: None,
             development_reload_status_path: None,
             development_checkout_path: None,
@@ -953,6 +958,20 @@ impl AppState {
     pub fn with_maintenance_request_path(mut self, path: PathBuf) -> Self {
         self.maintenance_request_path = Some(Arc::new(path));
         self
+    }
+
+    #[must_use]
+    pub fn with_package_lifecycle_lock_path(mut self, path: PathBuf) -> Self {
+        self.package_lifecycle_lock_path = Some(Arc::new(path));
+        self
+    }
+
+    /// Lets the automatic engine update run (ADR 0164). Called once the API
+    /// listens: an install waits on this API's health while it holds the
+    /// package lock the engine swap needs, so an update tried before then
+    /// waits on the install, and the install gives up on this API first.
+    pub fn note_api_listening(&self) {
+        self.idle_engine_update.note_listening();
     }
 
     #[must_use]

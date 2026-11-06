@@ -14,6 +14,8 @@
 - Amends: ADR 0161 (Swarm restarts a resting worker the engine cannot vouch
   for) and ADR 0162 (the engine names every session it refuses, and Swarm
   settles them at once).
+- Amended by: ADR 0164. Nothing is tried before the API listens or while a
+  package step holds its lock, and a drain nobody owns is lifted.
 
 ## Context
 
