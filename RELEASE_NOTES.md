@@ -12,6 +12,32 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.18.0
+
+Three database updates (221, 222 and 223). Your Hive backs up its database by itself before applying them. This release changes the worker engine, but installing it keeps your workers running: only the app installs, because it still drives the engine you have. The new engine arrives when you apply the worker engine update from its card, which stops and restarts your workers once. After that, engine updates apply by themselves while every worker is resting. Changes to Queen's and the workers' instructions reach each of them when it next starts.
+
+### New features
+- A new setting, Queen grants command cards, lets Queen allow a worker's "allow this command" card for work she reviewed, so it never reaches you. The worker must say whether the command touches a credential, a permission, spending over $25 or something deleted for good; those still come to you, and so does any card Queen hands on, with her reason. While it is on, Queen's cards are listed on the Queues page under Command cards with Queen rather than in your inbox. It starts off.
+- A waiting worker engine update now applies by itself the moment every worker is resting, and the engine card says what it is waiting for and who was stopped and came back. A checkbox on the card, "Update by itself when every worker is resting", turns it off; it starts on. (after the worker engine update)
+- A release that changes the worker engine no longer ends every worker session when it installs. The app installs first and your workers keep running; the engine follows when you apply the worker engine update.
+- Queen starts a new Claude conversation once a week, forked from her last, at a start that is already happening. She keeps what any restart gives her. Her old conversation file stops growing, and Claude Code removes it after 30 days. (after the worker engine update)
+- Workers can now see the images attached to their Jira issue, including screenshots pasted into comments, instead of asking you what they show.
+- With Workers read production for their task turned on, a read-only SQL query sent to an admin SQL endpoint in read-only mode counts as a read, so it no longer needs a card.
+- When Queen tells a worker to close or reopen a pull request, or to re-run its checks, the worker now does it without asking you.
+
+### Fixes
+- A command card whose task or asking session has ended no longer waits in your inbox for an Allow that could not grant anything.
+- A go from Queen about work a worker had handed off no longer waits hours behind that worker's other task.
+- A draft waiting on unfinished work can now be moved to Blocked, and the board shows it as waiting rather than as a plain draft nobody has read.
+- Swarm no longer closes finished Review work while a message to its worker is still on the way, which had cancelled that message unread.
+- A task move no longer fails with "database is locked" when another write is in progress; it waits its turn.
+- Your answer "I will say when" no longer leaves Review work sitting unseen for hours. It holds Draft and Blocked work only.
+- A worker engine update that changed the protocol is no longer recorded as timed out when it succeeded.
+- The Updates card no longer promises "Workers stay online" for a release that would stop them.
+- Swarm now stops within a bounded time when asked to, instead of being killed by the system after 90 seconds.
+- The engine timer no longer tells you to apply an engine update from the card when it would apply by itself, and Swarm's journal now says why an automatic engine update is waiting.
+- On a Hive that reloads from a development checkout: the build output folder stays under 20 GiB, and a reload that compiled but could not write its bundle (a full disk, say) says so instead of "did not compile".
+
 ## 1.17.10
 
 One database update (220). Your Hive backs up its database by itself before applying it, and your workers keep running. The new setting below takes effect only after the worker engine update, which does stop running workers. The worker engine card says when one is waiting.
