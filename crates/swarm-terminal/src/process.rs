@@ -708,11 +708,21 @@ impl ProcessTerminalSession {
         let mut turn = lock(&self.provider_turn)?;
         turn.get_or_insert_with(crate::ProviderTurn::default)
             .apply(&observation.event);
-        lock(&self.turn_ledger)?.observe(
+        if let Some(lost) = lock(&self.turn_ledger)?.observe(
             &observation.event,
             observation.prompt.as_deref(),
             observation.scheduled,
-        );
+        ) {
+            warn!(
+                session_id = %self.id,
+                case = lost.case,
+                reported = lost.reported.as_deref(),
+                open = lost.open.as_deref(),
+                last_closed = lost.last_closed.as_deref(),
+                queued = lost.queued,
+                "the engine lost count of this session's turns, so it will not stop it unattended until the session ends"
+            );
+        }
         Ok(true)
     }
 

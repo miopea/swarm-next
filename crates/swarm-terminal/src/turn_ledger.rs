@@ -35,9 +35,9 @@ pub(crate) struct TurnLedger {
     last_closed: Option<String>,
     /// Messages typed while a turn ran; each runs later as its own turn.
     queued: u16,
-    /// Something happened that the measurements do not account for. Nothing
-    /// clears it but a new session.
-    unaccounted: bool,
+    /// Something happened that the measurements do not account for, and which
+    /// case the first such report was. Nothing clears it but a new session.
+    unaccounted: Option<&'static str>,
     /// Writes to the terminal, counted before each one is attempted.
     writes: u64,
     /// `writes` when the latest submit arrived: anything written after it has
@@ -48,21 +48,56 @@ pub(crate) struct TurnLedger {
     after_stop: Option<AfterStop>,
 }
 
+/// The report that lost the count, for the engine's journal: which case, and
+/// what the ledger held then. Prompt ids only, never what a prompt said.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct LostCount {
+    pub(crate) case: &'static str,
+    pub(crate) reported: Option<String>,
+    pub(crate) open: Option<String>,
+    pub(crate) last_closed: Option<String>,
+    pub(crate) queued: u16,
+}
+
 impl TurnLedger {
     /// Applies one turn report. `prompt` and `scheduled` are as the hook gave
     /// them; a submit or `Stop` without a prompt id cannot be accounted for.
+    ///
+    /// Returns what lost the count when this report is the one that did, so
+    /// the engine can say so once: until it does, nobody can tell which case
+    /// holds a resting worker's update up (ADR 0162).
     pub(crate) fn observe(
         &mut self,
         event: &ProviderTurnEvent,
         prompt: Option<&str>,
         scheduled: Option<u16>,
-    ) {
+    ) -> Option<LostCount> {
+        let case = self.apply(event, prompt, scheduled)?;
+        if self.unaccounted.is_some() {
+            return None;
+        }
+        self.unaccounted = Some(case);
+        Some(LostCount {
+            case,
+            reported: prompt.map(str::to_owned),
+            open: self.open.clone(),
+            last_closed: self.last_closed.clone(),
+            queued: self.queued,
+        })
+    }
+
+    /// The case a report cannot be accounted for by, if it cannot.
+    fn apply(
+        &mut self,
+        event: &ProviderTurnEvent,
+        prompt: Option<&str>,
+        scheduled: Option<u16>,
+    ) -> Option<&'static str> {
         match event {
             ProviderTurnEvent::Submitted => {
                 self.writes_at_submit = self.writes;
                 let Some(prompt) = prompt else {
-                    self.unaccounted = true;
-                    return;
+                    return Some("submit_without_prompt_id");
                 };
                 match (&self.open, self.queued) {
                     // Typed while this prompt's turn runs: it will run next.
@@ -75,7 +110,7 @@ impl TurnLedger {
                     // Typed during a queued turn (whose id no submit named), or
                     // a fresh prompt after that turn was interrupted. The two
                     // look the same, and they leave different work behind.
-                    _ => self.unaccounted = true,
+                    _ => return Some("fresh_prompt_while_queued"),
                 }
             }
             ProviderTurnEvent::Ended { background } => {
@@ -84,8 +119,7 @@ impl TurnLedger {
                     scheduled,
                 });
                 let Some(prompt) = prompt else {
-                    self.unaccounted = true;
-                    return;
+                    return Some("stop_without_prompt_id");
                 };
                 if self.open.as_deref() == Some(prompt) {
                     self.last_closed = self.open.take();
@@ -96,7 +130,7 @@ impl TurnLedger {
                     self.last_closed = Some(prompt.to_owned());
                 } else {
                     // A turn ended that no submit started.
-                    self.unaccounted = true;
+                    return Some("stop_without_submit");
                 }
             }
             // The turn is over but said nothing about what it left. The
@@ -111,6 +145,7 @@ impl TurnLedger {
             | ProviderTurnEvent::BatchResolved { .. }
             | ProviderTurnEvent::Denied(_) => {}
         }
+        None
     }
 
     /// Counts one write to the terminal, before it is attempted.
@@ -128,7 +163,7 @@ impl TurnLedger {
     /// Whether the hooks and the writes account for every turn as finished,
     /// with nothing typed, running or scheduled after it.
     pub(crate) fn settled(&self) -> Result<(), MaintenanceRefusal> {
-        if self.unaccounted {
+        if self.unaccounted.is_some() {
             return Err(MaintenanceRefusal::TurnCountUnknown);
         }
         if self.open.is_some() || self.queued > 0 {
@@ -288,6 +323,48 @@ mod tests {
             ledger.observe(&event, None, Some(0));
             assert_eq!(ledger.settled(), Err(MaintenanceRefusal::TurnCountUnknown));
         }
+    }
+
+    /// ADR 0162: the report that loses the count says which case it was, once,
+    /// so the engine's journal can name it. Later reports say nothing.
+    #[test]
+    fn the_report_that_loses_the_count_names_its_case_once() {
+        let mut ledger = TurnLedger::default();
+        type_and_submit(&mut ledger, A);
+        submit(&mut ledger, A);
+        stop(&mut ledger, A);
+        assert_eq!(
+            ledger.observe(&ProviderTurnEvent::Submitted, Some(B), None),
+            Some(LostCount {
+                case: "fresh_prompt_while_queued",
+                reported: Some(B.to_owned()),
+                open: None,
+                last_closed: Some(A.to_owned()),
+                queued: 1,
+            })
+        );
+        let stopped = ProviderTurnEvent::Ended {
+            background: Some(clear()),
+        };
+        assert_eq!(ledger.observe(&stopped, Some("z"), Some(0)), None, "once");
+        assert_eq!(ledger.settled(), Err(MaintenanceRefusal::TurnCountUnknown));
+
+        let mut ledger = TurnLedger::default();
+        let lost = ledger.observe(&stopped, Some(Q), Some(0)).unwrap();
+        assert_eq!(lost.case, "stop_without_submit");
+        let lost = TurnLedger::default()
+            .observe(&ProviderTurnEvent::Submitted, None, None)
+            .unwrap();
+        assert_eq!(lost.case, "submit_without_prompt_id");
+        let lost = TurnLedger::default()
+            .observe(&stopped, None, Some(0))
+            .unwrap();
+        assert_eq!(lost.case, "stop_without_prompt_id");
+        assert_eq!(
+            TurnLedger::default().observe(&ProviderTurnEvent::Submitted, Some(A), None),
+            None,
+            "an ordinary report loses nothing"
+        );
     }
 
     /// Queen's change (2): unsent operator input always refuses.

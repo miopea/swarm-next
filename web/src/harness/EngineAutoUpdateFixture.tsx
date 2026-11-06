@@ -8,7 +8,8 @@ import WorkerEngineAutoUpdate from "../settings/WorkerEngineAutoUpdate";
  * The worker engine card's automatic update (ADR 0156) and its Needs you item,
  * in the state ?state= names: "waiting" (on, held up by a worker mid-turn),
  * "off" (switched off), "updated" (the last update applied itself),
- * "restart" (Swarm restarts a worker the engine cannot vouch for, ADR 0161),
+ * "restart" (Swarm restarted two workers the engine named and says why it left
+ * two more, ADR 0161 and 0162),
  * "partway" (a try stopped one worker and not the other), or "day" (an update
  * has waited more than a day). Nothing is stopped.
  */
@@ -23,8 +24,13 @@ export default function EngineAutoUpdateFixture() {
     refusal: state === "waiting" || state === "day" || disputed
       ? ledgerMidTurn
       : state === "partway" ? { reason: "stopped_partway", worker: "Pantry", since: now - 5 * 60 } : null,
-    restart: disputed ? { worker: "Ledger", at: now + 45 } : null,
-    restarted: disputed ? [{ worker: "Pantry", at: now - 6 * 60 }] : [],
+    holders: disputed
+      ? [
+        { worker: "Ledger", reason: "turn_in_progress", swarm: "in_use" },
+        { worker: "Larder", reason: "background_work", swarm: null },
+      ]
+      : [],
+    restarted: disputed ? [{ worker: "Pantry", at: now - 60 }, { worker: "Cellar", at: now - 60 }] : [],
     last_update_workers: state === "updated"
       ? [{ name: "Ledger", status: "back" }, { name: "Pantry", status: "back" }]
       : [],

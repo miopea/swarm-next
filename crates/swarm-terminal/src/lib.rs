@@ -62,7 +62,7 @@ pub use ipc::{
     TerminalControlCursor, TerminalControlStatus,
 };
 pub use journal::{JournalLimits, SequencedFrame};
-pub use maintenance::{MaintenanceOutcome, MaintenanceRefusal};
+pub use maintenance::{MaintenanceOutcome, MaintenanceRefusal, SessionRefusal};
 pub use native_interview_capture::NativeInterviewEvidence;
 pub use process::{
     ContinuationRecoveryOutcome, FreshRecoveryLaunch, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS,

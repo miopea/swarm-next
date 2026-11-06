@@ -1033,10 +1033,10 @@ mod tests {
             HostRequest::AdmitMaintenance { sessions } if sessions.len() == 1
         ));
         let response = HostResponse::Maintenance {
-            outcome: crate::MaintenanceOutcome::Refused {
-                reason: crate::MaintenanceRefusal::UnsentInput,
-                session_id: None,
-            },
+            outcome: crate::MaintenanceOutcome::refused(
+                crate::MaintenanceRefusal::UnsentInput,
+                None,
+            ),
         };
         assert_eq!(
             serde_json::to_value(&response).unwrap()["outcome"]["reason"],
