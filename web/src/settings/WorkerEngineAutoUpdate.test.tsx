@@ -18,7 +18,8 @@ test("the card shows the switch, what the update waits for, and turns it off", a
   />);
   const toggle = screen.getByRole("checkbox", { name: /Update by itself when every worker is resting/ });
   expect(toggle).toBeChecked();
-  expect(screen.getByRole("status")).toHaveTextContent("Not yet: Pantry is mid-turn.");
+  expect(screen.getByRole("status")).toHaveTextContent("This update applies by itself once every worker is resting. Waiting on:");
+  expect(screen.getByRole("listitem")).toHaveTextContent("The engine counts Pantry as mid-turn");
 
   fireEvent.click(toggle);
   await waitFor(() => expect(toggle).not.toBeChecked());

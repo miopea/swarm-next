@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DevelopmentRuntime, WorkerEngineAutoUpdateView } from "../api";
-import { ENGINE_WAIT_ATTENTION_SECONDS, engineAutoUpdateStatus, engineUpdateAttention, refusalSentence } from "./engineAutoUpdate";
+import { ENGINE_WAIT_ATTENTION_SECONDS, clock, engineAutoUpdateStatus, engineUpdateAttention, refusalSentence } from "./engineAutoUpdate";
 
 const on: WorkerEngineAutoUpdateView = { enabled: true, waiting_since: 1_000, refusal: null, last_update_workers: [] };
 
@@ -17,23 +17,65 @@ const runtime: DevelopmentRuntime = {
 };
 
 describe("engineAutoUpdateStatus", () => {
-  it("says it will happen by itself, and how to turn that off", () => {
-    expect(engineAutoUpdateStatus(on, 2_000)).toBe(
-      "This update applies by itself the moment every worker is resting. Turn that off here to apply it only with the button.",
-    );
+  it("says it applies within a minute when nobody holds it", () => {
+    expect(engineAutoUpdateStatus(on)).toEqual({
+      summary: "Every worker is resting, so this update applies within a minute.",
+      holders: [],
+      notes: [],
+    });
   });
 
-  it("names the worker holding it up and for how long", () => {
-    const sentence = engineAutoUpdateStatus(
-      { ...on, refusal: { reason: "turn_in_progress", worker: "Pantry", since: 1_000 } },
-      1_000 + 3 * 60,
+  // The operator, 2026-11-06: "it should be clear what is happening and if
+  // not why". One list, from the roster and the engine both.
+  it("lists each worker holding it, from the roster", () => {
+    const status = engineAutoUpdateStatus(
+      { ...on, refusal: { reason: "workers_busy", count: 2, since: 1_000 } },
+      [{ name: "Ledger", background: false }, { name: "Pantry", background: true }],
     );
-    expect(sentence).toBe("This update applies by itself the moment every worker is resting. Not yet: Pantry is mid-turn (for 3 minutes).");
+    expect(status).toEqual({
+      summary: "This update applies by itself once every worker is resting. Waiting on:",
+      holders: ["Ledger is working", "Pantry has a command running in the background"],
+      notes: [],
+    });
+    expect(engineAutoUpdateStatus({ ...on, refusal: { reason: "workers_busy", count: 1, since: 1_000 } })?.holders)
+      .toEqual(["1 worker session is working"]);
+  });
+
+  // ADR 0161: the screen and the engine disagree, and the card says which
+  // way Swarm settles it.
+  it("says when Swarm restarts the worker the engine cannot vouch for", () => {
+    const status = engineAutoUpdateStatus({
+      ...on,
+      refusal: { reason: "turns_unaccounted", worker: "Larder", since: 1_000 },
+      restart: { worker: "Larder", at: 1_060 },
+    });
+    expect(status?.holders).toEqual([
+      `The engine lost count of Larder's turns. Its screen shows it resting, so Swarm restarts Larder alone at ${clock(1_060)} if it still is.`,
+    ]);
+  });
+
+  it("says what Swarm already did, and when that is the button's", () => {
+    const status = engineAutoUpdateStatus({
+      ...on,
+      refusal: { reason: "turn_in_progress", worker: "Pantry", since: 1_000 },
+      restarted: [{ worker: "Pantry", at: 1_200 }],
+    });
+    expect(status?.holders).toEqual([
+      "The engine counts Pantry as mid-turn. Swarm already restarted Pantry once for this update, so use the button.",
+    ]);
+    expect(status?.notes).toEqual([
+      `Swarm restarted Pantry alone at ${clock(1_200)}, because the engine could not confirm it was resting.`,
+    ]);
+  });
+
+  it("names a reason that is nobody's in one sentence", () => {
+    expect(engineAutoUpdateStatus({ ...on, refusal: { reason: "earlier_attempt_failed", since: 1_000 } })?.summary)
+      .toContain("Not now: the last try at this update stopped workers");
   });
 
   it("says plainly when it is off, so the update waits for the operator", () => {
-    expect(engineAutoUpdateStatus({ ...on, enabled: false }, 2_000)).toContain("Automatic engine updates are off");
-    expect(engineAutoUpdateStatus(null, 2_000)).toBeNull();
+    expect(engineAutoUpdateStatus({ ...on, enabled: false })?.summary).toContain("Automatic engine updates are off");
+    expect(engineAutoUpdateStatus(null)).toBeNull();
   });
 
   it("words every reason the engine and the driver give", () => {

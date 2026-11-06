@@ -221,6 +221,64 @@ pub(super) async fn revive_worker_process(
     if host.draining || behind {
         return Ok(None);
     }
+    start_owed_return_unlocked(state, store, worker_id, size).await
+}
+
+/// Restarts one resting worker on its own conversation, because the engine
+/// refused to vouch for it while an engine update waits (ADR 0161).
+///
+/// The same stop as Sleep, then the same start as a return, so a start that
+/// fails is a return owed like any other and Needs you shows it. Returns
+/// `false`, having done nothing, when the worker's session is no longer the
+/// one named, the engine is draining, or a start is not admitted now.
+///
+/// The caller holds the delivery lock, so nothing Swarm sends lands between
+/// its last look at the screen and this stop.
+pub(super) async fn restart_resting_worker(
+    state: &AppState,
+    worker_id: WorkerId,
+    session_id: WorkerSessionId,
+) -> Result<bool, ApiError> {
+    let Ok(_guard) = state.worker_lifecycle.try_lock() else {
+        return Ok(false);
+    };
+    let store = task_store(state)?;
+    let profile = store
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    if profile.active_session_id != Some(session_id)
+        || !automation_admitted(state, profile.provider)
+        || !crate::runtime::coordinator_start_admission(state)
+            .await
+            .permits_start()
+        || crate::maintenance::host_status_snapshot(state)
+            .await?
+            .draining
+    {
+        return Ok(false);
+    }
+    store
+        .record_worker_revival_intents(&[worker_id], crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    stop_worker_session_preserving_context(state, session_id).await?;
+    store
+        .release_worker_session_because(session_id, Some(("engine_update_restart", "swarm")))
+        .map_err(|error| task_store_error(&error))?;
+    store
+        .release_session_assignments(session_id)
+        .map_err(|error| task_store_error(&error))?;
+    start_owed_return_unlocked(state, store, worker_id, TerminalSize::default()).await?;
+    Ok(true)
+}
+
+/// Starts a worker owed a return and settles the promise. The caller holds the
+/// worker lifecycle and has checked the engine.
+async fn start_owed_return_unlocked(
+    state: &AppState,
+    store: &swarm_persistence::TaskStore,
+    worker_id: WorkerId,
+    size: TerminalSize,
+) -> Result<Option<crate::WorkerView>, ApiError> {
     let Some(attempt) = store
         .claim_worker_revival_attempt(worker_id, crate::unix_timestamp())
         .map_err(|error| task_store_error(&error))?

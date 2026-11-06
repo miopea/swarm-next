@@ -21,7 +21,7 @@ import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
-import { engineUpdateCost, workerEngineUpdateRequired, workersMidCommand } from "../runtime/workerEngine";
+import { engineUpdateCost, workerEngineUpdateRequired, workersHoldingTheEngine, workersMidCommand } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import ReleaseUpdateAction from "./ReleaseUpdateAction";
@@ -607,7 +607,12 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                 <button className="secondary-button" type="button" onClick={() => setTerminalHostAttempt((attempt) => attempt + 1)}>Retry worker engine status</button>
               </> : workerEngineNeedsUpdate ? <>
                 <p>The engine currently reports {activeWorkerCount} loaded worker{activeWorkerCount === 1 ? "" : "s"}. Updating this layer restarts loaded workers.</p>
-                <p className={busyWorkerNames.length > 0 ? "engine-update-cost busy" : "engine-update-cost"} role="status">{engineUpdateCost(busyWorkerNames)}</p>
+                {/* Off, this is what the button costs. On, the automatic
+                    status below names who is working, and saying it twice
+                    was the complaint (2026-11-06). */}
+                {developmentRuntime?.worker_engine_auto_update?.enabled ? null : (
+                  <p className={busyWorkerNames.length > 0 ? "engine-update-cost busy" : "engine-update-cost"} role="status">{engineUpdateCost(busyWorkerNames)}</p>
+                )}
                 <small>Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
               {workerEngineProgress ? (
                 <div className="maintenance-progress" role="status" aria-live="polite">
@@ -663,6 +668,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
                   operatorToken={operatorToken}
                   view={developmentRuntime?.worker_engine_auto_update}
                   behind={workerEngineUpdateRequired(health, terminalHostStatus)}
+                  working={workersHoldingTheEngine(workers)}
                   history={developmentRuntime?.enabled ? null : engineUpdateHistory(
                     developmentRuntime?.last_worker_engine_update,
                     Math.floor(Date.now() / 1000),

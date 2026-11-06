@@ -3,26 +3,75 @@ import type { DevelopmentRuntime, EngineUpdateRefusal, WorkerEngineAutoUpdateVie
 /** How long an engine update waits before Needs you says so (ADR 0156). */
 export const ENGINE_WAIT_ATTENTION_SECONDS = 24 * 60 * 60;
 
+/** A worker the roster shows busy: working, or resting with a command running. */
+export type WorkingWorker = { name: string; background: boolean };
+
 /**
  * What the worker engine card says about the automatic path while an update
- * waits: whether it is on, and if so what is holding it up.
+ * waits: one sentence on what happens and when, then each worker holding it
+ * up, why, and what Swarm does about it.
  *
- * The operator's ruling: keep it automatic, but say so. So the card says it
- * will happen, what it is waiting for, and how to turn it off.
+ * The operator, 2026-11-06: "it should be clear what is happening and if not
+ * why". The card used to say the same thing twice, once from the roster and
+ * once from the engine, and neither said what would happen next.
  */
+export type EngineAutoUpdateStatus = {
+  summary: string;
+  holders: string[];
+  /** What Swarm already did while this update waited (ADR 0161). */
+  notes: string[];
+};
+
+const WAITING_ON = "This update applies by itself once every worker is resting. Waiting on:";
+
 export function engineAutoUpdateStatus(
   view: WorkerEngineAutoUpdateView | null | undefined,
-  now: number,
-): string | null {
+  working: WorkingWorker[] = [],
+): EngineAutoUpdateStatus | null {
   if (!view) return null;
   if (!view.enabled) {
-    return "Automatic engine updates are off, so this update waits for you. Turn them back on here.";
+    return {
+      summary: "Automatic engine updates are off, so this update waits for the button. Turn them back on here.",
+      holders: [],
+      notes: [],
+    };
   }
+  const notes = (view.restarted ?? []).map((restart) =>
+    `Swarm restarted ${restart.worker} alone at ${clock(restart.at)}, because the engine could not confirm it was resting.`);
+  const busy = working.map((worker) =>
+    worker.background ? `${worker.name} has a command running in the background` : `${worker.name} is working`);
   const refusal = view.refusal;
-  if (!refusal) {
-    return "This update applies by itself the moment every worker is resting. Turn that off here to apply it only with the button.";
+  if (!refusal || refusal.reason === "workers_busy") {
+    if (busy.length > 0) return { summary: WAITING_ON, holders: busy, notes };
+    if (refusal) return { summary: WAITING_ON, holders: [capitalize(refusalSentence(refusal))], notes };
+    return { summary: "Every worker is resting, so this update applies within a minute.", holders: [], notes };
   }
-  return `This update applies by itself the moment every worker is resting. Not yet: ${refusalSentence(refusal)}${heldSince(refusal.since, now)}.`;
+  if (!refusal.worker) {
+    return { summary: `This update applies by itself once every worker is resting. Not now: ${refusalSentence(refusal)}.`, holders: busy, notes };
+  }
+  const why = capitalize(refusalSentence(refusal));
+  const then = plan(view, refusal.worker);
+  return { summary: WAITING_ON, holders: [...busy, then ? `${why}. ${then}` : why], notes };
+}
+
+/** What Swarm does about the worker the engine named (ADR 0161). */
+function plan(view: WorkerEngineAutoUpdateView, worker: string): string {
+  if (view.restart?.worker === worker) {
+    return `Its screen shows it resting, so Swarm restarts ${worker} alone at ${clock(view.restart.at)} if it still is.`;
+  }
+  if ((view.restarted ?? []).some((restart) => restart.worker === worker)) {
+    return `Swarm already restarted ${worker} once for this update, so use the button.`;
+  }
+  return "";
+}
+
+/** Hours and minutes in the viewer's own time. */
+export function clock(at: number): string {
+  return new Date(at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function capitalize(sentence: string): string {
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
 /** The engine's or Swarm's reason, in the operator's words. */
@@ -33,15 +82,15 @@ export function refusalSentence(refusal: EngineUpdateRefusal): string {
       const count = refusal.count ?? 0;
       return count === 1 ? "1 worker session is working" : `${count} worker sessions are working`;
     }
-    case "turn_in_progress": return `${worker} is mid-turn`;
+    case "turn_in_progress": return `the engine counts ${worker} as mid-turn`;
     case "unsent_input": return `${worker} has text typed and not sent`;
     case "operator_has_terminal": return `you have ${worker}'s terminal`;
     case "waiting_on_operator": return `${worker} is waiting for an answer`;
     case "background_work": return `${worker} has background work running`;
-    case "scheduled_work": return `${worker} has a scheduled job`;
+    case "scheduled_work": return `${worker} has a scheduled job, which a restart ends`;
     case "screen_not_resting": return `${worker} does not look at rest on screen`;
     case "turn_failed": return `${worker}'s last turn failed`;
-    case "turns_unaccounted": return `${worker}'s turns cannot be accounted for until it restarts`;
+    case "turns_unaccounted": return `the engine lost count of ${worker}'s turns`;
     case "not_claude": return `${worker} is not a Claude session, and only Claude's turns are measured`;
     case "sessions_changed": return "the sessions changed while Swarm checked";
     case "engine_cannot_check_workers": return "the running engine cannot check that its workers are resting, so apply this one with the button";
@@ -99,12 +148,4 @@ export function engineUpdateAttention(
     reason: view?.refusal ? refusalSentence(view.refusal) : null,
     enabled: view?.enabled ?? false,
   };
-}
-
-function heldSince(since: number, now: number): string {
-  const minutes = Math.floor((now - since) / 60);
-  if (!Number.isFinite(minutes) || minutes < 1) return "";
-  if (minutes < 60) return ` (for ${minutes} minute${minutes === 1 ? "" : "s"})`;
-  const hours = Math.floor(minutes / 60);
-  return ` (for ${hours} hour${hours === 1 ? "" : "s"})`;
 }

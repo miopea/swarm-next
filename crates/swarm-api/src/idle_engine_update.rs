@@ -8,8 +8,13 @@
 //! stop the exact running set only if every session in it is resting by the
 //! engine's own evidence, and to stop none otherwise. Nothing here judges
 //! whether a worker rests.
+//!
+//! What a refusal leaves behind is Swarm's (ADR 0161). When the engine refuses
+//! one session for a reason only a new session clears, and Swarm's own reading
+//! of that session's screen says it rests, Swarm restarts that worker alone,
+//! once, and the engine is asked again. The engine still decides the swap.
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -20,12 +25,16 @@ use swarm_domain::{ControlRoomEventKind, WorkerId, WorkerSessionId};
 use swarm_persistence::{WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome};
 use swarm_terminal::{
     HostRequest, HostResponse, HostSessionSummary, MaintenanceOutcome, MaintenanceRefusal,
-    TerminalHostStatus,
+    ProviderActivity, TerminalHostStatus,
 };
 
 use crate::{
     ApiError, AppState, build_version,
+    coordination_delivery::{
+        BusyPolicy, Cadence, CoordinationMessage, TerminalSubmission, submit_coordination_message,
+    },
     maintenance::{host_status_snapshot, worker_engine_update_required},
+    provider_activity::ProviderSignals,
     task_store, task_store_error,
     terminal_host::{request_host, terminal_client},
     unix_timestamp, worker_engine_build_id, worker_runtime,
@@ -35,11 +44,53 @@ use crate::{
 /// of one request, and a busy Hive would otherwise be asked every pass.
 const ATTEMPT_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How long a refused worker must go on resting before Swarm restarts it: one
+/// more admission, so two answers a minute apart agree (ADR 0161).
+const RESTART_AFTER_SECONDS: i64 = 60;
+
+/// The engine's refusals that a new session clears, because each is about the
+/// turns the engine counted in this one: a turn it saw start and not end (Esc
+/// sends no report), a count it could not keep, a session whose hooks never
+/// reported, a turn that failed, or a session cron, which Claude ends with its
+/// process anyway. Anything else is work a restart would lose, or the operator.
+const RESTART_CLEARS: [&str; 4] = [
+    "turn_in_progress",
+    "turns_unaccounted",
+    "turn_failed",
+    "scheduled_work",
+];
+
+/// More restarts than one waiting update could make: one per worker.
+const RESTARTED_KEPT: usize = 64;
+
 /// What this process knows about the automatic path that the database does not.
 #[derive(Default)]
 pub(crate) struct IdleEngineUpdate {
     last_attempt: Mutex<Option<Instant>>,
     refusal: RwLock<Option<EngineUpdateRefusal>>,
+    /// The refused session Swarm will restart if it still rests (ADR 0161).
+    dispute: Mutex<Option<Dispute>>,
+    /// Who Swarm restarted while an update waited, until each is told.
+    restarted: Mutex<Vec<Restarted>>,
+}
+
+/// A refused session whose screen says it rests.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Dispute {
+    session: WorkerSessionId,
+    name: String,
+    /// When Swarm restarts it, if the engine still refuses it then.
+    restart_at: i64,
+}
+
+/// A worker Swarm restarted alone while an update waited.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Restarted {
+    worker: WorkerId,
+    name: String,
+    at: i64,
+    /// The engine that was waiting. A later update may restart it again.
+    engine: String,
 }
 
 impl IdleEngineUpdate {
@@ -54,6 +105,26 @@ impl IdleEngineUpdate {
     /// card forgets on a restart or once the update lands, and this is what is
     /// left to say why it waited.
     fn refuse(&self, reason: &'static str, worker: Option<String>, count: Option<usize>) {
+        self.hold(reason, worker, count, None);
+    }
+
+    /// The engine refused, naming the session that held it up.
+    fn refuse_session(
+        &self,
+        reason: &'static str,
+        worker: Option<String>,
+        session: WorkerSessionId,
+    ) {
+        self.hold(reason, worker, None, Some(session));
+    }
+
+    fn hold(
+        &self,
+        reason: &'static str,
+        worker: Option<String>,
+        count: Option<usize>,
+        session: Option<WorkerSessionId>,
+    ) {
         let Ok(mut current) = self.refusal.write() else {
             return;
         };
@@ -76,7 +147,66 @@ impl IdleEngineUpdate {
             worker,
             count,
             since,
+            session,
         });
+    }
+
+    /// The planned restart, when it is for this session.
+    fn planned(&self, session: WorkerSessionId) -> Option<i64> {
+        self.dispute
+            .lock()
+            .ok()?
+            .as_ref()
+            .filter(|dispute| dispute.session == session)
+            .map(|dispute| dispute.restart_at)
+    }
+
+    fn plan(&self, dispute: Dispute) {
+        tracing::info!(
+            worker = dispute.name,
+            restart_at = dispute.restart_at,
+            "the engine cannot vouch for a resting worker; Swarm restarts it alone if that still holds"
+        );
+        if let Ok(mut current) = self.dispute.lock() {
+            *current = Some(dispute);
+        }
+    }
+
+    fn forget_dispute(&self) {
+        if let Ok(mut current) = self.dispute.lock() {
+            *current = None;
+        }
+    }
+
+    fn restarted_before(&self, worker: WorkerId, engine: &str) -> bool {
+        self.restarted.lock().is_ok_and(|restarted| {
+            restarted
+                .iter()
+                .any(|entry| entry.worker == worker && entry.engine == engine)
+        })
+    }
+
+    fn note_restarted(&self, entry: Restarted) {
+        let Ok(mut restarted) = self.restarted.lock() else {
+            return;
+        };
+        if restarted.len() == RESTARTED_KEPT {
+            restarted.remove(0);
+        }
+        restarted.push(entry);
+    }
+
+    fn restarted(&self) -> Vec<Restarted> {
+        self.restarted
+            .lock()
+            .map(|restarted| restarted.clone())
+            .unwrap_or_default()
+    }
+
+    fn told(&self, worker: WorkerId) {
+        if let Ok(mut restarted) = self.restarted.lock() {
+            restarted.retain(|entry| entry.worker != worker);
+        }
     }
 
     fn clear(&self) {
@@ -114,6 +244,9 @@ pub(crate) struct EngineUpdateRefusal {
     /// How many sessions were busy, when the engine's own count refused.
     pub(crate) count: Option<usize>,
     pub(crate) since: i64,
+    /// The session the engine named, which the card has no use for.
+    #[serde(skip)]
+    pub(crate) session: Option<WorkerSessionId>,
 }
 
 /// What the card shows of the automatic path.
@@ -125,8 +258,18 @@ pub(crate) struct AutoUpdateView {
     waiting_since: Option<i64>,
     /// Why the waiting update has not applied itself yet.
     refusal: Option<EngineUpdateRefusal>,
+    /// The refused worker Swarm restarts alone, and when (ADR 0161).
+    restart: Option<PlannedRestart>,
+    /// Workers Swarm restarted alone while this update waited.
+    restarted: Vec<PlannedRestart>,
     /// Whom the latest update stopped, and whether each is back.
     last_update_workers: Vec<StoppedWorker>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct PlannedRestart {
+    worker: String,
+    at: i64,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -162,17 +305,47 @@ pub(crate) fn view(
             .collect(),
         None => Vec::new(),
     };
+    let refusal = state.idle_engine_update.refusal();
+    let restart = refusal
+        .as_ref()
+        .and_then(|refusal| refusal.session)
+        .and_then(|session| {
+            let dispute = state.idle_engine_update.dispute.lock().ok()?.clone()?;
+            (dispute.session == session).then_some(PlannedRestart {
+                worker: dispute.name,
+                at: dispute.restart_at,
+            })
+        });
+    let waiting = setting.waiting.as_ref().map(|(engine, _)| engine.as_str());
+    let restarted = state
+        .idle_engine_update
+        .restarted()
+        .into_iter()
+        .filter(|entry| Some(entry.engine.as_str()) == waiting)
+        .map(|entry| PlannedRestart {
+            worker: entry.name,
+            at: entry.at,
+        })
+        .collect();
     Some(AutoUpdateView {
         enabled: setting.enabled,
         waiting_since: setting.waiting.map(|(_, since)| since),
-        refusal: state.idle_engine_update.refusal(),
+        refusal,
+        restart,
+        restarted,
         last_update_workers,
     })
 }
 
 /// One supervisor pass. Returns whether the engine was replaced, so the
 /// caller brings the stopped workers back after releasing the lifecycle.
-pub(crate) async fn advance(state: &AppState) -> bool {
+///
+/// `observed` is Swarm's own reading of each session this pass, which decides
+/// only whether a worker the engine refused is restarted alone (ADR 0161).
+pub(crate) async fn advance(
+    state: &AppState,
+    observed: &HashMap<WorkerSessionId, ProviderSignals>,
+) -> bool {
     let Ok(status) = host_status_snapshot(state).await else {
         return false;
     };
@@ -187,10 +360,13 @@ pub(crate) async fn advance(state: &AppState) -> bool {
     }
     if !behind {
         state.idle_engine_update.clear();
+        state.idle_engine_update.forget_dispute();
+        tell_restarted(state, observed).await;
         return false;
     }
     if let Err((reason, count)) = ready(state, &status) {
         state.idle_engine_update.refuse(reason, None, count);
+        state.idle_engine_update.forget_dispute();
         return false;
     }
     if !state.idle_engine_update.due() {
@@ -203,6 +379,9 @@ pub(crate) async fn advance(state: &AppState) -> bool {
     };
     let replaced = attempt(state, &status).await;
     drop(lifecycle);
+    if !replaced {
+        settle(state, observed).await;
+    }
     if replaced {
         state.idle_engine_update.clear();
         if let Ok(store) = task_store(state)
@@ -214,6 +393,191 @@ pub(crate) async fn advance(state: &AppState) -> bool {
         state.control_room_notify.notify_waiters();
     }
     replaced
+}
+
+/// What Swarm does about the session the engine last refused (ADR 0161).
+#[derive(Debug, Eq, PartialEq)]
+enum Settle {
+    /// A reason a restart does not clear, a screen that does not say resting,
+    /// or a worker the operator is using: the engine's answer stands.
+    Leave,
+    /// Restarted once already while this update waited: the button's now.
+    AlreadyRestarted,
+    /// Say when, and restart it then if the engine still refuses it.
+    Plan(i64),
+    /// Planned, and not yet due.
+    Wait,
+    /// The engine refused it again, its screen still says resting, and its
+    /// time has come.
+    Restart,
+}
+
+/// Every input is an observation. `planned` is the restart already planned for
+/// this same session, if any.
+fn settle_step(
+    reason: &str,
+    resting: bool,
+    engaged: bool,
+    restarted_before: bool,
+    planned: Option<i64>,
+    now: i64,
+) -> Settle {
+    if !RESTART_CLEARS.contains(&reason) || !resting || engaged {
+        return Settle::Leave;
+    }
+    if restarted_before {
+        return Settle::AlreadyRestarted;
+    }
+    match planned {
+        None => Settle::Plan(now + RESTART_AFTER_SECONDS),
+        Some(at) if now >= at => Settle::Restart,
+        Some(_) => Settle::Wait,
+    }
+}
+
+/// Resting at its prompt, by Swarm's own reading, with nothing it can see
+/// running: the test provider updates use before typing `/restart` (ADR 0122).
+fn resting(signals: Option<&ProviderSignals>) -> bool {
+    signals.is_some_and(|signals| {
+        signals.activity == ProviderActivity::Resting && !signals.background_work.is_running()
+    })
+}
+
+/// Runs after each refused admission, so a restart answers two refusals a
+/// minute apart, never a stale one.
+async fn settle(state: &AppState, observed: &HashMap<WorkerSessionId, ProviderSignals>) {
+    let now = unix_timestamp();
+    let Some((reason, session)) = state
+        .idle_engine_update
+        .refusal()
+        .and_then(|refusal| refusal.session.map(|session| (refusal.reason, session)))
+    else {
+        state.idle_engine_update.forget_dispute();
+        return;
+    };
+    let Ok(store) = task_store(state) else {
+        return;
+    };
+    let Some(profile) = store.list_worker_profiles().ok().and_then(|profiles| {
+        profiles
+            .into_iter()
+            .find(|profile| profile.active_session_id == Some(session))
+    }) else {
+        state.idle_engine_update.forget_dispute();
+        return;
+    };
+    // Unreadable counts as engaged: a restart while the operator types loses
+    // what they typed.
+    let engaged = store
+        .engaged_devices_by_worker(now)
+        .map_or(true, |engaged| engaged.contains_key(&profile.id));
+    let engine = worker_engine_build_id();
+    match settle_step(
+        reason,
+        resting(observed.get(&session)),
+        engaged,
+        state
+            .idle_engine_update
+            .restarted_before(profile.id, engine),
+        state.idle_engine_update.planned(session),
+        now,
+    ) {
+        Settle::Leave | Settle::AlreadyRestarted => state.idle_engine_update.forget_dispute(),
+        Settle::Plan(restart_at) => state.idle_engine_update.plan(Dispute {
+            session,
+            name: profile.name,
+            restart_at,
+        }),
+        Settle::Wait => {}
+        Settle::Restart => restart(state, profile.id, profile.name, session, reason).await,
+    }
+}
+
+async fn restart(
+    state: &AppState,
+    worker: WorkerId,
+    name: String,
+    session: WorkerSessionId,
+    reason: &'static str,
+) {
+    // Nothing Swarm sends may land between its last look and the stop. A pass
+    // delivering now is a reason to try at the next admission.
+    let Ok(_deliveries) = state.coordination_delivery.try_lock() else {
+        return;
+    };
+    match worker_runtime::restart_resting_worker(state, worker, session).await {
+        Ok(false) => return,
+        Ok(true) => tracing::info!(
+            worker = name,
+            reason,
+            "Swarm restarted a resting worker alone because the engine could not vouch for it"
+        ),
+        // Stopped or not, it has had its one restart this update: a start that
+        // failed is a return owed, which Needs you shows.
+        Err(error) => tracing::warn!(
+            worker = name,
+            reason,
+            message = %error.message,
+            "Swarm could not restart a resting worker the engine could not vouch for"
+        ),
+    }
+    state.idle_engine_update.note_restarted(Restarted {
+        worker,
+        name,
+        at: unix_timestamp(),
+        engine: worker_engine_build_id().to_owned(),
+    });
+    state.idle_engine_update.forget_dispute();
+    state.idle_engine_update.clear();
+    state.control_room_notify.notify_waiters();
+}
+
+/// Once no update waits, each worker Swarm restarted is told, when it next
+/// rests, what happened and that its scheduled jobs did not survive.
+/// Claude ends a session's crons with its process, and Swarm cannot list them.
+async fn tell_restarted(state: &AppState, observed: &HashMap<WorkerSessionId, ProviderSignals>) {
+    let restarted = state.idle_engine_update.restarted();
+    if restarted.is_empty() {
+        return;
+    }
+    let (Ok(store), Ok(client)) = (task_store(state), terminal_client(state)) else {
+        return;
+    };
+    for entry in restarted {
+        let Ok(profile) = store.get_worker_profile(entry.worker) else {
+            // No such worker any more: nobody to tell.
+            state.idle_engine_update.told(entry.worker);
+            continue;
+        };
+        let Some(session) = profile.active_session_id else {
+            continue;
+        };
+        if !resting(observed.get(&session)) {
+            continue;
+        }
+        let outcome = submit_coordination_message(store, client, session, restarted_notice()).await;
+        // A deferral keeps it for the next pass. Anything else is final: an
+        // uncertain write may have landed, and twice is worse than once.
+        if !matches!(outcome, Ok(TerminalSubmission::Deferred(_))) {
+            state.idle_engine_update.told(entry.worker);
+        }
+    }
+}
+
+/// Says what happened and asks for nothing new, so a worker that was waiting
+/// on someone keeps waiting.
+fn restarted_notice() -> CoordinationMessage {
+    CoordinationMessage {
+        cadence: Cadence::Immediate,
+        busy: BusyPolicy::Wait,
+        bytes: b"[Swarm] While a worker engine update waited, Swarm restarted this session \
+                 because the engine could not confirm it was resting. The update has now \
+                 applied. Your conversation and your work are as you left them. Scheduled jobs \
+                 (CronCreate, /loop) end with a session, so any you had set are gone: set again \
+                 the ones you still need. If you were waiting on someone, keep waiting.\r"
+            .to_vec(),
+        marker: b"Swarm restarted this session".to_vec(),
+    }
 }
 
 /// Everything that refuses before the engine is asked anything.
@@ -345,9 +709,20 @@ async fn attempt(state: &AppState, status: &TerminalHostStatus) -> bool {
             cancel_drain(state).await;
             returns.withdraw(state, |_| true);
             let worker = session_id.and_then(|session| returns.name_of(session));
-            state
-                .idle_engine_update
-                .refuse(refusal_reason(reason), worker, None);
+            match session_id {
+                Some(session) => {
+                    state.idle_engine_update.refuse_session(
+                        refusal_reason(reason),
+                        worker,
+                        session,
+                    );
+                }
+                None => {
+                    state
+                        .idle_engine_update
+                        .refuse(refusal_reason(reason), worker, None);
+                }
+            }
             false
         }
         MaintenanceOutcome::Partial { stopped, failed } => {
@@ -840,6 +1215,11 @@ mod tests {
         admitted: Vec<Vec<WorkerSessionId>>,
         stopped: Vec<WorkerSessionId>,
         released: Vec<WorkerSessionId>,
+        /// Sessions stopped one at a time, outside admission.
+        retained_stops: Vec<WorkerSessionId>,
+        /// The conversation each start asked for, and the session it got.
+        started: Vec<String>,
+        restarted_as: Vec<WorkerSessionId>,
         draining: bool,
         /// Stops as admitted, then drops the connection unanswered.
         lose_answer: bool,
@@ -1031,7 +1411,9 @@ mod tests {
                     .map(|&session_id| swarm_terminal::HostSessionSummary {
                         session_id,
                         running: !engine.stopped.contains(&session_id),
-                        stop_pending_release: engine.stopped.contains(&session_id),
+                        // A released session is no longer waiting to be.
+                        stop_pending_release: engine.stopped.contains(&session_id)
+                            && !engine.released.contains(&session_id),
                         resources: None,
                         last_output_at: None,
                         recovery_attempt: None,
@@ -1061,12 +1443,37 @@ mod tests {
             HostRequest::Stop { session_id } => {
                 assert!(
                     engine.stopped.contains(&session_id),
-                    "only a session admission stopped is released"
+                    "only a session admission or a retained stop stopped is released"
                 );
                 engine.released.push(session_id);
                 HostResponse::Acknowledged
             }
+            request @ (HostRequest::Ping
+            | HostRequest::StopRetained { .. }
+            | HostRequest::StartClaude { .. }) => restart_alone(&mut engine, protocol, request),
             other => panic!("the automatic engine update sent an unexpected request: {other:?}"),
+        }
+    }
+
+    /// The one-worker restart (ADR 0161): it stops like Sleep and starts the
+    /// worker again on the same conversation.
+    fn restart_alone(engine: &mut Engine, protocol: u16, request: HostRequest) -> HostResponse {
+        match request {
+            HostRequest::Ping => HostResponse::Pong {
+                protocol_version: protocol,
+            },
+            HostRequest::StopRetained { session_id } => {
+                engine.retained_stops.push(session_id);
+                engine.stopped.push(session_id);
+                HostResponse::Acknowledged
+            }
+            HostRequest::StartClaude { conversation, .. } => {
+                engine.started.push(format!("{conversation:?}"));
+                let session_id = WorkerSessionId::new();
+                engine.restarted_as.push(session_id);
+                HostResponse::SessionStarted { session_id }
+            }
+            other => panic!("not part of a one-worker restart: {other:?}"),
         }
     }
 
@@ -1081,7 +1488,7 @@ mod tests {
     #[tokio::test]
     async fn a_resting_hive_updates_its_engine_by_itself_and_names_who_it_stopped() {
         let hive = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
-        assert!(advance(&hive.state).await);
+        assert!(advance(&hive.state, &HashMap::new()).await);
 
         let engine = hive.engine.lock().unwrap();
         let mut expected = vec![hive.ledger.1, hive.pantry.1];
@@ -1148,7 +1555,7 @@ mod tests {
             .record_worker_revival_intents(&[hive.ledger.0], 1)
             .unwrap();
 
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.asked("cancel_drain"), 1);
         assert!(hive.engine.lock().unwrap().released.is_empty());
         assert_eq!(
@@ -1163,11 +1570,191 @@ mod tests {
         );
 
         // Asked again only after a minute.
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.asked("admit_maintenance"), 1);
         hive.rearm();
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.asked("admit_maintenance"), 2);
+    }
+
+    /// ADR 0161, from 2026-11-06: with every worker paused the update still
+    /// waited, on a turn count the engine lost, a turn ended with Esc, which
+    /// sends no report, and a session cron. Each is cleared by a new session;
+    /// nothing else may be.
+    #[test]
+    fn only_a_resting_worker_refused_for_what_a_new_session_clears_is_restarted() {
+        for reason in RESTART_CLEARS {
+            assert_eq!(
+                settle_step(reason, true, false, false, None, 100),
+                Settle::Plan(160),
+                "{reason}: planned a minute out"
+            );
+        }
+        assert_eq!(
+            settle_step("turn_in_progress", true, false, false, Some(160), 159),
+            Settle::Wait
+        );
+        assert_eq!(
+            settle_step("turns_unaccounted", true, false, false, Some(160), 160),
+            Settle::Restart,
+            "refused again a minute later, still resting"
+        );
+        // A restart would lose this work, or it is the operator's.
+        for reason in [
+            "background_work",
+            "unsent_input",
+            "waiting_on_operator",
+            "operator_has_terminal",
+            "not_claude",
+            "screen_not_resting",
+            "sessions_changed",
+            "workers_busy",
+        ] {
+            assert_eq!(
+                settle_step(reason, true, false, false, Some(0), 100),
+                Settle::Leave,
+                "{reason}"
+            );
+        }
+        assert_eq!(
+            settle_step("turn_in_progress", false, false, false, Some(0), 100),
+            Settle::Leave,
+            "Swarm's own reading must say it rests"
+        );
+        assert_eq!(
+            settle_step("turn_in_progress", true, true, false, Some(0), 100),
+            Settle::Leave,
+            "never while the operator is using it"
+        );
+        assert_eq!(
+            settle_step("scheduled_work", true, false, true, Some(0), 100),
+            Settle::AlreadyRestarted,
+            "once per waiting update"
+        );
+    }
+
+    /// ADR 0161 end to end: a refusal Swarm's own reading disputes is planned,
+    /// a working screen drops the plan, and once its minute is up the worker is
+    /// restarted alone with the stop Sleep uses, owed a return like any other.
+    #[tokio::test]
+    async fn a_resting_worker_the_engine_cannot_vouch_for_is_restarted_alone_once() {
+        let named = Arc::new(Mutex::new(None));
+        let refused = Arc::clone(&named);
+        let mut hive = Hive::new(
+            swarm_terminal::PROTOCOL_VERSION,
+            0,
+            Box::new(move |_| MaintenanceOutcome::Refused {
+                reason: MaintenanceRefusal::TurnInProgress,
+                session_id: *refused.lock().unwrap(),
+            }),
+        );
+        *named.lock().unwrap() = Some(hive.pantry.1);
+        hive.state.test_start_admission = Some(crate::runtime::CoordinatorStartAdmission::Allowed);
+        let resting = reading(&hive, ProviderActivity::Resting);
+        let update = &hive.state.idle_engine_update;
+
+        assert!(!advance(&hive.state, &resting).await);
+        let planned = update.planned(hive.pantry.1).expect("a restart is planned");
+        let shown = serde_json::to_value(view(&hive.state, None).unwrap()).unwrap();
+        assert_eq!(
+            shown["restart"],
+            serde_json::json!({"worker": "Pantry", "at": planned})
+        );
+        assert!(hive.engine.lock().unwrap().retained_stops.is_empty());
+
+        hive.rearm();
+        assert!(!advance(&hive.state, &reading(&hive, ProviderActivity::Active)).await);
+        assert_eq!(update.planned(hive.pantry.1), None, "working: no restart");
+
+        hive.rearm();
+        assert!(!advance(&hive.state, &resting).await);
+        update
+            .dispute
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("planned again")
+            .restart_at = 0;
+        let delivering = hive.state.coordination_delivery.lock().await;
+        hive.rearm();
+        assert!(!advance(&hive.state, &resting).await);
+        assert!(
+            hive.engine.lock().unwrap().retained_stops.is_empty(),
+            "never while something is being delivered"
+        );
+        drop(delivering);
+        hive.rearm();
+        assert!(!advance(&hive.state, &resting).await);
+
+        assert_restarted_alone(&hive);
+
+        // Once no update waits, it is told only when Swarm reads it resting.
+        std::fs::write(
+            hive.state
+                .maintenance_request_path
+                .as_ref()
+                .unwrap()
+                .as_ref(),
+            "",
+        )
+        .unwrap();
+        assert!(!advance(&hive.state, &resting).await);
+        assert_eq!(
+            update.restarted().len(),
+            1,
+            "not read on its new session yet"
+        );
+    }
+
+    /// Swarm's own reading: Ledger resting, Pantry as given.
+    fn reading(hive: &Hive, pantry: ProviderActivity) -> HashMap<WorkerSessionId, ProviderSignals> {
+        let screen = |activity| {
+            ProviderSignals::from_screen(activity, swarm_terminal::BackgroundWork::default())
+        };
+        HashMap::from([
+            (hive.ledger.1, screen(ProviderActivity::Resting)),
+            (hive.pantry.1, screen(pantry)),
+        ])
+    }
+
+    /// Only Pantry was stopped, like Sleep, and started again on its own
+    /// conversation; its return is settled and the card says so.
+    fn assert_restarted_alone(hive: &Hive) {
+        let update = &hive.state.idle_engine_update;
+        let new_session = {
+            let engine = hive.engine.lock().unwrap();
+            assert_eq!(engine.retained_stops, vec![hive.pantry.1], "Pantry alone");
+            assert_eq!(engine.released, vec![hive.pantry.1]);
+            assert_eq!(engine.started.len(), 1);
+            assert!(
+                engine.started[0].starts_with("Resume"),
+                "its own conversation: {}",
+                engine.started[0]
+            );
+            engine.restarted_as[0]
+        };
+        assert_eq!(
+            hive.store()
+                .last_session_end_reason(hive.pantry.0)
+                .unwrap()
+                .as_deref(),
+            Some("engine_update_restart")
+        );
+        let pantry = hive.store().get_worker_profile(hive.pantry.0).unwrap();
+        assert_eq!(
+            pantry.active_session_id,
+            Some(new_session),
+            "back, on a new session"
+        );
+        assert!(hive.owed().is_empty(), "its return is settled");
+        let shown = serde_json::to_value(view(&hive.state, None).unwrap()).unwrap();
+        assert_eq!(shown["restarted"][0]["worker"], "Pantry");
+        assert_eq!(shown["restart"], serde_json::Value::Null);
+        assert!(update.restarted_before(hive.pantry.0, worker_engine_build_id()));
+        assert!(
+            !update.restarted_before(hive.ledger.0, worker_engine_build_id()),
+            "nobody else"
+        );
     }
 
     /// Queen's change (4): a partial stop keeps the exact returns, names the
@@ -1189,7 +1776,7 @@ mod tests {
         );
         *sessions.lock().unwrap() = Some((hive.ledger.1, hive.pantry.1));
 
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.asked("cancel_drain"), 1);
         assert_eq!(hive.engine.lock().unwrap().released, vec![hive.ledger.1]);
         assert!(
@@ -1212,7 +1799,7 @@ mod tests {
         );
 
         hive.rearm();
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.asked("admit_maintenance"), 1, "never asked again");
         assert_eq!(hive.asked("begin_drain"), 1);
         assert_eq!(hive.refusal(), Some(("earlier_attempt_failed", None)));
@@ -1225,7 +1812,7 @@ mod tests {
         let hive = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
         hive.store().release_worker_session(hive.pantry.1).unwrap();
 
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.refusal(), Some(("session_without_worker", None)));
         assert_eq!(hive.asked("admit_maintenance"), 0);
         assert_eq!(hive.asked("cancel_drain"), 1);
@@ -1253,7 +1840,7 @@ mod tests {
         );
         *sessions.lock().unwrap() = Some((partly.ledger.1, partly.pantry.1));
         partly.lose_answers(false);
-        assert!(!advance(&partly.state).await);
+        assert!(!advance(&partly.state, &HashMap::new()).await);
         assert_eq!(
             partly.owed(),
             vec![partly.ledger.0],
@@ -1269,7 +1856,7 @@ mod tests {
         assert!(last.detail.contains("Ledger") && last.detail.contains("answer was lost"));
         assert_eq!(partly.refusal(), Some(("answer_lost", None)));
         partly.rearm();
-        assert!(!advance(&partly.state).await);
+        assert!(!advance(&partly.state, &HashMap::new()).await);
         assert_eq!(partly.asked("admit_maintenance"), 1, "never asked again");
 
         // Nobody stopped: nothing owed and nothing recorded.
@@ -1282,7 +1869,7 @@ mod tests {
             }),
         );
         nobody.lose_answers(false);
-        assert!(!advance(&nobody.state).await);
+        assert!(!advance(&nobody.state, &HashMap::new()).await);
         assert!(nobody.owed().is_empty());
         assert_eq!(nobody.store().last_worker_engine_update().unwrap(), None);
         assert_eq!(nobody.asked("cancel_drain"), 1);
@@ -1291,7 +1878,7 @@ mod tests {
         // Everybody stopped: the update goes on as if the answer had come.
         let everyone = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
         everyone.lose_answers(false);
-        assert!(advance(&everyone.state).await);
+        assert!(advance(&everyone.state, &HashMap::new()).await);
         assert_eq!(
             everyone
                 .store()
@@ -1306,7 +1893,7 @@ mod tests {
         // return stays owed.
         let gone = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
         gone.lose_answers(true);
-        assert!(!advance(&gone.state).await);
+        assert!(!advance(&gone.state, &HashMap::new()).await);
         let mut both = vec![gone.ledger.0, gone.pantry.0];
         both.sort_by_key(ToString::to_string);
         assert_eq!(gone.owed(), both);
@@ -1323,15 +1910,15 @@ mod tests {
         hive.store()
             .set_worker_engine_auto_update(false, 1)
             .unwrap();
-        assert!(!advance(&hive.state).await);
+        assert!(!advance(&hive.state, &HashMap::new()).await);
         assert_eq!(hive.refusal(), Some(("switched_off", None)));
 
         let older = Hive::new(17, 0, stop_all());
-        assert!(!advance(&older.state).await);
+        assert!(!advance(&older.state, &HashMap::new()).await);
         assert_eq!(older.refusal(), Some(("engine_cannot_check_workers", None)));
 
         let busy = Hive::new(swarm_terminal::PROTOCOL_VERSION, 1, stop_all());
-        assert!(!advance(&busy.state).await);
+        assert!(!advance(&busy.state, &HashMap::new()).await);
         assert_eq!(
             busy.state
                 .idle_engine_update
@@ -1342,7 +1929,7 @@ mod tests {
 
         let mut unmanaged = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
         unmanaged.state.maintenance_request_path = None;
-        assert!(!advance(&unmanaged.state).await);
+        assert!(!advance(&unmanaged.state, &HashMap::new()).await);
         assert_eq!(unmanaged.refusal(), Some(("engine_not_managed", None)));
 
         let failed_before = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
@@ -1361,7 +1948,7 @@ mod tests {
             .store()
             .finish_worker_engine_update(&attempt, WorkerEngineUpdateOutcome::TimedOut, "", 2)
             .unwrap();
-        assert!(!advance(&failed_before.state).await);
+        assert!(!advance(&failed_before.state, &HashMap::new()).await);
         assert_eq!(
             failed_before.refusal(),
             Some(("earlier_attempt_failed", None))
