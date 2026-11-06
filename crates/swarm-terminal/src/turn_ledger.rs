@@ -152,6 +152,12 @@ impl TurnLedger {
     ///
     /// A focus report is not a keystroke: a terminal sends one when it gains or
     /// loses focus, and it never puts text in the composer.
+    ///
+    /// Every other write counts, including keys that leave the composer empty
+    /// (scrolling, Esc, arrows) and the terminal's own replies to Claude's
+    /// queries. So `UnsentInput` means "written since the last submit", not
+    /// "text at the prompt". Swarm reads the prompt itself before it accepts
+    /// that reason (ADR 0163).
     pub(crate) fn observe_write(&mut self, bytes: &[u8]) {
         if matches!(bytes, b"\x1b[I" | b"\x1b[O") {
             return;
