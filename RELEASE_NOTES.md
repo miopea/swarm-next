@@ -12,6 +12,18 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.18.1
+
+No database updates. This release changes the worker engine, but installing it keeps your workers running: the app installs first and drives the engine you have. The new engine then applies by itself the next time every worker is resting, which restarts your workers once with their conversations kept. That first update goes through the engine you have now, which names one waiting worker per check, so it can take a few checks longer than later ones.
+
+### Fixes
+- A waiting worker engine update now applies within about a minute of every worker resting, instead of waiting for hours or for you to press the button. Swarm stops the workers it can see are resting, the engine stops the rest in the same check, and nobody is restarted just to be checked.
+- When something real holds the update, nobody is stopped. The engine card lists only what holds it and why: a question waiting for you, you using a worker's terminal, text typed at a prompt, or a worker still working.
+- Scrolling, Esc, arrow keys and the terminal's own replies no longer hold the engine update as unsent input. Only text actually typed at a prompt holds it.
+- If the update cannot apply after Swarm stopped a worker for it, that worker comes back at once on its own conversation.
+- A worker Swarm stopped for the update is told, once it rests again, that any scheduled jobs it had are gone.
+- The engine names every worker holding an update in one check, not one at a time. (after the worker engine update)
+
 ## 1.18.0
 
 Three database updates (221, 222 and 223). Your Hive backs up its database by itself before applying them. This release changes the worker engine, but installing it keeps your workers running: only the app installs, because it still drives the engine you have. The new engine arrives when you apply the worker engine update from its card, which stops and restarts your workers once. After that, engine updates apply by themselves while every worker is resting. Changes to Queen's and the workers' instructions reach each of them when it next starts.
