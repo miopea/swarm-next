@@ -116,6 +116,7 @@ describe("engineAutoUpdateStatus", () => {
       .toBe("the engine saw keys pressed at Ledger's prompt since its last message");
     expect(refusalSentence({ reason: "input_in_flight", since: 0 })).toContain("on its way to a worker");
     expect(refusalSentence({ reason: "stop_failed", since: 0 })).toContain("brought that worker back");
+    expect(refusalSentence({ reason: "package_operation_active", since: 0 })).toContain("waits for it to finish");
     expect(refusalSentence({ reason: "operator_has_terminal", worker: "Ledger", since: 0 })).toBe("you have Ledger's terminal");
     expect(refusalSentence({ reason: "turns_unaccounted", worker: "Ledger", since: 0 })).toBe("the engine lost count of Ledger's turns");
     expect(refusalSentence({ reason: "no_startup_evidence", worker: "Ledger", since: 0 }))

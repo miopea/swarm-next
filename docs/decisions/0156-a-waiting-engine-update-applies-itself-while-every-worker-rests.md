@@ -11,6 +11,8 @@
   ADR 0077 (durable returns).
 - Amended by: ADR 0161. A refusal that only a new session clears is settled
   by restarting that one resting worker, and the card lists every holder.
+- Amended by: ADR 0164. Nothing is tried before the API listens or while a
+  package step holds its lock, and a drain nobody owns is lifted.
 
 ## Context
 

@@ -245,6 +245,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_email_attachment_store(email_attachment_root_from_database(&database_path))
         .with_legacy_database_path(legacy_database_path_from_env())
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
+        .with_package_lifecycle_lock_path(
+            release_state_root(&database_path).join(swarm_api::PACKAGE_LIFECYCLE_LOCK),
+        )
         .with_operator_config_path(operator_config_path())
         .with_release_paths(
             release_state_root(&database_path),
@@ -330,6 +333,9 @@ async fn serve_control_room(
     address: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
+    // Only now may the engine update run (ADR 0164). The pass awaited above,
+    // before this bind, would otherwise hold an install's health check up.
+    state.note_api_listening();
     let background = start_background_services(&state);
     let stop_background = background.stop_signal();
     let support_state = state.clone();
