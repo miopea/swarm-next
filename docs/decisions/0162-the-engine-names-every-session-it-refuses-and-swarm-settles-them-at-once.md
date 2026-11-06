@@ -10,6 +10,9 @@
 - Amends: ADR 0161 (Swarm restarts a resting worker the engine cannot vouch
   for) and ADR 0156 (a waiting engine update applies itself while every worker
   rests).
+- Amended by: ADR 0163. Decision 2's restarts are replaced. Swarm stops the
+  sessions it vouches for and asks the engine for the rest on the same pass,
+  or stops nobody. The card text in decision 3 is replaced.
 
 ## Context
 

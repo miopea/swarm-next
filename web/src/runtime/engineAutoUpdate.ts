@@ -23,6 +23,7 @@ export type EngineAutoUpdateStatus = {
 };
 
 const WAITING_ON = "This update applies by itself once every worker is resting. Waiting on:";
+const RESTING = "Every worker is resting, so this update applies within a minute.";
 
 export function engineAutoUpdateStatus(
   view: WorkerEngineAutoUpdateView | null | undefined,
@@ -39,17 +40,24 @@ export function engineAutoUpdateStatus(
   const notes = restartedNotes(view.restarted ?? []);
   const busy = working.map((worker) =>
     worker.background ? `${worker.name} has a command running in the background` : `${worker.name} is working`);
-  // The engine names every worker it refused (ADR 0162). One the roster
-  // already shows working is said once, by the roster.
-  const engine = (view.holders ?? [])
+  // The engine names every worker it refused (ADR 0162). One Swarm vouches
+  // for holds nothing: Swarm stops it with the rest (ADR 0163). One the
+  // roster already shows working is said once, by the roster.
+  const named = view.holders ?? [];
+  const engine = named
+    .filter((holder) => holder.swarm !== "stops_with_update")
     .filter((holder) => !(holder.swarm === "not_resting" && working.some((worker) => worker.name === holder.worker)))
     .map(holderLine);
   if (engine.length > 0) return { summary: WAITING_ON, holders: [...busy, ...engine], notes };
+  if (named.length > 0) {
+    if (busy.length > 0) return { summary: WAITING_ON, holders: busy, notes };
+    return { summary: RESTING, holders: [], notes };
+  }
   const refusal = view.refusal;
   if (!refusal || refusal.reason === "workers_busy") {
     if (busy.length > 0) return { summary: WAITING_ON, holders: busy, notes };
     if (refusal) return { summary: WAITING_ON, holders: [capitalize(refusalSentence(refusal))], notes };
-    return { summary: "Every worker is resting, so this update applies within a minute.", holders: [], notes };
+    return { summary: RESTING, holders: [], notes };
   }
   if (!refusal.worker) {
     return { summary: `This update applies by itself once every worker is resting. Not now: ${refusalSentence(refusal)}.`, holders: busy, notes };
@@ -57,9 +65,11 @@ export function engineAutoUpdateStatus(
   return { summary: WAITING_ON, holders: [...busy, capitalize(refusalSentence(refusal))], notes };
 }
 
-/** Why the engine refused one worker, then what Swarm does about it. */
+/** Why the engine refused one worker, then why that holds the update. */
 function holderLine(holder: EngineHolder): string {
   const worker = holder.worker ?? "a worker";
+  // What is on screen says it all: the engine's count adds nothing.
+  if (holder.swarm === "typed") return `${worker} has text typed at its prompt, so the update waits until it is sent or cleared.`;
   const why = capitalize(refusalSentence({ reason: holder.reason, worker, since: 0 }));
   const then = swarmDoes(holder, worker);
   return then ? `${why}. ${then}` : why;
@@ -67,9 +77,8 @@ function holderLine(holder: EngineHolder): string {
 
 function swarmDoes(holder: EngineHolder, worker: string): string {
   switch (holder.swarm) {
-    case "restarts": return `Swarm restarts ${worker} at its next check, within a minute.`;
-    case "in_use": return `You are using ${worker}'s terminal, so Swarm restarts it once you stop.`;
-    case "not_resting": return `Swarm does not read ${worker} as resting either, so it leaves it.`;
+    case "in_use": return `You are using ${worker}'s terminal, so the update waits until you stop.`;
+    case "not_resting": return `Swarm does not read ${worker} as resting either, so the update waits for it.`;
     case "already_restarted": return `Swarm already restarted ${worker} once for this update, so use the button.`;
     default: return "";
   }
@@ -109,7 +118,8 @@ export function refusalSentence(refusal: EngineUpdateRefusal): string {
       return count === 1 ? "1 worker session is working" : `${count} worker sessions are working`;
     }
     case "turn_in_progress": return `the engine counts ${worker} as mid-turn`;
-    case "unsent_input": return `${worker} has text typed and not sent`;
+    case "unsent_input": return `the engine saw keys pressed at ${worker}'s prompt since its last message`;
+    case "input_in_flight": return "a keystroke or a stop was on its way to a worker as Swarm checked";
     case "operator_has_terminal": return `you have ${worker}'s terminal`;
     case "waiting_on_operator": return `${worker} is waiting for an answer`;
     case "background_work": return `${worker} has background work running`;
@@ -131,6 +141,7 @@ export function refusalSentence(refusal: EngineUpdateRefusal): string {
     case "engine_not_managed": return "this installation does not replace its own worker engine";
     case "session_without_worker": return "a session no worker owns is running, and nothing could bring it back";
     case "returns_unrecorded": return "Swarm could not record who to bring back, so it stopped nobody";
+    case "stop_failed": return "Swarm could not stop a resting worker for it, so it brought that worker back";
     default: return "it is waiting";
   }
 }

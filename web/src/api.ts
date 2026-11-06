@@ -558,7 +558,7 @@ export type WorkerRestart = { worker: string; at: number };
 export type EngineHolder = {
   worker?: string | null;
   reason: string;
-  swarm?: "restarts" | "in_use" | "not_resting" | "already_restarted" | null;
+  swarm?: "stops_with_update" | "in_use" | "not_resting" | "typed" | "already_restarted" | null;
 };
 
 export type WorkerEngineAutoUpdateView = {
@@ -568,7 +568,7 @@ export type WorkerEngineAutoUpdateView = {
   refusal?: EngineUpdateRefusal | null;
   /** Every worker the engine's last answer refused, and what Swarm does about each. */
   holders?: EngineHolder[];
-  /** Workers Swarm restarted alone while this update waited. */
+  /** Workers Swarm stopped itself for this update, though the engine could not vouch for them. */
   restarted?: WorkerRestart[];
   last_update_workers: StoppedWorker[];
 };
