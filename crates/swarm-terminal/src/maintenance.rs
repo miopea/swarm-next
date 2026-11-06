@@ -37,12 +37,25 @@ pub enum MaintenanceRefusal {
     ScreenNotResting,
 }
 
+/// One more session that refused the same admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SessionRefusal {
+    pub session_id: WorkerSessionId,
+    pub reason: MaintenanceRefusal,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum MaintenanceOutcome {
     Refused {
         reason: MaintenanceRefusal,
         session_id: Option<WorkerSessionId>,
+        /// Every other session the same admission refused, so whoever asked
+        /// can settle them all at once rather than one per admission (ADR
+        /// 0162). Additive: an older engine sends none, and an older API
+        /// ignores it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        others: Vec<SessionRefusal>,
     },
     Stopped {
         session_ids: Vec<WorkerSessionId>,
@@ -58,7 +71,11 @@ impl MaintenanceOutcome {
         reason: MaintenanceRefusal,
         session_id: Option<WorkerSessionId>,
     ) -> Self {
-        Self::Refused { reason, session_id }
+        Self::Refused {
+            reason,
+            session_id,
+            others: Vec::new(),
+        }
     }
 }
 
@@ -84,15 +101,26 @@ pub(crate) fn stop_set<E>(
             }
         }
     }
-    for (index, guard) in guards.iter().enumerate() {
+    // Every session is asked, not only up to the first refusal: a caller that
+    // can settle what refused needs to know all of it (ADR 0162). Nothing is
+    // stopped unless none refuses.
+    let mut refusals = guards.iter().enumerate().filter_map(|(index, guard)| {
         let reason = if guard.has_owner() {
             Err(MaintenanceRefusal::InteractiveOwner)
         } else {
             eligibility(index)
         };
-        if let Err(reason) = reason {
-            return MaintenanceOutcome::refused(reason, Some(sessions[index].0));
-        }
+        reason.err().map(|reason| SessionRefusal {
+            session_id: sessions[index].0,
+            reason,
+        })
+    });
+    if let Some(first) = refusals.next() {
+        return MaintenanceOutcome::Refused {
+            reason: first.reason,
+            session_id: Some(first.session_id),
+            others: refusals.collect(),
+        };
     }
     let mut stopped = Vec::with_capacity(sessions.len());
     for (index, guard) in guards.iter().enumerate() {
@@ -158,6 +186,59 @@ mod tests {
         for gate in &gates {
             gate.legacy(false, || Ok::<_, ()>(())).unwrap();
         }
+    }
+
+    /// ADR 0162: one admission names every session that refused, so the
+    /// caller settles them in one round, and still stops nobody.
+    #[test]
+    fn maintenance_names_every_refusing_session_and_stops_none() {
+        let gates = [
+            TerminalControlGate::default(),
+            TerminalControlGate::default(),
+            TerminalControlGate::default(),
+        ];
+        let sessions = controls(&gates);
+        let asked = Cell::new(0);
+        let result = stop_set(
+            &sessions,
+            |index| {
+                asked.set(asked.get() + 1);
+                match index {
+                    0 => Err(MaintenanceRefusal::TurnCountUnknown),
+                    2 => Err(MaintenanceRefusal::ScheduledWork),
+                    _ => Ok(()),
+                }
+            },
+            |_| -> Result<(), ()> { panic!("a refusal stops nobody") },
+        );
+        assert_eq!(
+            result,
+            MaintenanceOutcome::Refused {
+                reason: MaintenanceRefusal::TurnCountUnknown,
+                session_id: Some(sessions[0].0),
+                others: vec![SessionRefusal {
+                    session_id: sessions[2].0,
+                    reason: MaintenanceRefusal::ScheduledWork,
+                }],
+            }
+        );
+        assert_eq!(
+            asked.get(),
+            3,
+            "every session is asked, past the first refusal"
+        );
+        for gate in &gates {
+            gate.legacy(false, || Ok::<_, ()>(())).unwrap();
+        }
+        // An older API, which knows nothing of `others`, still reads the answer.
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(wire["others"][0]["reason"], "scheduled_work");
+        let older = serde_json::json!({"status": "refused", "reason": "turn_in_progress", "session_id": null});
+        assert_eq!(
+            serde_json::from_value::<MaintenanceOutcome>(older).unwrap(),
+            MaintenanceOutcome::refused(MaintenanceRefusal::TurnInProgress, None),
+            "an older engine's answer, without `others`, reads as none"
+        );
     }
 
     #[test]

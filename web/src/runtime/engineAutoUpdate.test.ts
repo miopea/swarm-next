@@ -41,16 +41,24 @@ describe("engineAutoUpdateStatus", () => {
       .toEqual(["1 worker session is working"]);
   });
 
-  // ADR 0161: the screen and the engine disagree, and the card says which
-  // way Swarm settles it.
-  it("says when Swarm restarts the worker the engine cannot vouch for", () => {
+  // ADR 0162: the engine names every worker it refused, and the card says
+  // for each what Swarm does, or why it leaves it.
+  it("lists every worker the engine named, with what Swarm does about each", () => {
     const status = engineAutoUpdateStatus({
       ...on,
       refusal: { reason: "turns_unaccounted", worker: "Larder", since: 1_000 },
-      restart: { worker: "Larder", at: 1_060 },
-    });
+      holders: [
+        { worker: "Larder", reason: "turns_unaccounted", swarm: "restarts" },
+        { worker: "Ledger", reason: "turn_in_progress", swarm: "in_use" },
+        { worker: "Cellar", reason: "unsent_input", swarm: null },
+        { worker: "Pantry", reason: "turn_in_progress", swarm: "not_resting" },
+      ],
+    }, [{ name: "Pantry", background: false }]);
     expect(status?.holders).toEqual([
-      `The engine lost count of Larder's turns. Its screen shows it resting, so Swarm restarts Larder alone at ${clock(1_060)} if it still is.`,
+      "Pantry is working",
+      "The engine lost count of Larder's turns. Swarm restarts Larder at its next check, within a minute.",
+      "The engine counts Ledger as mid-turn. You are using Ledger's terminal, so Swarm restarts it once you stop.",
+      "Cellar has text typed and not sent",
     ]);
   });
 
@@ -58,13 +66,17 @@ describe("engineAutoUpdateStatus", () => {
     const status = engineAutoUpdateStatus({
       ...on,
       refusal: { reason: "turn_in_progress", worker: "Pantry", since: 1_000 },
-      restarted: [{ worker: "Pantry", at: 1_200 }],
+      holders: [{ worker: "Pantry", reason: "turn_in_progress", swarm: "already_restarted" }],
+      restarted: [{ worker: "Pantry", at: 1_200 }, { worker: "Larder", at: 1_200 }, { worker: "Ledger", at: 1_200 }],
     });
     expect(status?.holders).toEqual([
       "The engine counts Pantry as mid-turn. Swarm already restarted Pantry once for this update, so use the button.",
     ]);
     expect(status?.notes).toEqual([
-      `Swarm restarted Pantry alone at ${clock(1_200)}, because the engine could not confirm it was resting.`,
+      `Swarm restarted Pantry, Larder and Ledger at ${clock(1_200)}, because the engine could not confirm they were resting.`,
+    ]);
+    expect(engineAutoUpdateStatus({ ...on, restarted: [{ worker: "Pantry", at: 1_200 }] })?.notes).toEqual([
+      `Swarm restarted Pantry at ${clock(1_200)}, because the engine could not confirm it was resting.`,
     ]);
   });
 
@@ -82,6 +94,9 @@ describe("engineAutoUpdateStatus", () => {
     expect(refusalSentence({ reason: "workers_busy", count: 2, since: 0 })).toBe("2 worker sessions are working");
     expect(refusalSentence({ reason: "unsent_input", worker: "Ledger", since: 0 })).toBe("Ledger has text typed and not sent");
     expect(refusalSentence({ reason: "operator_has_terminal", worker: "Ledger", since: 0 })).toBe("you have Ledger's terminal");
+    expect(refusalSentence({ reason: "turns_unaccounted", worker: "Ledger", since: 0 })).toBe("the engine lost count of Ledger's turns");
+    expect(refusalSentence({ reason: "no_startup_evidence", worker: "Ledger", since: 0 }))
+      .toBe("the engine never heard Ledger start, so it cannot count its turns");
     expect(refusalSentence({ reason: "engine_cannot_check_workers", since: 0 })).toContain("apply this one with the button");
     expect(refusalSentence({ reason: "answer_lost", since: 0 })).toContain("comes back once the engine is updated");
     expect(refusalSentence({ reason: "session_without_worker", since: 0 })).toContain("no worker owns");

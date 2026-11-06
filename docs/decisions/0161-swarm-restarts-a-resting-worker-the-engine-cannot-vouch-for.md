@@ -10,6 +10,10 @@
   most are not running a dozen workers, they only have 3-4."
 - Amends: ADR 0156 (a waiting engine update applies itself while every worker
   rests).
+- Amended by: ADR 0162. The engine now names every session it refuses, and
+  Swarm restarts every qualifying one on that same answer, with no minute's
+  wait. Decision 2's plan-then-confirm and the card text in decision 8 are
+  replaced.
 
 ## Context
 

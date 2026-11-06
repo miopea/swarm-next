@@ -1,4 +1,4 @@
-import type { DevelopmentRuntime, EngineUpdateRefusal, WorkerEngineAutoUpdateView } from "../api";
+import type { DevelopmentRuntime, EngineHolder, EngineUpdateRefusal, WorkerEngineAutoUpdateView, WorkerRestart } from "../api";
 
 /** How long an engine update waits before Needs you says so (ADR 0156). */
 export const ENGINE_WAIT_ATTENTION_SECONDS = 24 * 60 * 60;
@@ -36,10 +36,15 @@ export function engineAutoUpdateStatus(
       notes: [],
     };
   }
-  const notes = (view.restarted ?? []).map((restart) =>
-    `Swarm restarted ${restart.worker} alone at ${clock(restart.at)}, because the engine could not confirm it was resting.`);
+  const notes = restartedNotes(view.restarted ?? []);
   const busy = working.map((worker) =>
     worker.background ? `${worker.name} has a command running in the background` : `${worker.name} is working`);
+  // The engine names every worker it refused (ADR 0162). One the roster
+  // already shows working is said once, by the roster.
+  const engine = (view.holders ?? [])
+    .filter((holder) => !(holder.swarm === "not_resting" && working.some((worker) => worker.name === holder.worker)))
+    .map(holderLine);
+  if (engine.length > 0) return { summary: WAITING_ON, holders: [...busy, ...engine], notes };
   const refusal = view.refusal;
   if (!refusal || refusal.reason === "workers_busy") {
     if (busy.length > 0) return { summary: WAITING_ON, holders: busy, notes };
@@ -49,20 +54,41 @@ export function engineAutoUpdateStatus(
   if (!refusal.worker) {
     return { summary: `This update applies by itself once every worker is resting. Not now: ${refusalSentence(refusal)}.`, holders: busy, notes };
   }
-  const why = capitalize(refusalSentence(refusal));
-  const then = plan(view, refusal.worker);
-  return { summary: WAITING_ON, holders: [...busy, then ? `${why}. ${then}` : why], notes };
+  return { summary: WAITING_ON, holders: [...busy, capitalize(refusalSentence(refusal))], notes };
 }
 
-/** What Swarm does about the worker the engine named (ADR 0161). */
-function plan(view: WorkerEngineAutoUpdateView, worker: string): string {
-  if (view.restart?.worker === worker) {
-    return `Its screen shows it resting, so Swarm restarts ${worker} alone at ${clock(view.restart.at)} if it still is.`;
+/** Why the engine refused one worker, then what Swarm does about it. */
+function holderLine(holder: EngineHolder): string {
+  const worker = holder.worker ?? "a worker";
+  const why = capitalize(refusalSentence({ reason: holder.reason, worker, since: 0 }));
+  const then = swarmDoes(holder, worker);
+  return then ? `${why}. ${then}` : why;
+}
+
+function swarmDoes(holder: EngineHolder, worker: string): string {
+  switch (holder.swarm) {
+    case "restarts": return `Swarm restarts ${worker} at its next check, within a minute.`;
+    case "in_use": return `You are using ${worker}'s terminal, so Swarm restarts it once you stop.`;
+    case "not_resting": return `Swarm does not read ${worker} as resting either, so it leaves it.`;
+    case "already_restarted": return `Swarm already restarted ${worker} once for this update, so use the button.`;
+    default: return "";
   }
-  if ((view.restarted ?? []).some((restart) => restart.worker === worker)) {
-    return `Swarm already restarted ${worker} once for this update, so use the button.`;
+}
+
+/** One line per moment Swarm restarted workers, naming them together. */
+function restartedNotes(restarted: WorkerRestart[]): string[] {
+  const byMoment = new Map<string, string[]>();
+  for (const restart of restarted) {
+    const at = clock(restart.at);
+    byMoment.set(at, [...(byMoment.get(at) ?? []), restart.worker]);
   }
-  return "";
+  return [...byMoment].map(([at, workers]) => workers.length === 1
+    ? `Swarm restarted ${workers[0]} at ${at}, because the engine could not confirm it was resting.`
+    : `Swarm restarted ${names(workers)} at ${at}, because the engine could not confirm they were resting.`);
+}
+
+function names(workers: string[]): string {
+  return workers.length < 2 ? workers.join("") : `${workers.slice(0, -1).join(", ")} and ${workers[workers.length - 1]}`;
 }
 
 /** Hours and minutes in the viewer's own time. */
@@ -91,6 +117,7 @@ export function refusalSentence(refusal: EngineUpdateRefusal): string {
     case "screen_not_resting": return `${worker} does not look at rest on screen`;
     case "turn_failed": return `${worker}'s last turn failed`;
     case "turns_unaccounted": return `the engine lost count of ${worker}'s turns`;
+    case "no_startup_evidence": return `the engine never heard ${worker} start, so it cannot count its turns`;
     case "not_claude": return `${worker} is not a Claude session, and only Claude's turns are measured`;
     case "sessions_changed": return "the sessions changed while Swarm checked";
     case "engine_cannot_check_workers": return "the running engine cannot check that its workers are resting, so apply this one with the button";

@@ -549,13 +549,25 @@ export type StoppedWorker = { name: string; status: "back" | "returning" | "need
 /** A worker Swarm restarts, or restarted, alone while an update waits (ADR 0161). */
 export type WorkerRestart = { worker: string; at: number };
 
+/**
+ * A session the engine refused, and what Swarm does about it (ADR 0162):
+ * restarts it at the next check, or leaves it because the worker is in use,
+ * does not read as resting, or was already restarted for this update. No
+ * `swarm` for a refusal a restart would not clear.
+ */
+export type EngineHolder = {
+  worker?: string | null;
+  reason: string;
+  swarm?: "restarts" | "in_use" | "not_resting" | "already_restarted" | null;
+};
+
 export type WorkerEngineAutoUpdateView = {
   enabled: boolean;
   /** When Swarm first saw the current engine update waiting. */
   waiting_since?: number | null;
   refusal?: EngineUpdateRefusal | null;
-  /** The worker the engine refused that Swarm restarts alone, and when. */
-  restart?: WorkerRestart | null;
+  /** Every worker the engine's last answer refused, and what Swarm does about each. */
+  holders?: EngineHolder[];
   /** Workers Swarm restarted alone while this update waited. */
   restarted?: WorkerRestart[];
   last_update_workers: StoppedWorker[];
