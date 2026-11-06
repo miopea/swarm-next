@@ -41,25 +41,45 @@ describe("engineAutoUpdateStatus", () => {
       .toEqual(["1 worker session is working"]);
   });
 
-  // ADR 0162: the engine names every worker it refused, and the card says
-  // for each what Swarm does, or why it leaves it.
-  it("lists every worker the engine named, with what Swarm does about each", () => {
+  // ADR 0162: the engine names every worker it refused. ADR 0163: the card
+  // lists only the ones that hold the update, each with why.
+  it("lists every worker that holds it, with why, and none Swarm vouches for", () => {
     const status = engineAutoUpdateStatus({
       ...on,
       refusal: { reason: "turns_unaccounted", worker: "Larder", since: 1_000 },
       holders: [
-        { worker: "Larder", reason: "turns_unaccounted", swarm: "restarts" },
+        { worker: "Larder", reason: "turns_unaccounted", swarm: "stops_with_update" },
         { worker: "Ledger", reason: "turn_in_progress", swarm: "in_use" },
-        { worker: "Cellar", reason: "unsent_input", swarm: null },
+        { worker: "Cellar", reason: "unsent_input", swarm: "typed" },
         { worker: "Pantry", reason: "turn_in_progress", swarm: "not_resting" },
+        { worker: "Spare", reason: "waiting_on_operator", swarm: null },
       ],
     }, [{ name: "Pantry", background: false }]);
     expect(status?.holders).toEqual([
       "Pantry is working",
-      "The engine lost count of Larder's turns. Swarm restarts Larder at its next check, within a minute.",
-      "The engine counts Ledger as mid-turn. You are using Ledger's terminal, so Swarm restarts it once you stop.",
-      "Cellar has text typed and not sent",
+      "The engine counts Ledger as mid-turn. You are using Ledger's terminal, so the update waits until you stop.",
+      "Cellar has text typed at its prompt, so the update waits until it is sent or cleared.",
+      "Spare is waiting for an answer",
     ]);
+  });
+
+  // The operator, 2026-11-06: "why would we restart workers to check their
+  // state when the engine restart restarts them anyway?"
+  it("says it applies within a minute when Swarm vouches for every worker the engine named", () => {
+    const vouched: WorkerEngineAutoUpdateView = {
+      ...on,
+      refusal: { reason: "unsent_input", worker: "Larder", since: 1_000 },
+      holders: [
+        { worker: "Larder", reason: "unsent_input", swarm: "stops_with_update" },
+        { worker: "Cellar", reason: "scheduled_work", swarm: "stops_with_update" },
+      ],
+    };
+    expect(engineAutoUpdateStatus(vouched)).toEqual({
+      summary: "Every worker is resting, so this update applies within a minute.",
+      holders: [],
+      notes: [],
+    });
+    expect(engineAutoUpdateStatus(vouched, [{ name: "Ledger", background: false }])?.holders).toEqual(["Ledger is working"]);
   });
 
   it("says what Swarm already did, and when that is the button's", () => {
@@ -92,7 +112,10 @@ describe("engineAutoUpdateStatus", () => {
 
   it("words every reason the engine and the driver give", () => {
     expect(refusalSentence({ reason: "workers_busy", count: 2, since: 0 })).toBe("2 worker sessions are working");
-    expect(refusalSentence({ reason: "unsent_input", worker: "Ledger", since: 0 })).toBe("Ledger has text typed and not sent");
+    expect(refusalSentence({ reason: "unsent_input", worker: "Ledger", since: 0 }))
+      .toBe("the engine saw keys pressed at Ledger's prompt since its last message");
+    expect(refusalSentence({ reason: "input_in_flight", since: 0 })).toContain("on its way to a worker");
+    expect(refusalSentence({ reason: "stop_failed", since: 0 })).toContain("brought that worker back");
     expect(refusalSentence({ reason: "operator_has_terminal", worker: "Ledger", since: 0 })).toBe("you have Ledger's terminal");
     expect(refusalSentence({ reason: "turns_unaccounted", worker: "Ledger", since: 0 })).toBe("the engine lost count of Ledger's turns");
     expect(refusalSentence({ reason: "no_startup_evidence", worker: "Ledger", since: 0 }))

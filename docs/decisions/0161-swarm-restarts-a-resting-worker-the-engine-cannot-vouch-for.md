@@ -14,6 +14,9 @@
   Swarm restarts every qualifying one on that same answer, with no minute's
   wait. Decision 2's plan-then-confirm and the card text in decision 8 are
   replaced.
+- Amended by: ADR 0163. Swarm no longer restarts a worker to have it
+  checked. When it vouches for every session the engine names, it stops them
+  itself and the update applies on that pass; otherwise it stops nobody.
 
 ## Context
 
