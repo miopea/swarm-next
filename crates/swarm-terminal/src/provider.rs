@@ -6,9 +6,41 @@ use thiserror::Error;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ClaudeConversationStart {
-    New { session_id: ProviderConversationId },
-    Resume { session_id: ProviderConversationId },
+    New {
+        session_id: ProviderConversationId,
+    },
+    Resume {
+        session_id: ProviderConversationId,
+    },
     Continue,
+    /// A new conversation, under `session_id`, that begins where `from` stands
+    /// (ADR 0160). Claude copies `from` from its last compaction onwards, which
+    /// is exactly what resuming it would load, and leaves `from` untouched, so
+    /// a conversation that only ever grew stops being written. Sent only to an
+    /// engine that `supports_conversation_fork`.
+    Fork {
+        from: ProviderConversationId,
+        session_id: ProviderConversationId,
+    },
+}
+
+impl ProviderCommand {
+    /// The conversation this command forks into, read from the arguments
+    /// Claude is given, so the engine expects exactly the id Claude was told.
+    #[must_use]
+    pub fn forked_conversation(&self) -> Option<ProviderConversationId> {
+        if !self
+            .arguments
+            .iter()
+            .any(|argument| argument == "--fork-session")
+        {
+            return None;
+        }
+        self.arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--session-id")
+            .and_then(|pair| pair[1].parse().ok())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -165,6 +197,13 @@ impl ProviderTerminalAdapter for ClaudeCodeAdapter {
                 vec!["--resume".into(), session_id.to_string()]
             }
             ClaudeConversationStart::Continue => vec!["--continue".into()],
+            ClaudeConversationStart::Fork { from, session_id } => vec![
+                "--resume".into(),
+                from.to_string(),
+                "--fork-session".into(),
+                "--session-id".into(),
+                session_id.to_string(),
+            ],
         };
         if let Some(config) = mcp_config {
             let config = config
@@ -552,6 +591,51 @@ mod tests {
         assert_eq!(command.arguments, ["--resume", &session_id.to_string()]);
     }
 
+    /// Measured on Claude Code 2.1.318: these arguments write a new file under
+    /// `session_id` that begins at `from`'s last compaction, and leave `from`'s
+    /// size and modification time unchanged.
+    #[test]
+    fn claude_forks_an_exact_conversation_into_the_id_swarm_chose() {
+        let from = ProviderConversationId::new();
+        let session_id = ProviderConversationId::new();
+        let command = ClaudeCodeAdapter
+            .command_for(
+                absolute_workspace(),
+                ClaudeConversationStart::Fork { from, session_id },
+            )
+            .unwrap();
+        assert_eq!(
+            command.arguments,
+            [
+                "--resume",
+                &from.to_string(),
+                "--fork-session",
+                "--session-id",
+                &session_id.to_string()
+            ]
+        );
+        assert_eq!(command.forked_conversation(), Some(session_id));
+    }
+
+    /// Only a fork names a conversation the engine should expect a fork into.
+    #[test]
+    fn no_other_start_is_read_as_a_fork() {
+        for start in [
+            ClaudeConversationStart::New {
+                session_id: ProviderConversationId::new(),
+            },
+            ClaudeConversationStart::Resume {
+                session_id: ProviderConversationId::new(),
+            },
+            ClaudeConversationStart::Continue,
+        ] {
+            let command = ClaudeCodeAdapter
+                .command_for(absolute_workspace(), start)
+                .unwrap();
+            assert_eq!(command.forked_conversation(), None, "{start:?}");
+        }
+    }
+
     #[test]
     fn claude_continues_the_workspace_for_migrated_profiles() {
         let command = ClaudeCodeAdapter
@@ -571,6 +655,10 @@ mod tests {
                 session_id: ProviderConversationId::new(),
             },
             ClaudeConversationStart::Continue,
+            ClaudeConversationStart::Fork {
+                from: ProviderConversationId::new(),
+                session_id: ProviderConversationId::new(),
+            },
         ] {
             let command = ClaudeCodeAdapter
                 .command_for_with_mcp(absolute_workspace(), start, Some(config))

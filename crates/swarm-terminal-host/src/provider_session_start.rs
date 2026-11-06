@@ -15,7 +15,7 @@ use swarm_terminal::{
 };
 
 const DEADLINE: Duration = Duration::from_secs(3);
-const STARTUP_PROTOCOL: u16 = 18;
+const STARTUP_PROTOCOL: u16 = 19;
 
 fn unavailable() -> io::Error {
     io::Error::other("provider startup evidence unavailable")
@@ -253,6 +253,9 @@ async fn send(client: &HostClient, request: &HostRequest) -> io::Result<()> {
 // Protocol 18 changed nothing a helper sends: a 17 engine still takes all of it
 // and reads less of a turn report, so the reload that stages 18 leaves the
 // running engine's turn reports working until the engine is swapped.
+// Protocol 19 changed nothing a helper sends either: a fork was already
+// reported as one. What changed is that the engine launches a fork and takes
+// that report as its startup (ADR 0160).
 fn supports_request(protocol: u16, request: &HostRequest) -> bool {
     (17..=STARTUP_PROTOCOL).contains(&protocol)
         || (protocol == 16

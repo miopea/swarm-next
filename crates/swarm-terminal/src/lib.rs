@@ -55,7 +55,7 @@ pub use ipc::{
     ProviderLifecycleCapability, TerminalHostStatus, TerminalInputKind, TerminalTakeoverLease,
     TerminalWriteActor, TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
     default_terminal_socket_path, drives_engine, supports_continuation_recovery,
-    supports_maintenance_admission,
+    supports_conversation_fork, supports_maintenance_admission,
 };
 pub use ipc::{
     MAX_CONTROL_INPUT_BYTES, TERMINAL_CONTROL_PROTOCOL_VERSION, TerminalControlCommand,

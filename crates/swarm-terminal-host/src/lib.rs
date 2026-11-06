@@ -96,15 +96,34 @@ fn conversation_claude_can_open(
     holds_no_such_conversation: impl Fn(ProviderConversationId) -> bool,
     candidates: impl Fn() -> Vec<ProviderConversationId>,
 ) -> ClaudeStartSelection {
-    let selected = match conversation {
-        ClaudeConversationStart::Resume { session_id } => Some(session_id),
-        ClaudeConversationStart::Continue => None,
+    let (selected, known_missing) = match conversation {
+        ClaudeConversationStart::Resume { session_id } => (Some(session_id), None),
+        ClaudeConversationStart::Continue => (None, None),
         ClaudeConversationStart::New { .. } => {
             return ClaudeStartSelection {
                 conversation,
                 recovery_attempt: None,
             };
         }
+        // ⚠️ A FORK NEEDS SOMETHING TO FORK FROM (ADR 0160). Claude is asked
+        // about `from` exactly as it is asked about a pin. When it holds it,
+        // the fork goes ahead: a new conversation, not a recovery. When it
+        // does not, this is a resume of `from` that cannot open, and the
+        // ladder below takes it from there, without asking about `from`
+        // again. The pin Swarm moved to the fork's id then moves to whatever
+        // the ladder opens, and the next start tries the fork again.
+        ClaudeConversationStart::Fork { from, .. } => {
+            if !holds_no_such_conversation(from) {
+                return ClaudeStartSelection {
+                    conversation,
+                    recovery_attempt: None,
+                };
+            }
+            (Some(from), Some(from))
+        }
+    };
+    let holds_no_such_conversation = |candidate: ProviderConversationId| {
+        known_missing == Some(candidate) || holds_no_such_conversation(candidate)
     };
     // ⚠️ THE SECOND TIER (ADR 0109). A pin Claude cannot open used to fall
     // straight to `--continue`, which asks Claude to pick the newest
@@ -2475,6 +2494,59 @@ mod conversation_oracle_tests {
                 }
             );
         }
+    }
+
+    /// The weekly rotation (ADR 0160): Claude holds the conversation being
+    /// forked, so the fork is launched as asked, and it is not a recovery.
+    #[test]
+    fn a_fork_from_a_conversation_claude_holds_goes_ahead() {
+        let from = pinned();
+        let session_id = pinned();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let selection = conversation_claude_can_open(
+            ClaudeConversationStart::Fork { from, session_id },
+            |id| {
+                asked.borrow_mut().push(id);
+                false
+            },
+            || panic!("a fork from a conversation Claude holds lists nothing"),
+        );
+        assert_eq!(
+            selection.conversation,
+            ClaudeConversationStart::Fork { from, session_id }
+        );
+        assert!(selection.recovery_attempt.is_none());
+        assert_eq!(*asked.borrow(), vec![from]);
+    }
+
+    /// Queen's condition: a fork that cannot happen resumes instead, through
+    /// the same ladder as a pin Claude cannot open, and `from` is asked about
+    /// once, not twice.
+    #[test]
+    fn a_fork_from_a_conversation_claude_cannot_open_resumes_what_it_can() {
+        let from = pinned();
+        let newest = pinned();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let selection = conversation_claude_can_open(
+            ClaudeConversationStart::Fork {
+                from,
+                session_id: pinned(),
+            },
+            |id| {
+                asked.borrow_mut().push(id);
+                id != newest
+            },
+            || vec![from, newest],
+        );
+        assert_eq!(
+            selection.conversation,
+            ClaudeConversationStart::Resume { session_id: newest }
+        );
+        assert!(
+            selection.recovery_attempt.is_some(),
+            "the resume is a recovery, so its outcome moves the pin"
+        );
+        assert_eq!(*asked.borrow(), vec![from, newest]);
     }
 
     #[test]
