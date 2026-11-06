@@ -1017,7 +1017,7 @@ pub(super) const QUEEN_RESTING_EXECUTION_GUIDANCE: &str = "RESTING IS NOT EXECUT
 /// Queen's half of "Queen releases reviewed work" (ADR 0131), given only while
 /// the operator has it on. Also put in each review's prompt, because a running
 /// Queen keeps the brief she connected with.
-pub(super) const QUEEN_RELEASE_GUIDANCE: &str = "RELEASING REVIEWED WORK. This Hive's operator has turned on \"Queen releases reviewed work\" (ADR 0131): your review is enough to release code. When you have reviewed a task's work and it is ready, tell its owning worker with swarm_message_worker to release it, naming the task, the repository and pull request, and the steps: commit, push, mark the pull request ready, merge it once its checks pass, and release or deploy when the task needs that. The same holds for a pull request's housekeeping in that repository (ADR 0149): closing one unmerged with the comment you give or approve, reopening one, or re-running its checks, for example a close and reopen so its checks run fresh against main; name each pull request. Their auto mode accepts that instruction from you, and telling the owner is routing, not a release of your own. Do not raise an operator decision to approve a merge, release or deploy of work you reviewed; that approval is yours. That includes a production deploy (ADR 0141): tell the worker to run it through the repository's own release script or deploy workflow, and do not tell it to ask the operator for that command with a command request. You still never run those commands yourself. The operator still decides what a release instruction does not cover: a database migration, a production slot swap (including a deploy workflow whose production step is a swap; ADR 0146), a change to production data, credentials, permissions, app settings or secrets, another repository, an admin merge, or merging past a failed or missing check. For one of those, the worker asks with a command request for that step alone.";
+pub(super) const QUEEN_RELEASE_GUIDANCE: &str = "RELEASING REVIEWED WORK. This Hive's operator has turned on \"Queen releases reviewed work\" (ADR 0131): your review is enough to release code. When you have reviewed a task's work and it is ready, tell its owning worker with swarm_message_worker to release it, naming the task, the repository and pull request, and the steps: commit, push, mark the pull request ready, merge it once its checks pass, and release or deploy when the task needs that. The same holds for a pull request's housekeeping in that repository (ADR 0149): closing one unmerged with the comment you give or approve, reopening one, or re-running its checks, for example a close and reopen so its checks run fresh against main; name each pull request. Their auto mode accepts that instruction from you, and telling the owner is routing, not a release of your own. Do not raise an operator decision to approve a merge, release or deploy of work you reviewed; that approval is yours. That includes a production deploy (ADR 0141): tell the worker to run it through the repository's own release script or deploy workflow, and do not tell it to ask the operator for that command with a command request. You still never run those commands yourself. The operator still decides what a release instruction does not cover: a database migration, a production slot swap (including a deploy workflow whose production step is a swap; ADR 0146), a change to production data, credentials, permissions, app settings or secrets (apart from the two kinds of command card ADR 0165 lets you grant while the operator lets you grant command cards), another repository, an admin merge, or merging past a failed or missing check. For one of those, the worker asks with a command request for that step alone.";
 
 /// A worker's half of "Queen releases reviewed work" (ADR 0131), given only
 /// while the operator has it on.
@@ -1031,11 +1031,11 @@ pub(super) const WORKER_TASK_READS_GUIDANCE: &str = "READING PRODUCTION FOR YOUR
 /// Queen's half of "Queen grants command cards" (ADR 0158), given only while
 /// the operator has it on. Also put in each review's prompt, because a running
 /// Queen keeps the brief she connected with.
-pub(super) const QUEEN_GRANT_GUIDANCE: &str = "GRANTING COMMAND CARDS. This Hive's operator has turned on \"Queen grants command cards\" (ADR 0158). A worker's command card is yours when the worker said none of the operator's reasons applies; swarm_list_command_cards lists them in full, and a review wakes you while one waits. For each, read the exact command, its script, and the task it belongs to. Grant it with swarm_grant_command only when it carries out work you have reviewed on that task, it does no more than that work needs, and none of the operator's reasons applies, whatever the worker said: it creates, sets, rotates, revokes or exposes a password, key, token or secret; it grants, revokes or changes access, a role, branch protection or a security setting; it may cost more than $25; or it deletes something that cannot be restored. Your note says what you checked. Otherwise hand it to the operator with swarm_hand_command_to_operator and say why, and when you are unsure, hand it on. The worker's claim is not your review. A card you leave waiting holds that worker's task.";
+pub(super) const QUEEN_GRANT_GUIDANCE: &str = "GRANTING COMMAND CARDS. This Hive's operator has turned on \"Queen grants command cards\" (ADR 0158). A worker's command card is yours when the worker said none of the operator's reasons applies; swarm_list_command_cards lists them in full, and a review wakes you while one waits. For each, read the exact command, its script, and the task it belongs to. Grant it with swarm_grant_command only when it carries out work you have reviewed on that task, it does no more than that work needs, and none of the operator's reasons applies, whatever the worker said: it creates, sets, rotates, revokes or exposes a password, key, token or secret; it grants, revokes or changes access, a role, branch protection or a security setting; it may cost more than $25; or it deletes something that cannot be restored. Your note says what you checked. Otherwise hand it to the operator with swarm_hand_command_to_operator and say why, and when you are unsure, hand it on. The worker's claim is not your review. A card you leave waiting holds that worker's task. Two more kinds are yours to grant (ADR 0165), and this replaces the operator's earlier rule that they approve each translation batch themselves. First, a guarded production content write: it changes only display content (translation or UI strings, or navigation entries) and never accounts, members' records, money, access, app settings or schema, and you read in its script that it is pinned by hash, reads every row it targets first and refuses if any differs from what the card shows, records each value it overwrites and each row it adds so the write can be undone, and reads the rows back afterwards. That record is why it deletes nothing that cannot be restored. Second, a read-only check on staging or another non-production environment that signs in only by minting a session through an application's sanctioned agent-session grant, for a test fixture that grant allow-lists: apart from that one mint it sends only GET and HEAD, and it never touches production, a real member's account or an admin impersonation route, or prints the session or its code. That mint is not a credentials step. A guard you cannot find in the script makes the card the operator's, and so do the production changes neither kind covers: a migration, a production app setting, a slot swap, a restart, a command that runs as the operator. Every other card is judged as above.";
 
 /// A worker's half of "Queen grants command cards" (ADR 0158), given only
 /// while the operator has it on.
-pub(super) const WORKER_GRANT_GUIDANCE: &str = "QUEEN GRANTS COMMAND CARDS. This Hive's operator lets Queen grant a command card when none of their reasons applies (ADR 0158). When you ask with command, also send operator_only naming every reason that applies: credentials (it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this), permissions (it grants, revokes or changes access, a role, branch protection or a security setting), spend_over_25_usd (it may cost more than $25) and irreversible_delete (it deletes something that cannot be restored). Send [] only when none does: Queen then reviews it and may grant it, and her answer reaches you like the operator's, marked as hers. A command card without operator_only is refused while this setting is on. Saying [] for a command one of these covers sends the operator's decision to Queen, so name the reason whenever you are unsure.";
+pub(super) const WORKER_GRANT_GUIDANCE: &str = "QUEEN GRANTS COMMAND CARDS. This Hive's operator lets Queen grant a command card when none of their reasons applies (ADR 0158). When you ask with command, also send operator_only naming every reason that applies: credentials (it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this), permissions (it grants, revokes or changes access, a role, branch protection or a security setting), spend_over_25_usd (it may cost more than $25) and irreversible_delete (it deletes something that cannot be restored). Send [] only when none does: Queen then reviews it and may grant it, and her answer reaches you like the operator's, marked as hers. A command card without operator_only is refused while this setting is on. Saying [] for a command one of these covers sends the operator's decision to Queen, so name the reason whenever you are unsure. Two commands are not these reasons (ADR 0165): a guarded content write to translation or UI strings or navigation entries, whose script refuses on any changed row and records every value it overwrites so it can be undone, is not irreversible_delete; and minting a session through an application's sanctioned agent-session grant for an allow-listed test fixture, for a read-only check off production, is not credentials. Send [] for those, and say in the card where the script records the old values, or refuses everything but GET and HEAD, so Queen can check it.";
 
 /// The operator's Hive-wide choices a brief depends on. A read that fails is
 /// the choice off: a brief must not grant what the store could not confirm.
@@ -5166,7 +5166,7 @@ fn request_decision_tool() -> Tool {
                 "deadline": { "type": ["integer", "null"] },
                 "command": { "type": ["string", "null"], "maxLength": 4000, "description": "The ONE shell command you need the operator to allow, verbatim and complete. Send it whenever a permission check or the auto-mode classifier denied a command you need. Swarm offers the operator its own grant button for it; pressing that button lets you run exactly this text once, straight away in this session, while the task is on the board. With a command, give task_id and leave allowed_actions, operator_actions and questions empty and suggested_action an empty string: a button you write could never grant it, so one is refused. Send the command you will actually run, not a pattern or a shortened version: the operator reads this exact text, and any other text is not covered. Omit this for an ordinary approval that authorises no execution." },
                 "script": { "type": ["string", "null"], "maxLength": 4096, "description": "When command runs a local script or program file (./deploy.sh, /srv/app/release), its absolute path. Swarm hashes the file now and shows the hash to the operator; the grant then lets the command run only while the file is unchanged. Omit it when the command runs no local file, such as gh pr merge 689." },
-                "operator_only": { "type": ["array", "null"], "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "enum": ["credentials", "permissions", "spend_over_25_usd", "irreversible_delete"] }, "description": "With command only: which of the operator's reasons apply to it. credentials: it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this. permissions: it grants, revokes or changes someone's access, a role, branch protection or a security setting. spend_over_25_usd: it may cost more than $25. irreversible_delete: it deletes something that cannot be restored. Name every one that applies, and send [] only when none does: then, while the operator lets Queen grant command cards, Queen reviews the work and may grant it instead. While the operator lets Queen grant command cards, a command without it is refused; otherwise, left out, the card is the operator's. Saying [] for a command one of these covers sends the operator's decision to Queen." }
+                "operator_only": { "type": ["array", "null"], "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "enum": ["credentials", "permissions", "spend_over_25_usd", "irreversible_delete"] }, "description": "With command only: which of the operator's reasons apply to it. credentials: it creates, sets, rotates, revokes or exposes a password, key, token or secret; authenticating through 1Password without printing one is not this. permissions: it grants, revokes or changes someone's access, a role, branch protection or a security setting. spend_over_25_usd: it may cost more than $25. irreversible_delete: it deletes something that cannot be restored. A guarded content write whose script records every value it overwrites is not irreversible_delete, and minting an allow-listed test fixture's session through a sanctioned agent-session grant, for a read-only check off production, is not credentials (ADR 0165). Name every one that applies, and send [] only when none does: then, while the operator lets Queen grant command cards, Queen reviews the work and may grant it instead. While the operator lets Queen grant command cards, a command without it is refused; otherwise, left out, the card is the operator's. Saying [] for a command one of these covers sends the operator's decision to Queen." }
             },
             "required": ["kind", "title", "summary", "reason", "suggested_action"],
             "additionalProperties": false
@@ -13481,6 +13481,66 @@ mod tests {
                 WORKER_GRANT_GUIDANCE.contains(reason.as_str()),
                 "a worker is told every reason by the name it sends: {}",
                 reason.as_str()
+            );
+        }
+    }
+
+    /// ADR 0165: the operator moved two kinds of command card to Queen. She
+    /// hears each with the guards she must find in its script, that the earlier
+    /// per-batch rule is gone, and what stays the operator's. Her release
+    /// paragraph, which keeps production data for the operator, points at the
+    /// exception rather than contradicting it. A worker hears that neither kind
+    /// is one of the operator's reasons, so it sends [] and the card reaches her.
+    #[test]
+    fn queen_may_grant_a_guarded_content_write_and_a_staging_test_session() {
+        for told in [
+            "ADR 0165",
+            "replaces the operator's earlier rule that they approve each translation batch",
+            "guarded production content write",
+            "translation or UI strings, or navigation entries",
+            "pinned by hash",
+            "refuses if any differs from what the card shows",
+            "records each value it overwrites and each row it adds",
+            "reads the rows back",
+            "sanctioned agent-session grant",
+            "a test fixture that grant allow-lists",
+            "only GET and HEAD",
+            "That mint is not a credentials step",
+        ] {
+            assert!(
+                QUEEN_GRANT_GUIDANCE.contains(told),
+                "Queen is told {told:?}: {QUEEN_GRANT_GUIDANCE}"
+            );
+        }
+        for kept in [
+            "a migration",
+            "a production app setting",
+            "a slot swap",
+            "a restart",
+            "a command that runs as the operator",
+            "when you are unsure, hand it on",
+            // The exception narrows what is the operator's; it must not read
+            // as taking every other card away from Queen's ADR 0158 judgment.
+            "the production changes neither kind covers",
+            "Every other card is judged as above",
+        ] {
+            assert!(
+                QUEEN_GRANT_GUIDANCE.contains(kept),
+                "Queen still hands on {kept:?}: {QUEEN_GRANT_GUIDANCE}"
+            );
+        }
+        assert!(
+            QUEEN_RELEASE_GUIDANCE.contains("ADR 0165"),
+            "the release paragraph names the exception: {QUEEN_RELEASE_GUIDANCE}"
+        );
+        for told in [
+            "is not irreversible_delete",
+            "is not credentials",
+            "ADR 0165",
+        ] {
+            assert!(
+                WORKER_GRANT_GUIDANCE.contains(told),
+                "a worker is told {told:?}: {WORKER_GRANT_GUIDANCE}"
             );
         }
     }
