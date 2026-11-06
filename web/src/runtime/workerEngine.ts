@@ -1,4 +1,5 @@
 import type { Health, TerminalHostStatus } from "../api";
+import type { WorkingWorker } from "./engineAutoUpdate";
 
 export function workerEngineUpdateRequired(
   health: Health | undefined,
@@ -23,11 +24,18 @@ export function workerEngineMatches(health: Health, host: TerminalHostStatus) {
  * A resting worker with a shell it can see running is counted: the engine
  * update stops that shell.
  */
-export function workersMidCommand(workers: { name: string; attention_state: string; background_work?: boolean }[]) {
+export function workersMidCommand(workers: RosterWorker[]) {
+  return workersHoldingTheEngine(workers).map((worker) => worker.name);
+}
+
+type RosterWorker = { name: string; attention_state: string; background_work?: boolean };
+
+/** The same workers, saying which only has a command running in the background. */
+export function workersHoldingTheEngine(workers: RosterWorker[]): WorkingWorker[] {
   return workers
     .filter((worker) => worker.attention_state === "buzzing"
       || (worker.attention_state === "resting" && worker.background_work === true))
-    .map((worker) => worker.name);
+    .map((worker) => ({ name: worker.name, background: worker.attention_state !== "buzzing" }));
 }
 
 export const ENGINE_RESTART_CONSEQUENCE = "Loaded worker processes stop. Swarm attempts to return them to their saved conversations; interrupted commands are not resumed automatically and unsent input may be lost.";

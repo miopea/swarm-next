@@ -8,6 +8,7 @@ import WorkerEngineAutoUpdate from "../settings/WorkerEngineAutoUpdate";
  * The worker engine card's automatic update (ADR 0156) and its Needs you item,
  * in the state ?state= names: "waiting" (on, held up by a worker mid-turn),
  * "off" (switched off), "updated" (the last update applied itself),
+ * "restart" (Swarm restarts a worker the engine cannot vouch for, ADR 0161),
  * "partway" (a try stopped one worker and not the other), or "day" (an update
  * has waited more than a day). Nothing is stopped.
  */
@@ -15,12 +16,15 @@ export default function EngineAutoUpdateFixture() {
   const state = new URLSearchParams(window.location.search).get("state") ?? "waiting";
   const now = Math.floor(Date.now() / 1000);
   const ledgerMidTurn = { reason: "turn_in_progress", worker: "Ledger", since: now - 12 * 60 };
+  const disputed = state === "restart";
   const view: WorkerEngineAutoUpdateView = {
     enabled: state !== "off",
     waiting_since: state === "updated" ? null : now - (state === "day" ? 26 : 1) * 3600,
-    refusal: state === "waiting" || state === "day"
+    refusal: state === "waiting" || state === "day" || disputed
       ? ledgerMidTurn
       : state === "partway" ? { reason: "stopped_partway", worker: "Pantry", since: now - 5 * 60 } : null,
+    restart: disputed ? { worker: "Ledger", at: now + 45 } : null,
+    restarted: disputed ? [{ worker: "Pantry", at: now - 6 * 60 }] : [],
     last_update_workers: state === "updated"
       ? [{ name: "Ledger", status: "back" }, { name: "Pantry", status: "back" }]
       : [],
@@ -61,6 +65,7 @@ export default function EngineAutoUpdateFixture() {
           operatorToken="fixture-only"
           view={view}
           behind={state !== "updated"}
+          working={state === "waiting" ? [{ name: "Pantry", background: true }] : []}
           history={state === "updated"
             ? engineUpdateHistory(updated, now, view.last_update_workers)
             : null}

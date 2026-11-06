@@ -3055,6 +3055,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .worker-remote-control-settings .worker-autostart small, .queen-releases-settings .worker-autostart small, .task-reads-settings .worker-autostart small, .queen-grants-settings .worker-autostart small, .engine-auto-update .worker-autostart small { color: var(--muted); font-size: .74rem; line-height: 1.4; }
 /* `label span` is quiet; on the tinted engine card that falls below AA. */
 .engine-auto-update .worker-autostart strong { color: var(--text); }
+/* What it waits on, one worker a line (ADR 0161). */
+.engine-auto-update-status { display: grid; gap: 4px; min-width: 0; }
+.engine-auto-update-status p { margin: 0; }
+.engine-auto-update-status ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 2px; overflow-wrap: anywhere; font-size: .77rem; line-height: 1.48; color: var(--text); }
 .worker-remote-control-settings .worker-remote-control-detail, .queen-releases-settings .queen-releases-detail, .task-reads-settings .task-reads-detail, .queen-grants-settings .queen-grants-detail { color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .worker-remote-control-settings .worker-remote-control-cost, .queen-releases-settings .queen-releases-cost, .task-reads-settings .task-reads-cost, .queen-grants-settings .queen-grants-cost { color: var(--warn-strong); font-size: .76rem; line-height: 1.45; }
 .worker-model-settings label, .terminal-history-settings label { display: grid; grid-template-columns: 94px minmax(0, 1fr); align-items: center; gap: .65rem; min-width: 0; font-weight: 700; }

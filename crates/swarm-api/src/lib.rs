@@ -1830,7 +1830,7 @@ impl AppState {
         // After the returns already owed, so a worker brought back this pass is
         // counted as running, and before any delivery, so nothing is handed to
         // a session about to be stopped (ADR 0156).
-        if idle_engine_update::advance(self).await {
+        if idle_engine_update::advance(self, &observed).await {
             self.revive_workers_owed_a_return().await;
         }
         // Before delivering anything new, settle a review Swarm could not

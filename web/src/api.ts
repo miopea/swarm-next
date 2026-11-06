@@ -546,11 +546,18 @@ export type EngineUpdateRefusal = {
 /** A worker an engine update stopped, and whether it is back. */
 export type StoppedWorker = { name: string; status: "back" | "returning" | "needs_you" };
 
+/** A worker Swarm restarts, or restarted, alone while an update waits (ADR 0161). */
+export type WorkerRestart = { worker: string; at: number };
+
 export type WorkerEngineAutoUpdateView = {
   enabled: boolean;
   /** When Swarm first saw the current engine update waiting. */
   waiting_since?: number | null;
   refusal?: EngineUpdateRefusal | null;
+  /** The worker the engine refused that Swarm restarts alone, and when. */
+  restart?: WorkerRestart | null;
+  /** Workers Swarm restarted alone while this update waited. */
+  restarted?: WorkerRestart[];
   last_update_workers: StoppedWorker[];
 };
 

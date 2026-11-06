@@ -9,6 +9,8 @@
   sessions.
 - Builds on: ADR 0123 (Claude workers report their turns through hooks) and
   ADR 0077 (durable returns).
+- Amended by: ADR 0161. A refusal that only a new session clears is settled
+  by restarting that one resting worker, and the card lists every holder.
 
 ## Context
 
