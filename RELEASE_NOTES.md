@@ -12,6 +12,15 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.18.2
+
+No database updates and no worker engine change. Installing it restarts only the app, and your workers keep running.
+
+### Fixes
+- An update that installs itself while you are away no longer fails when a worker engine update is also waiting. With 1.18.1, the new app could start the engine update before it answered the install's health check. The install then gave up and rolled back, and workers could not start until the machine restarted.
+- The worker engine update now waits while an install or another update step is running, and its card says so.
+- If a failed install left workers unable to start ("terminal host is draining for an update"), Swarm now clears that by itself once nothing is still using it, and your workers start again.
+
 ## 1.18.1
 
 No database updates. This release changes the worker engine, but installing it keeps your workers running: the app installs first and drives the engine you have. The new engine then applies by itself the next time every worker is resting, which restarts your workers once with their conversations kept. That first update goes through the engine you have now, which names one waiting worker per check, so it can take a few checks longer than later ones.
