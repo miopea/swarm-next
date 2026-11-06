@@ -202,6 +202,8 @@ pub enum HostRequest {
     HostStatus,
     ProviderCapabilities,
     BeginDrain,
+    /// Ends a drain. The API also sends it for a drain nothing owns any more:
+    /// no worker lifecycle, no package step and no swap request (ADR 0164).
     CancelDrain,
     /// Stops exactly these sessions, which must be every running one, if each
     /// is resting by the engine's own evidence; otherwise stops none. Only
