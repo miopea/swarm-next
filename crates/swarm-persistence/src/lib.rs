@@ -465,7 +465,10 @@ const IDLE_ENGINE_UPDATE_SCHEMA_MARKER: i64 = 221;
 const QUEEN_GRANTS_SCHEMA_MARKER: i64 = 222;
 /// When Swarm moved a worker onto a new conversation at a start (ADR 0160).
 const CONVERSATION_ROTATIONS_SCHEMA_MARKER: i64 = 223;
-const CURRENT_SCHEMA_VERSION: i64 = CONVERSATION_ROTATIONS_SCHEMA_MARKER;
+/// A wait on Queen is hers, and the blocks already parked on her move into her
+/// queue (ADR 0166).
+const QUEEN_WAITS_SCHEMA_MARKER: i64 = 224;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_WAITS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -3104,6 +3107,21 @@ impl TaskStore {
         )?)
     }
 
+    /// Whether `name` is a worker on this board rather than someone off it
+    /// (ADR 0166): a profile not archived, by name, ignoring case and the
+    /// space around it.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn is_board_worker_name(&self, name: &str) -> Result<bool, TaskStoreError> {
+        Ok(self.connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_profiles
+                 WHERE archived_at IS NULL AND lower(trim(name)) = lower(trim(?1)))",
+            [name],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Whether a decision linked to this task is still unanswered, which a
     /// block naming an operator action then waits on instead (ADR 0119).
     ///
@@ -5045,6 +5063,9 @@ fn migrate_queen_release_schema_steps(
             transaction,
             CONVERSATION_ROTATIONS_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < QUEEN_WAITS_SCHEMA_MARKER {
+        crate::task_waits::migrate_queen_waits(transaction, QUEEN_WAITS_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11374,6 +11395,39 @@ mod tests {
             undo_sql: "DROP TABLE worker_conversation_rotations;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'worker_conversation_rotations'",
+        },
+        // A wait on Queen (ADR 0166). A value inside a CHECK, so the undo
+        // rebuilds task_waits at the shape before it, without 'queen'.
+        SchemaStep {
+            table: "task_waits",
+            artifact: "queen",
+            undo_sql: "DROP INDEX IF EXISTS task_waits_due;
+                 PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE task_waits RENAME TO task_waits_undo;
+                 CREATE TABLE task_waits (
+                     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                     block_sequence INTEGER NOT NULL,
+                     kind TEXT NOT NULL
+                         CHECK (kind IN ('task','decision','operator_action','outside','date')),
+                     needs TEXT NOT NULL CHECK (length(needs) BETWEEN 1 AND 1000),
+                     party TEXT CHECK (party IS NULL OR length(party) <= 120),
+                     resume_at INTEGER,
+                     created_at INTEGER NOT NULL,
+                     actor_kind TEXT NOT NULL,
+                     actor_id TEXT,
+                     done_at INTEGER,
+                     PRIMARY KEY (task_id, block_sequence),
+                     CHECK ((kind IN ('outside','date')) = (resume_at IS NOT NULL)),
+                     CHECK ((kind = 'outside') = (party IS NOT NULL)),
+                     CHECK (kind = 'operator_action' OR done_at IS NULL)
+                 );
+                 DROP TABLE task_waits_undo;
+                 CREATE INDEX task_waits_due ON task_waits(resume_at)
+                     WHERE resume_at IS NOT NULL;
+                 PRAGMA legacy_alter_table = OFF",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'task_waits'
+                   AND sql LIKE '%''queen''%')",
         },
     ];
 

@@ -45,6 +45,17 @@ test.each([
   expect(summary).toHaveTextContent(`Next move${nextMove}`);
 });
 
+test("a task waiting on Queen says so, and says when she has answered (ADR 0166)", () => {
+  const wait = { kind: "queen", needs: "her GO on the exact head", party: null, resume_at: null, done_at: null, cleared: false } as const;
+  const blocked = { ...task, state: "blocked", assigned_worker_id: "worker-1", next_move_owner: "queen", wait } as Task;
+  const { rerender } = render(<TaskDetailDialog task={blocked} operatorToken="token" busy={false} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />);
+  const summary = screen.getByLabelText("Task summary");
+  expect(summary).toHaveTextContent("Waiting forQueen: her GO on the exact head");
+  expect(summary).toHaveTextContent("Next moveQueen");
+  rerender(<TaskDetailDialog task={{ ...blocked, next_move_owner: "worker", wait: { ...wait, done_at: 5, cleared: true } } as Task} operatorToken="token" busy={false} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />);
+  expect(screen.getByLabelText("Task summary")).toHaveTextContent("Waiting forQueen: answered");
+});
+
 test("guards edits from close, backdrop, and Escape until the operator chooses", () => {
   const onClose = renderDialog();
   fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Repair every worker picker" } });

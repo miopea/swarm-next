@@ -1685,7 +1685,7 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Co
         delivery.actionable_count,
         delivery.presence,
         delivery.run_id,
-        guidance = format_args!("{} {} {} {} {} {} {} {}", crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE, crate::agent::QUEEN_RESTING_EXECUTION_GUIDANCE, crate::agent::QUEEN_OPERATOR_ACTION_GUIDANCE, crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE, "RUN CONTINUITY. This may continue the same unfinished run after an idle provider turn. Read unfinished_delivered_review in current coordination attention before acting. Preserve existing receipts and completed actions; do not repeat side effects, restart the conversation, or replace this run. A worker notification does not finish the review. If the exact run already finished, do not reopen it."),
+        guidance = format_args!("{} {} {} {} {} {} {} {} {}", crate::agent::QUEEN_ACTIVE_RECOVERY_GUIDANCE, crate::agent::QUEEN_RESTING_EXECUTION_GUIDANCE, crate::agent::QUEEN_OPERATOR_ACTION_GUIDANCE, crate::agent::QUEEN_JUDGMENT_GUIDANCE, crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE, crate::agent::QUEEN_WAIT_GUIDANCE, crate::agent::QUEEN_EVIDENCE_GUIDANCE, crate::agent::QUEEN_REVIEW_COVERAGE_GUIDANCE, "RUN CONTINUITY. This may continue the same unfinished run after an idle provider turn. Read unfinished_delivered_review in current coordination attention before acting. Preserve existing receipts and completed actions; do not repeat side effects, restart the conversation, or replace this run. A worker notification does not finish the review. If the exact run already finished, do not reopen it."),
         wake_guidance = crate::agent::QUEEN_WAKE_GUIDANCE,
     )
     .into_bytes();
@@ -4375,6 +4375,7 @@ mod tests {
         assert!(message.contains("Never retry a superseded review question"));
         assert!(message.contains("not because of age"));
         assert!(message.contains(crate::agent::QUEEN_BLOCK_RECOVERY_GUIDANCE));
+        assert!(message.contains(crate::agent::QUEEN_WAIT_GUIDANCE));
         assert!(message.contains("swarm_reassess_task_block"));
         assert!(message.contains("A date written only in prose is not a scheduled hold"));
         assert!(message.contains("does not authorize automatic resumption"));

@@ -359,7 +359,8 @@ const MAX_APIARY_WAIT_KIND_BYTES: usize = 32;
 /// whole feed page over one task. An unknown kind is shown by its words.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApiaryTaskWait {
-    /// `task`, `decision`, `operator_action`, `outside` or `date` today.
+    /// `task`, `decision`, `operator_action`, `outside`, `date` or `queen`
+    /// today.
     pub kind: String,
     /// What must happen, in words.
     pub needs: String,
@@ -369,7 +370,8 @@ pub struct ApiaryTaskWait {
     /// When the work comes back to its worker, for an outside or date wait.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_at: Option<i64>,
-    /// The Hive whose operator must act, for an operator wait.
+    /// The Hive whose operator must act, for an operator wait, or whose Queen
+    /// must answer, for a wait on Queen (ADR 0166).
     ///
     /// The Keeper sets it from the member that sent the wait, so a member
     /// cannot name another Hive's operator.
@@ -399,10 +401,17 @@ impl ApiaryTaskWait {
     }
 
     /// This wait as recorded from `hive`: an operator wait names that Hive's
-    /// operator, and no other kind names a Hive.
+    /// operator and a wait on Queen names that Hive's Queen, and no other kind
+    /// names a Hive.
     #[must_use]
     pub fn sent_by(mut self, hive: HiveId) -> Self {
-        self.hive_id = (self.kind == crate::TaskWaitKind::OperatorAction.as_str()).then_some(hive);
+        self.hive_id = [
+            crate::TaskWaitKind::OperatorAction,
+            crate::TaskWaitKind::Queen,
+        ]
+        .iter()
+        .any(|kind| self.kind == kind.as_str())
+        .then_some(hive);
         self
     }
 
