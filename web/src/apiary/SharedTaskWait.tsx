@@ -14,6 +14,12 @@ export function sharedWaitLabel(wait: ApiaryTaskWait, localHiveId: string | unde
       const hive = wait.hive_id ? hiveName(wait.hive_id) : undefined;
       return `${hive ? `${hive}'s operator` : "its Hive's operator"}: ${wait.needs}`;
     }
+    case "queen": {
+      // Each Hive has its own Queen (ADR 0166).
+      if (wait.hive_id && wait.hive_id === localHiveId) return `Queen: ${wait.needs}`;
+      const hive = wait.hive_id ? hiveName(wait.hive_id) : undefined;
+      return `${hive ? `${hive}'s Queen` : "its Hive's Queen"}: ${wait.needs}`;
+    }
     case "outside":
       return `${wait.party ?? "an outside party"}: ${wait.needs}${backAt(wait)}`;
     case "date":

@@ -91,6 +91,78 @@ pub(crate) fn migrate_task_waits(transaction: &rusqlite::Transaction<'_>) -> rus
     transaction.pragma_update(None, "user_version", crate::TASK_WAITS_SCHEMA_MARKER)
 }
 
+/// Admits a wait on Queen, and brings the blocks already parked on her into
+/// her queue (ADR 0166).
+///
+/// The table is rebuilt because its CHECKs name the kinds. Then the current
+/// wait of each open block whose party is Queen alone becomes hers: no party
+/// and no recheck, its words untouched. Waits on blocks the task has since
+/// left are history and stay as they were written.
+pub(crate) fn migrate_queen_waits(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE task_waits_v224 (
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             block_sequence INTEGER NOT NULL,
+             kind TEXT NOT NULL
+                 CHECK (kind IN ('task','decision','operator_action','outside','date','queen')),
+             needs TEXT NOT NULL CHECK (length(needs) BETWEEN 1 AND 1000),
+             party TEXT CHECK (party IS NULL OR length(party) <= 120),
+             resume_at INTEGER,
+             created_at INTEGER NOT NULL,
+             actor_kind TEXT NOT NULL,
+             actor_id TEXT,
+             done_at INTEGER,
+             PRIMARY KEY (task_id, block_sequence),
+             CHECK ((kind IN ('outside','date')) = (resume_at IS NOT NULL)),
+             CHECK ((kind = 'outside') = (party IS NOT NULL)),
+             CHECK (kind IN ('operator_action','queen') OR done_at IS NULL)
+         );
+         -- Named, not `SELECT *`, so a column added later cannot shift one.
+         INSERT INTO task_waits_v224
+                 (task_id, block_sequence, kind, needs, party, resume_at,
+                  created_at, actor_kind, actor_id, done_at)
+             SELECT task_id, block_sequence, kind, needs, party, resume_at,
+                    created_at, actor_kind, actor_id, done_at
+             FROM task_waits;
+         DROP TABLE task_waits;
+         ALTER TABLE task_waits_v224 RENAME TO task_waits;
+         CREATE INDEX task_waits_due ON task_waits(resume_at)
+             WHERE resume_at IS NOT NULL;",
+    )?;
+    let open_block = format!(
+        "kind = 'outside' AND lower(trim(party)) = 'queen'
+         AND block_sequence = (SELECT {BLOCK_ENTRY} FROM tasks t
+             WHERE t.id = task_waits.task_id AND t.state = 'blocked'
+               AND t.removed_at IS NULL)"
+    );
+    // Said in each task's history, so a reader can tell why a task that was
+    // due back at its Recheck is in Queen's queue instead.
+    transaction.execute(
+        &format!(
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
+             SELECT task_id, 'noted', ?1, 'system', NULL
+             FROM task_waits WHERE {open_block}"
+        ),
+        [QUEEN_WAIT_MIGRATED],
+    )?;
+    transaction.execute(
+        &format!(
+            "UPDATE task_waits SET kind = 'queen', party = NULL, resume_at = NULL
+             WHERE {open_block}"
+        ),
+        [],
+    )?;
+    transaction.pragma_update(None, "user_version", version)
+}
+
+/// What a task parked on Queen by an earlier release says when it moves.
+const QUEEN_WAIT_MIGRATED: &str = "Swarm read this block as waiting on Queen, who is on the \
+     board: it is in her queue until she answers on it, and no longer comes back at its \
+     Recheck. Its words are unchanged.";
+
 /// The activity entry that put task `t` into its current state.
 macro_rules! wait_block_entry {
     () => {
@@ -163,7 +235,7 @@ macro_rules! wait_cleared {
             "((",
             crate::task_waits::wait_gates_clear!(),
             ") AND (w.kind IN ('task','decision')
-                OR (w.kind = 'operator_action' AND w.done_at IS NOT NULL)
+                OR (w.kind IN ('operator_action','queen') AND w.done_at IS NOT NULL)
                 OR (w.kind IN ('outside','date') AND w.resume_at <= unixepoch())))"
         )
     };
@@ -193,6 +265,68 @@ macro_rules! typed_wait_holds {
     };
 }
 pub(crate) use typed_wait_holds;
+
+/// Whether the task aliased `$task` waits on Queen's answer now (ADR 0166).
+///
+/// Deliberately NOT part of `typed_wait_holds`: a wait on Queen names her, so
+/// it wakes her, and the alarms that catch blocked work nobody acts on still
+/// count it. Her silence escalates instead of resting on a timer.
+macro_rules! queen_wait_holds {
+    ($task:literal) => {
+        concat!(
+            "EXISTS (SELECT 1 FROM task_waits wait WHERE wait.task_id = ",
+            $task,
+            ".id AND wait.kind = 'queen' AND wait.done_at IS NULL
+               AND wait.block_sequence = (SELECT max(entry.sequence) FROM task_activity entry
+                 WHERE entry.task_id = ",
+            $task,
+            ".id AND entry.kind = 'state_changed'))"
+        )
+    };
+}
+pub(crate) use queen_wait_holds;
+
+/// Queen has answered a blocked task's worker on it, which is what a wait on
+/// her waits for (ADR 0166). Records her answer on the current wait, in the
+/// transaction that records her message, and says so in the history. The
+/// coordination pass brings the task back.
+///
+/// # Errors
+/// Returns database failures.
+pub(crate) fn answer_queen_wait(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    now: i64,
+) -> Result<bool, TaskStoreError> {
+    let changed = transaction.execute(
+        &format!(
+            "UPDATE task_waits SET done_at = ?2
+             WHERE task_id = ?1 AND kind = 'queen' AND done_at IS NULL
+               AND block_sequence = (SELECT {BLOCK_ENTRY} FROM tasks t
+                   WHERE t.id = ?1 AND t.state = 'blocked' AND t.removed_at IS NULL)"
+        ),
+        params![task_id.to_string(), now],
+    )?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    // Queen is who acted, so the history names her profile, as it does for
+    // every other move she makes.
+    transaction.execute(
+        &format!(
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
+             SELECT ?1, 'noted', 'Queen answered: ' || w.needs,
+                    CASE WHEN queen.id IS NULL THEN 'system' ELSE 'worker' END, queen.id
+             FROM task_waits w JOIN tasks t ON t.id = w.task_id
+             LEFT JOIN (SELECT id FROM worker_profiles
+                        WHERE role = 'queen' AND archived_at IS NULL LIMIT 1) queen ON 1
+             WHERE w.task_id = ?1 AND w.block_sequence = {BLOCK_ENTRY}"
+        ),
+        [task_id.to_string()],
+    )?;
+    insert_control_room_event(transaction, ControlRoomEventKind::TasksChanged)?;
+    Ok(true)
+}
 
 const BLOCK_ENTRY: &str = wait_block_entry!();
 
@@ -480,7 +614,8 @@ impl TaskStore {
     /// so when its wait clears it is Queen's to move (ADR 0152).
     ///
     /// Runs in the coordination pass: every 30 seconds, and straight after a
-    /// decision is answered or Done is pressed.
+    /// decision is answered or Done is pressed. A wait on Queen that she has
+    /// answered comes back on the next pass (ADR 0166).
     ///
     /// # Errors
     /// Returns database failures. A task that cannot move is reported in
@@ -495,7 +630,7 @@ impl TaskStore {
                  WHERE t.state = 'blocked' AND t.removed_at IS NULL
                    AND ({gates})
                    AND (w.kind IN ('task','decision')
-                     OR (w.kind = 'operator_action' AND w.done_at IS NOT NULL)
+                     OR (w.kind IN ('operator_action','queen') AND w.done_at IS NOT NULL)
                      OR (w.kind IN ('outside','date') AND w.resume_at <= ?1))
                    AND NOT {from_draft}
                  ORDER BY t.position, t.id LIMIT ?2",
@@ -516,6 +651,7 @@ impl TaskStore {
                 "task" => "Came back by itself: every task it was waiting on is complete.".to_owned(),
                 "decision" => "Came back by itself: the operator answered the decision it was waiting on. Read the answer before going on.".to_owned(),
                 "operator_action" => format!("Came back by itself: the operator pressed Done on \"{needs}\"."),
+                "queen" => format!("Came back by itself: Queen answered on this task about \"{needs}\". Read her message before going on."),
                 "outside" => format!(
                     "Came back by itself to be rechecked: is \"{needs}\" done yet? It was waiting on {}. \
                      If not, block it again with a new Recheck time.",
@@ -666,6 +802,120 @@ mod tests {
         );
     }
 
+    /// The form older briefs taught for Queen: an outside wait with a Recheck.
+    /// It was recorded as an outside party's, which is nobody's move, so the
+    /// task sat in no queue until the timer sent it back to a worker who found
+    /// nothing changed (ADR 0166). It is refused now, with the form that
+    /// works, so no block can rest that way again.
+    #[test]
+    fn the_form_older_briefs_taught_for_queen_no_longer_leaves_a_task_to_nobody() {
+        let (store, task) = active_task("Payments B1");
+        let blocked = store
+            .transition_task_with_note(
+                task,
+                TaskState::Blocked,
+                &format!(
+                    "Draft PR #12 is ready.\nWaiting on: Queen\nNeeds: her GO on the exact head\nRecheck: {}",
+                    swarm_domain::format_rfc3339_seconds(now(&store) + 2 * 86_400)
+                ),
+            )
+            .map(|task| task.next_move_owner);
+        let Err(TaskStoreError::InvalidTaskWait(said)) = blocked else {
+            panic!("a wait on Queen was left to nobody: {blocked:?}");
+        };
+        assert!(said.contains("Waiting on: Queen"), "{said}");
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Active);
+    }
+
+    /// Named alone, Queen is the party. The task is in her queue, and it wakes
+    /// her, until she answers its worker on it. Her answer brings it back.
+    #[test]
+    fn a_block_on_queen_is_in_her_queue_until_she_answers_on_it() {
+        let (store, task) = active_task("Payments B1");
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let worker = store.get_task(task).unwrap().assigned_worker_id.unwrap();
+        // The clock is read first: an in-memory store has one connection.
+        let wakes = |store: &TaskStore| {
+            let at = now(store);
+            let connection = store.connection().unwrap();
+            crate::queen_conductor::actionable_count(&connection, at).unwrap()
+        };
+        let before = wakes(&store);
+        let blocked = store
+            .transition_task_with_note(
+                task,
+                TaskState::Blocked,
+                "Draft PR #12 is ready.\nWaiting on: Queen\nNeeds: her GO on the exact head",
+            )
+            .unwrap();
+        let wait = blocked.wait.clone().expect("the block names a wait");
+        assert_eq!(wait.kind.as_str(), "queen");
+        assert_eq!(wait.needs, "her GO on the exact head");
+        assert!(!wait.cleared);
+        assert_eq!(blocked.next_move_owner, NextMoveOwner::Queen);
+        assert_eq!(wakes(&store), before + 1, "it wakes Queen");
+        assert!(
+            store
+                .resume_cleared_waits(i64::MAX / 2)
+                .unwrap()
+                .resumed
+                .is_empty(),
+            "no amount of time answers for her"
+        );
+        // Her silence escalates, as an unattended block does, which a wait
+        // naming anyone else never does: four hours to the coordinator, twelve
+        // to the operator.
+        let a_day_later = now(&store) + 86_400;
+        let unattended = store
+            .unattended_block_candidates(a_day_later, 4 * 3_600)
+            .unwrap();
+        assert!(unattended.iter().any(|candidate| candidate.task_id == task));
+        let escalated = store
+            .operator_block_escalation_candidates(a_day_later, 12 * 3_600)
+            .unwrap();
+        assert!(escalated.iter().any(|candidate| candidate.task_id == task));
+
+        store
+            .send_queen_worker_message(
+                task,
+                worker,
+                swarm_domain::WorkerMessagePurpose::AssignedTask,
+                "GO on abc1234.",
+                now(&store),
+            )
+            .unwrap();
+
+        let answered = store.get_task(task).unwrap();
+        assert!(answered.wait.as_ref().is_some_and(|wait| wait.cleared));
+        assert_eq!(answered.next_move_owner, NextMoveOwner::Worker);
+        let outcome = store.resume_cleared_waits(now(&store)).unwrap();
+        assert_eq!(outcome.resumed, [task]);
+        let back = store.get_task(task).unwrap();
+        assert_eq!(back.state, TaskState::Ready);
+        assert_eq!(back.assigned_worker_id, Some(worker));
+        let notes: Vec<(Option<String>, String)> = {
+            let connection = store.connection().unwrap();
+            let mut statement = connection
+                .prepare(
+                    "SELECT actor_id, note FROM task_activity
+                     WHERE task_id = ?1 AND note != '' ORDER BY sequence DESC LIMIT 2",
+                )
+                .unwrap();
+            statement
+                .query_map([task.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert!(notes[0].1.contains("Queen answered"), "{notes:?}");
+        assert_eq!(
+            notes[1].0,
+            Some(queen.id.to_string()),
+            "the history names Queen as who acted"
+        );
+        assert!(notes[1].1.contains("her GO on the exact head"), "{notes:?}");
+    }
+
     /// Four tasks waited on the operator while Needs you was empty.
     #[test]
     fn an_operator_action_is_owed_in_needs_you_until_done() {
@@ -718,6 +968,42 @@ mod tests {
             store.complete_operator_wait(task, now(&store)),
             Err(TaskStoreError::NotFound)
         ));
+    }
+
+    /// A wait on Queen is hers whatever else holds the task, as its next move
+    /// says, so an unfinished prerequisite does not stop it waking her
+    /// (ADR 0166).
+    #[test]
+    fn a_wait_on_queen_behind_an_unfinished_prerequisite_still_wakes_her() {
+        let (store, task) = active_task("Payments B2");
+        let upstream = store.create_task("Payments B1", "/workspace").unwrap();
+        store
+            .transition_task(upstream.id, TaskState::Ready)
+            .unwrap();
+        store
+            .add_task_prerequisite(
+                task,
+                upstream.id,
+                "B2 follows B1",
+                &TaskActivityActor::operator(),
+                1,
+            )
+            .unwrap();
+        let wakes = |store: &TaskStore| {
+            let at = now(store);
+            let connection = store.connection().unwrap();
+            crate::queen_conductor::actionable_count(&connection, at).unwrap()
+        };
+        let before = wakes(&store);
+        let blocked = store
+            .transition_task_with_note(
+                task,
+                TaskState::Blocked,
+                "Waiting on: Queen\nNeeds: whether B2 may start before B1 merges",
+            )
+            .unwrap();
+        assert_eq!(blocked.next_move_owner, NextMoveOwner::Queen);
+        assert_eq!(wakes(&store), before, "it still wakes her");
     }
 
     #[test]
@@ -902,6 +1188,96 @@ mod tests {
             store.get_task(prose.id).unwrap().wait,
             None,
             "prose stays untyped"
+        );
+    }
+
+    /// The tasks already parked on Queen by an earlier release: each open
+    /// block's current wait becomes hers with its words unchanged, and it is in
+    /// her queue. An outside party keeps its wait, and a block the task has
+    /// since left stays as history (ADR 0166).
+    #[test]
+    fn the_migration_brings_the_blocks_parked_on_queen_into_her_queue() {
+        let recheck =
+            |store: &TaskStore| swarm_domain::format_rfc3339_seconds(now(store) + 2 * 86_400);
+        let block_as_older_releases_did = |store: &TaskStore, task: TaskId, party: &str| {
+            let note = format!(
+                "Draft PR #12 is ready.\nWaiting on: Spectrum\nNeeds: the operator release, then her GO on the exact head\nRecheck: {}",
+                recheck(store)
+            );
+            store
+                .transition_task_with_note(task, TaskState::Blocked, &note)
+                .unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute(
+                    "UPDATE task_waits SET party = ?2 WHERE task_id = ?1",
+                    params![task.to_string(), party],
+                )
+                .unwrap();
+        };
+        let (store, parked) = active_task("Payments B1");
+        block_as_older_releases_did(&store, parked, " queen ");
+        assert_eq!(
+            store.get_task(parked).unwrap().next_move_owner,
+            NextMoveOwner::Blocked,
+            "what an earlier release left it: nobody's"
+        );
+        let vendor = store.create_task("Spectrum outage", "/workspace").unwrap();
+        store.transition_task(vendor.id, TaskState::Ready).unwrap();
+        let worker = store.get_task(parked).unwrap().assigned_worker_id.unwrap();
+        store.assign_task_to_worker(vendor.id, worker).unwrap();
+        store.transition_task(vendor.id, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(
+                vendor.id,
+                TaskState::Blocked,
+                &format!(
+                    "Waiting on: Spectrum\nNeeds: X4 back to Available\nRecheck: {}",
+                    recheck(&store)
+                ),
+            )
+            .unwrap();
+        let note_before = store.get_task(parked).unwrap().blocked_note;
+
+        let mut connection = store.connection().unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_queen_waits(&transaction, crate::QUEEN_WAITS_SCHEMA_MARKER).unwrap();
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let moved = store.get_task(parked).unwrap();
+        let wait = moved.wait.clone().expect("the wait is kept");
+        assert_eq!(wait.kind.as_str(), "queen");
+        assert_eq!(
+            wait.needs,
+            "the operator release, then her GO on the exact head"
+        );
+        assert_eq!((wait.party, wait.resume_at), (None, None));
+        assert_eq!(moved.next_move_owner, NextMoveOwner::Queen);
+        assert_eq!(moved.blocked_note, note_before, "its words are unchanged");
+        let said: String = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT note FROM task_activity WHERE task_id = ?1 AND kind = 'noted'
+                 ORDER BY sequence DESC LIMIT 1",
+                [parked.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(said.contains("in her queue"), "{said}");
+        let outside = store.get_task(vendor.id).unwrap().wait.unwrap();
+        assert_eq!(outside.kind, TaskWaitKind::Outside);
+        assert_eq!(outside.party.as_deref(), Some("Spectrum"));
+        assert!(
+            store
+                .resume_cleared_waits(i64::MAX / 2)
+                .unwrap()
+                .resumed
+                .iter()
+                .all(|resumed| *resumed != parked),
+            "it no longer comes back at its old Recheck"
         );
     }
 }

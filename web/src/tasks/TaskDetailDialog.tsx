@@ -34,6 +34,8 @@ function waitLabel(wait: TaskWait) {
   switch (wait.kind) {
     case "operator_action":
       return wait.done_at ? "You: done" : `You: ${wait.needs}`;
+    case "queen":
+      return wait.done_at ? "Queen: answered" : `Queen: ${wait.needs}`;
     case "outside":
       return `${wait.party ?? "An outside party"}: ${wait.needs}${back}`;
     case "date":

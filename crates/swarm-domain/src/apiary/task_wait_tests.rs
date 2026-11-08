@@ -57,13 +57,19 @@ fn a_snapshot_without_a_wait_or_with_an_unknown_kind_still_reads() {
     );
 }
 
-/// Only an operator wait names a Hive, and only the Hive that sent it.
+/// Only an operator wait or a wait on Queen names a Hive, and only the Hive
+/// that sent it.
 #[test]
 fn an_operator_wait_names_the_hive_that_sent_it_and_no_other_wait_names_one() {
     let hive = HiveId::new();
     let operator = ApiaryTaskWait::from_local(&local(TaskWaitKind::OperatorAction), hive);
     assert_eq!(operator.kind, "operator_action");
     assert_eq!(operator.hive_id, Some(hive));
+
+    // Each Hive has its own Queen, so a wait on her names whose (ADR 0166).
+    let queen = ApiaryTaskWait::from_local(&local(TaskWaitKind::Queen), hive);
+    assert_eq!(queen.kind, "queen");
+    assert_eq!(queen.hive_id, Some(hive));
 
     let outside = ApiaryTaskWait::from_local(&local(TaskWaitKind::Outside), hive);
     assert_eq!(outside.hive_id, None);

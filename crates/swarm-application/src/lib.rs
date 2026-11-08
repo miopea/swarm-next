@@ -4434,6 +4434,22 @@ impl TaskService {
                     swarm_domain::DECISION_NAMED_AS_AN_ACTION.into(),
                 ));
             }
+            // Another worker on the board is not someone off it. Its wait
+            // would rest until the Recheck and come back unchanged, as the
+            // waits on Queen did (ADR 0166). Its task is a prerequisite.
+            Ok(Some(wait))
+                if wait.kind == swarm_domain::TaskWaitKind::Outside
+                    && self
+                        .store
+                        .is_board_worker_name(wait.party.as_deref().unwrap_or_default())? =>
+            {
+                return Err(ApplicationError::TransitionNotPermitted(format!(
+                    "\"{}\" {}\n\n{}",
+                    wait.party.as_deref().unwrap_or_default(),
+                    swarm_domain::BOARD_WORKER_NAMED_AS_A_WAIT,
+                    swarm_domain::TASK_WAIT_FORMAT
+                )));
+            }
             Ok(Some(_)) => return Ok(()),
             Ok(None) => {}
             Err(error) => return Err(ApplicationError::TransitionNotPermitted(error.to_string())),
@@ -6679,6 +6695,89 @@ mod tests {
             ),
             other => panic!("a block naming nothing must be refused, got {other:?}"),
         }
+    }
+
+    /// Another worker on the board is not someone off it: a wait on them
+    /// rested until its Recheck and came back unchanged (ADR 0166). It is
+    /// refused with the link that works. Queen, named alone, is her own wait.
+    #[test]
+    fn a_wait_naming_another_worker_on_the_board_is_refused() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let other = service
+            .store()
+            .create_worker(
+                "Platform",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/elsewhere",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = service
+            .create_task(
+                queen_principal,
+                "Payments B1",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+        let recheck = swarm_domain::format_rfc3339_seconds(
+            i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            )
+            .unwrap()
+                + 2 * 86_400,
+        );
+        for party in [other.name.as_str(), " platform "] {
+            let refused = service.transition_task(
+                queen_principal,
+                task.id,
+                TaskState::Blocked,
+                &format!("Waiting on: {party}\nNeeds: its release of main\nRecheck: {recheck}"),
+            );
+            match refused {
+                Err(ApplicationError::TransitionNotPermitted(reason)) => assert!(
+                    reason.contains("worker on this board") && reason.contains("prerequisite_id"),
+                    "{party}: {reason}"
+                ),
+                other => panic!("{party}: a wait on a board worker must be refused, got {other:?}"),
+            }
+        }
+        let outside = service
+            .transition_task(
+                queen_principal,
+                task.id,
+                TaskState::Blocked,
+                &format!("Waiting on: Spectrum\nNeeds: X4 back to Available\nRecheck: {recheck}"),
+            )
+            .unwrap();
+        assert_eq!(
+            outside.next_move_owner,
+            swarm_domain::NextMoveOwner::Blocked
+        );
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        let blocked = service
+            .transition_task(
+                queen_principal,
+                task.id,
+                TaskState::Blocked,
+                "Waiting on: Queen\nNeeds: her GO on the exact head",
+            )
+            .unwrap();
+        assert_eq!(blocked.next_move_owner, swarm_domain::NextMoveOwner::Queen);
     }
 
     /// Parks `task` on a decision that is PENDING at the moment it blocks.

@@ -915,6 +915,14 @@ const ACTIONABLE_TASKS: &str = concat!("task.removed_at IS NULL
                      -- A typed wait names who must act, and it is not Queen
                      -- until it clears (ADR 0119).
                      AND NOT ", crate::task_waits::typed_wait_holds!("task", ":now"), ")
+                 -- A wait on Queen is hers whatever else holds the task, as
+                 -- its next move says, unless the operator is asked (ADR 0166).
+                 OR (task.state = 'blocked'
+                     AND ", crate::task_waits::queen_wait_holds!("task"), "
+                     AND NOT EXISTS (
+                         SELECT 1 FROM task_decision_membership membership
+                         JOIN decision_requests decision ON decision.id = membership.decision_id
+                         WHERE membership.task_id = task.id AND decision.state = 'pending'))
                  OR (task.state = 'active' AND EXISTS (
                      SELECT 1 FROM task_prerequisites p LEFT JOIN tasks upstream ON upstream.id = p.prerequisite_id
                      WHERE p.task_id = task.id AND (upstream.id IS NULL OR upstream.removed_at IS NOT NULL OR upstream.state != 'completed')

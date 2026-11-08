@@ -346,6 +346,12 @@ impl TaskStore {
             body,
             now,
         )?;
+        // Her message to the task's own worker is her answer to a wait on her
+        // (ADR 0166), recorded with it so neither exists without the other.
+        // The coordination pass brings the task back.
+        if purpose == WorkerMessagePurpose::AssignedTask {
+            crate::task_waits::answer_queen_wait(&tx, task_id, now)?;
+        }
         tx.commit()?;
         Ok(message)
     }

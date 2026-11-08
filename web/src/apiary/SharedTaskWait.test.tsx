@@ -37,6 +37,14 @@ describe("SharedTaskWait", () => {
     expect(screen.getByText(/you: Approve M2 in Entra/).textContent).toBe("Waiting for you: Approve M2 in Entra");
   });
 
+  it("names the Hive whose Queen must answer, and says Queen on that Hive", () => {
+    const wait = { kind: "queen", needs: "her GO on the exact head", hive_id: "clover" };
+    const { rerender } = render(<SharedTaskWait task={{ ...task, wait }} localHiveId="meadow" hiveName={hiveName} />);
+    expect(screen.getByText(/Clover Hive's Queen: her GO on the exact head/)).toBeInTheDocument();
+    rerender(<SharedTaskWait task={{ ...task, wait }} localHiveId="clover" hiveName={hiveName} />);
+    expect(screen.getByText(/Queen: her GO/).textContent).toBe("Waiting for Queen: her GO on the exact head");
+  });
+
   it("shows a kind from a later release by its words", () => {
     render(<SharedTaskWait task={{ ...task, wait: { kind: "vendor_ticket", needs: "" } }} hiveName={hiveName} />);
     expect(screen.getByText(/vendor ticket/)).toBeInTheDocument();

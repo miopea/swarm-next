@@ -1,6 +1,8 @@
 # 0119 — A wait says who must act and until when
 
-- Status: Accepted
+- Status: Accepted; amended by ADR 0166 (a wait on Queen is hers, and a wait
+  naming another board worker, or the operator's move under an outside
+  party, is refused)
 - Date: 2026-10-18
 - Decided by: the operator, on 2026-10-18. Asked "Accept ADR 0119 (typed waits)
   with those three behaviours?", they chose "Accept as drafted". The three

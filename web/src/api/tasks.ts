@@ -82,16 +82,16 @@ export type TaskClarificationWait = {
   delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
 };
 
-/** What a blocked task waits for (ADR 0119). */
+/** What a blocked task waits for (ADR 0119; Queen's answer, ADR 0166). */
 export type TaskWait = {
-  kind: "task" | "decision" | "operator_action" | "outside" | "date";
+  kind: "task" | "decision" | "operator_action" | "outside" | "date" | "queen";
   /** What must happen, in words. */
   needs: string;
   /** Who must act, for an outside wait. */
   party: string | null;
   /** When it comes back by itself, Unix seconds, for an outside or date wait. */
   resume_at: number | null;
-  /** When the operator pressed Done, for an operator action. */
+  /** When the operator pressed Done, for an operator action, or Queen answered, for a wait on her. */
   done_at: number | null;
   cleared: boolean;
 };

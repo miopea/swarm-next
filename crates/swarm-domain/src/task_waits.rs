@@ -40,6 +40,9 @@ pub enum TaskWaitKind {
     Outside,
     /// Nobody can act until `resume_at`.
     Date,
+    /// Queen must answer. She is on the board, so the task is in her queue
+    /// until she answers its worker on it (ADR 0166).
+    Queen,
 }
 
 impl TaskWaitKind {
@@ -51,6 +54,7 @@ impl TaskWaitKind {
             Self::OperatorAction => "operator_action",
             Self::Outside => "outside",
             Self::Date => "date",
+            Self::Queen => "queen",
         }
     }
 
@@ -62,6 +66,7 @@ impl TaskWaitKind {
             "operator_action" => Some(Self::OperatorAction),
             "outside" => Some(Self::Outside),
             "date" => Some(Self::Date),
+            "queen" => Some(Self::Queen),
             _ => None,
         }
     }
@@ -86,7 +91,8 @@ pub struct TaskWaitView {
     pub needs: String,
     pub party: Option<String>,
     pub resume_at: Option<i64>,
-    /// When the operator pressed Done, for an operator action.
+    /// When the operator pressed Done, for an operator action, or when Queen
+    /// answered, for a wait on her.
     pub done_at: Option<i64>,
     /// Whether it had cleared when it was read.
     pub cleared: bool,
@@ -107,7 +113,7 @@ impl TaskWaitView {
         match self.kind {
             // Read from the gates themselves, which the board holds.
             TaskWaitKind::Task | TaskWaitKind::Decision => self.cleared,
-            TaskWaitKind::OperatorAction => self.done_at.is_some(),
+            TaskWaitKind::OperatorAction | TaskWaitKind::Queen => self.done_at.is_some(),
             TaskWaitKind::Outside | TaskWaitKind::Date => {
                 self.resume_at.is_some_and(|resume| resume <= now)
             }
@@ -117,9 +123,11 @@ impl TaskWaitView {
 
 impl crate::NextMoveOwner {
     /// A typed wait names who must act, so a blocked task with one is never
-    /// Queen's to judge (ADR 0119).
+    /// Queen's to judge (ADR 0119), unless it names her (ADR 0166).
     ///
     /// - An operator action that is not done is the operator's.
+    /// - A wait on Queen that she has not answered is hers, whatever the
+    ///   earlier rules left (ADR 0166).
     /// - An outside or date wait that has not cleared is nobody's until then.
     /// - A cleared wait is the assigned worker's, provided its prerequisites
     ///   are done. Swarm moves it back to Ready by itself, and this is what the
@@ -157,6 +165,7 @@ impl crate::NextMoveOwner {
         }
         match wait.kind {
             TaskWaitKind::OperatorAction => Self::Operator,
+            TaskWaitKind::Queen => Self::Queen,
             TaskWaitKind::Task
             | TaskWaitKind::Decision
             | TaskWaitKind::Outside
@@ -170,11 +179,33 @@ pub const TASK_WAIT_FORMAT: &str = "Name the wait with marker lines in the Block
      - The operator must do something:\n  Waiting on: operator\n  Needs: <what they must do>\n\
      - The operator must answer or choose: no wait line. Ask it with swarm_request_decision \
      on the task, which blocks the task until they answer.\n\
-     - An outside party must act:\n  Waiting on: <who>\n  Needs: <what must happen>\n  \
+     - Queen must answer or decide:\n  Waiting on: Queen\n  Needs: <what she must answer>\n  \
+     No Recheck: the task is in her queue until she answers you on it.\n\
+     - Someone off the board must act:\n  Waiting on: <who>\n  Needs: <what must happen>\n  \
      Recheck: <when to check again, e.g. 2026-10-20T13:00:00Z>\n\
      - Nothing can happen until a date:\n  Blocked until: <e.g. 2026-11-16T14:00:00Z>\n\
-     Times are UTC with a Z, between one hour and 30 days ahead. The task comes back to you \
-     by itself when the time arrives or the operator presses Done.";
+     Another worker on the board is not a wait: link the task it must finish with \
+     prerequisite_id. Times are UTC with a Z, between one hour and 30 days ahead. The task \
+     comes back to you by itself when the time arrives, the operator presses Done, or Queen \
+     answers.";
+
+/// Why a wait naming another worker on the board is refused (ADR 0166).
+pub const BOARD_WORKER_NAMED_AS_A_WAIT: &str = "is a worker on this board, not someone off \
+     it, and a wait on them is nobody's to act on: it rests until its Recheck and comes back \
+     unchanged. If this waits on their task, link that task with prerequisite_id on this call, \
+     and it comes back when that task completes. If Queen must route it, name her: \
+     \"Waiting on: Queen\".";
+
+/// Whether "Needs:" names the operator's own move: "the operator's release",
+/// "the operator's word". Under another party's name, nobody would ask them.
+///
+/// Deliberately narrow: the possessive only, so "nothing from the operator"
+/// and "report to the operator" pass. A miss records the wait as before.
+#[must_use]
+pub fn needs_the_operator_s_move(needs: &str) -> bool {
+    let lower = needs.to_lowercase();
+    lower.contains("operator's") || lower.contains("operator\u{2019}s")
+}
 
 /// Why an agent's operator action that asks for a decision is refused.
 pub const DECISION_NAMED_AS_AN_ACTION: &str = "\"Needs:\" asks the operator to decide: to \
@@ -251,6 +282,8 @@ pub enum TaskWaitError {
     UnreadableTime(String),
     TimeOutOfRange,
     RecheckWithoutParty,
+    QueenHasNoRecheck,
+    NeedsTheOperator,
 }
 
 impl std::fmt::Display for TaskWaitError {
@@ -264,6 +297,8 @@ impl std::fmt::Display for TaskWaitError {
             Self::UnreadableTime(value) => format!("\"{value}\" is not a UTC time like 2026-10-20T13:00:00Z."),
             Self::TimeOutOfRange => "The time must be between one hour and 30 days ahead.".to_owned(),
             Self::RecheckWithoutParty => "\"Recheck:\" belongs with \"Waiting on:\" an outside party. For a date alone, use \"Blocked until:\".".to_owned(),
+            Self::QueenHasNoRecheck => "Queen is on the board, so a wait on her has no \"Recheck:\". The task is in her queue, and her answer to you on it brings it back. Drop the Recheck line and keep \"Waiting on: Queen\" with \"Needs:\".".to_owned(),
+            Self::NeedsTheOperator => "\"Needs:\" names the operator's move under someone else's name, so nobody would ask them. If they must do something, name them: \"Waiting on: operator\". If they must decide or approve, ask with swarm_request_decision on this task, or send the command as a command request. If Queen must get it from them, name her: \"Waiting on: Queen\".".to_owned(),
         };
         write!(formatter, "{problem}\n\n{TASK_WAIT_FORMAT}")
     }
@@ -332,6 +367,23 @@ pub fn parse_block_wait(note: &str, now: i64) -> Result<Option<TaskWait>, TaskWa
             party: None,
             resume_at: None,
         }));
+    }
+    // ⚠️ QUEEN IS ON THE BOARD. Read as an outside party, a wait on her was
+    // nobody's: thirteen tasks waiting on her answer sat in no queue, and each
+    // Recheck sent one back to a worker who found nothing changed (ADR 0166).
+    if party.eq_ignore_ascii_case("queen") {
+        if recheck.is_some() {
+            return Err(TaskWaitError::QueenHasNoRecheck);
+        }
+        return Ok(Some(TaskWait {
+            kind: TaskWaitKind::Queen,
+            needs: needs.to_owned(),
+            party: None,
+            resume_at: None,
+        }));
+    }
+    if needs_the_operator_s_move(needs) {
+        return Err(TaskWaitError::NeedsTheOperator);
     }
     let recheck = recheck.ok_or(TaskWaitError::OutsideNeedsRecheck)?;
     let at = parse_rfc3339_seconds(recheck)
@@ -530,6 +582,111 @@ mod tests {
             let refused = parse_block_wait(note, NOW).unwrap_err();
             assert_eq!(refused, error, "{note}");
             assert!(refused.to_string().contains("Waiting on: operator"));
+        }
+    }
+
+    /// Queen is on the board. "Waiting on: Queen" was read as an outside
+    /// party, whose uncleared wait is nobody's, so thirteen tasks waiting on
+    /// her answer sat in no queue at all: not hers, not the operator's
+    /// (ADR 0166). Named alone, she is the party, and the move is hers.
+    #[test]
+    fn waiting_on_queen_is_her_move() {
+        use crate::{NextMoveOwner, TaskState};
+        for party in ["Queen", "queen", "QUEEN"] {
+            let wait = parse_block_wait(
+                &format!(
+                    "Draft PR #12 is ready.\nWaiting on: {party}\nNeeds: her GO on the exact head"
+                ),
+                NOW,
+            )
+            .unwrap_or_else(|error| panic!("{party}: {error}"))
+            .expect("a wait is named");
+            assert_eq!(wait.kind.as_str(), "queen", "{party}");
+            assert_eq!(wait.needs, "her GO on the exact head");
+            assert_eq!((wait.party.as_deref(), wait.resume_at), (None, None));
+            let waiting = TaskWaitView {
+                kind: wait.kind,
+                needs: wait.needs,
+                party: None,
+                resume_at: None,
+                done_at: None,
+                cleared: false,
+                entered_from_draft: false,
+            };
+            assert!(!waiting.cleared_at(NOW + MAX_WAIT_SECONDS));
+            // Hers whatever the earlier rules left, an unfinished
+            // prerequisite included: her answer is owed either way.
+            for base in [NextMoveOwner::Queen, NextMoveOwner::Blocked] {
+                assert_eq!(
+                    base.after_wait(TaskState::Blocked, Some(&waiting), true, &[]),
+                    NextMoveOwner::Queen
+                );
+            }
+            let answered = TaskWaitView {
+                done_at: Some(NOW),
+                cleared: true,
+                ..waiting
+            };
+            assert!(answered.cleared_at(NOW));
+            assert_eq!(
+                NextMoveOwner::Queen.after_wait(TaskState::Blocked, Some(&answered), true, &[]),
+                NextMoveOwner::Worker,
+                "her answer brings it back to its worker"
+            );
+        }
+    }
+
+    /// The form older briefs taught for Queen carried a Recheck, and that
+    /// timer is the loop: the task came back, nothing had changed, and it was
+    /// blocked again. Her answer brings the task back, so the line is refused
+    /// with the form that works.
+    #[test]
+    fn a_wait_on_queen_has_no_recheck() {
+        let refused = parse_block_wait(
+            "Waiting on: Queen\nNeeds: her GO on the exact head\nRecheck: 2026-10-20T13:00:00Z",
+            NOW,
+        )
+        .expect_err("older briefs' form for Queen left the task to nobody");
+        assert_eq!(refused, TaskWaitError::QueenHasNoRecheck);
+        let said = refused.to_string();
+        assert!(said.contains("Queen is on the board"), "{said}");
+        assert!(said.contains("Waiting on: Queen"), "{said}");
+    }
+
+    /// The other half of the same evening: nine of those waits needed "the
+    /// operator's combined release" under Queen's name, and nobody asked the
+    /// operator. Under an outside party, a need that is the operator's is
+    /// refused: they are named as the party, or asked. A need that only
+    /// mentions the operator is left alone.
+    #[test]
+    fn an_outside_wait_that_needs_the_operator_s_move_is_refused() {
+        for needs in [
+            "the operator's combined --with-migration release",
+            "the sweep's parent; the Operator’s word on the panel's IP",
+        ] {
+            let refused = parse_block_wait(
+                &format!("Waiting on: Platform 1\nNeeds: {needs}\nRecheck: 2026-10-20T13:00:00Z"),
+                NOW,
+            )
+            .expect_err(needs);
+            assert_eq!(refused, TaskWaitError::NeedsTheOperator, "{needs}");
+            let said = refused.to_string();
+            assert!(said.contains("Waiting on: operator"), "{said}");
+            assert!(said.contains("swarm_request_decision"), "{said}");
+        }
+        for needs in [
+            "nothing from the operator. Unity read done (seq 31273).",
+            "read the audit log daily; S1 to the operator if none new",
+        ] {
+            let wait = parse_block_wait(
+                &format!(
+                    "Waiting on: iDRAC collector\nNeeds: {needs}\nRecheck: 2026-10-20T13:00:00Z"
+                ),
+                NOW,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(wait.kind, TaskWaitKind::Outside, "{needs}");
         }
     }
 
