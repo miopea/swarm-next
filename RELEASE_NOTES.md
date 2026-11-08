@@ -12,6 +12,19 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.18.3
+
+One database update (224). Your Hive backs up its database by itself before applying it. This release changes the worker engine, but installing it keeps your workers running: the app installs first and drives the engine you have, and the new engine applies by itself the next time every worker is resting. Changes to Queen's and the workers' instructions reach each of them when it next starts.
+
+### Fixes
+- Work a worker blocks "Waiting on: Queen" is now in Queen's queue and wakes her. Before, it sat in nobody's queue until its recheck sent it back to the worker unchanged, and nothing asked you either.
+- When Queen answers the worker on that task, the task comes back to the worker by itself. If she does not answer, it reaches your blocked escalations like any other unattended block.
+- Tasks already parked waiting on Queen move into her queue when this release installs. Their notes stay as written, and each gets one history line saying why it moved. Any blocked for more than twelve hours show in your blocked escalations straight away.
+- A worker can no longer park work as waiting on another worker on the board, or on an outside party for something only you can do. It is told the form that works: a link to the task it waits on, or a wait that reaches you or Queen.
+
+### New features
+- Queen can now grant two kinds of command card she used to hand to you: a guarded production write of display content (translation or UI strings, or navigation entries), and a read-only staging check through an application's sanctioned test session. She grants one only after finding its guards in the script herself.
+
 ## 1.18.2
 
 No database updates and no worker engine change. Installing it restarts only the app, and your workers keep running.
