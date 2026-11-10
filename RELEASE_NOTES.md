@@ -12,6 +12,20 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.18.4
+
+No database update. This release changes the worker engine, but installing it keeps your workers running: the app installs first and drives the engine you have. On an engine from 1.18.0 or later, the new engine applies by itself the next time every worker is resting. On a Hive still running the engine from 1.17.10 or earlier, update it once yourself from the Worker engine card in Settings ("Prepare worker engine update", then "Stop workers and update"); that restarts its workers, and after it, updates install by themselves.
+
+### New features
+- A new release now installs itself once every worker is idle, not only while you are away. While you are at the Hive, a worker in the middle of a turn still holds it. The app restarts and your workers keep running.
+
+### Fixes
+- Hives on 1.17.10 never installed a 1.18 release by themselves, because each one looked like a change that would stop every worker. It never was: the app installs alone and the workers keep running. These Hives now install this release by themselves while their operator is away.
+- A Hive on 1.18.0 to 1.18.3 whose worker engine is already up to date holds this one release until you press Install on the Updates card. The card may warn that installing ends every worker session; for this release it does not. Releases after this one install themselves.
+- The Apiary roster no longer says a member's engine update "swaps by itself" when that member cannot apply it alone. It names the Worker engine card instead.
+- Security: the library that carries every worker's Swarm calls (rmcp) moves from 3.1.2 to 3.9.0, for three published advisories. It passes Swarm's own tests, but a live worker session on it has not been watched yet.
+- Security: the database library (rusqlite) moves to 0.41, and its bundled SQLite from 3.50.2 to 3.54.1, for a published SQLite advisory. Your database file is unchanged.
+
 ## 1.18.3
 
 One database update (224). Your Hive backs up its database by itself before applying it. This release changes the worker engine, but installing it keeps your workers running: the app installs first and drives the engine you have, and the new engine applies by itself the next time every worker is resting. Changes to Queen's and the workers' instructions reach each of them when it next starts.
