@@ -1,4 +1,4 @@
-import type { HiveCondition } from "../api";
+import type { AutoInstallHold, HiveCondition } from "../api";
 import { WORKER_MODEL_LABELS } from "../settings/workerModelLabels";
 
 /**
@@ -43,6 +43,26 @@ export function conditionText(condition: HiveCondition, nowSeconds: number): { s
         ? "It swaps by itself once its workers are idle"
         : "Its operator applies it from the Worker engine card",
     };
+    // Shown only beside "behind", so it answers why that Hive has not caught up
+    // and who moves it (ADR 0167).
+    case "release_held": return releaseHeldText(condition.hold);
+  }
+}
+
+function releaseHeldText(hold: AutoInstallHold): { status: string; next: string } {
+  const fromUpdatesCard = "Its operator installs it from the Updates card";
+  const askForInstall = "Open its logs, or ask its operator to press Install on the Updates card";
+  switch (hold) {
+    case "turned_off": return { status: "Release waiting: automatic install is off", next: fromUpdatesCard };
+    case "development_build": return { status: "Runs a development build", next: "It never installs a release by itself; its operator reloads it" };
+    case "nothing_newer": return { status: "Hasn't seen the release yet", next: "It finds it at its next check; its operator can check now from the Updates card" };
+    case "in_use": return { status: "Release waiting for idle workers", next: "It installs by itself once its workers are idle or its operator is away" };
+    case "in_flight": return { status: "Installing the release", next: "It finishes by itself" };
+    case "already_attempted": return { status: "Automatic install didn't finish", next: askForInstall };
+    case "protocol_change": return { status: "Release would end worker sessions", next: fromUpdatesCard };
+    case "protocol_unknown": return { status: "Can't tell if the release ends worker sessions", next: fromUpdatesCard };
+    case "download_failed": return { status: "Release download failing", next: "It tries again by itself; open its logs if it keeps failing" };
+    case "install_refused": return { status: "Install couldn't start", next: askForInstall };
   }
 }
 

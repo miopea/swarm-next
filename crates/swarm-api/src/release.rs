@@ -31,9 +31,10 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use swarm_domain::{
-    ReleaseNotes, ReleaseOffer, SignedReleaseManifest, SwarmVersion,
+    AutoInstallHold, ReleaseNotes, ReleaseOffer, SignedReleaseManifest, SwarmVersion,
     compiled_release_verifying_key, verify_release_manifest,
 };
+use swarm_persistence::TaskStore;
 use tokio::io::AsyncWriteExt;
 
 use crate::auth::authorize;
@@ -618,27 +619,19 @@ pub(super) async fn poll(state: &Arc<AppState>, startup: bool) {
     auto_install(state).await;
 }
 
-/// Why an ordinary release is not installing itself right now (ADR 0110).
-///
-/// Every hold is a reason to wait, not an error: the pass runs again, and the
-/// operator can always install from the Updates card.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AutoInstallHold {
-    TurnedOff,
-    DevelopmentBuild,
-    NothingNewer,
-    /// It swaps the engine with the API, which ends every worker session. Only
-    /// the operator decides that.
-    ProtocolChange,
-    /// Unknown is not "no": a Hive that cannot tell does not install.
-    ProtocolUnknown,
-    /// Installing restarts the API. With the operator at the Hive and a worker
-    /// mid-turn, or an engine that cannot say, that lands under somebody's
-    /// hands: the worker's Swarm calls fail while the API is down.
-    InUse,
-    InFlight,
-    /// This release already had its automatic attempt and it did not install.
-    AlreadyAttempted,
+impl AppState {
+    /// Where this Hive's last automatic install pass stopped, for its health
+    /// report (ADR 0167). `None` before the first pass and when nothing held
+    /// the release.
+    pub(crate) fn auto_install_hold(&self) -> Option<AutoInstallHold> {
+        self.auto_install_hold.lock().ok().and_then(|hold| *hold)
+    }
+
+    pub(crate) fn record_auto_install_hold(&self, hold: Option<AutoInstallHold>) {
+        if let Ok(mut recorded) = self.auto_install_hold.lock() {
+            *recorded = hold;
+        }
+    }
 }
 
 /// What the automatic install is decided on, before the release is read.
@@ -744,8 +737,11 @@ fn release_swaps_engine(release: &Path, engine_protocol: Option<u16>) -> Option<
 }
 
 /// Downloads and installs an ordinary release while the operator is away or
-/// every worker is idle.
+/// every worker is idle, and records where the pass stopped for this Hive's
+/// health report (ADR 0167).
 async fn auto_install(state: &Arc<AppState>) {
+    // A Hive that cannot read its own store or status keeps its last answer
+    // rather than inventing one.
     let Ok(store) = crate::task_store(state) else {
         return;
     };
@@ -754,6 +750,18 @@ async fn auto_install(state: &Arc<AppState>) {
     let Ok(status) = build_status(state, None) else {
         return;
     };
+    let hold = auto_install_pass(state, store, status).await;
+    state.record_auto_install_hold(hold);
+}
+
+/// One automatic install pass. Returns where it stopped, or `None` when nothing
+/// held the release: it was downloaded for the next pass, or its install was
+/// asked for.
+async fn auto_install_pass(
+    state: &Arc<AppState>,
+    store: &TaskStore,
+    status: ReleaseStatusResponse,
+) -> Option<AutoInstallHold> {
     let offered = status.offer.as_ref().map(|offer| offer.version.as_str());
     let in_flight = state
         .release_apply_request_path
@@ -779,13 +787,13 @@ async fn auto_install(state: &Arc<AppState>) {
         last_outcome: status.apply_state.as_deref(),
     }) {
         tracing::debug!(?hold, "an ordinary release is not installing itself yet");
-        return;
+        return Some(hold);
     }
-    let Some(offer) = status.offer.clone() else {
-        return;
+    let Some(offer) = status.offer else {
+        return Some(AutoInstallHold::NothingNewer);
     };
     let Some(root) = download_root(state) else {
-        return;
+        return Some(AutoInstallHold::InstallRefused);
     };
     // Downloaded before the protocol is judged, because only the release can
     // say whether it swaps the engine. A release that does is kept for the
@@ -794,18 +802,19 @@ async fn auto_install(state: &Arc<AppState>) {
     // THE INSTALL WAITS FOR THE NEXT PASS AFTER A DOWNLOAD. A download can take
     // minutes, and "every worker is idle" was read before it began.
     if status.downloaded_version.as_deref() != Some(offer.version.as_str()) {
-        match fetch_artifact(&offer, &root).await {
+        return match fetch_artifact(&offer, &root).await {
             Ok(_) => {
                 tracing::info!(version = %offer.version, "downloaded a release to install on the next pass");
+                None
             }
             Err(reason) => {
                 tracing::warn!(%reason, version = %offer.version, "an automatic install could not download its release");
+                Some(AutoInstallHold::DownloadFailed)
             }
-        }
-        return;
+        };
     }
     let Some(release) = downloaded_release(&root, Some(&offer.artifact_sha256)) else {
-        return;
+        return Some(AutoInstallHold::DownloadFailed);
     };
     match release_swaps_engine(&release, engine.map(|engine| engine.protocol_version)) {
         Some(false) => {}
@@ -816,19 +825,25 @@ async fn auto_install(state: &Arc<AppState>) {
                 AutoInstallHold::ProtocolUnknown
             };
             tracing::debug!(?hold, version = %offer.version, "an ordinary release is not installing itself yet");
-            return;
+            return Some(hold);
         }
     }
     match request_install(state).await {
-        Ok(()) => tracing::info!(
-            version = %offer.version,
-            "installing an ordinary release automatically while the operator is away or every worker is idle"
-        ),
-        Err(error) => tracing::warn!(
-            message = %error.message,
-            version = %offer.version,
-            "an automatic install could not be requested"
-        ),
+        Ok(()) => {
+            tracing::info!(
+                version = %offer.version,
+                "installing an ordinary release automatically while the operator is away or every worker is idle"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                message = %error.message,
+                version = %offer.version,
+                "an automatic install could not be requested"
+            );
+            Some(AutoInstallHold::InstallRefused)
+        }
     }
 }
 
@@ -1443,8 +1458,68 @@ mod tests {
             let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
             auto_install(&state).await;
             assert!(!request.exists(), "{oldest_engine:?}");
+            assert_eq!(
+                state.auto_install_hold(),
+                Some(AutoInstallHold::ProtocolChange),
+                "the member reports that its operator's press is what it waits for"
+            );
             host.abort();
         }
+    }
+
+    /// A member reports where this pass stopped, so its Keeper can say why it
+    /// is behind (ADR 0167). ⚠️ A LATER PASS REPLACES IT: a hold that has
+    /// cleared must not go on explaining a Hive that has moved on.
+    #[tokio::test]
+    async fn the_pass_records_where_it_stopped_and_a_later_pass_replaces_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture {
+            busy: 1,
+            ..Fixture::ordinary(AtHive)
+        };
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        assert_eq!(state.auto_install_hold(), None, "nothing before a pass");
+        auto_install(&state).await;
+        assert_eq!(state.auto_install_hold(), Some(AutoInstallHold::InUse));
+        crate::task_store(&state)
+            .unwrap()
+            .set_manual_presence(Some(Reachable), 2)
+            .unwrap();
+        auto_install(&state).await;
+        assert!(request.exists(), "the operator left, so it installs");
+        assert_eq!(state.auto_install_hold(), None);
+        host.abort();
+    }
+
+    /// A download that fails leaves the Hive behind with every rule satisfied,
+    /// which is exactly the case nothing explained before.
+    #[tokio::test]
+    async fn a_release_that_cannot_be_downloaded_is_reported_as_held_by_the_download() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture::ordinary(Reachable);
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        std::fs::remove_dir_all(directory.path().join("downloads").join("99.0.0")).unwrap();
+        // Refused before any network: larger than this product ships.
+        let offer = swarm_domain::ReleaseOffer {
+            version: "99.0.0".to_owned(),
+            protocol: fixture.release_protocol.to_string(),
+            artifact_url: "https://releases.invalid/swarm-99.0.0.tar.gz".to_owned(),
+            artifact_sha256: "b".repeat(64),
+            artifact_bytes: MAX_ARTIFACT_BYTES + 1,
+            worker_engine_build_id: worker_engine_build_id().to_owned(),
+            notes_url: None,
+        };
+        crate::task_store(&state)
+            .unwrap()
+            .record_release_check("offered", Some(&serde_json::to_string(&offer).unwrap()), 2)
+            .unwrap();
+        auto_install(&state).await;
+        assert!(!request.exists());
+        assert_eq!(
+            state.auto_install_hold(),
+            Some(AutoInstallHold::DownloadFailed)
+        );
+        host.abort();
     }
 
     /// The ordinary case, which is the whole point of ADR 0110: a newer

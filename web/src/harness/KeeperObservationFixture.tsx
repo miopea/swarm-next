@@ -47,6 +47,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             { kind: "workers_off_model", count: 2, model: "sonnet" },
           ] },
           { hive_id: "thistle", conditions: [{ kind: "quiet", last_contact_at: now - 3 * 86_400 }, { kind: "schema_behind", running: "1.11.0" }] },
+          { hive_id: "sorrel", conditions: [{ kind: "behind", running: "1.12.4" }, { kind: "release_held", hold: "protocol_change" }] },
         ]
         : url.includes("/apiary/usage") ? (() => {
           const totals = (weighted: number, active_seconds: number) => ({ input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, output_tokens: 0, messages: 0, weighted, active_seconds });
@@ -127,6 +128,8 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             // Joined, never reached the Keeper, and its membership expired: the
             // roster used to say only that it "hasn't reported".
             { hive_id: "bramble", hive_name: "Bramble Hive", operator_id: "operator-5", operator_display_name: "Rue", operator_email: "rue@example.invalid", role: "member", is_local: false, credential_expires_at: now - 3 * 86_400 },
+            // Behind and in touch, holding the release for its operator (ADR 0167).
+            { hive_id: "sorrel", hive_name: "Sorrel Hive", operator_id: "operator-6", operator_display_name: "Ash", role: "member", is_local: false, last_contact_at: now - 40 },
           ]
         : url.endsWith("/fleet-versions")
         ? {
@@ -135,6 +138,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
               { hive_id: "fictional", node_id: "node-1", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false, reports_task_waits: true },
               { hive_id: "clover", node_id: "node-2", swarm_version: "1.13.1", database_schema_version: 192, observed_at: 100, standing: "current", raises: false, reports_task_waits: true },
               { hive_id: "thistle", node_id: "node-3", swarm_version: "1.11.0", database_schema_version: 188, observed_at: 100, standing: "schema_behind", raises: true, reports_task_waits: false },
+              { hive_id: "sorrel", node_id: "node-6", swarm_version: "1.12.4", database_schema_version: 192, observed_at: 100, standing: "behind", raises: true, reports_task_waits: true },
               // Heather reports no version at all, which is the case that has to
               // read as "unknown" rather than as an empty gap in the row.
             ],

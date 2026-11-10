@@ -516,6 +516,9 @@ pub struct AppState {
     /// When this Hive last looked at which workers were busy, so the next look
     /// can credit the time between (ADR 0114 addendum).
     busy_sampled_at: Arc<std::sync::Mutex<Option<i64>>>,
+    /// Where this Hive's last automatic install pass stopped, which its health
+    /// report carries to its Keeper (ADR 0167). One value, replaced each pass.
+    auto_install_hold: Arc<std::sync::Mutex<Option<swarm_domain::AutoInstallHold>>>,
     /// Decisions whose question Swarm has pressed Esc on (ADR 0134).
     answered_questions: Arc<answered_question_close::AnsweredQuestions>,
     notification_sender: Option<notifications::NotificationSender>,
@@ -672,6 +675,7 @@ impl AppState {
             health_shipping: fleet_health::SharedHealthShipping::default(),
             usage_shipping: apiary_usage::SharedUsageShipping::default(),
             busy_sampled_at: Arc::new(std::sync::Mutex::new(None)),
+            auto_install_hold: Arc::new(std::sync::Mutex::new(None)),
             answered_questions: Arc::default(),
             notification_sender: None,
             attachment_store: None,

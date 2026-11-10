@@ -1846,7 +1846,21 @@ export type HiveCondition =
   | { kind: "workers_stuck"; count: number }
   | { kind: "ci_unreadable"; why: string }
   | { kind: "workers_off_model"; count: number; model: WorkerModel }
-  | { kind: "engine_update_pending"; applies_itself: boolean };
+  | { kind: "engine_update_pending"; applies_itself: boolean }
+  | { kind: "release_held"; hold: AutoInstallHold };
+
+/** Where a member's last automatic install stopped (ADR 0167). */
+export type AutoInstallHold =
+  | "turned_off"
+  | "development_build"
+  | "nothing_newer"
+  | "in_use"
+  | "in_flight"
+  | "already_attempted"
+  | "protocol_change"
+  | "protocol_unknown"
+  | "download_failed"
+  | "install_refused";
 
 /** A member Hive with something wrong, worst first. A healthy Hive is absent. */
 export type HiveHealth = { hive_id: string; conditions: HiveCondition[] };
