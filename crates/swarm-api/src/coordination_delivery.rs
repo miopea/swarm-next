@@ -20,7 +20,9 @@ use swarm_persistence::{
     CommandGrantOutcome, DecisionDispatch, OperatorBroadcastDispatch, QueenAutomationDelivery,
     TaskDispatch, TaskMessageDispatch, TaskOutcomeDispatch, TaskStore,
 };
-use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, snapshot_plain_text};
+use swarm_terminal::{
+    HostRequest, HostResponse, ProviderActivity, snapshot_bracketed_paste, snapshot_plain_text,
+};
 use tokio::time::sleep;
 
 use crate::{
@@ -680,6 +682,9 @@ enum Baseline {
     Ready {
         sequence: u64,
         paste_placeholder: Option<Vec<u8>>,
+        /// This prompt takes a framed paste, so a long message can be written
+        /// as one. See `framed_paste`.
+        accepts_framed_paste: bool,
     },
     /// The prompt holds unsent text and that text is DEMONSTRABLY THIS MESSAGE:
     /// our own marker is on the screen. Nothing needs writing — it only needs
@@ -814,6 +819,10 @@ fn baseline_from_response(
                         .as_bytes(),
                 )
                 .map(<[u8]>::to_vec),
+                // Measured on Claude only. Another provider may read the
+                // frame as an Escape key, so it keeps the unframed write.
+                accepts_framed_paste: provider == ProviderKind::ClaudeCode
+                    && snapshot_bracketed_paste(&snapshot.bytes, snapshot.rows, snapshot.columns),
             }
         }
         HostResponse::Error { code, message } => {
@@ -843,7 +852,16 @@ async fn submit_terminal_message(
             Baseline::Ready {
                 sequence,
                 paste_placeholder,
-            } => (sequence, paste_placeholder),
+                accepts_framed_paste,
+            } => {
+                // Only a message Claude would treat as a paste anyway. A
+                // shorter one is typed whole and keeps its marker visible,
+                // which is what finding it unsent in a prompt relies on.
+                if accepts_framed_paste && bytes.len() > CLAUDE_LONGEST_TYPED_READ {
+                    bytes = framed_paste(bytes);
+                }
+                (sequence, paste_placeholder)
+            }
             // ALREADY WRITTEN, NEVER SUBMITTED. Skip straight to Enter rather
             // than writing the message a second time underneath itself — the
             // text is on screen and only the submit is missing.
@@ -947,6 +965,34 @@ async fn submit_terminal_message(
         rendered_paste_placeholder.as_deref(),
     )
     .await
+}
+
+/// Claude types an unframed stdin read of up to this many characters and takes
+/// a longer one as a paste (Claude Code 2.1.322). Compared in bytes, which are
+/// never fewer than characters, so a message at or under it is typed whole.
+const CLAUDE_LONGEST_TYPED_READ: usize = 800;
+
+/// Wraps a message in the frame a terminal gives a paste when the program asked
+/// for one, so the provider receives it as ONE paste however its reads split.
+///
+/// Claude decides paste or typing per stdin read, by length, and an unframed
+/// long write can reach it as several reads. Measured 2026-11-10: a 30,920-byte
+/// batch to Queen kept only its last 712 bytes, as typed text with no chip and
+/// no marker. Reproduced with the same bytes against the same Claude: raw, a
+/// short final read is typed; framed, the batch becomes a single chip.
+///
+/// Any escape byte inside becomes a space. `ESC[201~` ends the frame, so a
+/// message carrying one would end its own paste and have the rest read as keys.
+fn framed_paste(bytes: Vec<u8>) -> Vec<u8> {
+    let mut framed = Vec::with_capacity(bytes.len() + 12);
+    framed.extend_from_slice(b"\x1b[200~");
+    framed.extend(
+        bytes
+            .into_iter()
+            .map(|byte| if byte == 0x1b { b' ' } else { byte }),
+    );
+    framed.extend_from_slice(b"\x1b[201~");
+    framed
 }
 
 /// Presses Enter on a message already rendered in the prompt, and confirms it.
@@ -2917,6 +2963,183 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, TerminalSubmission::Acknowledged);
         server.abort();
+    }
+
+    /// ⚠️ A LONG MESSAGE TO QUEEN KEPT ONLY ITS LAST FEW HUNDRED CHARACTERS.
+    /// Measured 2026-11-10 in her terminal history: of a 30,920-byte batch,
+    /// her prompt held the last 712 bytes as typed text, starting mid-word,
+    /// with no paste chip and no marker. So the delivery went Uncertain, and
+    /// everything after it was held behind "unsent text".
+    ///
+    /// Claude judges an unframed write one stdin read at a time: a read longer
+    /// than 800 characters is a paste, a shorter one is typing. A long write
+    /// that reaches it as several reads ends in a short one, and that tail is
+    /// typed. A framed paste is gathered across reads into one event.
+    ///
+    /// The frame is closed by `ESC[201~`, so the text inside may carry no
+    /// escape at all, or a message could end its own paste early and have the
+    /// rest read as keys.
+    #[test]
+    fn a_framed_paste_cannot_be_closed_early_by_its_own_text() {
+        let framed = framed_paste(b"one\ntwo \x1b[201~\x1b[2J three".to_vec());
+        assert!(framed.starts_with(b"\x1b[200~"));
+        assert!(framed.ends_with(b"\x1b[201~"));
+        assert!(!framed[6..framed.len() - 6].contains(&0x1b));
+        assert_eq!(
+            &framed[6..framed.len() - 6],
+            b"one\ntwo  [201~ [2J three".as_slice()
+        );
+    }
+
+    /// Framed only where it is measured to work: Claude, at a prompt that has
+    /// switched bracketed paste on. A provider that did not ask for pastes to
+    /// be framed would read the frame as an Escape key.
+    #[test]
+    fn only_a_claude_prompt_with_bracketed_paste_on_gets_a_framed_write() {
+        let session = WorkerSessionId::new();
+        let frame = |provider, text: &str| match baseline_from_response(
+            session,
+            provider,
+            b"marker",
+            BusyPolicy::Wait,
+            prompt_observation(session, text, true),
+        ) {
+            Baseline::Ready {
+                accepts_framed_paste,
+                ..
+            } => accepts_framed_paste,
+            other => panic!("{other:?}"),
+        };
+        let claude = "● Done.\r\n\r\n❯ \r\n  ? for shortcuts";
+        assert!(frame(
+            ProviderKind::ClaudeCode,
+            &format!("\x1b[?2004h{claude}")
+        ));
+        assert!(!frame(ProviderKind::ClaudeCode, claude));
+        assert!(!frame(
+            ProviderKind::ClaudeCode,
+            &format!("\x1b[?2004h{claude}\x1b[?2004l")
+        ));
+        assert!(!frame(
+            ProviderKind::Codex,
+            "\x1b[?2004h› \r\n  gpt-5.6 medium · ~/projects"
+        ));
+    }
+
+    /// What reaches the terminal host, not what was built: a long message goes
+    /// in one framed write with its submitting carriage return left out, so
+    /// Enter still follows only after the render is seen. A short one is
+    /// written exactly as before, because it is typed whole and its visible
+    /// marker is how an unsent copy is recognised later.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_long_message_to_a_bracketed_claude_prompt_is_written_as_one_framed_paste() {
+        let long = format!(
+            "[Messages (2) via Swarm · m1]\nfirst\n{}\r",
+            "x".repeat(900)
+        );
+        let body = &long.as_bytes()[..long.len() - 1];
+        let mut framed = b"\x1b[200~".to_vec();
+        framed.extend_from_slice(body);
+        framed.extend_from_slice(b"\x1b[201~");
+        assert_eq!(
+            written_to(ProviderKind::ClaudeCode, BRACKETED_CLAUDE, long.as_bytes()).await,
+            framed
+        );
+
+        let short = b"[Message via Swarm \xc2\xb7 m1]\nfirst\nsecond\r";
+        assert_eq!(
+            written_to(ProviderKind::ClaudeCode, BRACKETED_CLAUDE, short).await,
+            short[..short.len() - 1].to_vec()
+        );
+    }
+
+    /// THE FALLBACK. A prompt that has not switched bracketed paste on, or
+    /// has switched it off again, or belongs to a provider nobody has
+    /// measured, gets exactly the bytes every delivery wrote before this.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_long_message_is_written_unframed_where_framing_was_not_asked_for() {
+        let long = format!(
+            "[Messages (2) via Swarm · m1]\nfirst\n{}\r",
+            "x".repeat(900)
+        );
+        let unframed = long.as_bytes()[..long.len() - 1].to_vec();
+        for (provider, prompt) in [
+            (
+                ProviderKind::ClaudeCode,
+                "● Done.\r\n\r\n❯ \r\n  ? for shortcuts",
+            ),
+            (
+                ProviderKind::ClaudeCode,
+                "\x1b[?2004h● Done.\r\n\r\n❯ \r\n  ? for shortcuts\x1b[?2004l",
+            ),
+            (
+                ProviderKind::Codex,
+                "\x1b[?2004h› \r\n  gpt-5.6 medium · ~/projects",
+            ),
+        ] {
+            assert_eq!(
+                written_to(provider, prompt, long.as_bytes()).await,
+                unframed,
+                "{provider:?} {prompt:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    const BRACKETED_CLAUDE: &str = "\x1b[?2004h● Done.\r\n\r\n❯ \r\n  ? for shortcuts";
+
+    /// The one write a delivery makes to a resting prompt, as the host
+    /// receives it. The host refuses it, so nothing after the write runs.
+    #[cfg(unix)]
+    async fn written_to(provider: ProviderKind, prompt: &'static str, message: &[u8]) -> Vec<u8> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let session = WorkerSessionId::new();
+        let server = tokio::spawn(async move {
+            let mut written = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let response = match serde_json::from_str::<HostRequest>(&line).unwrap() {
+                    HostRequest::Write { bytes, .. } => {
+                        written.push(bytes);
+                        // Stop here: the bytes are what this test is about.
+                        HostResponse::Error {
+                            code: "test_stops_after_the_write".into(),
+                            message: "observed".into(),
+                        }
+                    }
+                    _ => prompt_observation(session, prompt, true),
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                reader.get_mut().write_all(&bytes).await.unwrap();
+            }
+            written
+        });
+        let outcome = submit_terminal_message(
+            &HostClient::new(socket),
+            session,
+            provider,
+            message.to_vec(),
+            b"m1",
+            BusyPolicy::Wait,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(&outcome, TerminalSubmission::Rejected { code, .. } if code == "test_stops_after_the_write"),
+            "{outcome:?}"
+        );
+        let mut written = server.await.unwrap();
+        assert_eq!(written.len(), 1, "one write, never a second");
+        written.remove(0)
     }
 
     #[tokio::test]

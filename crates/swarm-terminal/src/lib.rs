@@ -98,5 +98,6 @@ pub use provider_prompt::{ProviderPromptObservation, read_claude_prompt_submissi
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,
-    MAX_CANONICAL_SNAPSHOT_BYTES, Resume, TerminalSnapshot, snapshot_plain_text,
+    MAX_CANONICAL_SNAPSHOT_BYTES, Resume, TerminalSnapshot, snapshot_bracketed_paste,
+    snapshot_plain_text,
 };
