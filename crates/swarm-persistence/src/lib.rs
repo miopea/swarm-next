@@ -3050,7 +3050,7 @@ impl TaskStore {
             std::fs::create_dir_all(parent)?;
         }
         let connection = self.connection()?;
-        connection.backup("main", path, None)?;
+        connection.backup("main", path, None::<fn(rusqlite::backup::Progress)>)?;
         Ok(())
     }
 
