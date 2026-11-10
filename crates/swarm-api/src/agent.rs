@@ -18,7 +18,7 @@ use rmcp::{
     ErrorData, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
-        PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+        PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -1127,7 +1127,7 @@ fn release_guidance(enabled: bool, guidance: &str) -> String {
 }
 
 impl ServerHandler for AgentMcp {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let brief = if self.tasks.files_by_intake(self.principal) {
             intake_brief()
         } else {
@@ -1143,7 +1143,7 @@ impl ServerHandler for AgentMcp {
                 },
             )
         };
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(brief)
     }
 
