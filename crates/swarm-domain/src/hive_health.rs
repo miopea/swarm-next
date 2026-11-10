@@ -52,6 +52,46 @@ pub struct HiveHealthReport {
     /// none, and from releases before the setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workers_off_model: Option<WorkersOffModel>,
+    /// Where this Hive's last automatic install pass stopped (ADR 0167), so a
+    /// Keeper can say why a member is behind. Absent when nothing held it, and
+    /// from releases before the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_hold: Option<AutoInstallHold>,
+}
+
+/// Why a release is not installing itself on a Hive right now (ADR 0110, ADR
+/// 0167). Every hold is a reason to wait, not an error: the pass runs again,
+/// and the operator can always install from the Updates card.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoInstallHold {
+    TurnedOff,
+    DevelopmentBuild,
+    NothingNewer,
+    /// It swaps the engine with the API, which ends every worker session. Only
+    /// the operator decides that.
+    ProtocolChange,
+    /// Unknown is not "no": a Hive that cannot tell does not install.
+    ProtocolUnknown,
+    /// Installing restarts the API. With the operator at the Hive and a worker
+    /// mid-turn, or an engine that cannot say, that lands under somebody's
+    /// hands: the worker's Swarm calls fail while the API is down.
+    InUse,
+    InFlight,
+    /// This release already had its automatic attempt and it did not install.
+    AlreadyAttempted,
+    /// The release could not be fetched, or what was fetched does not match
+    /// the signed digest. The next pass tries again.
+    DownloadFailed,
+    /// The Hive refused to start the install it decided on, for instance
+    /// because it cannot install a release itself.
+    InstallRefused,
+    /// ⚠️ A HOLD FROM A LATER RELEASE THAN THIS ONE. Members and their Keeper
+    /// run different releases as a matter of course, and refusing the whole
+    /// report over one new word would hide a full disk to show nothing. Never
+    /// sent, and never shown.
+    #[serde(other)]
+    Unrecognised,
 }
 
 /// Running Claude repository workers that started on another model than the
@@ -191,6 +231,11 @@ pub enum HiveCondition {
     EngineUpdatePending {
         applies_itself: bool,
     },
+    /// Why a Hive that is behind has not installed the release by itself, as
+    /// the Hive reports it. Shown only past the grace a new release gets.
+    ReleaseHeld {
+        hold: AutoInstallHold,
+    },
 }
 
 impl HiveCondition {
@@ -225,6 +270,7 @@ impl HiveCondition {
             Self::CiUnreadable { .. } => "ci_unreadable",
             Self::WorkersOffModel { .. } => "workers_off_model",
             Self::EngineUpdatePending { .. } => "engine_update_pending",
+            Self::ReleaseHeld { .. } => "release_held",
         }
     }
 }
@@ -280,6 +326,19 @@ pub fn hive_conditions(evidence: &HiveHealthEvidence<'_>, now: i64) -> Vec<HiveC
             running: running.to_owned(),
         }),
         _ => {}
+    }
+    // Only beside "behind": between releases, and in a new release's grace, a
+    // hold is every Hive's normal state.
+    let behind = matches!(
+        evidence.version,
+        Some((VersionStanding::Behind | VersionStanding::SchemaBehind, _))
+    );
+    if behind
+        && let Some(hold) = health
+            .and_then(|health| health.release_hold)
+            .filter(|hold| *hold != AutoInstallHold::Unrecognised)
+    {
+        found.push(HiveCondition::ReleaseHeld { hold });
     }
     let Some(health) = health else {
         return found;
@@ -361,6 +420,7 @@ mod tests {
             stuck_workers: 0,
             ci_unreadable: None,
             workers_off_model: None,
+            release_hold: None,
         }
     }
 
@@ -369,6 +429,13 @@ mod tests {
             last_contact_at: Some(NOW - 20),
             version: Some((VersionStanding::Current, "1.16.10")),
             health: Some(health),
+        }
+    }
+
+    fn behind(health: &HiveHealthReport) -> HiveHealthEvidence<'_> {
+        HiveHealthEvidence {
+            version: Some((VersionStanding::Behind, "1.17.10")),
+            ..evidence(health)
         }
     }
 
@@ -493,6 +560,101 @@ mod tests {
         let older: ReportedEngine =
             serde_json::from_str(r#"{"update_pending":true,"last_attempt":"succeeded"}"#).unwrap();
         assert_eq!(older.applies_itself, None, "a report from before the field");
+    }
+
+    /// A member behind its Apiary's release said nothing about why, so the
+    /// Keeper could not tell "its workers are busy" from "it waits for its
+    /// operator's press". It now reports where its last automatic install
+    /// stopped, and the roster shows that beside "behind".
+    #[test]
+    fn a_member_behind_says_why_its_release_is_held() {
+        let mut health = healthy();
+        health.release_hold = Some(AutoInstallHold::ProtocolChange);
+        let standing = |standing| HiveHealthEvidence {
+            version: Some((standing, "1.17.10")),
+            ..evidence(&health)
+        };
+        assert_eq!(
+            hive_conditions(&standing(VersionStanding::Behind), NOW),
+            [
+                HiveCondition::Behind {
+                    running: "1.17.10".to_owned()
+                },
+                HiveCondition::ReleaseHeld {
+                    hold: AutoInstallHold::ProtocolChange
+                },
+            ]
+        );
+        assert_eq!(
+            hive_conditions(&standing(VersionStanding::SchemaBehind), NOW)
+                .iter()
+                .map(HiveCondition::key)
+                .collect::<Vec<_>>(),
+            ["schema_behind", "release_held"]
+        );
+        // Between releases, and in the grace a new one gets, a hold is the
+        // normal state of every Hive. Showing it then would be noise.
+        for quiet_standing in [
+            VersionStanding::Current,
+            VersionStanding::BehindWithinGrace,
+            VersionStanding::Development,
+        ] {
+            assert_eq!(
+                hive_conditions(&standing(quiet_standing), NOW),
+                [],
+                "{quiet_standing:?}"
+            );
+        }
+        assert!(
+            !HiveCondition::ReleaseHeld {
+                hold: AutoInstallHold::ProtocolChange
+            }
+            .pushes(),
+            "behind is pushed already, by the fleet's \"Hives are behind\" question"
+        );
+    }
+
+    #[test]
+    fn a_hold_is_shown_only_from_a_member_that_reports_one_and_is_heard() {
+        let mut health = healthy();
+        // A member from before the field sends none, and none is invented.
+        let sent = serde_json::to_value(&health).unwrap();
+        assert!(sent.get("release_hold").is_none(), "{sent}");
+        let older: HiveHealthReport = serde_json::from_value(sent).unwrap();
+        assert_eq!(older.release_hold, None);
+        assert_eq!(
+            hive_conditions(&behind(&older), NOW),
+            [HiveCondition::Behind {
+                running: "1.17.10".to_owned()
+            }]
+        );
+        // A quiet Hive's report says nothing about now.
+        health.release_hold = Some(AutoInstallHold::InUse);
+        let quiet = HiveHealthEvidence {
+            last_contact_at: Some(NOW - MEMBER_QUIET_SECONDS),
+            ..behind(&health)
+        };
+        assert!(
+            hive_conditions(&quiet, NOW)
+                .iter()
+                .all(|condition| condition.key() != "release_held")
+        );
+        // ⚠️ A HOLD THIS KEEPER DOES NOT KNOW MUST NOT COST IT THE REST OF THE
+        // REPORT. Members and their Keeper run different releases as a matter
+        // of course, and a refused report would hide a full disk to show
+        // nothing at all.
+        let mut newer = serde_json::to_value(&health).unwrap();
+        newer["release_hold"] = serde_json::json!("a_hold_from_a_later_release");
+        newer["disk"]["pressure"] = serde_json::json!("critical");
+        let newer: HiveHealthReport = serde_json::from_value(newer).unwrap();
+        assert_eq!(newer.release_hold, Some(AutoInstallHold::Unrecognised));
+        assert_eq!(
+            hive_conditions(&behind(&newer), NOW)
+                .iter()
+                .map(HiveCondition::key)
+                .collect::<Vec<_>>(),
+            ["behind", "low_disk"]
+        );
     }
 
     #[test]

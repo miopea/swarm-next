@@ -166,6 +166,7 @@ async fn derive_health_report(state: &AppState, store: &TaskStore, now: i64) -> 
                 model: setting.model,
             })
         }),
+        release_hold: state.auto_install_hold(),
     }
 }
 
@@ -286,4 +287,34 @@ pub(crate) async fn contact_history(
         }),
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use swarm_domain::AutoInstallHold;
+
+    /// Gap 3 of ADR 0167: a Keeper could see a member was behind and never
+    /// why. The report now carries where the member's last automatic install
+    /// stopped, and nothing when nothing held it.
+    #[tokio::test]
+    async fn the_report_carries_where_the_last_automatic_install_stopped() {
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default().with_task_store(store.clone());
+        assert_eq!(
+            derive_health_report(&state, &store, 1).await.release_hold,
+            None
+        );
+        state.record_auto_install_hold(Some(AutoInstallHold::ProtocolChange));
+        assert_eq!(
+            derive_health_report(&state, &store, 2).await.release_hold,
+            Some(AutoInstallHold::ProtocolChange)
+        );
+        state.record_auto_install_hold(None);
+        assert_eq!(
+            derive_health_report(&state, &store, 3).await.release_hold,
+            None
+        );
+    }
 }

@@ -94,3 +94,27 @@ Measured read-only on the operator's Keeper on 2026-11-10:
   release published with protocol 17 listed, and its operator away.
 - That the idle rule fires on a real Hive. It needs a Hive on the release that
   carries it, and a later release to install.
+
+## Addendum 2026-11-10: a member says why it is behind
+
+The roster could say a member was behind and never why: busy workers, a release
+waiting for its operator's press, a failed download and the switch turned off
+all looked the same.
+
+Each automatic install pass now records where it stopped, and the member's
+health report (ADR 0114) carries it as `release_hold`. The value is replaced on
+every pass, and is absent when nothing held the release. A pass that cannot read
+its own store or status keeps the last value rather than inventing one. Two
+holds are new, because nothing explained them before: the download failed, and
+the Hive refused to start the install it decided on.
+
+The Keeper shows the hold on the member's health line only when that member is
+behind or schema-behind past the grace a new release gets, and only from a
+member it has heard from recently. Between releases a hold is every Hive's
+normal state, and showing it would be noise. Each hold names who moves it: the
+Hive by itself, or its operator from the Updates card.
+
+A hold this Keeper does not know reads as unrecognised and is not shown. The
+rest of the report is still read, because members and their Keeper run different
+releases as a matter of course. The field is optional, so the report's schema
+version is unchanged and an older Keeper ignores it.

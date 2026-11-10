@@ -279,6 +279,7 @@ mod tests {
             stuck_workers,
             ci_unreadable: None,
             workers_off_model: None,
+            release_hold: None,
         }
     }
 
