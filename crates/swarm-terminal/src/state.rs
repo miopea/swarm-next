@@ -252,6 +252,17 @@ pub fn snapshot_plain_text(bytes: &[u8], rows: u16, columns: u16) -> String {
     rendered
 }
 
+/// Whether the program in this snapshot asked for pastes to be framed
+/// (`ESC[?2004h`), which a terminal honours by wrapping a paste in
+/// `ESC[200~` and `ESC[201~`. A snapshot carries input modes after its
+/// contents, so replaying it is enough to read them.
+#[must_use]
+pub fn snapshot_bracketed_paste(bytes: &[u8], rows: u16, columns: u16) -> bool {
+    let mut parser = vt100::Parser::new(rows.max(1), columns.max(1), 0);
+    parser.process(bytes);
+    parser.screen().bracketed_paste()
+}
+
 fn formatted_scrollback(screen: &vt100::Screen, max_bytes: usize) -> Vec<u8> {
     let mut history = screen.clone();
     history.set_scrollback(usize::MAX);
@@ -477,6 +488,38 @@ mod tests {
         assert!(matches!(
             state.resume_after(Some(snapshot.sequence)),
             Resume::Deltas { frames } if frames.is_empty()
+        ));
+    }
+
+    /// A delivery decides from a snapshot whether to frame its write as a
+    /// paste, so the snapshot has to carry the mode the provider set, in both
+    /// directions, and a later switch-off has to win.
+    #[test]
+    fn snapshot_says_whether_the_provider_enabled_bracketed_paste() {
+        let mut state =
+            CanonicalTerminalState::new(JournalLimits::new(4096, 16), TerminalSize::new(6, 40));
+        state.push(b"\xe2\x9d\xaf ".to_vec());
+        let plain = state.snapshot();
+        assert!(!snapshot_bracketed_paste(
+            &plain.bytes,
+            plain.rows,
+            plain.columns
+        ));
+
+        state.push(b"\x1b[?2004h".to_vec());
+        let enabled = state.snapshot();
+        assert!(snapshot_bracketed_paste(
+            &enabled.bytes,
+            enabled.rows,
+            enabled.columns
+        ));
+
+        state.push(b"\x1b[?2004l".to_vec());
+        let disabled = state.snapshot();
+        assert!(!snapshot_bracketed_paste(
+            &disabled.bytes,
+            disabled.rows,
+            disabled.columns
         ));
     }
 
