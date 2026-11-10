@@ -24,7 +24,7 @@ impl TaskStore {
     }
 
     fn probe_with_budget(&self, budget: Duration) -> Result<bool, TaskStoreError> {
-        let connection = match self.connection.try_lock() {
+        let mut connection = match self.connection.try_lock() {
             Ok(connection) => connection,
             Err(TryLockError::WouldBlock) => return Ok(false),
             Err(TryLockError::Poisoned(_)) => return Err(TaskStoreError::LockPoisoned),
@@ -33,9 +33,12 @@ impl TaskStore {
             return Err(TaskStoreError::DatabaseRecoveryRequired);
         }
         let started = Instant::now();
-        connection.progress_handler(1000, Some(move || started.elapsed() >= budget));
+        connection.progress_handler(1000, Some(move || started.elapsed() >= budget))?;
         let result = self.check_integrity_result(&connection);
-        connection.progress_handler(0, None::<fn() -> bool>);
+        // A deadline left installed would interrupt every later query on this
+        // shared connection, so failing to remove it outranks the probe's own
+        // answer.
+        connection.progress_handler(0, None::<fn() -> bool>)?;
         result.map(|()| true)
     }
 

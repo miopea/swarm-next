@@ -10,7 +10,7 @@ use rmcp::{
     ErrorData, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ListToolsResult,
-        PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+        PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool, ToolAnnotations,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -291,8 +291,8 @@ impl OpsMcp {
 }
 
 impl ServerHandler for OpsMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Submit reviewed Ops requests as inert drafts; read their progress. No worker, terminal, assignment, state change or customer-send operations are available.")
     }
     async fn list_tools(
