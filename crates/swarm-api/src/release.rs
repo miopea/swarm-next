@@ -109,6 +109,12 @@ pub(super) struct ReleaseStatusResponse {
     /// That is the shape that put "your workers keep running" in front of an
     /// operator whose workers were about to stop.
     carries_protocol_change: Option<bool>,
+    /// How an offer that swaps the engine gets swapped (ADR 0169):
+    /// `waits_for_rest`, by itself once every worker rests; `waits_for_press`,
+    /// by the operator's press; `attempted`, by nothing, because a swap of it
+    /// stopped workers and did not finish. `None` for an offer that does not
+    /// swap the engine, or when this Hive cannot tell.
+    engine_swap: Option<AutomaticSwap>,
     /// How many commits this working copy is ahead of the released tag.
     ///
     /// The version strings alone say nothing: a working copy and the release it
@@ -177,17 +183,56 @@ pub(super) async fn status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(current_status(&state).await?),
+    )
+        .into_response())
+}
+
+/// The status, with the facts only the running engine can give.
+async fn current_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError> {
     // Asked of the RUNNING host rather than a symlink or this build's own
     // constant: the host is a separate process that deliberately outlives an
     // API restart, so it can be a release behind, and a symlink comparison is
     // how a staleness check once reported current while the host was two
     // releases back.
-    let protocol_change = offered_protocol_change(&state).await;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state, protocol_change)?),
-    )
-        .into_response())
+    let protocol_change = offered_protocol_change(state).await;
+    let mut status = build_status(state, protocol_change)?;
+    status.engine_swap = offered_engine_swap(state, &status).await;
+    Ok(status)
+}
+
+/// How the offer's engine swap happens, when it swaps the engine (ADR 0169).
+///
+/// Before an automatic install has prepared it, the pass that would: this
+/// Hive installs releases by itself, has not already tried this one, and its
+/// engine's idle update would take the swap.
+async fn offered_engine_swap(
+    state: &Arc<AppState>,
+    status: &ReleaseStatusResponse,
+) -> Option<AutomaticSwap> {
+    if status.carries_protocol_change != Some(true) || !status.upgrade_available {
+        return None;
+    }
+    let store = crate::task_store(state).ok()?;
+    let engine = crate::maintenance::host_status_snapshot(state).await.ok();
+    let offered = status.offer.as_ref().map(|offer| offer.version.as_str());
+    if let Some(swap) = automatic_swap(state, store, offered, engine.as_ref()) {
+        return Some(swap);
+    }
+    let unattempted = status
+        .apply_state
+        .as_deref()
+        .is_none_or(|outcome| outcome == "installed");
+    let applies_itself = engine
+        .as_ref()
+        .is_some_and(|engine| crate::idle_engine_update::applies_itself(state, engine));
+    Some(if status.auto_install && unattempted && applies_itself {
+        AutomaticSwap::WaitsForRest
+    } else {
+        AutomaticSwap::WaitsForPress
+    })
 }
 
 /// Whether installing the offer ends worker sessions, or `None` when this Hive
@@ -393,16 +438,28 @@ pub(super) async fn apply(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    request_install(&state).await?;
+    request_install(&state, InstallMode::Install).await?;
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
-/// Asks the install unit to install the downloaded release.
+/// What the install unit is asked to do with the downloaded release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InstallMode {
+    /// Install it now. A release that swaps the engine swaps it now, ending
+    /// every worker session: the operator's press, and an ordinary release.
+    Install,
+    /// Prepare a release that swaps the engine, which stops nobody. The swap
+    /// waits for every worker to rest (ADR 0169).
+    PrepareMigration,
+}
+
+/// Asks the install unit to install the downloaded release, or to prepare it
+/// (`mode`).
 ///
 /// The operator's Install button and the automatic install (ADR 0110) both come
 /// through here, so every guard — one install at a time, workers owed a return
 /// recorded first — holds for both.
-async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
+async fn request_install(state: &Arc<AppState>, mode: InstallMode) -> Result<(), ApiError> {
     let status = build_status(state, None)?;
     let request_path = state.release_apply_request_path.as_ref().ok_or_else(|| {
         ApiError::new(
@@ -462,7 +519,10 @@ async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
     // holds, so a worker cannot start between the roster being read and the
     // intents being written. Recorded BEFORE the request rather than after,
     // because the install can begin the moment the file appears.
-    if install_swaps_engine(state, &release).await {
+    //
+    // A PREPARATION STOPS NOBODY, so it owes nobody a return. The swap that
+    // follows records its own, for exactly the sessions it stops (ADR 0169).
+    if mode == InstallMode::Install && install_swaps_engine(state, &release).await {
         let guard = state.worker_lifecycle.lock().await;
         let recorded = record_revival_intents(state).await;
         drop(guard);
@@ -476,7 +536,14 @@ async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
             );
         }
     }
-    tokio::fs::write(request_path.as_ref(), release.to_string_lossy().as_bytes())
+    // The release on the first line, as every swarm-package reads it. An older
+    // package reads the second line as part of the path and refuses the
+    // request: refusing is the safe way for it to misread a preparation.
+    let mut request = release.to_string_lossy().into_owned();
+    if mode == InstallMode::PrepareMigration {
+        request.push_str("\nmode=prepare-migration\n");
+    }
+    tokio::fs::write(request_path.as_ref(), request.as_bytes())
         .await
         .map_err(|_| {
             ApiError::new(
@@ -492,6 +559,13 @@ async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
 ///
 /// A Hive that is not a member, or cannot read its policy, has no requirement:
 /// its operator's own choice stands.
+/// Whether this Hive installs releases by itself: its operator's choice,
+/// unless its Apiary requires one (ADR 0113). `None` when it cannot be read.
+pub(crate) fn auto_install_enabled(state: &AppState) -> Option<bool> {
+    let stored = crate::task_store(state).ok()?.release_check_state().ok()?;
+    Some(required_auto_install(state).unwrap_or(stored.auto_install))
+}
+
 fn required_auto_install(state: &AppState) -> Option<bool> {
     crate::apiary_service(state)
         .ok()?
@@ -530,6 +604,7 @@ fn build_status(
         last_checked_at: stored.last_checked_at,
         last_outcome: stored.last_outcome,
         carries_protocol_change: protocol_change,
+        engine_swap: None,
         carries_new_worker_engine: offer
             .as_ref()
             .is_some_and(|offer| offer.worker_engine_build_id != worker_engine_build_id()),
@@ -639,7 +714,7 @@ impl AppState {
 /// Independent yes/no facts read from different places, not a state encoded in
 /// flags, so the bools are each the honest type.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct AutoInstallFacts<'a> {
     enabled: bool,
     development_build: bool,
@@ -651,6 +726,22 @@ struct AutoInstallFacts<'a> {
     workers_idle: bool,
     in_flight: bool,
     last_outcome: Option<&'a str>,
+    /// Where a swap of the offered release stands, when one has begun.
+    swap: Option<AutomaticSwap>,
+}
+
+/// Where a swap of the offered release stands (ADR 0169).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AutomaticSwap {
+    /// It swaps by itself once every worker rests: an automatic install has
+    /// prepared it, or would.
+    WaitsForRest,
+    /// Nothing here would swap it by itself: the operator's press does.
+    WaitsForPress,
+    /// A swap of it stopped workers and did not finish, or was not heard from
+    /// again. Nothing tries it again by itself.
+    Attempted,
 }
 
 /// The rule, pure so each hold can be tested without a network or a clock.
@@ -666,6 +757,7 @@ fn auto_install_hold(facts: &AutoInstallFacts<'_>) -> Option<AutoInstallHold> {
         workers_idle,
         in_flight,
         last_outcome,
+        swap,
     } = *facts;
     if !enabled {
         return Some(AutoInstallHold::TurnedOff);
@@ -675,6 +767,13 @@ fn auto_install_hold(facts: &AutoInstallFacts<'_>) -> Option<AutoInstallHold> {
     }
     if !upgrade_available {
         return Some(AutoInstallHold::NothingNewer);
+    }
+    // A swap under way is the reason, whatever the workers are doing now.
+    match swap {
+        Some(AutomaticSwap::Attempted) => return Some(AutoInstallHold::SwapAttempted),
+        Some(AutomaticSwap::WaitsForRest) => return Some(AutoInstallHold::SwapWaitsForRest),
+        Some(AutomaticSwap::WaitsForPress) => return Some(AutoInstallHold::ProtocolChange),
+        None => {}
     }
     // AWAY, OR EVERY WORKER IDLE (ADR 0167). An install that keeps the engine
     // restarts only the API: workers keep running, and an open page reconnects
@@ -785,6 +884,7 @@ async fn auto_install_pass(
         workers_idle,
         in_flight,
         last_outcome: status.apply_state.as_deref(),
+        swap: automatic_swap(state, store, offered, engine.as_ref()),
     }) {
         tracing::debug!(?hold, "an ordinary release is not installing itself yet");
         return Some(hold);
@@ -816,8 +916,21 @@ async fn auto_install_pass(
     let Some(release) = downloaded_release(&root, Some(&offer.artifact_sha256)) else {
         return Some(AutoInstallHold::DownloadFailed);
     };
-    match release_swaps_engine(&release, engine.map(|engine| engine.protocol_version)) {
-        Some(false) => {}
+    let mode = match release_swaps_engine(
+        &release,
+        engine.as_ref().map(|engine| engine.protocol_version),
+    ) {
+        Some(false) => InstallMode::Install,
+        // ADR 0169: where the engine can stop only resting workers and would
+        // swap by itself, the release is prepared now, stopping nobody, and
+        // swapped once every worker rests.
+        Some(true)
+            if engine
+                .as_ref()
+                .is_some_and(|engine| crate::idle_engine_update::applies_itself(state, engine)) =>
+        {
+            InstallMode::PrepareMigration
+        }
         swaps => {
             let hold = if swaps.is_some() {
                 AutoInstallHold::ProtocolChange
@@ -827,8 +940,15 @@ async fn auto_install_pass(
             tracing::debug!(?hold, version = %offer.version, "an ordinary release is not installing itself yet");
             return Some(hold);
         }
-    }
-    match request_install(state).await {
+    };
+    match request_install(state, mode).await {
+        Ok(()) if mode == InstallMode::PrepareMigration => {
+            tracing::info!(
+                version = %offer.version,
+                "preparing a release that swaps the worker engine; it installs itself once every worker rests"
+            );
+            None
+        }
         Ok(()) => {
             tracing::info!(
                 version = %offer.version,
@@ -845,6 +965,47 @@ async fn auto_install_pass(
             Some(AutoInstallHold::InstallRefused)
         }
     }
+}
+
+/// Where a swap of the offered release stands, if one has begun (ADR 0169).
+///
+/// An attempt at it that stopped workers and did not finish comes first,
+/// whoever started it: nothing tries it again by itself. Then a migration an
+/// automatic install prepared for it, which swaps by itself only where the
+/// engine's idle update would take it.
+fn automatic_swap(
+    state: &AppState,
+    store: &TaskStore,
+    offered: Option<&str>,
+    engine: Option<&swarm_terminal::TerminalHostStatus>,
+) -> Option<AutomaticSwap> {
+    let offered = offered?;
+    let unfinished = store
+        .last_worker_engine_update()
+        .ok()
+        .flatten()
+        .is_some_and(|last| {
+            last.to_version == offered
+                && last.to_protocol.is_some()
+                && last.stopped_sessions.is_some()
+                && last.outcome != Some(swarm_persistence::WorkerEngineUpdateOutcome::Succeeded)
+        });
+    if unfinished {
+        return Some(AutomaticSwap::Attempted);
+    }
+    let (_, prepared) = crate::maintenance::automatic_protocol_target(state)
+        .ok()
+        .flatten()?;
+    if prepared != offered {
+        return None;
+    }
+    Some(
+        if engine.is_some_and(|engine| crate::idle_engine_update::applies_itself(state, engine)) {
+            AutomaticSwap::WaitsForRest
+        } else {
+            AutomaticSwap::WaitsForPress
+        },
+    )
 }
 
 /// The check mode in effect.
@@ -1219,6 +1380,7 @@ mod tests {
     use super::*;
 
     use swarm_domain::PresenceMode::{AtHive, NightWatch, Reachable};
+    use swarm_persistence::{WorkerEngineUpdateInitiator, WorkerEngineUpdateOutcome};
 
     /// Positional, so each case reads as one line of the rule's inputs.
     #[allow(clippy::fn_params_excessive_bools)]
@@ -1239,6 +1401,7 @@ mod tests {
             workers_idle,
             in_flight,
             last_outcome,
+            swap: None,
         })
     }
 
@@ -1255,6 +1418,11 @@ mod tests {
         /// The downloaded bundle's `OLDEST_ENGINE_PROTOCOL`, absent from a
         /// bundle built before ADR 0157.
         oldest_engine: Option<u16>,
+        /// Whether swarm-package replaces this Hive's engine, as every
+        /// installed Hive's does.
+        managed: bool,
+        /// A worker whose session the engine lists as running.
+        loaded_worker: bool,
     }
 
     impl Fixture {
@@ -1266,13 +1434,32 @@ mod tests {
                 busy: 0,
                 release_protocol: swarm_terminal::PROTOCOL_VERSION,
                 oldest_engine: None,
+                managed: true,
+                loaded_worker: false,
+            }
+        }
+
+        /// A release whose API cannot drive the running engine, which can
+        /// stop its own resting workers (ADR 0156), with a worker loaded.
+        fn swapping(presence: swarm_domain::PresenceMode) -> Self {
+            Self {
+                release_protocol: swarm_terminal::PROTOCOL_VERSION + 1,
+                oldest_engine: Some(swarm_terminal::PROTOCOL_VERSION + 1),
+                loaded_worker: true,
+                ..Self::ordinary(presence)
             }
         }
     }
 
     /// An engine that answers its status with `protocol` and `busy`, and lists
-    /// no sessions. One request per connection, as the client sends them.
-    fn fake_engine(socket: &Path, protocol: u16, busy: usize) -> tokio::task::JoinHandle<()> {
+    /// `running` as its running sessions. One request per connection, as the
+    /// client sends them.
+    fn fake_engine(
+        socket: &Path,
+        protocol: u16,
+        busy: usize,
+        running: Vec<swarm_domain::WorkerSessionId>,
+    ) -> tokio::task::JoinHandle<()> {
         use swarm_terminal::{HostRequest, HostResponse, TerminalHostStatus};
         use tokio::io::{AsyncBufReadExt, BufReader};
         let listener = tokio::net::UnixListener::bind(socket).unwrap();
@@ -1302,7 +1489,23 @@ mod tests {
                         },
                     },
                     Ok(HostRequest::ListSessions) => HostResponse::Sessions {
-                        sessions: Vec::new(),
+                        sessions: running
+                            .iter()
+                            .map(|&session_id| swarm_terminal::HostSessionSummary {
+                                session_id,
+                                running: true,
+                                stop_pending_release: false,
+                                resources: None,
+                                last_output_at: None,
+                                recovery_attempt: None,
+                                provider_start: None,
+                                provider_selection: None,
+                                continuation_unavailable: false,
+                                continuation_recovery: None,
+                                provider_executable: None,
+                                provider_tools_relay: None,
+                            })
+                            .collect(),
                     },
                     _ => HostResponse::Error {
                         code: "fixture_unsupported".to_owned(),
@@ -1328,8 +1531,23 @@ mod tests {
         tokio::task::JoinHandle<()>,
     ) {
         let socket = directory.path().join("terminal.sock");
-        let host = fake_engine(&socket, fixture.engine_protocol, fixture.busy);
         let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let mut running = Vec::new();
+        if fixture.loaded_worker {
+            let worker = store
+                .create_worker(
+                    "Ledger",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace/fictional",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let session = swarm_domain::WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            running.push(session);
+        }
+        let host = fake_engine(&socket, fixture.engine_protocol, fixture.busy, running);
         let offer = swarm_domain::ReleaseOffer {
             version: "99.0.0".to_owned(),
             protocol: fixture.release_protocol.to_string(),
@@ -1366,10 +1584,15 @@ mod tests {
             .unwrap();
         }
         let request = directory.path().join("release-apply.request");
-        let state = AppState::default()
+        let mut state = AppState::default()
             .with_terminal_host(swarm_terminal::HostClient::new(&socket), "secret")
             .with_task_store(store)
             .with_release_paths(directory.path().to_owned(), request.clone());
+        if fixture.managed {
+            state = state.with_maintenance_request_path(
+                directory.path().join("worker-engine-maintenance.request"),
+            );
+        }
         (Arc::new(state), request, host)
     }
 
@@ -1444,7 +1667,8 @@ mod tests {
     }
 
     /// A release whose API cannot drive the running engine swaps both and ends
-    /// every session. That stays the operator's call.
+    /// every session. An engine on 17 cannot be asked to stop only resting
+    /// workers, so there it stays the operator's call (ADR 0169).
     #[tokio::test]
     async fn a_release_that_cannot_drive_the_running_engine_waits_for_the_operator() {
         for oldest_engine in [Some(18), None] {
@@ -1520,6 +1744,278 @@ mod tests {
             Some(AutoInstallHold::DownloadFailed)
         );
         host.abort();
+    }
+
+    /// ADR 0169: a release that swaps the engine is no longer kept for the
+    /// operator's press where the engine can stop its own resting workers. The
+    /// install unit is asked to PREPARE it, which stops nobody and owes nobody
+    /// a return; the swap waits for every worker to rest.
+    #[tokio::test]
+    async fn an_engine_swapping_release_is_prepared_where_the_engine_can_stop_resting_workers() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture::swapping(Reachable);
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        auto_install(&state).await;
+        let requested = std::fs::read_to_string(&request).expect("its preparation was asked for");
+        let mut lines = requested.lines();
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.ends_with("downloads/99.0.0")),
+            "{requested}"
+        );
+        assert_eq!(lines.next(), Some("mode=prepare-migration"), "{requested}");
+        assert_eq!(lines.next(), None, "{requested}");
+        assert_eq!(state.auto_install_hold(), None);
+        assert!(
+            crate::task_store(&state)
+                .unwrap()
+                .worker_revival_intents()
+                .unwrap()
+                .is_empty(),
+            "preparing stops nobody, so nobody is owed a return yet"
+        );
+        host.abort();
+    }
+
+    /// The press installs it outright, as before, and writes the loaded
+    /// workers down first. Only the automatic install prepares.
+    #[tokio::test]
+    async fn the_operators_press_still_swaps_the_engine_outright() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture::swapping(AtHive);
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        request_install(&state, InstallMode::Install).await.unwrap();
+        let requested = std::fs::read_to_string(&request).unwrap();
+        assert!(requested.ends_with("downloads/99.0.0"), "{requested}");
+        assert!(!requested.contains("mode="), "{requested}");
+        assert_eq!(
+            crate::task_store(&state)
+                .unwrap()
+                .worker_revival_intents()
+                .unwrap()
+                .len(),
+            1,
+            "the loaded worker is owed a return"
+        );
+        host.abort();
+    }
+
+    /// Wherever the swap could not then apply by itself, the release waits for
+    /// the press as it did: automatic engine updates off, an engine nothing
+    /// replaces, or a migration its operator prepared.
+    #[tokio::test]
+    async fn an_engine_swapping_release_waits_for_the_press_where_nothing_would_swap_it_by_itself()
+    {
+        for case in ["engine switch off", "unmanaged", "operator prepared"] {
+            let directory = tempfile::tempdir().unwrap();
+            let fixture = Fixture {
+                managed: case != "unmanaged",
+                ..Fixture::swapping(Reachable)
+            };
+            let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+            match case {
+                "engine switch off" => {
+                    crate::task_store(&state)
+                        .unwrap()
+                        .set_worker_engine_auto_update(false, 1)
+                        .unwrap();
+                }
+                "operator prepared" => {
+                    prepared_migration(directory.path(), "98.0.0", "manual");
+                }
+                _ => {}
+            }
+            auto_install(&state).await;
+            assert!(!request.exists(), "{case}");
+            assert_eq!(
+                state.auto_install_hold(),
+                Some(AutoInstallHold::ProtocolChange),
+                "{case}"
+            );
+            host.abort();
+        }
+    }
+
+    /// Once prepared, the member says the swap waits for its workers to rest,
+    /// and asks for nothing again. ⚠️ ONLY WHILE IT WOULD APPLY BY ITSELF: with
+    /// automatic engine updates off it waits for the press, and says so.
+    #[tokio::test]
+    async fn a_swap_prepared_by_itself_is_reported_as_waiting_for_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture::swapping(Reachable);
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        std::fs::remove_dir_all(directory.path().join("downloads").join("99.0.0")).unwrap();
+        prepared_migration(directory.path(), "99.0.0", "automatic");
+        std::fs::write(
+            directory.path().join("release-apply.status"),
+            "state=deferred\nversion=99.0.0\nprotocol_migration=1\n",
+        )
+        .unwrap();
+        auto_install(&state).await;
+        assert!(!request.exists());
+        assert_eq!(
+            state.auto_install_hold(),
+            Some(AutoInstallHold::SwapWaitsForRest)
+        );
+
+        crate::task_store(&state)
+            .unwrap()
+            .set_worker_engine_auto_update(false, 2)
+            .unwrap();
+        auto_install(&state).await;
+        assert!(!request.exists());
+        assert_eq!(
+            state.auto_install_hold(),
+            Some(AutoInstallHold::ProtocolChange)
+        );
+        host.abort();
+    }
+
+    /// Queen's condition on ADR 0169: the member names an automatic swap that
+    /// stopped its workers and did not finish, whether it failed or was never
+    /// heard from again. It is not tried again by itself.
+    #[tokio::test]
+    async fn an_automatic_swap_that_did_not_finish_is_named_and_not_tried_again() {
+        for outcome in [None, Some(WorkerEngineUpdateOutcome::Failed)] {
+            let directory = tempfile::tempdir().unwrap();
+            let fixture = Fixture::swapping(Reachable);
+            let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+            let store = crate::task_store(&state).unwrap();
+            let attempt = store
+                .begin_worker_engine_update(
+                    "1.0.0-fixture",
+                    "99.0.0",
+                    Some(fixture.release_protocol),
+                    Some(1),
+                    WorkerEngineUpdateInitiator::Automatic,
+                    1,
+                )
+                .unwrap();
+            if let Some(outcome) = outcome {
+                store
+                    .finish_worker_engine_update(&attempt, outcome, "", 2)
+                    .unwrap();
+            }
+            auto_install(&state).await;
+            assert!(!request.exists(), "{outcome:?}");
+            assert_eq!(
+                state.auto_install_hold(),
+                Some(AutoInstallHold::SwapAttempted),
+                "{outcome:?}"
+            );
+            host.abort();
+        }
+    }
+
+    /// The Updates card is told how a swapping offer gets swapped (ADR 0169),
+    /// so it does not say "nothing is installed until you say so" where the
+    /// release installs itself once every worker rests, and does not send the
+    /// operator to the maintenance action for a swap Swarm applies itself.
+    #[tokio::test]
+    async fn the_updates_card_is_told_how_a_swapping_offer_is_swapped() {
+        for (case, expected) in [
+            ("installs itself", Some(AutomaticSwap::WaitsForRest)),
+            ("prepared by itself", Some(AutomaticSwap::WaitsForRest)),
+            ("automatic install off", Some(AutomaticSwap::WaitsForPress)),
+            ("engine switch off", Some(AutomaticSwap::WaitsForPress)),
+            ("operator prepared", Some(AutomaticSwap::WaitsForPress)),
+            ("already attempted", Some(AutomaticSwap::WaitsForPress)),
+            ("attempted", Some(AutomaticSwap::Attempted)),
+            ("no swap", None),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let fixture = if case == "no swap" {
+                Fixture::ordinary(Reachable)
+            } else {
+                Fixture::swapping(Reachable)
+            };
+            let (state, _request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+            let store = crate::task_store(&state).unwrap();
+            match case {
+                "prepared by itself" => prepared_migration(directory.path(), "99.0.0", "automatic"),
+                "automatic install off" => {
+                    store.set_release_auto_install(false).unwrap();
+                }
+                "engine switch off" => {
+                    store.set_worker_engine_auto_update(false, 1).unwrap();
+                }
+                "operator prepared" => prepared_migration(directory.path(), "99.0.0", "manual"),
+                "already attempted" => std::fs::write(
+                    directory.path().join("release-apply.status"),
+                    "state=failed\nversion=99.0.0\nstep=migrate-protocol\n",
+                )
+                .unwrap(),
+                "attempted" => {
+                    store
+                        .begin_worker_engine_update(
+                            "1.0.0-fixture",
+                            "99.0.0",
+                            Some(fixture.release_protocol),
+                            Some(1),
+                            WorkerEngineUpdateInitiator::Automatic,
+                            1,
+                        )
+                        .unwrap();
+                }
+                _ => {}
+            }
+            let status = current_status(&state).await.unwrap();
+            assert_eq!(status.engine_swap, expected, "{case}");
+            host.abort();
+        }
+    }
+
+    /// A migration prepared in this Hive's state root, as swarm-package leaves
+    /// one: `protocol-migration.pending` and its `marker` (`manual` or
+    /// `automatic`) naming the installed release.
+    fn prepared_migration(root: &Path, version: &str, marker: &str) {
+        let release = root.join("releases").join(version);
+        std::fs::create_dir_all(&release).unwrap();
+        std::fs::write(
+            release.join("PROTOCOL"),
+            format!("{}\n", swarm_terminal::PROTOCOL_VERSION + 1),
+        )
+        .unwrap();
+        std::fs::write(release.join("VERSION"), format!("{version}\n")).unwrap();
+        let named = format!("{}\n", release.display());
+        std::fs::write(root.join("protocol-migration.pending"), &named).unwrap();
+        std::fs::write(root.join(format!("protocol-migration.{marker}")), &named).unwrap();
+    }
+
+    /// The automatic swap's own holds come after the switch, a development
+    /// build and having nothing newer, and before the workers and the
+    /// one-attempt rule: a swap waiting for rest is not "in use".
+    #[test]
+    fn the_automatic_swap_holds_come_after_the_switch_and_before_the_workers() {
+        let facts = |swap| AutoInstallFacts {
+            enabled: true,
+            upgrade_available: true,
+            presence: Some(AtHive),
+            workers_idle: false,
+            last_outcome: Some("deferred"),
+            swap,
+            ..AutoInstallFacts::default()
+        };
+        assert_eq!(
+            auto_install_hold(&facts(Some(AutomaticSwap::WaitsForRest))),
+            Some(AutoInstallHold::SwapWaitsForRest)
+        );
+        assert_eq!(
+            auto_install_hold(&facts(Some(AutomaticSwap::Attempted))),
+            Some(AutoInstallHold::SwapAttempted)
+        );
+        assert_eq!(
+            auto_install_hold(&facts(None)),
+            Some(AutoInstallHold::InUse)
+        );
+        assert_eq!(
+            auto_install_hold(&AutoInstallFacts {
+                enabled: false,
+                ..facts(Some(AutomaticSwap::WaitsForRest))
+            }),
+            Some(AutoInstallHold::TurnedOff)
+        );
     }
 
     /// The ordinary case, which is the whole point of ADR 0110: a newer

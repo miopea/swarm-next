@@ -1220,6 +1220,82 @@ grep -q '^state=deferred$' "$SWARM_STATE_ROOT/release-apply.status" \
   || { echo "could not restore protocol 7 after the migration cases" >&2; exit 1; }
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
+
+# ADR 0169: AN AUTOMATIC INSTALL OF A RELEASE THAT SWAPS THE ENGINE PREPARES IT.
+# The request's second line asks for a preparation. With workers loaded, the
+# release is installed and left pending without the operator's manual hold,
+# and marked automatic so the API's idle update may take it over once every
+# worker rests. Nothing is activated, stopped or restarted at this step.
+printf '3\n' > "$HOME/running-sessions"
+printf '0\n' > "$HOME/busy-sessions"
+printf '0\n' > "$HOME/unreadable-sessions"
+rm -rf "$SWARM_STATE_ROOT/downloads/4.0.0"
+cp -R "$migration_bundle" "$SWARM_STATE_ROOT/downloads/4.0.0"
+printf '%s\nmode=prepare-migration\n' "$SWARM_STATE_ROOT/downloads/4.0.0" \
+  > "$SWARM_STATE_ROOT/release-apply.request"
+: > "$HOME/systemctl.log"
+"$package" apply-release 2>"$HOME/prepare-automatic.log" \
+  || { echo "an automatic preparation failed: $(cat "$HOME/prepare-automatic.log")" >&2; exit 1; }
+grep -q '^version=4.0.0$' "$SWARM_STATE_ROOT/release-apply.status"
+grep -q '^state=deferred$' "$SWARM_STATE_ROOT/release-apply.status" \
+  || { echo "an automatic preparation was not reported as waiting: $(cat "$SWARM_STATE_ROOT/release-apply.status")" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ] \
+  || { echo "an automatic preparation moved the API" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ] \
+  || { echo "an automatic preparation moved the engine under loaded workers" >&2; exit 1; }
+! grep -Eq '(^| )(stop|restart)( |$)' "$HOME/systemctl.log" \
+  || { echo "an automatic preparation stopped or restarted a service: $(cat "$HOME/systemctl.log")" >&2; exit 1; }
+[ -f "$SWARM_STATE_ROOT/protocol-migration.pending" ]
+[ ! -e "$SWARM_STATE_ROOT/protocol-migration.manual" ] \
+  || { echo "an automatic preparation wrote the operator's manual hold" >&2; exit 1; }
+[ "$(cat "$SWARM_STATE_ROOT/protocol-migration.automatic" 2>/dev/null)" = "$(cat "$SWARM_STATE_ROOT/protocol-migration.pending")" ] \
+  || { echo "an automatic preparation was not marked as the automatic install's" >&2; exit 1; }
+
+# The timer still waits while workers are loaded, and says the API applies it.
+printf 'true\n' > "$HOME/auto-update"
+printf '1\n' > "$HOME/busy-sessions"
+automatic_waits=$(SWARM_MAINTENANCE_ADMISSION_PROTOCOL=5 "$package" complete-protocol-migration-if-idle 2>&1) \
+  || { echo "a prepared automatic migration failed the timer: $automatic_waits" >&2; exit 1; }
+printf '%s' "$automatic_waits" | grep -q 'remains deferred; it waits for every worker to rest (1 busy now); Swarm then applies it by itself' \
+  || { echo "a prepared automatic migration was not said to wait for rest: $automatic_waits" >&2; exit 1; }
+! printf '%s' "$automatic_waits" | grep -q -e 'cannot yet stop them' -e 'Apply it from the worker engine card' \
+  || { echo "the timer sent the operator to the card for a migration that applies itself: $automatic_waits" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
+printf '0\n' > "$HOME/busy-sessions"
+rm -f "$HOME/auto-update"
+
+# A request naming any other release is consumed without activating anything.
+printf 'requested_at=%s\ntarget_version=older-build\n' "$(date +%s)" \
+  > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+"$package" reconcile-host-requested >"$HOME/automatic-mismatch.log" 2>&1 \
+  || { echo "a mismatched request failed instead of being consumed: $(cat "$HOME/automatic-mismatch.log")" >&2; exit 1; }
+[ ! -e "$SWARM_STATE_ROOT/worker-engine-maintenance.request" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ] \
+  || { echo "a request for another release activated the automatic migration" >&2; exit 1; }
+[ -f "$SWARM_STATE_ROOT/protocol-migration.automatic" ]
+
+# The API's request for the prepared release, made once its admission stopped
+# every worker, completes it: API and engine swap together, and every marker
+# goes with the migration.
+printf '0\n' > "$HOME/running-sessions"
+printf 'requested_at=%s\ntarget_version=4.0.0\n' "$(date +%s)" \
+  > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
+"$package" reconcile-host-requested >"$HOME/automatic-complete.log" 2>&1 \
+  || { echo "the requested automatic migration failed: $(cat "$HOME/automatic-complete.log")" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ] \
+  || { echo "the requested automatic migration did not move the API" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ] \
+  || { echo "the requested automatic migration did not move the engine" >&2; exit 1; }
+for marker in pending manual automatic; do
+  [ ! -e "$SWARM_STATE_ROOT/protocol-migration.$marker" ] \
+    || { echo "protocol-migration.$marker outlived the migration it described" >&2; exit 1; }
+done
+
+# Back to protocol 7 for the assertions that follow.
+"$package" update "$test_root/bundle-7.0.0" >/dev/null 2>&1 \
+  || { echo "could not restore protocol 7 after the automatic migration" >&2; exit 1; }
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "7.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "7.0.0" ]
 printf '0
 ' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"

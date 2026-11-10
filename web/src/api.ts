@@ -647,6 +647,13 @@ export type ReleaseStatus = {
    * and the card must say so rather than fall back to the reassuring sentence.
    */
   carries_protocol_change: boolean | null;
+  /**
+   * How an offer that swaps the engine gets swapped (ADR 0169): by itself once
+   * every worker rests, by the operator's press, or by nothing, because a swap
+   * of it stopped workers and did not finish. `null` for an offer that does
+   * not swap the engine, or when the Hive cannot tell.
+   */
+  engine_swap: "waits_for_rest" | "waits_for_press" | "attempted" | null;
   /** Commits this working copy is ahead of the released tag; null when uncountable. */
   commits_ahead_of_release: number | null;
   downloaded_version: string | null;
@@ -1860,7 +1867,9 @@ export type AutoInstallHold =
   | "protocol_change"
   | "protocol_unknown"
   | "download_failed"
-  | "install_refused";
+  | "install_refused"
+  | "swap_waits_for_rest"
+  | "swap_attempted";
 
 /** A member Hive with something wrong, worst first. A healthy Hive is absent. */
 export type HiveHealth = { hive_id: string; conditions: HiveCondition[] };

@@ -63,6 +63,16 @@ function releaseHeldText(hold: AutoInstallHold): { status: string; next: string 
     case "protocol_unknown": return { status: "Can't tell if the release ends worker sessions", next: fromUpdatesCard };
     case "download_failed": return { status: "Release download failing", next: "It tries again by itself; open its logs if it keeps failing" };
     case "install_refused": return { status: "Install couldn't start", next: askForInstall };
+    // A release that swaps the engine prepares itself and swaps once every
+    // worker rests (ADR 0169).
+    case "swap_waits_for_rest": return {
+      status: "Release waits for its workers to rest",
+      next: "It swaps the engine by itself once every worker rests, restarting each of them",
+    };
+    case "swap_attempted": return {
+      status: "Release swap stopped its workers and didn't finish",
+      next: "It is not tried again by itself; its operator applies it from the Worker engine card",
+    };
   }
 }
 

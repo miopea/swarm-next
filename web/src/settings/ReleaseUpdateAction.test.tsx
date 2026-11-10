@@ -39,6 +39,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
     upgrade_available: true,
     carries_new_worker_engine: false,
     carries_protocol_change: false,
+    engine_swap: null,
     commits_ahead_of_release: null,
     downloaded_version: null,
     apply_state: null,
@@ -65,6 +66,7 @@ afterEach(cleanup);
 test("a prepared release waits without claiming installation or offering another install", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
     downloaded_version: "0.2.0", apply_state: "deferred", carries_protocol_change: true,
+    engine_swap: "waits_for_press",
   }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   expect(await screen.findByText(/Release prepared · waiting for engine maintenance/)).toBeInTheDocument();
@@ -567,9 +569,61 @@ test("an ordinary release says it installs itself once every worker is idle or t
 test("a release that stops workers still says nothing installs until you say so", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
     auto_install: true, downloaded_version: "0.2.0", carries_protocol_change: true,
+    engine_swap: "waits_for_press",
   }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
   expect(await screen.findByText(/Nothing is installed until you say so/)).toBeInTheDocument();
+});
+
+/**
+ * ADR 0169: where the engine's idle update would take it, a release that swaps
+ * the engine installs itself too, and restarts every worker when it does. The
+ * card says so before it happens, because nobody will press anything.
+ */
+test("a release that swaps the engine by itself says it waits for every worker to rest", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
+    auto_install: true, downloaded_version: "0.2.0", carries_protocol_change: true,
+    engine_swap: "waits_for_rest",
+  }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/It installs itself once every worker rests, swapping the engine and restarting each worker/)).toBeInTheDocument();
+  expect(screen.getByText(/Here that happens by itself once every worker rests/)).toBeInTheDocument();
+  expect(screen.queryByText(/Nothing is installed until you say so/)).not.toBeInTheDocument();
+});
+
+/** The switch no longer promises that such a release always waits for the operator. */
+test("the automatic install switch says a release that stops workers can wait for rest instead", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/where worker engine updates apply by themselves, for every worker to rest/)).toBeInTheDocument();
+  expect(screen.queryByText(/would stop your workers still waits for you/)).not.toBeInTheDocument();
+});
+
+/** Prepared by itself, it is Swarm's to apply: no maintenance action is asked for. */
+test("a swap prepared by itself does not send the operator to the maintenance action", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
+    auto_install: true, downloaded_version: "0.2.0", apply_state: "deferred", carries_protocol_change: true,
+    engine_swap: "waits_for_rest",
+  }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/Release prepared · it swaps the engine by itself once every worker rests/)).toBeInTheDocument();
+  expect(screen.queryByText(/waiting for engine maintenance/)).not.toBeInTheDocument();
+  // Nothing is offered to press once it is prepared, so nothing says to press it.
+  expect(screen.queryByText(/if you press Install/)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Install (Swarm )?\d/ })).not.toBeInTheDocument();
+});
+
+/** A swap that stopped its workers and did not finish is named, and not retried. */
+test("a swap that did not finish says it is not tried again by itself", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({
+    auto_install: true, downloaded_version: "0.2.0", apply_state: "deferred", carries_protocol_change: true,
+    engine_swap: "attempted",
+  }));
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/A swap to 0.2.0 stopped its workers and did not finish/)).toBeInTheDocument();
+  expect(screen.getByText(/It is not tried again by itself/)).toBeInTheDocument();
+  expect(screen.queryByText(/swaps the engine by itself once every worker rests/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/waiting for engine maintenance/)).not.toBeInTheDocument();
 });
 
 test("the operator can turn automatic installs off from the card", async () => {

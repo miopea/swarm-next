@@ -47,7 +47,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
             { kind: "workers_off_model", count: 2, model: "sonnet" },
           ] },
           { hive_id: "thistle", conditions: [{ kind: "quiet", last_contact_at: now - 3 * 86_400 }, { kind: "schema_behind", running: "1.11.0" }] },
-          { hive_id: "sorrel", conditions: [{ kind: "behind", running: "1.12.4" }, { kind: "release_held", hold: "protocol_change" }] },
+          { hive_id: "sorrel", conditions: [{ kind: "behind", running: "1.12.4" }, { kind: "release_held", hold: "swap_attempted" }] },
         ]
         : url.includes("/apiary/usage") ? (() => {
           const totals = (weighted: number, active_seconds: number) => ({ input_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, output_tokens: 0, messages: 0, weighted, active_seconds });

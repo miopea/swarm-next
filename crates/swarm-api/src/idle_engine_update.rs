@@ -385,21 +385,30 @@ pub(crate) async fn advance(
         return false;
     };
     let behind = worker_engine_update_required(&status);
-    if let Err(error) =
-        store.note_worker_engine_waiting(behind.then(worker_engine_build_id), unix_timestamp())
-    {
+    // A migration an automatic install prepared swaps this engine too, and
+    // waits for rest like an engine update (ADR 0169). It is behind while the
+    // engine still speaks the old protocol, though its build is current.
+    let migration = automatic_migration(state, &status);
+    let waiting = migration
+        .as_ref()
+        .map(|(_, version)| version.as_str())
+        .or_else(|| behind.then(worker_engine_build_id));
+    if let Err(error) = store.note_worker_engine_waiting(waiting, unix_timestamp()) {
         tracing::warn!(message = %error, "how long the engine update has waited could not be recorded");
     }
     if status.draining && lift_stale_drain(state).await {
         publish_runtime_change(state);
         return true;
     }
-    if !behind {
+    if !behind && migration.is_none() {
         state.idle_engine_update.clear();
         tell_restarted(state, observed).await;
         return false;
     }
-    if let Err((reason, count)) = ready(state, &status) {
+    let target = migration
+        .as_ref()
+        .map_or(build_version(), |(_, version)| version.as_str());
+    if let Err((reason, count)) = ready(state, &status, target) {
         state.idle_engine_update.refuse(reason, None, count);
         return false;
     }
@@ -411,7 +420,7 @@ pub(crate) async fn advance(
     let Ok(lifecycle) = state.worker_lifecycle.try_lock() else {
         return false;
     };
-    let replaced = attempt(state, &status, observed).await;
+    let replaced = attempt(state, &status, observed, migration.as_ref()).await;
     drop(lifecycle);
     if replaced {
         state.idle_engine_update.clear();
@@ -835,6 +844,15 @@ pub(crate) fn applies_itself(state: &AppState, status: &TerminalHostStatus) -> b
     standing_refusal(state, status).is_ok()
 }
 
+/// The migration an automatic install prepared, as its protocol and release,
+/// while the engine still speaks another protocol (ADR 0169).
+fn automatic_migration(state: &AppState, status: &TerminalHostStatus) -> Option<(u16, String)> {
+    crate::maintenance::automatic_protocol_target(state)
+        .ok()
+        .flatten()
+        .filter(|(protocol, _)| *protocol != status.protocol_version)
+}
+
 /// What refuses for as long as the setup stays as it is: the switch, the
 /// installation, a prepared migration, and an engine that cannot be asked.
 fn standing_refusal(
@@ -854,12 +872,17 @@ fn standing_refusal(
     if state.maintenance_request_path.is_none() {
         return Err(("engine_not_managed", None));
     }
-    // A protocol migration replaces this API too. The operator applies it.
-    if !matches!(
-        crate::maintenance::prepared_protocol_target(state),
-        Ok(None)
-    ) {
-        return Err(("protocol_migration_waits", None));
+    // A protocol migration replaces this API too. The operator applies one
+    // they prepared, or one prepared any other way. One an automatic install
+    // prepared is this path's while automatic install stays on (ADR 0169).
+    match crate::maintenance::prepared_protocol_target(state) {
+        Ok(None) => {}
+        Ok(Some(_))
+            if matches!(
+                crate::maintenance::automatic_protocol_target(state),
+                Ok(Some(_))
+            ) && crate::release::auto_install_enabled(state) == Some(true) => {}
+        _ => return Err(("protocol_migration_waits", None)),
     }
     if !swarm_terminal::supports_maintenance_admission(status.protocol_version) {
         return Err(("engine_cannot_check_workers", None));
@@ -867,10 +890,12 @@ fn standing_refusal(
     Ok(())
 }
 
-/// Everything that refuses before the engine is asked anything.
+/// Everything that refuses before the engine is asked anything. `target` is
+/// the release the swap installs: this API's, or a prepared migration's.
 fn ready(
     state: &AppState,
     status: &TerminalHostStatus,
+    target: &str,
 ) -> Result<(), (&'static str, Option<usize>)> {
     standing_refusal(state, status)?;
     let store = task_store(state).map_err(|_| ("store_unavailable", None))?;
@@ -894,7 +919,7 @@ fn ready(
         .map_err(|_| ("store_unavailable", None))?
         .is_some_and(|last| {
             last.stopped_sessions.is_some()
-                && last.to_version == build_version()
+                && last.to_version == target
                 && last.outcome != Some(WorkerEngineUpdateOutcome::Succeeded)
         })
     {
@@ -917,10 +942,16 @@ fn ready(
 ///
 /// At most two admissions. When the first refuses only sessions Swarm can
 /// vouch for, Swarm stops those and asks once more for the rest (ADR 0163).
+///
+/// ⚠️ NOT FOR A MIGRATION (ADR 0169). Swarm tells a worker it stopped itself
+/// that its scheduled jobs are gone, from this process, once the update has
+/// applied. A migration replaces this process, so that would go unsaid. Its
+/// admission is taken as the engine answers it.
 async fn attempt(
     state: &AppState,
     status: &TerminalHostStatus,
     observed: &HashMap<WorkerSessionId, ProviderSignals>,
+    migration: Option<&(u16, String)>,
 ) -> bool {
     let Ok(client) = terminal_client(state) else {
         return false;
@@ -935,7 +966,7 @@ async fn attempt(
     loop {
         if asked.is_empty() {
             // Every running session was one Swarm stopped itself.
-            return replace_engine(state, status, &returns, &[], &set_aside).await;
+            return replace_engine(state, status, &returns, &[], &set_aside, migration).await;
         }
         // Asked through the client itself rather than `request_host`, which
         // folds a lost answer and an engine's error into one: an error comes
@@ -958,7 +989,7 @@ async fn attempt(
             }
             Err(error) => {
                 tracing::warn!(%error, "the engine's answer to the automatic engine update was lost");
-                return answer_lost(state, status, &returns, &asked, &set_aside).await;
+                return answer_lost(state, status, &returns, &asked, &set_aside, migration).await;
             }
         };
         let (reason, session_id, others) = match outcome {
@@ -968,17 +999,34 @@ async fn attempt(
                 others,
             } => (reason, session_id, others),
             MaintenanceOutcome::Partial { stopped, failed } => {
-                stopped_partway(state, status, &returns, &stopped, &set_aside, Some(failed)).await;
+                stopped_partway(
+                    state,
+                    status,
+                    &returns,
+                    &stopped,
+                    &set_aside,
+                    Some(failed),
+                    migration,
+                )
+                .await;
                 return false;
             }
             MaintenanceOutcome::Stopped { session_ids } => {
-                return replace_engine(state, status, &returns, &session_ids, &set_aside).await;
+                return replace_engine(
+                    state,
+                    status,
+                    &returns,
+                    &session_ids,
+                    &set_aside,
+                    migration,
+                )
+                .await;
             }
         };
         let holders = named(&returns, reason, session_id, &others);
         // Only the first answer is settled. Once Swarm has stopped anyone, a
         // second refusal ends the attempt and brings them back.
-        if set_aside.is_empty() && !holders.is_empty() {
+        if set_aside.is_empty() && !holders.is_empty() && migration.is_none() {
             match settle(state, observed, holders).await {
                 Settled::SetAside(stopped, guard) => {
                     note_set_aside(state, &stopped);
@@ -1097,6 +1145,7 @@ async fn answer_lost(
     returns: &Returns,
     requested: &[WorkerSessionId],
     set_aside: &[SetAside],
+    migration: Option<&(u16, String)>,
 ) -> bool {
     let Ok(now) = running_sessions(state).await else {
         // Nothing can say who was stopped, so every return this attempt made
@@ -1122,9 +1171,9 @@ async fn answer_lost(
         state.idle_engine_update.refuse("answer_lost", None, None);
         false
     } else if stopped.len() == requested.len() {
-        replace_engine(state, status, returns, &stopped, set_aside).await
+        replace_engine(state, status, returns, &stopped, set_aside, migration).await
     } else {
-        stopped_partway(state, status, returns, &stopped, set_aside, None).await;
+        stopped_partway(state, status, returns, &stopped, set_aside, None, migration).await;
         false
     }
 }
@@ -1150,12 +1199,13 @@ async fn stopped_partway(
     stopped: &[WorkerSessionId],
     set_aside: &[SetAside],
     failed: Option<WorkerSessionId>,
+    migration: Option<&(u16, String)>,
 ) {
     cancel_drain(state).await;
     let everyone = all_stopped(stopped, set_aside);
     returns.withdraw(state, |session| !everyone.contains(&session));
     release(state, stopped).await;
-    let attempt = begin(state, status, returns, &everyone);
+    let attempt = begin(state, status, returns, &everyone, migration);
     let names = returns.names(&everyone).join(", ");
     let failed_name = failed.and_then(|session| returns.name_of(session));
     let (detail, reason) = match failed {
@@ -1186,17 +1236,20 @@ async fn stopped_partway(
 }
 
 /// The whole set stopped: the engine's admission stopped `stopped`, and Swarm
-/// stopped and released `set_aside` itself. From here this is the card's path.
+/// stopped and released `set_aside` itself. From here this is the card's path,
+/// for a prepared `migration` too.
 async fn replace_engine(
     state: &AppState,
     status: &TerminalHostStatus,
     returns: &Returns,
     stopped: &[WorkerSessionId],
     set_aside: &[SetAside],
+    migration: Option<&(u16, String)>,
 ) -> bool {
     release(state, stopped).await;
     let everyone = all_stopped(stopped, set_aside);
-    let attempt = begin(state, status, returns, &everyone);
+    let attempt = begin(state, status, returns, &everyone, migration);
+    let target_version = migration.map_or(build_version(), |(_, version)| version.as_str());
     let Some(request_path) = state.maintenance_request_path.as_ref() else {
         abandon(
             state,
@@ -1209,9 +1262,8 @@ async fn replace_engine(
     if let Err(error) = std::fs::write(
         request_path.as_ref(),
         format!(
-            "requested_at={}\ntarget_version={}\n",
+            "requested_at={}\ntarget_version={target_version}\n",
             unix_timestamp(),
-            build_version()
         ),
     ) {
         abandon(
@@ -1223,9 +1275,17 @@ async fn replace_engine(
         return false;
     }
     state.control_room_notify.notify_waiters();
-    let updated = crate::maintenance::await_expected_engine(state, None).await;
+    let updated =
+        crate::maintenance::await_expected_engine(state, migration.map(|(protocol, _)| *protocol))
+            .await;
     let _ = std::fs::remove_file(request_path.as_ref());
     let Ok(current) = updated else {
+        // A MIGRATION REPLACES THIS PROCESS, so its clock is not a verdict. As
+        // on the card, the row stays open, and the Swarm that replaces this one
+        // settles it from what the engine reports.
+        if migration.is_some() {
+            return false;
+        }
         // As on the card: the returns stay owed, and the supervisor brings
         // the workers back once the engine reports in.
         finish(
@@ -1288,19 +1348,22 @@ async fn release(state: &AppState, stopped: &[WorkerSessionId]) {
 }
 
 /// The history row, written once something has been stopped. A refusal stops
-/// nothing and leaves no row: it is shown on the card instead.
+/// nothing and leaves no row: it is shown on the card instead. A migration's
+/// row names its release and protocol, which is what the Swarm replacing this
+/// one settles it by.
 fn begin(
     state: &AppState,
     status: &TerminalHostStatus,
     returns: &Returns,
     stopped: &[WorkerSessionId],
+    migration: Option<&(u16, String)>,
 ) -> Option<String> {
     let store = task_store(state).ok()?;
     let attempt = store
         .begin_worker_engine_update(
             &status.host_version,
-            build_version(),
-            None,
+            migration.map_or(build_version(), |(_, version)| version.as_str()),
+            migration.map(|(protocol, _)| *protocol),
             Some(stopped.len()),
             WorkerEngineUpdateInitiator::Automatic,
             unix_timestamp(),
@@ -1597,6 +1660,21 @@ mod tests {
         gone: bool,
         /// When the engine is replaced once the request file appears.
         swap: Swap,
+        /// Which build the engine reports before any swap.
+        build: Build,
+        /// The package layer's request, as the engine first saw it.
+        request_seen: Option<String>,
+    }
+
+    /// The build the fake engine reports before it is replaced.
+    #[derive(Default, PartialEq)]
+    enum Build {
+        /// One build behind this API, as for an engine update.
+        #[default]
+        Behind,
+        /// Already on this API's build, as both links are while a protocol
+        /// migration waits: only the migration is behind.
+        Current,
     }
 
     /// When the fake engine is replaced.
@@ -1617,7 +1695,7 @@ mod tests {
         /// swarm-package's lifecycle lock, in the same state root.
         package_lock: std::path::PathBuf,
         request: std::path::PathBuf,
-        _directory: tempfile::TempDir,
+        directory: tempfile::TempDir,
     }
 
     impl Hive {
@@ -1696,7 +1774,7 @@ mod tests {
                 pantry,
                 package_lock,
                 request: request_path,
-                _directory: directory,
+                directory,
             }
         }
 
@@ -1735,7 +1813,34 @@ mod tests {
             engine.lose_answer = true;
             engine.gone = then_gone;
         }
+
+        /// As `new` with nobody busy, on an engine already on this API's build
+        /// and a protocol migration to `protocol + 1` prepared as swarm-package
+        /// leaves one, marked `marker`: `automatic` when an automatic install
+        /// prepared it (ADR 0169), `manual` when its operator did, or `none`.
+        /// The engine never reports the new protocol: the API that asked is
+        /// replaced before it could see it.
+        fn migrating(protocol: u16, admission: Admission, marker: &str) -> Self {
+            let mut hive = Self::new(protocol, 0, admission);
+            hive.engine.lock().unwrap().build = Build::Current;
+            let root = hive.directory.path().to_owned();
+            let release = root.join("releases").join(MIGRATION_VERSION);
+            std::fs::create_dir_all(&release).unwrap();
+            std::fs::write(release.join("PROTOCOL"), format!("{}\n", protocol + 1)).unwrap();
+            std::fs::write(release.join("VERSION"), format!("{MIGRATION_VERSION}\n")).unwrap();
+            let named = format!("{}\n", release.display());
+            std::fs::write(root.join("protocol-migration.pending"), &named).unwrap();
+            if marker != "none" {
+                std::fs::write(root.join(format!("protocol-migration.{marker}")), &named).unwrap();
+            }
+            hive.state.release_state_root = Some(Arc::new(root));
+            hive.state.maintenance_timeout = Duration::from_millis(300);
+            hive
+        }
     }
+
+    /// The release a prepared migration installs.
+    const MIGRATION_VERSION: &str = "99.0.0";
 
     fn answer(
         engine: &Mutex<Engine>,
@@ -1753,17 +1858,20 @@ mod tests {
                 .unwrap()
                 .to_owned(),
         );
+        if engine.request_seen.is_none() {
+            engine.request_seen = std::fs::read_to_string(request_path).ok();
+        }
         let swapped = request_path.exists() && matches!(engine.swap, Swap::OnRequest);
         let status = |engine: &Engine| TerminalHostStatus {
             protocol_version: protocol,
-            host_version: if swapped {
+            host_version: if swapped || engine.build == Build::Current {
                 build_version()
             } else {
                 "1.0.0-old"
             }
             .to_owned(),
             host_build_id: Some(
-                if swapped {
+                if swapped || engine.build == Build::Current {
                     worker_engine_build_id()
                 } else {
                     OLD_ENGINE
@@ -2628,6 +2736,149 @@ mod tests {
         for hive in [&hive, &older, &busy, &unmanaged] {
             assert_eq!(hive.store().last_worker_engine_update().unwrap(), None);
         }
+    }
+
+    /// ADR 0169: a migration an automatic install prepared applies like an
+    /// engine update once every worker rests. The engine stops the exact
+    /// running set, the package is asked for the prepared release, and the
+    /// attempt is left open for the Swarm that replaces this one to settle.
+    #[tokio::test]
+    async fn a_migration_prepared_by_itself_applies_once_every_worker_rests() {
+        let protocol = swarm_terminal::PROTOCOL_VERSION;
+        let hive = Hive::migrating(protocol, stop_all(), "automatic");
+        assert!(
+            !worker_engine_update_required(
+                &crate::maintenance::host_status_snapshot(&hive.state)
+                    .await
+                    .unwrap()
+            ),
+            "only the migration is behind"
+        );
+        assert!(
+            !advance(&hive.state, &HashMap::new()).await,
+            "this API is replaced, so it never sees the swap land"
+        );
+
+        let engine = hive.engine.lock().unwrap();
+        assert_eq!(engine.admitted.len(), 1);
+        assert_eq!(engine.admitted[0].len(), 2, "the exact running set, once");
+        assert_eq!(engine.released.len(), 2, "each stopped session is released");
+        let requested = engine.request_seen.clone().expect("the swap was asked for");
+        drop(engine);
+        assert!(
+            requested.contains(&format!("target_version={MIGRATION_VERSION}\n")),
+            "the prepared release, not this API's: {requested}"
+        );
+        let mut owed_workers = vec![hive.ledger.0, hive.pantry.0];
+        owed_workers.sort_by_key(ToString::to_string);
+        assert_eq!(hive.owed(), owed_workers, "both are owed a return");
+        let last = hive.store().last_worker_engine_update().unwrap().unwrap();
+        assert_eq!(last.initiated, WorkerEngineUpdateInitiator::Automatic);
+        assert_eq!(last.to_version, MIGRATION_VERSION);
+        assert_eq!(last.to_protocol, Some(protocol + 1));
+        assert_eq!(last.stopped_sessions, Some(2));
+        assert_eq!(
+            last.outcome, None,
+            "left open for the Swarm that replaces this one"
+        );
+    }
+
+    /// A migration its operator prepared, or one prepared any other way, is
+    /// still theirs to apply. So is one an automatic install prepared, once
+    /// automatic install is switched off, and the card says so. Nothing is
+    /// drained or stopped for any of them.
+    #[tokio::test]
+    async fn a_migration_not_prepared_by_an_automatic_install_waits_for_the_operator() {
+        let protocol = swarm_terminal::PROTOCOL_VERSION;
+        let manual = Hive::migrating(protocol, stop_all(), "manual");
+        let unmarked = Hive::migrating(protocol, stop_all(), "none");
+        let switched_off = Hive::migrating(protocol, stop_all(), "automatic");
+        switched_off
+            .store()
+            .set_release_auto_install(false)
+            .unwrap();
+        for hive in [&manual, &unmarked, &switched_off] {
+            assert!(!advance(&hive.state, &HashMap::new()).await);
+        }
+        assert_eq!(
+            switched_off.refusal(),
+            Some(("protocol_migration_waits", None))
+        );
+        for hive in [&manual, &unmarked, &switched_off] {
+            assert_eq!(hive.asked("begin_drain"), 0);
+            assert_eq!(hive.asked("admit_maintenance"), 0);
+            assert!(hive.owed().is_empty());
+            assert_eq!(hive.store().last_worker_engine_update().unwrap(), None);
+        }
+    }
+
+    /// ADR 0169: a migration takes the engine's admission as it stands. Swarm
+    /// overrules no refusal for it, not even one it stops a worker for on an
+    /// engine update (ADR 0163): the process that would tell that worker its
+    /// scheduled jobs are gone is the one the migration replaces.
+    #[tokio::test]
+    async fn swarm_overrules_no_refusal_for_a_migration() {
+        let pantry = Arc::new(Mutex::new(None));
+        let named = Arc::clone(&pantry);
+        let mut hive = Hive::migrating(
+            swarm_terminal::PROTOCOL_VERSION,
+            Box::new(move |sessions| {
+                let pantry = named.lock().unwrap().unwrap();
+                if sessions.contains(&pantry) {
+                    MaintenanceOutcome::Refused {
+                        reason: MaintenanceRefusal::UnsentInput,
+                        session_id: Some(pantry),
+                        others: Vec::new(),
+                    }
+                } else {
+                    MaintenanceOutcome::Stopped {
+                        session_ids: sessions.to_vec(),
+                    }
+                }
+            }),
+            "automatic",
+        );
+        *pantry.lock().unwrap() = Some(hive.pantry.1);
+        hive.state.test_start_admission = Some(crate::runtime::CoordinatorStartAdmission::Allowed);
+        let resting = reading(&[hive.ledger.1, hive.pantry.1]);
+
+        assert!(!advance(&hive.state, &resting).await);
+        {
+            let engine = hive.engine.lock().unwrap();
+            assert!(engine.retained_stops.is_empty(), "Swarm stopped nobody");
+            assert!(engine.stopped.is_empty(), "and neither did the engine");
+            assert_eq!(engine.admitted.len(), 1, "asked once");
+        }
+        assert!(hive.owed().is_empty(), "nobody stopped, nothing owed");
+        assert_eq!(hive.store().last_worker_engine_update().unwrap(), None);
+        assert_holders(
+            &hive,
+            &serde_json::json!([
+                {"worker": "Pantry", "reason": "unsent_input", "swarm": null},
+            ]),
+        );
+    }
+
+    /// An automatic attempt at this migration that stopped workers and did
+    /// not finish, or was never heard from again, is not repeated by itself.
+    #[tokio::test]
+    async fn an_unfinished_attempt_at_a_migration_is_not_repeated_by_itself() {
+        let protocol = swarm_terminal::PROTOCOL_VERSION;
+        let hive = Hive::migrating(protocol, stop_all(), "automatic");
+        hive.store()
+            .begin_worker_engine_update(
+                "1.0.0-old",
+                MIGRATION_VERSION,
+                Some(protocol + 1),
+                Some(2),
+                WorkerEngineUpdateInitiator::Automatic,
+                1,
+            )
+            .unwrap();
+        assert!(!advance(&hive.state, &HashMap::new()).await);
+        assert_eq!(hive.refusal(), Some(("earlier_attempt_failed", None)));
+        assert_eq!(hive.asked("begin_drain"), 0);
+        assert!(hive.owed().is_empty());
     }
 
     /// The package timer says a waiting update applies itself only on an
