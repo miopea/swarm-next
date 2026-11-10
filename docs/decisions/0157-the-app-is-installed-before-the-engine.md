@@ -8,6 +8,8 @@
   automatically".
 - Amends: ADR 0009, whose ordinary update rejects any protocol change, and the
   "Protocol 18 and its ordering" section of ADR 0156.
+- Amended by: ADR 0167. Auto-install no longer holds every protocol change:
+  it reads the downloaded release and holds only one that swaps the engine.
 
 ## Context
 

@@ -79,6 +79,13 @@ pub struct ReportedEngine {
     pub update_pending: bool,
     /// How the most recent swap ended, if one was tried.
     pub last_attempt: Option<EngineAttemptOutcome>,
+    /// The waiting update applies by itself once every worker is idle: its
+    /// switch is on and its engine can check its workers (ADR 0156). Absent
+    /// from a release before ADR 0167, which the Keeper reads as "cannot":
+    /// 1.17.10 had no idle update at all, and an engine older than protocol 18
+    /// cannot be asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_itself: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -179,8 +186,11 @@ pub enum HiveCondition {
         count: u32,
         model: WorkerModel,
     },
-    /// A newer engine is waiting; it swaps by itself once workers are idle.
-    EngineUpdatePending,
+    /// A newer engine is waiting. It swaps by itself once workers are idle
+    /// only where `applies_itself`; otherwise its operator applies it.
+    EngineUpdatePending {
+        applies_itself: bool,
+    },
 }
 
 impl HiveCondition {
@@ -214,7 +224,7 @@ impl HiveCondition {
             Self::WorkersStuck { .. } => "workers_stuck",
             Self::CiUnreadable { .. } => "ci_unreadable",
             Self::WorkersOffModel { .. } => "workers_off_model",
-            Self::EngineUpdatePending => "engine_update_pending",
+            Self::EngineUpdatePending { .. } => "engine_update_pending",
         }
     }
 }
@@ -309,7 +319,9 @@ pub fn hive_conditions(evidence: &HiveHealthEvidence<'_>, now: i64) -> Vec<HiveC
         });
     }
     if health.engine.update_pending && !engine_failing {
-        found.push(HiveCondition::EngineUpdatePending);
+        found.push(HiveCondition::EngineUpdatePending {
+            applies_itself: health.engine.applies_itself == Some(true),
+        });
     }
     found
 }
@@ -339,6 +351,7 @@ mod tests {
             engine: ReportedEngine {
                 update_pending: false,
                 last_attempt: Some(EngineAttemptOutcome::Succeeded),
+                applies_itself: None,
             },
             disk: ReportedDisk {
                 pressure: ResourcePressure::Normal,
@@ -383,6 +396,7 @@ mod tests {
         health.engine = ReportedEngine {
             update_pending: true,
             last_attempt: Some(EngineAttemptOutcome::TimedOut),
+            applies_itself: Some(true),
         };
         health.disk = ReportedDisk {
             pressure: ResourcePressure::Critical,
@@ -446,15 +460,39 @@ mod tests {
     fn a_pending_engine_is_only_pending_until_a_swap_to_it_fails() {
         let mut health = healthy();
         health.engine.update_pending = true;
+        health.engine.applies_itself = Some(true);
         assert_eq!(
             hive_conditions(&evidence(&health), NOW),
-            [HiveCondition::EngineUpdatePending]
+            [HiveCondition::EngineUpdatePending {
+                applies_itself: true
+            }]
         );
         health.engine.last_attempt = Some(EngineAttemptOutcome::Failed);
         assert_eq!(
             hive_conditions(&evidence(&health), NOW),
             [HiveCondition::EngineUpdateFailing]
         );
+    }
+
+    /// ADR 0167. A member on 1.17.10 reported "pending" and the roster said it
+    /// swaps by itself, which that release cannot do. Only a member that says
+    /// it can is read as able to.
+    #[test]
+    fn a_pending_engine_applies_itself_only_where_the_member_says_so() {
+        let mut health = healthy();
+        health.engine.update_pending = true;
+        for (reported, applies_itself) in [(None, false), (Some(false), false), (Some(true), true)]
+        {
+            health.engine.applies_itself = reported;
+            assert_eq!(
+                hive_conditions(&evidence(&health), NOW),
+                [HiveCondition::EngineUpdatePending { applies_itself }],
+                "{reported:?}"
+            );
+        }
+        let older: ReportedEngine =
+            serde_json::from_str(r#"{"update_pending":true,"last_attempt":"succeeded"}"#).unwrap();
+        assert_eq!(older.applies_itself, None, "a report from before the field");
     }
 
     #[test]

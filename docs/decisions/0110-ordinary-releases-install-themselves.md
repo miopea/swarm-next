@@ -4,6 +4,7 @@
 - Date: 2026-09-27
 - Supersedes: ADR 0050 §3 ("installing is consented to every time") for ordinary releases
 - Amended: 2026-10-19, §5 (which Hives the Keeper asks about, and what it offers)
+- Amended by: ADR 0167, §1 (idle workers are enough, and "ordinary" is read from the downloaded release)
 
 ## Context
 

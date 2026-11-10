@@ -35,7 +35,14 @@ export function conditionText(condition: HiveCondition, nowSeconds: number): { s
       status: `${condition.count} ${condition.count === 1 ? "worker" : "workers"} not yet on ${WORKER_MODEL_LABELS[condition.model]}`,
       next: "Each switches when it next starts; its operator can restart them sooner",
     };
-    case "engine_update_pending": return { status: "Engine update pending", next: "It swaps by itself once its workers are idle" };
+    // Only a member that says so swaps by itself (ADR 0167). One on 1.17.10, or
+    // with an engine older than protocol 18, waits for its operator's press.
+    case "engine_update_pending": return {
+      status: "Engine update pending",
+      next: condition.applies_itself
+        ? "It swaps by itself once its workers are idle"
+        : "Its operator applies it from the Worker engine card",
+    };
   }
 }
 

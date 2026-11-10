@@ -621,7 +621,7 @@ export type ReleaseStatus = {
   available: boolean;
   /** "unset" is a Hive nobody asked, which is not the same as one that said no. */
   mode: "unset" | "off" | "daily";
-  /** Whether an ordinary release installs itself while the operator is away (ADR 0110), as in effect. */
+  /** Whether an ordinary release installs itself once every worker is idle or the operator is away (ADR 0110, ADR 0167), as in effect. */
   auto_install: boolean;
   /** Whether this Hive's Apiary requires `auto_install`, which locks it here (ADR 0113). */
   auto_install_required_by_apiary: boolean;
@@ -640,10 +640,11 @@ export type ReleaseStatus = {
   /**
    * Whether installing this release ends every worker session.
    *
-   * `true` changes the terminal-host protocol, which swaps the API and the
-   * engine together. `false` does not. `null` means the Hive could not tell —
-   * the host did not answer, or the offer carries no readable protocol, and
-   * the card must say so rather than fall back to the reassuring sentence.
+   * `true` swaps the API and the engine together. `false` does not: once the
+   * release is downloaded, that includes a newer protocol whose API still
+   * drives the installed engine (ADR 0167). `null` means the Hive could not
+   * tell — the host did not answer, or the offer carries no readable protocol,
+   * and the card must say so rather than fall back to the reassuring sentence.
    */
   carries_protocol_change: boolean | null;
   /** Commits this working copy is ahead of the released tag; null when uncountable. */
@@ -1845,7 +1846,7 @@ export type HiveCondition =
   | { kind: "workers_stuck"; count: number }
   | { kind: "ci_unreadable"; why: string }
   | { kind: "workers_off_model"; count: number; model: WorkerModel }
-  | { kind: "engine_update_pending" };
+  | { kind: "engine_update_pending"; applies_itself: boolean };
 
 /** A member Hive with something wrong, worst first. A healthy Hive is absent. */
 export type HiveHealth = { hive_id: string; conditions: HiveCondition[] };

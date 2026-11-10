@@ -828,8 +828,16 @@ fn restarted_notice() -> CoordinationMessage {
     }
 }
 
-/// Everything that refuses before the engine is asked anything.
-fn ready(
+/// Whether a waiting update can ever apply by itself here, whatever the
+/// workers are doing now. A member reports it, so its Keeper says "swaps by
+/// itself" only where that is true (ADR 0167).
+pub(crate) fn applies_itself(state: &AppState, status: &TerminalHostStatus) -> bool {
+    standing_refusal(state, status).is_ok()
+}
+
+/// What refuses for as long as the setup stays as it is: the switch, the
+/// installation, a prepared migration, and an engine that cannot be asked.
+fn standing_refusal(
     state: &AppState,
     status: &TerminalHostStatus,
 ) -> Result<(), (&'static str, Option<usize>)> {
@@ -856,6 +864,16 @@ fn ready(
     if !swarm_terminal::supports_maintenance_admission(status.protocol_version) {
         return Err(("engine_cannot_check_workers", None));
     }
+    Ok(())
+}
+
+/// Everything that refuses before the engine is asked anything.
+fn ready(
+    state: &AppState,
+    status: &TerminalHostStatus,
+) -> Result<(), (&'static str, Option<usize>)> {
+    standing_refusal(state, status)?;
+    let store = task_store(state).map_err(|_| ("store_unavailable", None))?;
     // An install, a reload or a swap holds the lock the swap needs. One that
     // cannot be read is not taken to be free.
     match package_operation_active(state) {
@@ -2631,5 +2649,33 @@ mod tests {
 
         assert!(swarm_terminal::supports_maintenance_admission(first));
         assert!(!swarm_terminal::supports_maintenance_admission(first - 1));
+    }
+
+    /// ADR 0167: what a member tells its Keeper. A busy worker only delays an
+    /// update that applies itself; an engine on protocol 17 or an install
+    /// nothing manages never applies one.
+    #[tokio::test]
+    async fn a_member_says_its_update_applies_itself_only_where_it_can() {
+        let busy = Hive::new(swarm_terminal::PROTOCOL_VERSION, 1, stop_all());
+        let status = crate::maintenance::host_status_snapshot(&busy.state)
+            .await
+            .unwrap();
+        assert!(
+            applies_itself(&busy.state, &status),
+            "a busy worker only delays it"
+        );
+
+        let older = Hive::new(17, 0, stop_all());
+        let status = crate::maintenance::host_status_snapshot(&older.state)
+            .await
+            .unwrap();
+        assert!(!applies_itself(&older.state, &status));
+
+        let mut unmanaged = Hive::new(swarm_terminal::PROTOCOL_VERSION, 0, stop_all());
+        unmanaged.state.maintenance_request_path = None;
+        let status = crate::maintenance::host_status_snapshot(&unmanaged.state)
+            .await
+            .unwrap();
+        assert!(!applies_itself(&unmanaged.state, &status));
     }
 }

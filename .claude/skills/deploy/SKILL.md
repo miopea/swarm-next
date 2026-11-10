@@ -318,6 +318,31 @@ One entry per protocol, all naming the same artifact and digest. Check both:
 python3 -c "import json;d=json.load(open('releases.json'));print(sorted((r['version'],r['protocol']) for r in d['payload']['releases']))"
 ```
 
+### List every 1.18+ release under protocol 17 too, while Hives run 1.18.3 or older
+
+**Through 1.18.3 a Hive installs a release by itself only when the manifest's
+protocol equals its running engine's** (ADR 0167). Every 1.18 release speaks 19
+and drives an engine on 17, so its app installs alone with workers running, yet
+every Hive on 1.17.10 held 1.18.0 to 1.18.3 for a press nobody was asked for.
+Until no Hive runs 1.18.3 or older, publish with:
+
+```bash
+SWARM_OFFER_PROTOCOL=19,17 sh packaging/linux/publish-release-manifest.sh ...
+```
+
+The script orders the entries itself: the release's own protocol first, the
+oldest last. Old code keeps the LAST of equal versions, so every Hive through
+1.18.3 reads 17. Newer code takes the highest wherever it is. Only list an older
+protocol that this release's `OLDEST_ENGINE_PROTOCOL` reaches:
+
+```bash
+tar -xzOf $T --wildcards '*/OLDEST_ENGINE_PROTOCOL'
+```
+
+A Hive on 1.18.0 to 1.18.3 whose engine is already on 19 also reads 17. It holds
+that one release for its operator's Install press, once. Say so in the release
+notes.
+
 **Only sound when the field can actually install it.** The manifest's protocol
 is a discovery filter and the install reads the bundle's own `PROTOCOL` file, so
 this offers a release the Hive will then migrate onto — which is true only

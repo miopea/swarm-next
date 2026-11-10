@@ -291,7 +291,8 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
   const offered = status.upgrade_available && status.offer;
   const ready = status.downloaded_version !== null;
-  // Only a release that keeps workers running installs itself (ADR 0110).
+  // Only a release that keeps workers running installs itself (ADR 0110), and
+  // once it is downloaded the release itself says so (ADR 0167).
   const installsItself = status.auto_install && status.carries_protocol_change === false;
   // Only an offer KNOWN not to change the engine protocol leaves every worker
   // up. A protocol change ends their sessions when the new app cannot drive the
@@ -418,7 +419,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
             </div>
           )}
           {ready && !installed && <small>{installsItself
-            ? "Downloaded and verified against the signed digest. It installs itself while you are away, or now if you press Install."
+            ? "Downloaded and verified against the signed digest. It installs itself once every worker is idle or you are away, or now if you press Install."
             : "Downloaded and verified against the signed digest. Nothing is installed until you say so."}</small>}
         </>
       )}

@@ -207,7 +207,7 @@ impl ReleaseManifest {
         self.installable_offers()
             .into_iter()
             .filter(|(version, _)| version.supersedes(current))
-            .max_by(|(left, _), (right, _)| left.cmp(right))
+            .max_by(newest_then_own_protocol)
             .map(|(_, offer)| offer)
     }
 
@@ -220,7 +220,7 @@ impl ReleaseManifest {
     pub fn newest_offer(&self) -> Option<&ReleaseOffer> {
         self.installable_offers()
             .into_iter()
-            .max_by(|(left, _), (right, _)| left.cmp(right))
+            .max_by(newest_then_own_protocol)
             .map(|(_, offer)| offer)
     }
 
@@ -251,6 +251,25 @@ impl ReleaseManifest {
             .filter_map(|offer| Some((offer.parsed_version()?, offer)))
             .collect()
     }
+}
+
+/// Orders offers by version, and one version listed under several protocols by
+/// protocol, so the highest wins.
+///
+/// ⚠️ A RELEASE IS LISTED UNDER OLDER PROTOCOLS TOO (ADR 0167), so that Hives
+/// whose code judges an install by the manifest's number see it as ordinary.
+/// That older code keeps the LAST of equal versions, which is why the publish
+/// script lists the oldest protocol last. The highest is always the release's
+/// own, so this code takes it wherever it is listed. A protocol that is not a
+/// number orders below any that is.
+fn newest_then_own_protocol(
+    (left_version, left): &(SwarmVersion, &ReleaseOffer),
+    (right_version, right): &(SwarmVersion, &ReleaseOffer),
+) -> std::cmp::Ordering {
+    let protocol = |offer: &ReleaseOffer| offer.protocol.trim().parse::<u16>().ok();
+    left_version
+        .cmp(right_version)
+        .then_with(|| protocol(left).cmp(&protocol(right)))
 }
 
 /// The bytes a signature is made over.
@@ -548,6 +567,30 @@ mod tests {
         // The version decides now, and only the version.
         assert_eq!(payload.upgrade_for(&current).unwrap().version, "0.9.0");
         assert_eq!(payload.newest_offer().unwrap().version, "0.9.0");
+    }
+
+    /// One release listed under two protocols, its own and an older one, so
+    /// that Hives whose code reads the protocol from the manifest see it as
+    /// ordinary (ADR 0167). That older code takes the LAST of equal versions,
+    /// so the older protocol is listed last. This code takes the release's
+    /// own protocol, the highest, wherever it is listed.
+    #[test]
+    fn a_release_listed_under_two_protocols_is_offered_under_its_own() {
+        let (signing_key, public) = keypair();
+        let listed = |protocol: &str| ReleaseOffer {
+            protocol: protocol.to_owned(),
+            ..offer("0.9.0", "engine-b")
+        };
+        for releases in [
+            vec![listed("19"), listed("17")],
+            vec![listed("17"), listed("19")],
+        ] {
+            let document = sign(manifest(releases), &signing_key);
+            let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
+            let current = SwarmVersion::parse("0.1.0").unwrap();
+            assert_eq!(payload.newest_offer().unwrap().protocol, "19");
+            assert_eq!(payload.upgrade_for(&current).unwrap().protocol, "19");
+        }
     }
 
     /// "Replacing someone's checkout-built binary with a release would discard

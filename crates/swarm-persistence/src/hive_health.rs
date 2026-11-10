@@ -269,6 +269,7 @@ mod tests {
             engine: ReportedEngine {
                 update_pending: true,
                 last_attempt: Some(EngineAttemptOutcome::Failed),
+                applies_itself: Some(false),
             },
             disk: ReportedDisk {
                 pressure: ResourcePressure::Advisory,

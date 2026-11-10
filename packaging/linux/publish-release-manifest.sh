@@ -52,30 +52,36 @@ for tarball in "$@"; do
   # WHICH HIVES MAY BE OFFERED THIS, which is not always the protocol the
   # release speaks.
   #
-  # A Hive filters the manifest for offers whose protocol EQUALS its own
-  # compiled PROTOCOL_VERSION (swarm-domain offers_speaking), and a miss is
-  # reported as "current" — so publishing a protocol bump does not make a
-  # release hard to install, it makes it INVISIBLE while telling the operator
-  # they are up to date. 0.9.0 shipped that way on 2026-08-28: fully published,
-  # verified end to end, and unreachable by every Hive in the field.
+  # Before 0.9.2 a Hive filtered the manifest for offers whose protocol EQUALS
+  # its own compiled PROTOCOL_VERSION, and a miss was reported as "current" — so
+  # publishing a protocol bump made the release INVISIBLE while telling the
+  # operator they were up to date. 0.9.0 shipped that way on 2026-08-28.
+  # Discovery no longer filters on protocol.
   #
-  # The manifest's protocol is a DISCOVERY filter and nothing else — the
-  # install reads the bundle's own PROTOCOL file — so declaring the protocol a
-  # target Hive speaks is what lets it see a release that `update` is then able
-  # to migrate onto. Set SWARM_OFFER_PROTOCOL to that number.
+  # THE NUMBER STILL DECIDES AUTOMATIC INSTALL ON OLDER HIVES (ADR 0167).
+  # Through 1.18.3 a Hive installs a release by itself only when the offer's
+  # protocol equals its running engine's. Every 1.18 release speaks 19 and
+  # drives an engine on 17, so its `update` installs the app alone with every
+  # worker left running (ADR 0157), yet each Hive on 1.17.10 held it for a press
+  # nobody was asked for. Listing the release under 17 as well tells those
+  # Hives the truth they are asking: installing it stops no worker. From the
+  # release carrying ADR 0167, a Hive decides from the downloaded release
+  # itself and the number is only discovery.
   #
-  # ONLY SOUND WHEN THE FIELD CAN ACTUALLY INSTALL IT. test-field-upgrade.sh is
-  # the evidence: it drives the real swarm-package from each release tag and
-  # installs a protocol-bumping bundle through it. Do not set this for a bump
-  # that path has not been shown to survive.
-  # A LIST, BECAUSE ONE NUMBER CANNOT REACH EVERYONE. Offering only 9 hides the
-  # release from every Hive that already speaks 10; offering only 10 hides it
-  # from the whole field. Nothing requires a version to appear once: the
-  # manifest's validate() checks only that a version parses and a protocol is
-  # non-empty, and offers_speaking filters by protocol BEFORE taking the newest,
-  # so one entry per protocol means each Hive sees exactly one and they all see
-  # the same artifact and digest.
-  offer_protocols=${SWARM_OFFER_PROTOCOL:-$protocol}
+  # ONLY SOUND WHEN THE FIELD CAN ACTUALLY INSTALL IT. List an older protocol
+  # only when this release's OLDEST_ENGINE_PROTOCOL reaches it, or when
+  # test-field-upgrade.sh has shown that path survives a migration.
+  #
+  # A LIST, BECAUSE ONE NUMBER CANNOT REACH EVERYONE. Nothing requires a version
+  # to appear once: validate() checks only that a version parses and a protocol
+  # is non-empty, and every entry names the same artifact and digest.
+  #
+  # ⚠️ ORDER MATTERS, SO IT IS NOT LEFT TO THE CALLER. A Hive through 1.18.3
+  # keeps the LAST of equal versions, so the lowest protocol is listed last and
+  # every such Hive reads it. A newer Hive takes the highest, the release's own,
+  # wherever it is listed.
+  offer_protocols=$(printf '%s' "${SWARM_OFFER_PROTOCOL:-$protocol}" | tr ',' '\n' | sort -rnu | tr '\n' ',')
+  offer_protocols=${offer_protocols%,}
   for offer_protocol in $(printf '%s' "$offer_protocols" | tr ',' ' '); do
     case "$offer_protocol" in
       *[!0-9]*|"") die "SWARM_OFFER_PROTOCOL must be protocol numbers";;
