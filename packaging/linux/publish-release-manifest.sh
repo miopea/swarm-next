@@ -21,6 +21,10 @@ base_url=$2
 shift 2
 
 [ -f "$signing_key" ] || die "signing key not found"
+# Refused rather than ignored: someone setting it believes they choose the
+# offers, and an offer under an engine the release cannot drive stops workers.
+[ -z "${SWARM_OFFER_PROTOCOL+set}" ] \
+  || die "SWARM_OFFER_PROTOCOL is no longer read: each release is offered under every engine its OLDEST_ENGINE_PROTOCOL..PROTOCOL drives. Unset it."
 case "$base_url" in
   https://*) :;;
   *) die "the base URL must be https; a signed document that downgrades its own transport is still worth refusing";;
@@ -49,43 +53,50 @@ for tarball in "$@"; do
   [ -n "$bundle" ] || die "$name is not a Swarm release"
   version=$(tr -d '\r\n' < "$bundle/VERSION")
   protocol=$(tr -d '\r\n' < "$bundle/PROTOCOL")
-  # WHICH HIVES MAY BE OFFERED THIS, which is not always the protocol the
-  # release speaks.
+  case "$protocol" in
+    *[!0-9]*|"") die "$name declares PROTOCOL '$protocol', which is not a protocol number";;
+  esac
+  # WHICH HIVES ARE OFFERED THIS: every engine the release drives, read from
+  # the release itself.
   #
-  # Before 0.9.2 a Hive filtered the manifest for offers whose protocol EQUALS
-  # its own compiled PROTOCOL_VERSION, and a miss was reported as "current" — so
-  # publishing a protocol bump made the release INVISIBLE while telling the
-  # operator they were up to date. 0.9.0 shipped that way on 2026-08-28.
-  # Discovery no longer filters on protocol.
+  # THE NUMBER DECIDES AUTOMATIC INSTALL ON OLDER HIVES (ADR 0167). Through
+  # 1.18.3 a Hive installs a release by itself only when the offer's protocol
+  # equals its running engine's. Every 1.18 release speaks 19 and drives an
+  # engine on 17, so its `update` installs the app alone with every worker left
+  # running (ADR 0157), yet each Hive on 1.17.10 held it for a press nobody was
+  # asked for. Listing the release under 17 as well tells those Hives the truth
+  # they are asking: installing it stops no worker. From the release carrying
+  # ADR 0167, a Hive decides from the downloaded release and the number is only
+  # discovery.
   #
-  # THE NUMBER STILL DECIDES AUTOMATIC INSTALL ON OLDER HIVES (ADR 0167).
-  # Through 1.18.3 a Hive installs a release by itself only when the offer's
-  # protocol equals its running engine's. Every 1.18 release speaks 19 and
-  # drives an engine on 17, so its `update` installs the app alone with every
-  # worker left running (ADR 0157), yet each Hive on 1.17.10 held it for a press
-  # nobody was asked for. Listing the release under 17 as well tells those
-  # Hives the truth they are asking: installing it stops no worker. From the
-  # release carrying ADR 0167, a Hive decides from the downloaded release
-  # itself and the number is only discovery.
-  #
-  # ONLY SOUND WHEN THE FIELD CAN ACTUALLY INSTALL IT. List an older protocol
-  # only when this release's OLDEST_ENGINE_PROTOCOL reaches it, or when
-  # test-field-upgrade.sh has shown that path survives a migration.
+  # ONLY SOUND FOR AN ENGINE THE RELEASE DRIVES, which is why the range comes
+  # from the bundle's OLDEST_ENGINE_PROTOCOL and not from the caller. Offered
+  # under an engine it cannot drive, a release reads to a Hive through 1.18.3 as
+  # an ordinary install, and it would stop every worker without the hold that
+  # exists to ask first. A release without the file predates app-first installs
+  # and drives only its own engine.
   #
   # A LIST, BECAUSE ONE NUMBER CANNOT REACH EVERYONE. Nothing requires a version
   # to appear once: validate() checks only that a version parses and a protocol
   # is non-empty, and every entry names the same artifact and digest.
   #
-  # ⚠️ ORDER MATTERS, SO IT IS NOT LEFT TO THE CALLER. A Hive through 1.18.3
-  # keeps the LAST of equal versions, so the lowest protocol is listed last and
-  # every such Hive reads it. A newer Hive takes the highest, the release's own,
-  # wherever it is listed.
-  offer_protocols=$(printf '%s' "${SWARM_OFFER_PROTOCOL:-$protocol}" | tr ',' '\n' | sort -rnu | tr '\n' ',')
-  offer_protocols=${offer_protocols%,}
-  for offer_protocol in $(printf '%s' "$offer_protocols" | tr ',' ' '); do
-    case "$offer_protocol" in
-      *[!0-9]*|"") die "SWARM_OFFER_PROTOCOL must be protocol numbers";;
+  # ⚠️ ORDER MATTERS. A Hive through 1.18.3 keeps the LAST of equal versions, so
+  # the oldest protocol is listed last and every such Hive on that engine reads
+  # it. A newer Hive takes the highest, the release's own, wherever it is listed.
+  oldest=$protocol
+  if [ -f "$bundle/OLDEST_ENGINE_PROTOCOL" ]; then
+    oldest=$(tr -d '\r\n' < "$bundle/OLDEST_ENGINE_PROTOCOL")
+    case "$oldest" in
+      *[!0-9]*|"") die "$name declares OLDEST_ENGINE_PROTOCOL '$oldest', which is not a protocol number";;
     esac
+    [ "$oldest" -le "$protocol" ] \
+      || die "$name declares OLDEST_ENGINE_PROTOCOL $oldest above its PROTOCOL $protocol; a release cannot drive an engine newer than itself"
+  fi
+  offer_protocols=
+  next=$protocol
+  while [ "$next" -ge "$oldest" ]; do
+    offer_protocols="$offer_protocols $next"
+    next=$((next - 1))
   done
   [ -f "$bundle/WORKER_ENGINE_BUILD_ID" ] || die "$name predates the recorded engine build id and cannot be offered"
   engine=$(tr -d '\r\n' < "$bundle/WORKER_ENGINE_BUILD_ID")
@@ -108,7 +119,7 @@ for tarball in "$@"; do
   fi
 
   offer=
-  for offer_protocol in $(printf '%s' "$offer_protocols" | tr ',' ' '); do
+  for offer_protocol in $offer_protocols; do
     [ "$offer_protocol" = "$protocol" ] || printf '%s: also offered at protocol %s (it speaks %s)\n' \
       "$name" "$offer_protocol" "$protocol" >&2
     entry=$(printf '{"version":"%s","protocol":"%s","artifact_url":"%s","artifact_sha256":"%s","artifact_bytes":%s,"worker_engine_build_id":"%s","notes_url":null}' \

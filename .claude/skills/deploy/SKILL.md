@@ -295,60 +295,40 @@ sh packaging/linux/publish-release-manifest.sh "$KEY" \
 rm -f "$KEY"
 ```
 
-### Offering to Hives whose protocol differs — `SWARM_OFFER_PROTOCOL`
+### Which engines it is offered to — the release says, not you
 
-**A Hive can only see offers its own installed code will show it**, and every
-release up to 0.9.1 filters the manifest for offers whose protocol EQUALS its
-compiled `PROTOCOL_VERSION`, reporting a miss as "current". So a release that
-bumps the protocol is invisible to the field while telling operators they are up
-to date. That is how v0.9.0 shipped, fully signed and verified, to nobody.
+The script lists each release under every engine protocol it drives, from the
+bundle's `OLDEST_ENGINE_PROTOCOL` up to its `PROTOCOL`: the release's own
+first, the oldest last. Nothing is typed. `SWARM_OFFER_PROTOCOL` is gone, and
+the script refuses to run while it is set.
 
-Discovery no longer filters on protocol from 0.9.2 onward — but that fix lives
-in the installed binary, so it does nothing for a Hive already in the field.
-**Until every Hive is past 0.9.1, list a release under every protocol you need
-to reach:**
+**Why the number still matters.** Through 1.18.3 a Hive installs a release by
+itself only when the offer's protocol equals its running engine's (ADR 0167).
+That code keeps the LAST of equal versions, so it reads the oldest entry: a
+Hive on an engine on 17 sees no change and installs the app alone, with its
+workers running. From 1.18.4 a Hive decides from the downloaded release, and the
+number is only discovery.
 
-```bash
-SWARM_OFFER_PROTOCOL=9,10 sh packaging/linux/publish-release-manifest.sh ...
-```
+**Why it is not left to the caller.** Offered under an engine it cannot drive,
+a release reads to a Hive through 1.18.3 as an ordinary install, and would stop
+every worker without the hold that exists to ask first. 1.18.4 had to be
+published with the list typed by hand; leaving it off would have held the
+release on every Hive on an engine on 17.
 
-One entry per protocol, all naming the same artifact and digest. Check both:
+A Hive on 1.18.0 to 1.18.3 whose engine is already on the release's own
+protocol also reads the oldest entry, and holds that release for one Install
+press. Say so in the release notes while any such Hive exists.
 
-```bash
-python3 -c "import json;d=json.load(open('releases.json'));print(sorted((r['version'],r['protocol']) for r in d['payload']['releases']))"
-```
+A release that bumps the protocol without driving the old engine
+(`OLDEST_ENGINE_PROTOCOL` equal to `PROTOCOL`) is listed under its own protocol
+only. Hives discover it anyway and hold it for their operator, because
+installing it migrates the engine and stops every worker.
 
-### List every 1.18+ release under protocol 17 too, while Hives run 1.18.3 or older
-
-**Through 1.18.3 a Hive installs a release by itself only when the manifest's
-protocol equals its running engine's** (ADR 0167). Every 1.18 release speaks 19
-and drives an engine on 17, so its app installs alone with workers running, yet
-every Hive on 1.17.10 held 1.18.0 to 1.18.3 for a press nobody was asked for.
-Until no Hive runs 1.18.3 or older, publish with:
-
-```bash
-SWARM_OFFER_PROTOCOL=19,17 sh packaging/linux/publish-release-manifest.sh ...
-```
-
-The script orders the entries itself: the release's own protocol first, the
-oldest last. Old code keeps the LAST of equal versions, so every Hive through
-1.18.3 reads 17. Newer code takes the highest wherever it is. Only list an older
-protocol that this release's `OLDEST_ENGINE_PROTOCOL` reaches:
+Check the entries, in the order a Hive reads them:
 
 ```bash
-tar -xzOf $T --wildcards '*/OLDEST_ENGINE_PROTOCOL'
+python3 -c "import json;d=json.load(open('releases.json'));print([(r['version'],r['protocol']) for r in d['payload']['releases']])"
 ```
-
-A Hive on 1.18.0 to 1.18.3 whose engine is already on 19 also reads 17. It holds
-that one release for its operator's Install press, once. Say so in the release
-notes.
-
-**Only sound when the field can actually install it.** The manifest's protocol
-is a discovery filter and the install reads the bundle's own `PROTOCOL` file, so
-this offers a release the Hive will then migrate onto — which is true only
-because `update` performs the migration and `test-field-upgrade.sh` proves the
-real `swarm-package` from each field tag can install a protocol-bumping bundle.
-**Do not use this for a bump that test has not been shown to survive.**
 
 The base URL **must include the `/vX.Y.Z/` segment**. Omitting it is how 0.8.7
 published a manifest pointing at a 404 and stranded a developer on a download
