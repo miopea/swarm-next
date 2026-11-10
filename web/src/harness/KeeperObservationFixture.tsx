@@ -42,7 +42,7 @@ export default function KeeperObservationFixture({ member = false }: { member?: 
           { hive_id: "clover", conditions: [
             { kind: "failing_sync", step: "project catalog", last_success_at: now - 2 * 3_600, sustained: true },
             { kind: "low_disk", lowest_available_bytes: 1_610_612_736, critical: false },
-            { kind: "engine_update_pending" },
+            { kind: "engine_update_pending", applies_itself: true },
             { kind: "ci_unreadable", why: "gh is not logged in on this machine" },
             { kind: "workers_off_model", count: 2, model: "sonnet" },
           ] },

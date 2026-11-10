@@ -555,10 +555,10 @@ test("does not claim parity when the distance cannot be counted", async () => {
  * ADR 0110. The card has to say what will happen without anyone pressing
  * Install, because the moment of consent is gone for an ordinary release.
  */
-test("an ordinary release says it installs itself while the operator is away", async () => {
+test("an ordinary release says it installs itself once every worker is idle or the operator is away", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ auto_install: true, downloaded_version: "0.2.0" }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
-  expect(await screen.findByText(/It installs itself while you are away/)).toBeInTheDocument();
+  expect(await screen.findByText(/It installs itself once every worker is idle or you are away/)).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /Install ordinary releases automatically/ })).toBeChecked();
   expect(screen.queryByText(/Nothing is installed until you say so/)).not.toBeInTheDocument();
 });

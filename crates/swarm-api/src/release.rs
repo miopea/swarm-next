@@ -95,10 +95,13 @@ pub(super) struct ReleaseStatusResponse {
     carries_new_worker_engine: bool,
     /// Whether installing this release ends every worker session.
     ///
-    /// TRI-STATE ON PURPOSE. `Some(true)` changes the terminal-host protocol,
-    /// which swaps the API and the engine together and stops every session.
-    /// `Some(false)` does not. `None` means this Hive could not tell — the host
-    /// did not answer, or the offer carries no readable protocol.
+    /// TRI-STATE ON PURPOSE. `Some(true)` swaps the API and the engine together
+    /// and stops every session. `Some(false)` does not. `None` means this Hive
+    /// could not tell — the host did not answer, or the offer carries no
+    /// readable protocol. Before the download it is the manifest's protocol
+    /// against the engine's; after it, the release's own answer, so a newer
+    /// protocol whose API still drives the engine reads `Some(false)`
+    /// (ADR 0167). The name predates that.
     ///
     /// A bool would have to fold "cannot tell" into one of the two answers, and
     /// folding it into `false` renders the unknown case as the reassuring one.
@@ -186,26 +189,31 @@ pub(super) async fn status(
         .into_response())
 }
 
-/// Whether the offer changes the protocol, or `None` when this Hive cannot say.
+/// Whether installing the offer ends worker sessions, or `None` when this Hive
+/// cannot say. Before the download that is the manifest's protocol against the
+/// engine's; after it, the release's own answer.
 ///
 /// UNKNOWN IS NOT "NO". Both halves have to be known: an offer with no readable
 /// protocol, and a host that does not answer, each leave the question open. The
 /// card says so rather than guessing, because guessing wrong in the reassuring
 /// direction costs somebody their session.
 ///
-/// Deliberately NOT `protocol_change_offered`, which answers a different
-/// question for a different caller: that one decides whether to stop every
-/// worker, so an unknown protocol must mean "do not", and folding unknown into
-/// `false` is right there and wrong here. Same input, opposite cost of error.
+/// Deliberately NOT `install_swaps_engine`, which answers a different question
+/// for a different caller: that one decides whether to write down every
+/// worker, so unknown must mean "do not", and folding unknown into `false` is
+/// right there and wrong here. Same input, opposite cost of error.
 async fn offered_protocol_change(state: &Arc<AppState>) -> Option<bool> {
-    let offered = build_status(state, None)
-        .ok()?
-        .offer?
-        .protocol
-        .trim()
-        .parse::<u16>()
-        .ok()?;
+    let offer = build_status(state, None).ok()?.offer?;
     let host = crate::maintenance::host_status_snapshot(state).await.ok()?;
+    // ONCE DOWNLOADED, THE RELEASE SAYS ITSELF (ADR 0167). A protocol change
+    // whose API still drives this engine installs the app alone, so its workers
+    // keep running, and the manifest's number cannot say so.
+    if let Some(release) = download_root(state)
+        .and_then(|root| downloaded_release(&root, Some(&offer.artifact_sha256)))
+    {
+        return release_swaps_engine(&release, Some(host.protocol_version));
+    }
+    let offered = offer.protocol.trim().parse::<u16>().ok()?;
     Some(host.protocol_version != offered)
 }
 
@@ -326,34 +334,22 @@ pub(super) async fn download(
         .into_response())
 }
 
-/// Asks for the downloaded release to be installed.
+/// Whether installing this downloaded release swaps the running engine, read
+/// from the release itself (ADR 0167).
 ///
-/// Writes a request naming the verified directory. `swarm-package`
-/// re-verifies that bundle's own `SHA256SUMS` before installing it, so the
-/// integrity check does not depend on this having been honest.
-/// Whether the release on offer moves the terminal-host protocol.
+/// The engine's protocol is asked of the HOST rather than a symlink, because a
+/// symlink comparison is how a staleness check reported current while the
+/// running host was two releases behind.
 ///
-/// Compared against what the HOST reports about itself rather than a symlink,
-/// because a symlink comparison is how a staleness check reported current while
-/// the running host was two releases behind.
-async fn carries_protocol_change(state: &AppState, status: &ReleaseStatusResponse) -> bool {
-    let offered = status.offer.as_ref().map(|offer| offer.protocol.as_str());
-    crate::maintenance::host_status_snapshot(state)
+/// UNKNOWN IS "NO SWAP" HERE, deliberately. This decides whether to write down
+/// every running worker for a return; getting it wrong in the other direction
+/// costs a needless roster wipe on an ordinary update.
+async fn install_swaps_engine(state: &AppState, release: &Path) -> bool {
+    let engine = crate::maintenance::host_status_snapshot(state)
         .await
-        .is_ok_and(|host| protocol_change_offered(offered, host.protocol_version))
-}
-
-/// The rule, separated so it can be tested against this function rather than a
-/// copy of it — the same reason `apply_field_from` is separate.
-///
-/// UNPARSEABLE OR ABSENT IS "NO CHANGE", deliberately. This decides whether to
-/// stop every worker and write down who was running; getting it wrong in the
-/// other direction costs a needless roster wipe on an ordinary update. A
-/// missing protocol is an older manifest, not a migration.
-fn protocol_change_offered(offered: Option<&str>, host_protocol: u16) -> bool {
-    offered
-        .and_then(|value| value.trim().parse::<u16>().ok())
-        .is_some_and(|offered| offered != host_protocol)
+        .ok()
+        .map(|host| host.protocol_version);
+    release_swaps_engine(release, engine) == Some(true)
 }
 
 /// Write down every worker that is loaded now, so the supervisor brings them
@@ -386,6 +382,11 @@ async fn record_revival_intents(state: &AppState) -> Result<(), ApiError> {
         .map_err(|error| crate::task_store_error(&error))
 }
 
+/// Asks for the downloaded release to be installed.
+///
+/// Writes a request naming the verified directory. `swarm-package`
+/// re-verifies that bundle's own `SHA256SUMS` before installing it, so the
+/// integrity check does not depend on this having been honest.
 pub(super) async fn apply(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -460,7 +461,7 @@ async fn request_install(state: &Arc<AppState>) -> Result<(), ApiError> {
     // holds, so a worker cannot start between the roster being read and the
     // intents being written. Recorded BEFORE the request rather than after,
     // because the install can begin the moment the file appears.
-    if carries_protocol_change(state, &status).await {
+    if install_swaps_engine(state, &release).await {
         let guard = state.worker_lifecycle.lock().await;
         let recorded = record_revival_intents(state).await;
         drop(guard);
@@ -626,18 +627,21 @@ enum AutoInstallHold {
     TurnedOff,
     DevelopmentBuild,
     NothingNewer,
-    /// It stops every worker session, which only the operator decides.
+    /// It swaps the engine with the API, which ends every worker session. Only
+    /// the operator decides that.
     ProtocolChange,
     /// Unknown is not "no": a Hive that cannot tell does not install.
     ProtocolUnknown,
-    /// Installing restarts the API, which should not land under somebody's hands.
-    OperatorPresent,
+    /// Installing restarts the API. With the operator at the Hive and a worker
+    /// mid-turn, or an engine that cannot say, that lands under somebody's
+    /// hands: the worker's Swarm calls fail while the API is down.
+    InUse,
     InFlight,
     /// This release already had its automatic attempt and it did not install.
     AlreadyAttempted,
 }
 
-/// What the automatic install is decided on.
+/// What the automatic install is decided on, before the release is read.
 ///
 /// Independent yes/no facts read from different places, not a state encoded in
 /// flags, so the bools are each the honest type.
@@ -647,20 +651,26 @@ struct AutoInstallFacts<'a> {
     enabled: bool,
     development_build: bool,
     upgrade_available: bool,
-    protocol_change: Option<bool>,
     presence: Option<swarm_domain::PresenceMode>,
+    /// Every session is at rest by the engine's own count: none mid-turn and
+    /// none it cannot read (ADR 0156). An engine that cannot answer is not
+    /// idle.
+    workers_idle: bool,
     in_flight: bool,
     last_outcome: Option<&'a str>,
 }
 
 /// The rule, pure so each hold can be tested without a network or a clock.
+///
+/// Whether the release swaps the engine is decided after this, from the
+/// downloaded release itself (`swaps_engine`).
 fn auto_install_hold(facts: &AutoInstallFacts<'_>) -> Option<AutoInstallHold> {
     let AutoInstallFacts {
         enabled,
         development_build,
         upgrade_available,
-        protocol_change,
         presence,
+        workers_idle,
         in_flight,
         last_outcome,
     } = *facts;
@@ -673,15 +683,15 @@ fn auto_install_hold(facts: &AutoInstallFacts<'_>) -> Option<AutoInstallHold> {
     if !upgrade_available {
         return Some(AutoInstallHold::NothingNewer);
     }
-    match protocol_change {
-        Some(true) => return Some(AutoInstallHold::ProtocolChange),
-        None => return Some(AutoInstallHold::ProtocolUnknown),
-        Some(false) => {}
-    }
-    // Unreadable presence is treated as present: the only evidence that a
-    // restart will not land under somebody's hands is evidence they are away.
-    if presence.is_none_or(|mode| mode == swarm_domain::PresenceMode::AtHive) {
-        return Some(AutoInstallHold::OperatorPresent);
+    // AWAY, OR EVERY WORKER IDLE (ADR 0167). An install that keeps the engine
+    // restarts only the API: workers keep running, and an open page reconnects
+    // once. The operator ruled that idle workers are reason enough, as they
+    // are for the engine, which is the more disruptive update. Unreadable
+    // presence is treated as present, and an engine that cannot count its
+    // workers as busy.
+    let away = presence.is_some_and(|mode| mode != swarm_domain::PresenceMode::AtHive);
+    if !away && !workers_idle {
+        return Some(AutoInstallHold::InUse);
     }
     if in_flight {
         return Some(AutoInstallHold::InFlight);
@@ -694,7 +704,47 @@ fn auto_install_hold(facts: &AutoInstallFacts<'_>) -> Option<AutoInstallHold> {
     None
 }
 
-/// Downloads and installs an ordinary release while the operator is away.
+/// Whether installing a release swaps the running engine too, which ends every
+/// worker session. `None` when that cannot be told.
+///
+/// ⚠️ READ FROM THE RELEASE, THE WAY ITS OWN `swarm-package update` READS IT
+/// (ADR 0157): the same protocol, or an API that still drives the running
+/// engine (`OLDEST_ENGINE_PROTOCOL` up to its `PROTOCOL`), installs the app
+/// alone. The manifest's protocol number cannot say that. Trusting it held
+/// every 1.18 release on Hives whose engine was on 17, although each would
+/// have installed with every worker left running (ADR 0167).
+///
+/// A release without `OLDEST_ENGINE_PROTOCOL` predates app-first installs, and
+/// one whose value is not a number cannot be trusted to drive anything. Both
+/// swap the engine, as the installer does with them.
+fn swaps_engine(
+    release_protocol: Option<&str>,
+    oldest_engine: Option<&str>,
+    engine_protocol: Option<u16>,
+) -> Option<bool> {
+    let engine = engine_protocol?;
+    let release = release_protocol?.trim().parse::<u16>().ok()?;
+    if release == engine {
+        return Some(false);
+    }
+    let drives = oldest_engine
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .is_some_and(|oldest| oldest <= engine && engine <= release);
+    Some(!drives)
+}
+
+/// `swaps_engine` for a downloaded release directory.
+fn release_swaps_engine(release: &Path, engine_protocol: Option<u16>) -> Option<bool> {
+    let read = |name: &str| std::fs::read_to_string(release.join(name)).ok();
+    swaps_engine(
+        read("PROTOCOL").as_deref(),
+        read("OLDEST_ENGINE_PROTOCOL").as_deref(),
+        engine_protocol,
+    )
+}
+
+/// Downloads and installs an ordinary release while the operator is away or
+/// every worker is idle.
 async fn auto_install(state: &Arc<AppState>) {
     let Ok(store) = crate::task_store(state) else {
         return;
@@ -713,17 +763,18 @@ async fn auto_install(state: &Arc<AppState>) {
         .operator_presence(chrono::Utc::now().timestamp())
         .ok()
         .map(|presence| presence.mode);
-    let protocol_change = if status.upgrade_available {
-        offered_protocol_change(state).await
-    } else {
-        Some(false)
-    };
+    // One reading of the engine answers both questions asked of it here: are
+    // its workers idle, and which protocol does it speak.
+    let engine = crate::maintenance::host_status_snapshot(state).await.ok();
+    let workers_idle = engine.as_ref().is_some_and(|engine| {
+        engine.busy_sessions == Some(0) && engine.unreadable_sessions == Some(0)
+    });
     if let Some(hold) = auto_install_hold(&AutoInstallFacts {
         enabled: status.auto_install,
         development_build: status.development_build,
         upgrade_available: status.upgrade_available,
-        protocol_change,
         presence,
+        workers_idle,
         in_flight,
         last_outcome: status.apply_state.as_deref(),
     }) {
@@ -733,19 +784,45 @@ async fn auto_install(state: &Arc<AppState>) {
     let Some(offer) = status.offer.clone() else {
         return;
     };
+    let Some(root) = download_root(state) else {
+        return;
+    };
+    // Downloaded before the protocol is judged, because only the release can
+    // say whether it swaps the engine. A release that does is kept for the
+    // operator's Install button.
+    //
+    // THE INSTALL WAITS FOR THE NEXT PASS AFTER A DOWNLOAD. A download can take
+    // minutes, and "every worker is idle" was read before it began.
     if status.downloaded_version.as_deref() != Some(offer.version.as_str()) {
-        let Some(root) = download_root(state) else {
-            return;
-        };
-        if let Err(reason) = fetch_artifact(&offer, &root).await {
-            tracing::warn!(%reason, version = %offer.version, "an automatic install could not download its release");
+        match fetch_artifact(&offer, &root).await {
+            Ok(_) => {
+                tracing::info!(version = %offer.version, "downloaded a release to install on the next pass");
+            }
+            Err(reason) => {
+                tracing::warn!(%reason, version = %offer.version, "an automatic install could not download its release");
+            }
+        }
+        return;
+    }
+    let Some(release) = downloaded_release(&root, Some(&offer.artifact_sha256)) else {
+        return;
+    };
+    match release_swaps_engine(&release, engine.map(|engine| engine.protocol_version)) {
+        Some(false) => {}
+        swaps => {
+            let hold = if swaps.is_some() {
+                AutoInstallHold::ProtocolChange
+            } else {
+                AutoInstallHold::ProtocolUnknown
+            };
+            tracing::debug!(?hold, version = %offer.version, "an ordinary release is not installing itself yet");
             return;
         }
     }
     match request_install(state).await {
         Ok(()) => tracing::info!(
             version = %offer.version,
-            "installing an ordinary release automatically while the operator is away"
+            "installing an ordinary release automatically while the operator is away or every worker is idle"
         ),
         Err(error) => tracing::warn!(
             message = %error.message,
@@ -1134,8 +1211,8 @@ mod tests {
         enabled: bool,
         development_build: bool,
         upgrade_available: bool,
-        protocol_change: Option<bool>,
         presence: Option<swarm_domain::PresenceMode>,
+        workers_idle: bool,
         in_flight: bool,
         last_outcome: Option<&str>,
     ) -> Option<AutoInstallHold> {
@@ -1143,42 +1220,104 @@ mod tests {
             enabled,
             development_build,
             upgrade_available,
-            protocol_change,
             presence,
+            workers_idle,
             in_flight,
             last_outcome,
         })
     }
 
-    /// A Hive whose store holds a verified offer newer than this build, with the
-    /// release already downloaded, and a real terminal host speaking the
-    /// offer's protocol. Returns the state, the request path, and the host task.
-    fn hive_with_an_ordinary_release(
-        directory: &tempfile::TempDir,
+    /// What the fake engine reports and what the downloaded release says
+    /// about itself.
+    struct Fixture {
         presence: swarm_domain::PresenceMode,
+        /// The protocol the RUNNING engine speaks.
+        engine_protocol: u16,
+        /// Sessions the engine counts as mid-turn.
+        busy: usize,
+        /// The downloaded bundle's `PROTOCOL`, which the manifest repeats.
+        release_protocol: u16,
+        /// The downloaded bundle's `OLDEST_ENGINE_PROTOCOL`, absent from a
+        /// bundle built before ADR 0157.
+        oldest_engine: Option<u16>,
+    }
+
+    impl Fixture {
+        /// A release on this Hive's own protocol, nobody busy.
+        fn ordinary(presence: swarm_domain::PresenceMode) -> Self {
+            Self {
+                presence,
+                engine_protocol: swarm_terminal::PROTOCOL_VERSION,
+                busy: 0,
+                release_protocol: swarm_terminal::PROTOCOL_VERSION,
+                oldest_engine: None,
+            }
+        }
+    }
+
+    /// An engine that answers its status with `protocol` and `busy`, and lists
+    /// no sessions. One request per connection, as the client sends them.
+    fn fake_engine(socket: &Path, protocol: u16, busy: usize) -> tokio::task::JoinHandle<()> {
+        use swarm_terminal::{HostRequest, HostResponse, TerminalHostStatus};
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let response = match serde_json::from_str::<HostRequest>(&line) {
+                    Ok(HostRequest::HostStatus) => HostResponse::HostStatus {
+                        status: TerminalHostStatus {
+                            protocol_version: protocol,
+                            host_version: "1.0.0-fixture".to_owned(),
+                            host_build_id: None,
+                            draining: false,
+                            running_sessions: busy,
+                            retained_sessions: busy,
+                            busy_sessions: Some(busy),
+                            unreadable_sessions: Some(0),
+                            resources: None,
+                            takeover_relay: false,
+                        },
+                    },
+                    Ok(HostRequest::ListSessions) => HostResponse::Sessions {
+                        sessions: Vec::new(),
+                    },
+                    _ => HostResponse::Error {
+                        code: "fixture_unsupported".to_owned(),
+                        message: "the fixture engine answers status and sessions only".to_owned(),
+                    },
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                let _ = reader.get_mut().write_all(&bytes).await;
+            }
+        })
+    }
+
+    /// A Hive whose store holds a verified offer newer than this build, with the
+    /// release already downloaded, and an engine as `fixture` describes. Returns
+    /// the state, the request path, and the engine task.
+    fn hive_with_a_downloaded_release(
+        directory: &tempfile::TempDir,
+        fixture: &Fixture,
     ) -> (
         Arc<AppState>,
         std::path::PathBuf,
         tokio::task::JoinHandle<()>,
     ) {
-        let workspace = std::env::temp_dir().canonicalize().unwrap();
-        let registry = std::sync::Arc::new(
-            swarm_terminal::SessionRegistry::new(
-                swarm_terminal::JournalLimits::new(4096, 64),
-                2,
-                [workspace],
-            )
-            .unwrap(),
-        );
         let socket = directory.path().join("terminal.sock");
-        let server = swarm_terminal_host::HostServer::bind(&socket, registry).unwrap();
-        let host = tokio::spawn(async move {
-            let _ = server.run().await;
-        });
+        let host = fake_engine(&socket, fixture.engine_protocol, fixture.busy);
         let store = swarm_persistence::TaskStore::in_memory().unwrap();
         let offer = swarm_domain::ReleaseOffer {
             version: "99.0.0".to_owned(),
-            protocol: swarm_terminal::PROTOCOL_VERSION.to_string(),
+            protocol: fixture.release_protocol.to_string(),
             artifact_url: "https://releases.invalid/swarm-99.0.0.tar.gz".to_owned(),
             artifact_sha256: "b".repeat(64),
             artifact_bytes: 4096,
@@ -1188,7 +1327,9 @@ mod tests {
         store
             .record_release_check("offered", Some(&serde_json::to_string(&offer).unwrap()), 1)
             .unwrap();
-        store.set_manual_presence(Some(presence), 1).unwrap();
+        store
+            .set_manual_presence(Some(fixture.presence), 1)
+            .unwrap();
         let downloaded = directory.path().join("downloads").join("99.0.0");
         std::fs::create_dir_all(&downloaded).unwrap();
         std::fs::write(downloaded.join("swarm-package"), "#!/bin/sh\n").unwrap();
@@ -1197,6 +1338,18 @@ mod tests {
             &offer.artifact_sha256,
         )
         .unwrap();
+        std::fs::write(
+            downloaded.join("PROTOCOL"),
+            format!("{}\n", fixture.release_protocol),
+        )
+        .unwrap();
+        if let Some(oldest) = fixture.oldest_engine {
+            std::fs::write(
+                downloaded.join("OLDEST_ENGINE_PROTOCOL"),
+                format!("{oldest}\n"),
+            )
+            .unwrap();
+        }
         let request = directory.path().join("release-apply.request");
         let state = AppState::default()
             .with_terminal_host(swarm_terminal::HostClient::new(&socket), "secret")
@@ -1206,78 +1359,178 @@ mod tests {
     }
 
     /// ⚠️ THE PASS ITSELF, NOT ONLY ITS RULE: with the operator away it asks the
-    /// install unit for the downloaded release, exactly as the button does.
+    /// install unit for the downloaded release, exactly as the button does,
+    /// even while a worker is mid-turn, because the app install stops nobody.
     #[tokio::test]
     async fn an_ordinary_release_is_requested_for_install_while_the_operator_is_away() {
         let directory = tempfile::tempdir().unwrap();
-        let (state, request, host) =
-            hive_with_an_ordinary_release(&directory, swarm_domain::PresenceMode::Reachable);
+        let fixture = Fixture {
+            busy: 1,
+            ..Fixture::ordinary(swarm_domain::PresenceMode::Reachable)
+        };
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
         auto_install(&state).await;
         let requested = std::fs::read_to_string(&request).expect("an install was requested");
         assert!(requested.ends_with("downloads/99.0.0"), "{requested}");
         host.abort();
     }
 
+    /// The operator's ruling of 2026-11-10: an app install restarts only the
+    /// API, so it need not wait for the operator to leave. Waiting for every
+    /// worker to be idle is enough, as it is for the engine.
     #[tokio::test]
-    async fn nothing_is_requested_while_the_operator_is_at_the_hive() {
+    async fn an_ordinary_release_is_requested_while_the_operator_is_at_the_hive_and_every_worker_is_idle()
+     {
         let directory = tempfile::tempdir().unwrap();
-        let (state, request, host) =
-            hive_with_an_ordinary_release(&directory, swarm_domain::PresenceMode::AtHive);
+        let fixture = Fixture::ordinary(swarm_domain::PresenceMode::AtHive);
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        auto_install(&state).await;
+        let requested = std::fs::read_to_string(&request)
+            .expect("the operator is at the Hive, but no worker is mid-turn");
+        assert!(requested.ends_with("downloads/99.0.0"), "{requested}");
+        host.abort();
+    }
+
+    #[tokio::test]
+    async fn nothing_is_requested_while_the_operator_is_at_the_hive_and_a_worker_is_busy() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture {
+            busy: 1,
+            ..Fixture::ordinary(swarm_domain::PresenceMode::AtHive)
+        };
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
         auto_install(&state).await;
         assert!(
             !request.exists(),
-            "installing restarts the API under the operator's hands"
+            "restarting the API under a busy worker breaks its Swarm calls"
         );
         host.abort();
     }
 
+    /// ⚠️ THE BUG. Every 1.18 release is protocol 19 and still drives an engine
+    /// on 17 (ADR 0157), so its `update` installs the app alone and no worker
+    /// stops. The manifest's number said "protocol change", and every member
+    /// on 1.17.10 waited for a press that nobody was asked for.
+    #[tokio::test]
+    async fn a_release_on_a_newer_protocol_is_requested_when_it_drives_the_running_engine() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = Fixture {
+            engine_protocol: 17,
+            release_protocol: 19,
+            oldest_engine: Some(17),
+            ..Fixture::ordinary(swarm_domain::PresenceMode::Reachable)
+        };
+        let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+        auto_install(&state).await;
+        let requested = std::fs::read_to_string(&request)
+            .expect("the release installs the app alone, so it is ordinary");
+        assert!(requested.ends_with("downloads/99.0.0"), "{requested}");
+        host.abort();
+    }
+
+    /// A release whose API cannot drive the running engine swaps both and ends
+    /// every session. That stays the operator's call.
+    #[tokio::test]
+    async fn a_release_that_cannot_drive_the_running_engine_waits_for_the_operator() {
+        for oldest_engine in [Some(18), None] {
+            let directory = tempfile::tempdir().unwrap();
+            let fixture = Fixture {
+                engine_protocol: 17,
+                release_protocol: 19,
+                oldest_engine,
+                ..Fixture::ordinary(swarm_domain::PresenceMode::Reachable)
+            };
+            let (state, request, host) = hive_with_a_downloaded_release(&directory, &fixture);
+            auto_install(&state).await;
+            assert!(!request.exists(), "{oldest_engine:?}");
+            host.abort();
+        }
+    }
+
     /// The ordinary case, which is the whole point of ADR 0110: a newer
-    /// release, no protocol change, nobody at the Hive.
+    /// release, nobody at the Hive, whatever the workers are doing.
     #[test]
     fn an_ordinary_release_installs_while_the_operator_is_away() {
+        for presence in [Reachable, NightWatch] {
+            assert_eq!(
+                hold(true, false, true, Some(presence), false, false, None),
+                None,
+                "{presence:?}"
+            );
+        }
+    }
+
+    /// ADR 0167: the operator at the Hive does not hold an install while every
+    /// worker is idle. The engine's own update waits for exactly that.
+    #[test]
+    fn an_ordinary_release_installs_while_every_worker_is_idle() {
         assert_eq!(
-            hold(true, false, true, Some(false), Some(Reachable), false, None),
+            hold(true, false, true, Some(AtHive), true, false, None),
             None
         );
         assert_eq!(
-            hold(
-                true,
-                false,
-                true,
-                Some(false),
-                Some(NightWatch),
-                false,
-                None
-            ),
-            None
+            hold(true, false, true, None, true, false, None),
+            None,
+            "idle workers are enough even when presence cannot be read"
         );
     }
 
     #[test]
-    fn nothing_installs_under_the_operators_hands() {
+    fn nothing_installs_under_a_busy_worker_with_the_operator_at_the_hive() {
         assert_eq!(
-            hold(true, false, true, Some(false), Some(AtHive), false, None),
-            Some(AutoInstallHold::OperatorPresent)
+            hold(true, false, true, Some(AtHive), false, false, None),
+            Some(AutoInstallHold::InUse)
         );
         assert_eq!(
-            hold(true, false, true, Some(false), None, false, None),
-            Some(AutoInstallHold::OperatorPresent),
+            hold(true, false, true, None, false, false, None),
+            Some(AutoInstallHold::InUse),
             "presence that cannot be read is not evidence of absence"
         );
     }
 
-    /// A protocol change stops every worker session, so it stays the
-    /// operator's call — and a Hive that cannot tell does not guess.
+    /// Read the way the release's own `update` reads it (ADR 0157).
     #[test]
-    fn a_protocol_change_or_an_unknown_one_waits_for_the_operator() {
+    fn a_release_that_drives_the_running_engine_installs_the_app_alone() {
         assert_eq!(
-            hold(true, false, true, Some(true), Some(Reachable), false, None),
-            Some(AutoInstallHold::ProtocolChange)
+            swaps_engine(Some("19\n"), Some("17\n"), Some(17)),
+            Some(false)
+        );
+        assert_eq!(swaps_engine(Some("19"), Some("17"), Some(18)), Some(false));
+        assert_eq!(swaps_engine(Some("19"), Some("17"), Some(19)), Some(false));
+        assert_eq!(
+            swaps_engine(Some("17"), None, Some(17)),
+            Some(false),
+            "the same protocol never swaps, with or without the file"
+        );
+    }
+
+    /// A swap ends every worker session, so it stays the operator's call.
+    #[test]
+    fn a_release_that_cannot_drive_the_running_engine_swaps_it() {
+        assert_eq!(swaps_engine(Some("19"), Some("18"), Some(17)), Some(true));
+        assert_eq!(
+            swaps_engine(Some("19"), None, Some(17)),
+            Some(true),
+            "a release from before ADR 0157 swaps both"
         );
         assert_eq!(
-            hold(true, false, true, None, Some(Reachable), false, None),
-            Some(AutoInstallHold::ProtocolUnknown)
+            swaps_engine(Some("19"), Some("seventeen"), Some(17)),
+            Some(true),
+            "an unreadable range drives nothing, as the installer reads it"
         );
+        assert_eq!(
+            swaps_engine(Some("19"), Some("17"), Some(20)),
+            Some(true),
+            "an engine newer than the release"
+        );
+    }
+
+    /// A Hive that cannot tell does not guess.
+    #[test]
+    fn a_release_or_engine_that_cannot_be_read_is_unknown() {
+        assert_eq!(swaps_engine(None, Some("17"), Some(17)), None);
+        assert_eq!(swaps_engine(Some("x"), Some("17"), Some(17)), None);
+        assert_eq!(swaps_engine(Some("19"), Some("17"), None), None);
     }
 
     /// ⚠️ ONE ATTEMPT PER RELEASE. A release that failed to install must not be
@@ -1290,8 +1543,8 @@ mod tests {
                     true,
                     false,
                     true,
-                    Some(false),
                     Some(Reachable),
+                    true,
                     false,
                     Some(outcome)
                 ),
@@ -1300,7 +1553,7 @@ mod tests {
             );
         }
         assert_eq!(
-            hold(true, false, true, Some(false), Some(Reachable), true, None),
+            hold(true, false, true, Some(Reachable), true, true, None),
             Some(AutoInstallHold::InFlight)
         );
     }
@@ -1308,32 +1561,16 @@ mod tests {
     #[test]
     fn the_switch_a_development_build_and_nothing_newer_each_hold_it() {
         assert_eq!(
-            hold(
-                false,
-                false,
-                true,
-                Some(false),
-                Some(Reachable),
-                false,
-                None
-            ),
+            hold(false, false, true, Some(Reachable), true, false, None),
             Some(AutoInstallHold::TurnedOff)
         );
         assert_eq!(
-            hold(true, true, true, Some(false), Some(Reachable), false, None),
+            hold(true, true, true, Some(Reachable), true, false, None),
             Some(AutoInstallHold::DevelopmentBuild),
             "ADR 0050 §4: a working copy is never replaced by a release"
         );
         assert_eq!(
-            hold(
-                true,
-                false,
-                false,
-                Some(false),
-                Some(Reachable),
-                false,
-                None
-            ),
+            hold(true, false, false, Some(Reachable), true, false, None),
             Some(AutoInstallHold::NothingNewer)
         );
     }
@@ -1428,34 +1665,51 @@ mod tests {
 #[cfg(test)]
 mod apply_status_tests {
     use super::apply_field_from;
-    use super::protocol_change_offered;
+    use super::release_swaps_engine;
 
-    /// A protocol change ends every worker session, so this decides whether the
-    /// roster is written down first. On 2026-08-28 it was not, and the operator
-    /// woke workers one at a time.
-    #[test]
-    fn a_differing_protocol_is_a_change() {
-        assert!(protocol_change_offered(Some("10"), 9));
+    fn release(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, value) in files {
+            std::fs::write(directory.path().join(name), value).unwrap();
+        }
+        directory
     }
 
-    /// The ordinary case, which must not wipe the roster.
+    /// A swap ends every worker session, so this decides whether the roster is
+    /// written down first. On 2026-08-28 it was not, and the operator woke
+    /// workers one at a time.
     #[test]
-    fn a_matching_protocol_is_not_a_change() {
-        assert!(!protocol_change_offered(Some("10"), 10));
+    fn a_release_that_cannot_drive_the_engine_swaps_it() {
+        let swaps = release(&[("PROTOCOL", "10\n")]);
+        assert_eq!(release_swaps_engine(swaps.path(), Some(9)), Some(true));
     }
 
-    /// An older manifest carries no protocol. Treating absent as "changed"
-    /// would stop every worker on an ordinary update.
+    /// The ordinary case, and the app-first one (ADR 0157), which must not wipe
+    /// the roster: their workers keep running.
     #[test]
-    fn an_absent_protocol_is_not_a_change() {
-        assert!(!protocol_change_offered(None, 9));
+    fn a_release_on_the_engines_protocol_or_driving_it_does_not_swap_it() {
+        let same = release(&[("PROTOCOL", "10\n")]);
+        assert_eq!(release_swaps_engine(same.path(), Some(10)), Some(false));
+        let drives = release(&[("PROTOCOL", "19\n"), ("OLDEST_ENGINE_PROTOCOL", "17\n")]);
+        assert_eq!(release_swaps_engine(drives.path(), Some(17)), Some(false));
     }
 
-    /// And neither is a value that is not a number.
+    /// A release whose protocol cannot be read is not called a swap: treating
+    /// absent as "swaps" would write down every worker on an ordinary update.
     #[test]
-    fn an_unparseable_protocol_is_not_a_change() {
-        assert!(!protocol_change_offered(Some("ten"), 9));
-        assert!(!protocol_change_offered(Some(""), 9));
+    fn an_absent_release_protocol_is_not_a_swap() {
+        let absent = release(&[]);
+        assert_eq!(release_swaps_engine(absent.path(), Some(9)), None);
+    }
+
+    /// And neither is a value that is not a number, or an engine that did not
+    /// answer.
+    #[test]
+    fn an_unparseable_protocol_or_a_silent_engine_is_not_a_swap() {
+        let unparseable = release(&[("PROTOCOL", "ten\n")]);
+        assert_eq!(release_swaps_engine(unparseable.path(), Some(9)), None);
+        let readable = release(&[("PROTOCOL", "10\n")]);
+        assert_eq!(release_swaps_engine(readable.path(), None), None);
     }
 
     /// This test previously carried its own copy of the rule and passed while

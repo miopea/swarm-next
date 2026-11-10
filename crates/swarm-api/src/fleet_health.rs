@@ -110,13 +110,21 @@ fn same_health(left: &HiveHealthReport, right: &HiveHealthReport) -> bool {
 /// `unavailable`, never `normal`.
 async fn derive_health_report(state: &AppState, store: &TaskStore, now: i64) -> HiveHealthReport {
     let sync = store.federation_sync_health().unwrap_or_default();
-    let update_pending = match &state.terminal_host {
-        Some(client) => matches!(
-            client.request(&HostRequest::HostStatus).await,
+    // Whether a pending update applies by itself is said only of a pending
+    // one, and only from an engine that answered (ADR 0167).
+    let (update_pending, applies_itself) = match &state.terminal_host {
+        Some(client) => match client.request(&HostRequest::HostStatus).await {
             Ok(HostResponse::HostStatus { status })
-                if crate::maintenance::worker_engine_update_required(&status)
-        ),
-        None => false,
+                if crate::maintenance::worker_engine_update_required(&status) =>
+            {
+                (
+                    true,
+                    Some(crate::idle_engine_update::applies_itself(state, &status)),
+                )
+            }
+            _ => (false, None),
+        },
+        None => (false, None),
     };
     let last_attempt =
         store
@@ -143,6 +151,7 @@ async fn derive_health_report(state: &AppState, store: &TaskStore, now: i64) -> 
         engine: ReportedEngine {
             update_pending,
             last_attempt,
+            applies_itself,
         },
         disk: ReportedDisk {
             pressure,
