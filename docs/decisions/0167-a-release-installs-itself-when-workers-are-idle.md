@@ -95,6 +95,28 @@ Measured read-only on the operator's Keeper on 2026-11-10:
 - That the idle rule fires on a real Hive. It needs a Hive on the release that
   carries it, and a later release to install.
 
+## Addendum 2026-11-10: the release names its own offer list
+
+Decision 3 left the list typed at publish time: 1.18.4 went out with
+`SWARM_OFFER_PROTOCOL=19,17`, and leaving it off would have held that release
+on every Hive on an engine on 17.
+
+`publish-release-manifest.sh` now lists each release under every protocol from
+the bundle's `OLDEST_ENGINE_PROTOCOL` up to its `PROTOCOL`, the release's own
+first and the oldest last. A bundle without the file is listed under its own
+protocol only. The script refuses a protocol that is not a number, a range whose
+oldest is above its own, and refuses to run while `SWARM_OFFER_PROTOCOL` is set.
+
+The override is removed rather than kept, because the only offer it could add
+is one under an engine the release cannot drive. A Hive through 1.18.3 reads
+that entry as an ordinary install and would stop every worker without the hold.
+Its other use, reaching Hives through 0.9.1 that filtered discovery on
+protocol, has no Hive left to reach: every member reports 1.17.10 or later.
+
+`test-publish-release-manifest.sh` covers the range, the order, the legacy
+bundle, two bundles at once, the three bad declarations and the refused
+variable. It runs in the `linux-package` job.
+
 ## Addendum 2026-11-10: a member says why it is behind
 
 The roster could say a member was behind and never why: busy workers, a release

@@ -118,6 +118,7 @@ jobs:
       - run: packaging/linux/test-development-builder.sh
       - run: bash packaging/linux/test-worker-return-preparation.sh
       - run: packaging/linux/test-release-preflight.sh
+      - run: packaging/linux/test-publish-release-manifest.sh
       - run: packaging/linux/test-operator-token-rules.sh
       # The releases a field Hive installs with its OWN older swarm-package.
       # It failed on main unnoticed because nothing ran it. It needs the tags
