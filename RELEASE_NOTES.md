@@ -12,6 +12,19 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.18.5
+
+No database update. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting, on an engine from 1.18.0 or later. On a Hive still running the engine from 1.17.10 or earlier, update it once yourself from the Worker engine card in Settings.
+
+### New features
+- A release that has to swap the worker engine now installs itself the next time every worker is resting, instead of waiting for you to press Install. Each worker restarts once and comes back on its own conversation, and the Updates card says so before it happens. It needs automatic install and the worker engine's automatic update both on, which they are by default; turn either off to keep pressing Install yourself. A swap that stops workers and does not finish is not tried again by itself, and the card says so. This starts with the next such release, once this one is installed. An engine from 1.17.10 or earlier still waits for you.
+- The Apiary roster now says why a member Hive is behind on releases, and who can move it: for example, its workers are busy, the release would end worker sessions, the download is failing, or automatic install is off. Before, all of these read the same. A member reports this once it runs this release.
+
+### Fixes
+- A long message to Queen or a worker could arrive with only its last few hundred characters. It then showed as uncertain, and held later messages behind it as if someone were typing. A long message to a Claude session now arrives as one paste. Messages already marked uncertain are not resent by themselves.
+- Each release is now offered to every worker engine it can drive without anyone listing those engines by hand when it is published, so a Hive on an older engine is no longer held back by a slip at publishing.
+- A Hive on 1.18.0 to 1.18.3 whose worker engine is already up to date holds this release until you press Install on the Updates card, as with 1.18.4. Installing it keeps your workers running. Releases after it install themselves.
+
 ## 1.18.4
 
 No database update. This release changes the worker engine, but installing it keeps your workers running: the app installs first and drives the engine you have. On an engine from 1.18.0 or later, the new engine applies by itself the next time every worker is resting. On a Hive still running the engine from 1.17.10 or earlier, update it once yourself from the Worker engine card in Settings ("Prepare worker engine update", then "Stop workers and update"); that restarts its workers, and after it, updates install by themselves.
