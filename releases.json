@@ -1,27 +1,36 @@
 {
   "payload": {
     "schema_version": 1,
-    "issued_at": 1794337111,
+    "issued_at": 1794366273,
     "releases": [
       {
-        "version": "1.18.4",
+        "version": "1.18.5",
         "protocol": "19",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.4/swarm-1.18.4-linux-x86_64.tar.gz",
-        "artifact_sha256": "fed12ef83e245ec047fb2fbabdeaf255c597aa8913e116d2e4d7fd43c5fdd68c",
-        "artifact_bytes": 24152501,
-        "worker_engine_build_id": "039587aec011e14a2fba4bc73ac945a1dc98bbe4abb2fa007134c8bbf1ef1f59",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.5/swarm-1.18.5-linux-x86_64.tar.gz",
+        "artifact_sha256": "c8d3874650c187d2f824e61ec34c162b10f84722b73fef1be169216a3a8a98ce",
+        "artifact_bytes": 24074575,
+        "worker_engine_build_id": "9d02c9e43fb78ee9c6fcabbee2e4c10e2d0aa02e5af0c1810db12cf0ed3cf3db",
         "notes_url": null
       },
       {
-        "version": "1.18.4",
+        "version": "1.18.5",
+        "protocol": "18",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.5/swarm-1.18.5-linux-x86_64.tar.gz",
+        "artifact_sha256": "c8d3874650c187d2f824e61ec34c162b10f84722b73fef1be169216a3a8a98ce",
+        "artifact_bytes": 24074575,
+        "worker_engine_build_id": "9d02c9e43fb78ee9c6fcabbee2e4c10e2d0aa02e5af0c1810db12cf0ed3cf3db",
+        "notes_url": null
+      },
+      {
+        "version": "1.18.5",
         "protocol": "17",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.4/swarm-1.18.4-linux-x86_64.tar.gz",
-        "artifact_sha256": "fed12ef83e245ec047fb2fbabdeaf255c597aa8913e116d2e4d7fd43c5fdd68c",
-        "artifact_bytes": 24152501,
-        "worker_engine_build_id": "039587aec011e14a2fba4bc73ac945a1dc98bbe4abb2fa007134c8bbf1ef1f59",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.5/swarm-1.18.5-linux-x86_64.tar.gz",
+        "artifact_sha256": "c8d3874650c187d2f824e61ec34c162b10f84722b73fef1be169216a3a8a98ce",
+        "artifact_bytes": 24074575,
+        "worker_engine_build_id": "9d02c9e43fb78ee9c6fcabbee2e4c10e2d0aa02e5af0c1810db12cf0ed3cf3db",
         "notes_url": null
       }
     ]
   },
-  "signature": "ACSsm6JDOEl_onNabqrZZkx5wtFzvU81QszmCguuWvJ_6pxjEhkXVjmQmy0GO8L1X-QxAF3m-ldO_tjCSSxKBA"
+  "signature": "6mqxd0A72-1RKM1LFGA0kVm8SWF8UU_oaucdBo91cQnpkzU9yxP09-3p3B-dz-69q-OW4Q_F_aONgcYhQeZaAg"
 }
