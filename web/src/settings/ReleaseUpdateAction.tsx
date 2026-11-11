@@ -74,7 +74,7 @@ function stepName(step: string | null): string | null {
  * failing case as the reassuring one. That is the shape this fleet keeps
  * producing, so it says it does not know and lets the operator decide.
  */
-function installConsequence(carriesProtocolChange: boolean | null) {
+function installConsequence(carriesProtocolChange: boolean | null, swapsItself: boolean) {
   if (carriesProtocolChange === true) {
     return (
       <p className="form-error" role="alert">
@@ -83,6 +83,8 @@ function installConsequence(carriesProtocolChange: boolean | null) {
         up, and the engine waits for the worker engine update. When it cannot, the app and
         engine move together, every worker session ends, and Swarm brings the workers back
         afterwards; unsent terminal input can be lost.
+        {/* ADR 0169: nobody presses anything for it, so the consent is here. */}
+        {swapsItself ? " Here that happens by itself once every worker rests, without anyone pressing Install." : null}
       </p>
     );
   }
@@ -294,6 +296,9 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   // Only a release that keeps workers running installs itself (ADR 0110), and
   // once it is downloaded the release itself says so (ADR 0167).
   const installsItself = status.auto_install && status.carries_protocol_change === false;
+  // One that swaps the engine installs itself too, where the engine's idle
+  // update would take the swap: once every worker rests (ADR 0169).
+  const swapsItself = status.engine_swap === "waits_for_rest";
   // Only an offer KNOWN not to change the engine protocol leaves every worker
   // up. A protocol change ends their sessions when the new app cannot drive the
   // installed engine (ADR 0157), and "cannot tell" may be one, so neither is
@@ -325,7 +330,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
       {offered && !status.development_build && (
         <>
-          {installConsequence(status.carries_protocol_change)}
+          {installConsequence(status.carries_protocol_change, swapsItself)}
           {status.carries_new_worker_engine && (
             <p>It also carries a newer worker engine. That part is <strong>deferred while any worker is running</strong>. Use the warned worker engine maintenance action to apply it with loaded workers; that action stops them and attempts to restore their saved conversations.</p>
           )}
@@ -339,8 +344,14 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
               {!status.apply_detail && !status.apply_reason ? <> <code>journalctl --user -u swarm-release-apply.service -n 30</code> says more.</> : null}
             </p>
           ) : null}
-          {status.apply_state === "deferred" ? (
-            <p role="status">Release prepared · waiting for engine maintenance. {status.current_version} and your workers remain running. Use the worker engine maintenance action when you are ready for its warned interruption.</p>
+          {status.engine_swap === "attempted" ? (
+            <p className="form-error" role="alert">
+              A swap to {status.offer?.version} stopped its workers and did not finish. It is not tried
+              again by itself; use the worker engine maintenance action when you are ready to try it again.
+            </p>
+          ) : status.apply_state === "deferred" ? (swapsItself
+            ? <p role="status">Release prepared · it swaps the engine by itself once every worker rests. {status.current_version} and your workers keep running until then, and each worker restarts when it happens. The worker engine card shows what holds it.</p>
+            : <p role="status">Release prepared · waiting for engine maintenance. {status.current_version} and your workers remain running. Use the worker engine maintenance action when you are ready for its warned interruption.</p>
           ) : null}
           {installInFlight ? (
             <>
@@ -418,9 +429,11 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
               <button className="primary-action" disabled={disabled} onClick={() => void run(() => downloadRelease(operatorToken), "The release could not be downloaded.")}>{working ? "Downloading and verifying…" : "Download Swarm " + (status.offer?.version ?? "")}</button>
             </div>
           )}
-          {ready && !installed && <small>{installsItself
+          {ready && !installed && !(swapsItself && status.apply_state === "deferred") && <small>{installsItself
             ? "Downloaded and verified against the signed digest. It installs itself once every worker is idle or you are away, or now if you press Install."
-            : "Downloaded and verified against the signed digest. Nothing is installed until you say so."}</small>}
+            : swapsItself
+              ? "Downloaded and verified against the signed digest. It installs itself once every worker rests, swapping the engine and restarting each worker, or now if you press Install, which ends every session."
+              : "Downloaded and verified against the signed digest. Nothing is installed until you say so."}</small>}
         </>
       )}
 
@@ -451,7 +464,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
                 change it. */}
             {status.auto_install_required_by_apiary
               ? <small className="release-set-by-apiary">Set by your Apiary. Only its Keeper can change this.</small>
-              : <small>A release that would stop your workers still waits for you.</small>}
+              : <small>A release that would stop your workers waits for you, or, where worker engine updates apply by themselves, for every worker to rest.</small>}
           </span>
         </label>
       ) : null}

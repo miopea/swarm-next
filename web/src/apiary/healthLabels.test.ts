@@ -42,10 +42,25 @@ test("a held release says why it is held and who moves it", () => {
   });
 });
 
+// ADR 0169: a release that swaps the engine now prepares itself and swaps once
+// every worker rests. Queen's condition on the consent ruling: the roster says
+// plainly when an automatic swap was attempted and did not finish.
+test("an engine-swapping release says when it swaps by itself and when a swap did not finish", () => {
+  expect(conditionText({ kind: "release_held", hold: "swap_waits_for_rest" }, 0)).toEqual({
+    status: "Release waits for its workers to rest",
+    next: "It swaps the engine by itself once every worker rests, restarting each of them",
+  });
+  expect(conditionText({ kind: "release_held", hold: "swap_attempted" }, 0)).toEqual({
+    status: "Release swap stopped its workers and didn't finish",
+    next: "It is not tried again by itself; its operator applies it from the Worker engine card",
+  });
+});
+
 test("every hold reads as its own status with a next step", () => {
   const holds: AutoInstallHold[] = [
     "turned_off", "development_build", "nothing_newer", "in_use", "in_flight",
     "already_attempted", "protocol_change", "protocol_unknown", "download_failed", "install_refused",
+    "swap_waits_for_rest", "swap_attempted",
   ];
   const statuses = holds.map((hold) => {
     const text = conditionText({ kind: "release_held", hold }, 0);

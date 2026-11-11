@@ -738,14 +738,7 @@ pub(crate) fn pending_protocol_migration(state: &AppState) -> Option<u16> {
 pub(crate) fn prepared_protocol_target(
     state: &AppState,
 ) -> Result<Option<(u16, String)>, ApiError> {
-    use std::io::Read;
-    let unavailable = || {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "prepared_migration_unavailable",
-            "the prepared migration could not be verified; no workers were stopped",
-        )
-    };
+    let unavailable = migration_unavailable;
     let Some(root) = state.release_state_root.as_ref() else {
         return Ok(None);
     };
@@ -760,18 +753,8 @@ pub(crate) fn prepared_protocol_target(
         }
         return Ok(None);
     }
-    let read = |path: &std::path::Path, limit: u64| -> Result<String, ApiError> {
-        let mut value = String::new();
-        std::fs::File::open(path)
-            .map_err(|_| unavailable())?
-            .take(limit + 1)
-            .read_to_string(&mut value)
-            .map_err(|_| unavailable())?;
-        if value.len() as u64 > limit {
-            return Err(unavailable());
-        }
-        Ok(value.trim().to_owned())
-    };
+    let read =
+        |path: &std::path::Path, limit: u64| read_marker(path, limit).ok_or_else(unavailable);
     let path = PathBuf::from(read(&marker, 4096)?);
     if !path.is_absolute() {
         return Err(unavailable());
@@ -788,6 +771,52 @@ pub(crate) fn prepared_protocol_target(
         return Err(unavailable());
     }
     Ok(Some((protocol, version)))
+}
+
+fn migration_unavailable() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "prepared_migration_unavailable",
+        "the prepared migration could not be verified; no workers were stopped",
+    )
+}
+
+/// One of swarm-package's marker files, trimmed, or nothing when it cannot be
+/// read or is longer than `limit`.
+fn read_marker(path: &std::path::Path, limit: u64) -> Option<String> {
+    use std::io::Read;
+    let mut value = String::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(limit + 1)
+        .read_to_string(&mut value)
+        .ok()?;
+    (value.len() as u64 <= limit).then(|| value.trim().to_owned())
+}
+
+/// The prepared migration an automatic install asked for (ADR 0169), or
+/// nothing: none is prepared, its operator prepared it, or it was prepared
+/// some other way.
+///
+/// swarm-package marks one it prepared for an automatic install with
+/// `protocol-migration.automatic`, naming the same release as `.pending`. A
+/// marker naming anything else is left over from an earlier migration.
+pub(crate) fn automatic_protocol_target(
+    state: &AppState,
+) -> Result<Option<(u16, String)>, ApiError> {
+    let Some(target) = prepared_protocol_target(state)? else {
+        return Ok(None);
+    };
+    let Some(root) = state.release_state_root.as_ref() else {
+        return Ok(None);
+    };
+    let manual = root
+        .join("protocol-migration.manual")
+        .try_exists()
+        .map_err(|_| migration_unavailable())?;
+    let automatic = read_marker(&root.join("protocol-migration.automatic"), 4096);
+    let pending = read_marker(&root.join("protocol-migration.pending"), 4096);
+    Ok((!manual && automatic.is_some() && automatic == pending).then_some(target))
 }
 
 async fn maintain_worker_engine_locked(

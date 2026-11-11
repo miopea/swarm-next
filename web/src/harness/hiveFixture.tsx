@@ -190,6 +190,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       // ?release=protocol offers a release that changes the engine protocol,
       // which the operator accepts and which installs the app first (ADR 0157).
       const protocolOffer = new URLSearchParams(window.location.search).get("release") === "protocol";
+      // With it, ?swap=rest is a downloaded release that swaps the engine by
+      // itself once every worker rests, ?swap=prepared the same once prepared,
+      // and ?swap=attempted one whose swap did not finish (ADR 0169).
+      const swap = protocolOffer ? new URLSearchParams(window.location.search).get("swap") : null;
       return {
         available: true,
         mode: "daily",
@@ -212,9 +216,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         upgrade_available: protocolOffer,
         carries_new_worker_engine: protocolOffer,
         carries_protocol_change: protocolOffer,
+        engine_swap: swap === "attempted" ? "attempted" : swap ? "waits_for_rest" : protocolOffer ? "waits_for_press" : null,
         commits_ahead_of_release: null,
-        downloaded_version: null,
-        apply_state: null,
+        downloaded_version: swap ? OFFERED_VERSION : null,
+        apply_state: swap === "prepared" || swap === "attempted" ? "deferred" : null,
         apply_reason: null,
         apply_step: null,
         apply_detail: null,

@@ -68,8 +68,10 @@ pub enum AutoInstallHold {
     TurnedOff,
     DevelopmentBuild,
     NothingNewer,
-    /// It swaps the engine with the API, which ends every worker session. Only
-    /// the operator decides that.
+    /// It swaps the engine with the API, which ends every worker session, and
+    /// nothing here would swap it by itself: the engine cannot be asked to
+    /// stop only resting workers, automatic engine updates are off, or its
+    /// operator prepared it. The operator's press applies it.
     ProtocolChange,
     /// Unknown is not "no": a Hive that cannot tell does not install.
     ProtocolUnknown,
@@ -86,6 +88,12 @@ pub enum AutoInstallHold {
     /// The Hive refused to start the install it decided on, for instance
     /// because it cannot install a release itself.
     InstallRefused,
+    /// It swaps the engine, and is prepared to swap by itself once every
+    /// worker rests, restarting each of them (ADR 0169).
+    SwapWaitsForRest,
+    /// A swap of it stopped the workers and did not finish, or was not heard
+    /// from again. It is not tried again by itself (ADR 0169).
+    SwapAttempted,
     /// ⚠️ A HOLD FROM A LATER RELEASE THAN THIS ONE. Members and their Keeper
     /// run different releases as a matter of course, and refusing the whole
     /// report over one new word would hide a full disk to show nothing. Never
@@ -790,6 +798,23 @@ mod tests {
                 }
                 .validate()
                 .is_err()
+            );
+        }
+    }
+
+    /// ADR 0169: a member says when an engine-swapping release waits to swap
+    /// by itself, and when its automatic swap stopped workers and did not
+    /// finish, so its Keeper does not call either one its operator's press.
+    #[test]
+    fn an_automatic_swap_has_its_own_holds_on_the_wire() {
+        for (hold, wire) in [
+            (AutoInstallHold::SwapWaitsForRest, "swap_waits_for_rest"),
+            (AutoInstallHold::SwapAttempted, "swap_attempted"),
+        ] {
+            assert_eq!(serde_json::to_value(hold).unwrap(), serde_json::json!(wire));
+            assert_eq!(
+                serde_json::from_value::<AutoInstallHold>(serde_json::json!(wire)).unwrap(),
+                hold
             );
         }
     }
