@@ -43,6 +43,8 @@ mod check_gate_routes;
 mod ci_checks;
 pub mod federation_http;
 mod feedback;
+mod gh_cli;
+mod github_asks;
 mod github_device;
 mod github_feedback;
 mod hive_capability;
@@ -466,6 +468,9 @@ pub struct AppState {
     /// was that nobody else had set the variable.
     github_issue_intake: Option<github_feedback::GithubFeedback>,
     github_issue_workspace: String,
+    /// When the next read of GitHub's asks of the operator may run, after
+    /// failures (ADR 0170).
+    github_asks: Arc<github_asks::AskBackoff>,
     /// The device code of an authorisation somebody is midway through.
     ///
     /// IN MEMORY AND NOT IN THE DATABASE, on purpose. It is a short-lived
@@ -653,6 +658,7 @@ impl AppState {
             support_admission: Arc::new(Semaphore::new(4)),
             github_issue_intake: None,
             github_issue_workspace: String::new(),
+            github_asks: Arc::default(),
             pending_github_device: std::sync::Arc::new(std::sync::Mutex::new(None)),
             github_client_id: std::env::var("SWARM_GITHUB_APP_CLIENT_ID")
                 .unwrap_or_else(|_| github_device::DEFAULT_CLIENT_ID.to_owned()),
@@ -5583,6 +5589,19 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         degraded.push(DegradedSubsystem {
             subsystem: "Hive database".into(),
             reason: "Integrity verification failed. New database-backed work is paused; verified offline recovery is required. Running workers have not been stopped.".into(),
+        });
+    }
+    // GitHub's asks stopped arriving after they had been arriving (ADR 0170).
+    // An empty board there would read as nobody asking, so it says why.
+    if let Some(why) = state
+        .task_store
+        .as_ref()
+        .and_then(|store| store.github_ask_reading().ok())
+        .and_then(|reading| reading.lapsed().map(str::to_owned))
+    {
+        degraded.push(DegradedSubsystem {
+            subsystem: "GitHub review requests and assigned issues".into(),
+            reason: format!("They have stopped arriving: {why}"),
         });
     }
     let protocol_migration_pending = crate::maintenance::pending_protocol_migration(&state);

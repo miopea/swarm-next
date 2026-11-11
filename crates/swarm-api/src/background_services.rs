@@ -80,8 +80,13 @@ impl BackgroundServices {
         // same terms: owned here, and each pass is bounded — at most ten tasks,
         // each gh call capped at twenty seconds, and no task started once the
         // pass has run a minute, so shutdown never waits long on it.
+        //
+        // 12 since 2026-11-11, for GitHub's asks of the operator (ADR 0170), on
+        // the same terms as the check gate: owned here, every gh call capped at
+        // twenty seconds, at most two searches and ten direct reads a pass, and
+        // no direct read started once the pass has run a minute.
         assert!(
-            self.tasks.len() < 11,
+            self.tasks.len() < 12,
             "all background services need a bounded owner"
         );
         let mut stop = self.stop.subscribe();

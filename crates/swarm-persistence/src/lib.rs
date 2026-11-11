@@ -46,6 +46,8 @@ pub use conversation_rotations::{ConversationRotation, RotationHold};
 mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
+mod github_asks;
+pub use github_asks::{GithubAskArrival, GithubAskFiling, StandingGithubAsk};
 mod queen_grants;
 mod queen_releases;
 mod settings_restart;
@@ -468,7 +470,10 @@ const CONVERSATION_ROTATIONS_SCHEMA_MARKER: i64 = 223;
 /// A wait on Queen is hers, and the blocks already parked on her move into her
 /// queue (ADR 0166).
 const QUEEN_WAITS_SCHEMA_MARKER: i64 = 224;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_WAITS_SCHEMA_MARKER;
+/// What GitHub asks of the operator is linked to the draft it filed, and how
+/// the last read of GitHub went (ADR 0170).
+const GITHUB_ASKS_SCHEMA_MARKER: i64 = 225;
+const CURRENT_SCHEMA_VERSION: i64 = GITHUB_ASKS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5066,6 +5071,9 @@ fn migrate_queen_release_schema_steps(
     }
     if schema_version < QUEEN_WAITS_SCHEMA_MARKER {
         crate::task_waits::migrate_queen_waits(transaction, QUEEN_WAITS_SCHEMA_MARKER)?;
+    }
+    if schema_version < GITHUB_ASKS_SCHEMA_MARKER {
+        crate::github_asks::migrate_github_asks(transaction, GITHUB_ASKS_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11428,6 +11436,16 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'task_waits'
                    AND sql LIKE '%''queen''%')",
+        },
+        // What GitHub asks of the operator, linked to the draft it filed, and
+        // how the last read of GitHub went (ADR 0170).
+        SchemaStep {
+            table: "github_ask_links",
+            artifact: "github_ask_links",
+            undo_sql: "DROP TABLE github_ask_links;
+                DROP TABLE github_ask_reading;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
+                AND name IN ('github_ask_links', 'github_ask_reading')",
         },
     ];
 
