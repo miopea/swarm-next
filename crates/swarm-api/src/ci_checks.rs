@@ -11,7 +11,6 @@
 //! CI ran on and reads what it said.
 
 use std::path::Path;
-use std::process::Command;
 
 use swarm_domain::{
     CheckRunReading, CiObservation, CiOutcome, StatusReading, classify_checks, combine_outcomes,
@@ -29,8 +28,6 @@ const TASKS_PER_PASS: usize = 10;
 /// How long one pass may keep starting tasks, so it ends soon after, whatever
 /// GitHub is doing.
 const PASS_SECONDS: u64 = 60;
-/// How long one `gh api` call may take.
-const GH_TIMEOUT_SECONDS: &str = "20";
 
 /// CI as GitHub reports it for one commit.
 pub(crate) trait CheckReader {
@@ -48,38 +45,7 @@ pub(crate) struct GhCli;
 
 impl GhCli {
     fn api<T: serde::de::DeserializeOwned>(path: &str, jq: &str) -> Result<T, String> {
-        // `timeout` bounds a hung call; std's Command has no deadline of its own.
-        // ⚠️ PLAIN JSON, WHATEVER THE ENVIRONMENT FORCES. A forced-colour
-        // variable makes gh paint its JSON with escape codes even into a pipe,
-        // and NO_COLOR alone does not beat CLICOLOR_FORCE. Seen on this box.
-        let output = Command::new("timeout")
-            .args([GH_TIMEOUT_SECONDS, "gh", "api", path, "--jq", jq])
-            .env_remove("CLICOLOR_FORCE")
-            .env_remove("FORCE_COLOR")
-            .env_remove("GH_FORCE_TTY")
-            .env("NO_COLOR", "1")
-            .env("GH_PROMPT_DISABLED", "1")
-            .output()
-            .map_err(|_| "the timeout command is not available on this machine".to_owned())?;
-        if output.status.success() {
-            return serde_json::from_slice(&output.stdout)
-                .map_err(|_| "GitHub answered in a shape Swarm did not expect".to_owned());
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(match output.status.code() {
-            Some(124) => "GitHub did not answer within 20 seconds".to_owned(),
-            Some(127) => swarm_domain::CI_GH_MISSING.to_owned(),
-            _ if stderr.contains("gh auth login") || stderr.contains("not logged") => {
-                swarm_domain::CI_GH_SIGNED_OUT.to_owned()
-            }
-            _ if stderr.contains("HTTP 404") => {
-                "this machine's gh login can't see that repository".to_owned()
-            }
-            _ => format!(
-                "GitHub could not be read: {}",
-                stderr.lines().next().unwrap_or("no reason given").trim()
-            ),
-        })
+        crate::gh_cli::gh_api(path, jq).map_err(|failure| failure.describe())
     }
 }
 
@@ -102,7 +68,7 @@ impl CheckReader for GhCli {
 }
 
 /// `owner/name` for a GitHub remote, or `None` for anything else.
-fn github_repository(remote: &str) -> Option<String> {
+pub(crate) fn github_repository(remote: &str) -> Option<String> {
     let path = remote
         .strip_prefix("git@github.com:")
         .or_else(|| remote.strip_prefix("ssh://git@github.com/"))
@@ -300,6 +266,7 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::process::Command;
 
     use super::*;
 

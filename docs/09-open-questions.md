@@ -1,5 +1,19 @@
 # Open product questions
 
+## A Hive that does not want GitHub's asks — November 11, 2026
+
+ADR 0170 brings in GitHub review requests and issues assigned to the operator
+on every Hive whose machine has a gh login. There is no switch. The operator
+asked for it on their Hive. A member's Hive gets it too after updating, and
+drafts start arriving there for the member's own review requests and issues.
+
+It also leaves out review requests made to a team the operator belongs to,
+because the ruling was "mine".
+
+Open: should a Hive be able to turn this off, and should team review requests
+count? Not chosen silently, because either changes what arrives on someone
+else's board.
+
 ## A draft parked on the operator's word — November 4, 2026
 
 ADR 0154 stops an operator deferral covering Review. It still covers Draft, as

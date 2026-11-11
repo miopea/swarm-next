@@ -122,6 +122,24 @@ impl TaskStore {
             transaction.commit()?;
             return Ok(None);
         }
+        // An issue assigned to the operator came down as an ask (ADR 0170)
+        // under the same link. It is that task, not a second one; remembering
+        // it here keeps this intake from asking again on every tick.
+        let asked: Option<String> = transaction
+            .query_row(
+                "SELECT task_id FROM github_ask_links WHERE url = ?1",
+                [issue_url],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(task_id) = asked {
+            transaction.execute(
+                "INSERT INTO github_issue_tasks (issue_url, task_id) VALUES (?1, ?2)",
+                params![issue_url, task_id],
+            )?;
+            transaction.commit()?;
+            return Ok(None);
+        }
         let hive_id: String = transaction.query_row(
             "SELECT hive_id FROM local_hive_identity WHERE singleton = 1",
             [],

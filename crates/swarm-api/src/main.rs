@@ -585,6 +585,19 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
             let _ = tokio::task::spawn_blocking(move || state.observe_task_ci()).await;
         }
     });
+    // WHAT GITHUB ASKS OF THE OPERATOR ARRIVES BY ITSELF (ADR 0170): review
+    // requests and assigned issues, on every repository the machine's gh
+    // login reaches. Five minutes, like the issue intake above: a review
+    // request is not a page, and the pass costs three or four calls.
+    let github_asks = state.clone();
+    services.periodic(std::time::Duration::from_secs(5 * 60), true, move || {
+        let state = github_asks.clone();
+        async move {
+            // Blocking thread: gh and git are subprocesses and the store is
+            // rusqlite, as for the check gate's reads.
+            let _ = tokio::task::spawn_blocking(move || state.read_github_asks()).await;
+        }
+    });
     let jira_reconciler = state.clone();
     services.periodic(std::time::Duration::from_secs(60), false, move || {
         let state = jira_reconciler.clone();
