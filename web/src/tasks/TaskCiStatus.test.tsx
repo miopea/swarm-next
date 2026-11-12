@@ -138,3 +138,28 @@ test("the card shows a crossing as a Scope row beside CI", async () => {
   );
   expect(screen.queryByText("Check")).not.toBeInTheDocument();
 });
+
+/**
+ * Patterns the Hive cannot read say so beside CI and the check. They never
+ * read as no limits, which would hide a crossing (ADR 0172).
+ */
+test("a scope that cannot be read reads as unreadable beside CI and the check", async () => {
+  expect(scopeSummary({ state: "unreadable", why: "integrity failure: must-not-touch patterns are not a list" }))
+    .toEqual({ tone: "unchecked", word: "Unreadable", text: "This task's must-not-touch paths could not be read: integrity failure: must-not-touch patterns are not a list." });
+
+  const task: Task = { id: "petal", hive_id: "hive", title: "Petals", state: "review", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
+  const ci: TaskCi = {
+    level: "require",
+    recorded_commits: 1,
+    observation: observed({ outcome: "passed" }),
+    independent_check: { state: "checked", head: "1111aaaa2222bbbb", verdict: "pass", ran: "cargo test", findings: "", recorded_at: 1 },
+    must_not_touch: { state: "unreadable", why: "the database is damaged" },
+  };
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response)));
+  render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
+
+  expect(await screen.findByText("Scope")).toBeInTheDocument();
+  expect(screen.getByText("Unreadable")).toHaveAttribute("title", "This task's must-not-touch paths could not be read: the database is damaged.");
+  expect(screen.getByText("CI")).toBeInTheDocument();
+  expect(screen.getByText("Check")).toBeInTheDocument();
+});

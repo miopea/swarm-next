@@ -62,7 +62,9 @@ not part of this.
    - A row that is not a list of strings is an integrity failure, never an
      empty list, because an empty list would hide a crossing. Queen's board
      and the task history say the patterns are unreadable, the coordinator
-     holds the task, and the card's read fails rather than showing no limits.
+     holds the task, and the card shows Scope as "Unreadable", with the
+     reason in the tooltip. The CI and Check rows beside it still show, as
+     they do for a check that cannot be read (ADR 0171).
 5. **The comparison.** At read time, every pattern against every changed path
    of every recorded commit. Each crossing names the commit, the path and the
    first pattern it fell under. A commit lists at most 20 crossed paths, and
@@ -90,9 +92,9 @@ not part of this.
    - `swarm_read_task_history` carries the full report.
    - The task card, as a "Scope" row beside CI for work in Review or Awaiting
      Release, read from `GET /api/v1/tasks/{id}/ci`: "Within" or "Crossed",
-     with the commits and paths in the tooltip and for screen readers. A
-     crossing has the amber tone of something to look at, not the red of a
-     failure.
+     with the commits and paths in the tooltip and for screen readers, or
+     "Unreadable" when the patterns cannot be read (4). A crossing has the
+     amber tone of something to look at, not the red of a failure.
 7. **Shown, never refused, and never closed unseen.** Moving to Review,
    completion and the check gate do not read the patterns. Some crossings are
    needed, and Queen decides. So the coordinator does not decide for her:
@@ -121,7 +123,8 @@ not part of this.
    no activity is written. The one exception is deliberate: commits are now
    recorded with renames split and paths unquoted (5), for every task, so a
    rename out of code into documentation is no longer settled as
-   documentation only. Its listing, its Review response and Queen's board
+   documentation only. It was accepted at review because it is stricter,
+   never looser. Its listing, its Review response and Queen's board
    say nothing about patterns; the history's report and the card's read carry
    `null`, and the card shows no Scope row.
 

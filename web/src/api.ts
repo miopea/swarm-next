@@ -2863,14 +2863,15 @@ export type MustNotTouchReport = {
 /**
  * What the check gate knows about one task. No recorded commits means the gate never holds it.
  * `independent_check` is null when the task built no code; `must_not_touch` is
- * null when the task carries no patterns.
+ * null when the task carries no patterns, and says it is unreadable when its
+ * patterns cannot be read, never null.
  */
 export type TaskCi = {
   level: CheckGateLevel;
   recorded_commits: number;
   observation: CiObservation | null;
   independent_check: IndependentCheck | null;
-  must_not_touch: MustNotTouchReport | null;
+  must_not_touch: MustNotTouchReport | { state: "unreadable"; why: string } | null;
 };
 
 export async function fetchCheckGate(operatorToken: string, signal?: AbortSignal): Promise<CheckGate> {

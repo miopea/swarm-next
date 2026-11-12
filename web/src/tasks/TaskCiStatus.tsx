@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { fetchTaskCi, type IndependentCheck, type MustNotTouchReport, type Task, type TaskCi } from "../api";
+import { fetchTaskCi, type IndependentCheck, type Task, type TaskCi } from "../api";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 function short(shas: string[]) {
@@ -69,9 +69,13 @@ export function checkSummary(check: IndependentCheck | null): { tone: Tone; word
  * The task's must-not-touch patterns against its recorded commits (ADR 0172).
  * Nothing when it has no patterns or no commits to compare. A crossing reads
  * as something to look at, not a failure: some are needed, and Queen decides.
+ * Patterns that cannot be read say so, never nothing, which would hide a
+ * crossing.
  */
-export function scopeSummary(report: MustNotTouchReport | null): { tone: Tone; word: string; text: string } | undefined {
-  if (!report || report.commits_compared === 0) return undefined;
+export function scopeSummary(report: TaskCi["must_not_touch"]): { tone: Tone; word: string; text: string } | undefined {
+  if (!report) return undefined;
+  if ("state" in report) return { tone: "unchecked", word: "Unreadable", text: `This task's must-not-touch paths could not be read: ${sentence(report.why)}` };
+  if (report.commits_compared === 0) return undefined;
   const limits = report.patterns.join(", ");
   const crossed = report.crossings.length + report.more_commits;
   if (crossed === 0) {
