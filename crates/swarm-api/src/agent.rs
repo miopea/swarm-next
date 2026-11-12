@@ -4123,6 +4123,7 @@ swarm_read_task_history before acting on it."
             IndependentCheckRecording::CommitsMoved { .. } => Err(ApplicationError::Refused(
                 "This task's recorded commits changed after the checker's input was built, so this answer does not cover all of the work. Build the input again with swarm_independent_check_input and have that checked.".to_owned(),
             )),
+            IndependentCheckRecording::Unstorable { why } => Err(ApplicationError::Refused(why)),
         }
     }
 
@@ -15543,6 +15544,58 @@ mod tests {
         assert!(super::must_not_touch_on_board(unreadable()).unwrap()["unreadable"].is_string());
         assert!(super::must_not_touch_for_queen(Ok(None)).is_null());
         assert!(super::must_not_touch_for_queen(unreadable())["unreadable"].is_string());
+    }
+
+    /// Recording commits has no limit on how many, and the table holds a
+    /// commit list of at most 20,000 characters. A check of more is refused in
+    /// words, never by the table's constraint, and nothing is kept.
+    #[tokio::test]
+    async fn a_check_of_more_commits_than_the_table_holds_is_refused_in_words() {
+        let (bridge, store, _, _, _directory) = setup();
+        let state = plain_state();
+        let not_a_repo = tempfile::tempdir().unwrap();
+        let (worker_id, task) = active_task_in(&store, not_a_repo.path());
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let shas: Vec<String> = (0..600).map(|n| format!("{n:040x}")).collect();
+        let commits: Vec<swarm_domain::TaskCommit> = shas
+            .iter()
+            .map(|sha| swarm_domain::TaskCommit {
+                sha: sha.clone(),
+                verdict: swarm_domain::CommitVerdict::Unchecked,
+                subject: String::new(),
+                changed_paths: vec!["src/lib.rs".to_owned()],
+                found_in: None,
+            })
+            .collect();
+        store
+            .record_task_commits(
+                task.id,
+                not_a_repo.path().to_str().unwrap(),
+                swarm_domain::CommitRepositoryState::NotARepository,
+                &commits,
+                1,
+            )
+            .unwrap();
+
+        let record = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({
+                "task_id": task.id.to_string(),
+                "basis": swarm_domain::independent_check_basis(&shas),
+                "verdict": "pass",
+                "ran": "cargo test"
+            }),
+        )
+        .await;
+
+        assert_eq!(record["result"]["isError"], true, "{record}");
+        let text = record["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("20,000"), "{text}");
+        assert!(!text.contains("constraint"), "{text}");
+        assert!(store.latest_independent_check(task.id).unwrap().is_none());
     }
 
     #[tokio::test]

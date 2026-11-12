@@ -2841,12 +2841,14 @@ export type IndependentCheckVerdict = "pass" | "partial" | "fail";
 /**
  * The worker's independent check of a task's recorded commits (ADR 0171): a
  * fresh checker's verdict, bound to the commits it read. Stale names the
- * commits recorded after it. Shown beside the work; it never gates anything.
+ * commits recorded after it. Unreadable is the card's word for a check the
+ * Hive could not read. Shown beside the work; it never gates anything.
  */
 export type IndependentCheck =
   | { state: "not_checked" }
   | { state: "checked"; head: string; verdict: IndependentCheckVerdict; ran: string; findings: string; recorded_at: number }
-  | { state: "stale"; head: string; verdict: IndependentCheckVerdict; recorded_at: number; since: string[] };
+  | { state: "stale"; head: string; verdict: IndependentCheckVerdict; recorded_at: number; since: string[] }
+  | { state: "unreadable"; why: string };
 /**
  * A task's must-not-touch patterns against the paths its recorded commits
  * changed (ADR 0172). Shown, never enforced: Queen decides whether a crossing

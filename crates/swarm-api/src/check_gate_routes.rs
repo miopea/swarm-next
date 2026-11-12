@@ -11,9 +11,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use swarm_domain::{
-    CheckGateLevel, CiObservation, IndependentCheckState, MustNotTouchReport,
-    independent_check_state,
+    CheckGateLevel, CiObservation, IndependentCheck, IndependentCheckState, MustNotTouchReport,
+    TaskCommitReport, independent_check_state,
 };
+use swarm_persistence::TaskStoreError;
 
 use super::{
     ApiError, AppState, application_error, authorize, parse_task_id, task_service, task_store,
@@ -81,10 +82,36 @@ struct TaskCiView {
     level: CheckGateLevel,
     recorded_commits: usize,
     observation: Option<CiObservation>,
-    independent_check: Option<IndependentCheckState>,
+    independent_check: Option<CardCheck>,
     /// The task's must-not-touch patterns against its commits (ADR 0172),
     /// also shown and never gating; null when the task has none.
     must_not_touch: Option<MustNotTouchReport>,
+}
+
+/// The independent check as the card reads it.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum CardCheck {
+    Read(IndependentCheckState),
+    /// The check could not be read. Said beside CI, so a damaged check row
+    /// neither takes the CI row with it nor reads as no check at all.
+    Unreadable {
+        state: &'static str,
+        why: String,
+    },
+}
+
+fn card_check(
+    report: Option<&TaskCommitReport>,
+    latest: &Result<Option<IndependentCheck>, TaskStoreError>,
+) -> Option<CardCheck> {
+    match latest {
+        Ok(latest) => independent_check_state(report, latest.as_ref()).map(CardCheck::Read),
+        Err(error) => Some(CardCheck::Unreadable {
+            state: "unreadable",
+            why: error.to_string(),
+        }),
+    }
 }
 
 pub(super) async fn task_ci(
@@ -105,9 +132,7 @@ pub(super) async fn task_ci(
     let observation = store
         .ci_observation(task_id)
         .map_err(|error| task_store_error(&error))?;
-    let latest_check = store
-        .latest_independent_check(task_id)
-        .map_err(|error| task_store_error(&error))?;
+    let latest_check = store.latest_independent_check(task_id);
     let must_not_touch = task_service(&state)?
         .must_not_touch_report(task_id)
         .map_err(application_error)?;
@@ -117,9 +142,74 @@ pub(super) async fn task_ci(
             level,
             recorded_commits: report.as_ref().map_or(0, |report| report.commits.len()),
             observation,
-            independent_check: independent_check_state(report.as_ref(), latest_check.as_ref()),
+            independent_check: card_check(report.as_ref(), &latest_check),
             must_not_touch,
         }),
     )
         .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use swarm_domain::{
+        CommitRepositoryState, CommitVerdict, IndependentCheck, IndependentCheckVerdict,
+        TaskCommit, TaskCommitReport, TaskId,
+    };
+    use swarm_persistence::TaskStoreError;
+
+    use super::card_check;
+
+    /// A check that cannot be read is said to be unreadable on the card,
+    /// rather than failing the CI beside it or reading as no check at all.
+    #[test]
+    fn a_check_that_cannot_be_read_reads_as_unreadable_and_nothing_else_changes() {
+        let report = TaskCommitReport {
+            task_id: TaskId::new(),
+            workspace: "/work".to_owned(),
+            repository_state: CommitRepositoryState::Read,
+            reported_at: 1,
+            commits: vec![TaskCommit {
+                sha: "aaaaaaaa".to_owned(),
+                verdict: CommitVerdict::Present,
+                subject: "feat: a".to_owned(),
+                changed_paths: vec!["src/lib.rs".to_owned()],
+                found_in: None,
+            }],
+        };
+        let damaged: Result<Option<IndependentCheck>, TaskStoreError> = Err(
+            TaskStoreError::IntegrityFailure("unknown independent check verdict maybe".to_owned()),
+        );
+
+        let unreadable = json!(card_check(Some(&report), &damaged));
+        assert_eq!(unreadable["state"], "unreadable", "{unreadable}");
+        assert!(
+            unreadable["why"]
+                .as_str()
+                .is_some_and(|why| why.contains("unknown independent check verdict")),
+            "{unreadable}"
+        );
+
+        assert_eq!(
+            json!(card_check(Some(&report), &Ok(None))),
+            json!({ "state": "not_checked" })
+        );
+        let check = IndependentCheck {
+            commits: "aaaaaaaa".to_owned(),
+            head: "aaaaaaaa".to_owned(),
+            verdict: IndependentCheckVerdict::Pass,
+            ran: "cargo test".to_owned(),
+            findings: String::new(),
+            recorded_at: 2,
+        };
+        assert_eq!(
+            json!(card_check(Some(&report), &Ok(Some(check))))["state"],
+            "checked"
+        );
+        assert_eq!(
+            json!(card_check(None, &Ok(None))),
+            json!(null),
+            "no code, no row"
+        );
+    }
 }

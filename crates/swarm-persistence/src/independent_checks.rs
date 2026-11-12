@@ -17,6 +17,12 @@ use crate::{TaskStore, TaskStoreError};
 /// before it say whether it failed first. It bounds the table, it is not a
 /// quota.
 const CHECKS_KEPT_PER_TASK: i64 = 10;
+/// The table's own limits on a check's commit list and head (schema 226), in
+/// characters as the table counts them. Recording commits allows more than
+/// either, so a result past them is refused in words before the table's
+/// constraint is reached. They must match the CHECKs below.
+const COMMITS_CHARS: std::ops::RangeInclusive<usize> = 1..=20_000;
+const HEAD_CHARS: std::ops::RangeInclusive<usize> = 4..=64;
 
 pub(crate) fn migrate_independent_checks(
     transaction: &rusqlite::Transaction<'_>,
@@ -49,6 +55,12 @@ pub enum IndependentCheckRecording {
     /// is the basis the input would carry now.
     CommitsMoved {
         current: String,
+    },
+    /// The check cannot be stored against these commits, and `why` says so:
+    /// their list is longer than the table holds, or the commit it is shown at
+    /// is not a name the table holds. Nothing was stored.
+    Unstorable {
+        why: String,
     },
 }
 
@@ -108,6 +120,22 @@ impl TaskStore {
             findings: result.findings.trim().to_owned(),
             recorded_at: result.now,
         };
+        let commits_chars = check.commits.chars().count();
+        if !COMMITS_CHARS.contains(&commits_chars) {
+            return Ok(IndependentCheckRecording::Unstorable {
+                why: format!(
+                    "This task's recorded commits, listed, come to {commits_chars} characters, and a check is stored against a list of 1 to 20,000, about 480 full commit names. Nothing was recorded."
+                ),
+            });
+        }
+        let head_chars = check.head.chars().count();
+        if !HEAD_CHARS.contains(&head_chars) {
+            return Ok(IndependentCheckRecording::Unstorable {
+                why: format!(
+                    "The commit this check would be shown at is named in {head_chars} characters, and a check holds a commit name of 4 to 64. Record the task's commits by their full names with swarm_record_task_commits, then build the input again. Nothing was recorded."
+                ),
+            });
+        }
         transaction.execute(
             "INSERT INTO task_independent_checks
                  (task_id, commits, head, verdict, ran, findings, recorded_at)
@@ -365,6 +393,95 @@ mod tests {
         let latest = reopened.latest_independent_check(task_id).unwrap().unwrap();
         assert_eq!(latest.verdict, IndependentCheckVerdict::Pass);
         assert_eq!(latest.head, "bbbbbbbb");
+    }
+
+    /// The table holds a commit list of at most 20,000 characters and a head
+    /// of 4 to 64. Recording commits allows more than either, so a result past
+    /// them is refused in words before the table's constraint is reached, and
+    /// nothing is stored. Counted in characters, as the table counts them.
+    #[test]
+    fn a_result_past_the_table_s_limits_is_refused_in_words_at_the_boundary() {
+        let store = TaskStore::in_memory().unwrap();
+        // 487 forty-character names and one of `last` characters, joined by
+        // 487 commas: 19,967 characters and `last`.
+        for (last, fits) in [(33, true), (34, false)] {
+            let task = store.create_task("Build a lot", "/work").unwrap();
+            let mut shas: Vec<String> = (0..487).map(|n| format!("{n:040x}")).collect();
+            shas.push("é".repeat(last));
+            assert_eq!(
+                swarm_domain::commits_digest(&shas).chars().count(),
+                19_967 + last
+            );
+            let shas: Vec<&str> = shas.iter().map(String::as_str).collect();
+            record_commits(&store, task.id, &shas);
+            let given = basis(&shas);
+
+            let recorded = store
+                .record_independent_check(task.id, &result(&given, IndependentCheckVerdict::Pass));
+
+            if fits {
+                assert!(
+                    matches!(recorded, Ok(IndependentCheckRecording::Recorded(_))),
+                    "{recorded:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&recorded, Ok(IndependentCheckRecording::Unstorable { why }) if why.contains("20,000")),
+                    "{recorded:?}"
+                );
+                assert_eq!(store.latest_independent_check(task.id).unwrap(), None);
+            }
+        }
+
+        for (head, fits) in [
+            ("abc".to_owned(), false),
+            ("abcd".to_owned(), true),
+            ("é".repeat(64), true),
+            ("é".repeat(65), false),
+        ] {
+            let task = store.create_task("Build it", "/work").unwrap();
+            record_commits(&store, task.id, &["aaaaaaaa"]);
+            let given = basis(&["aaaaaaaa"]);
+
+            let recorded = store.record_independent_check(
+                task.id,
+                &IndependentCheckResult {
+                    head: &head,
+                    ..result(&given, IndependentCheckVerdict::Pass)
+                },
+            );
+
+            if fits {
+                assert!(
+                    matches!(&recorded, Ok(IndependentCheckRecording::Recorded(check)) if check.head == head),
+                    "{recorded:?}"
+                );
+            } else {
+                assert!(
+                    matches!(&recorded, Ok(IndependentCheckRecording::Unstorable { why }) if why.contains("4 to 64")),
+                    "{head}: {recorded:?}"
+                );
+                assert_eq!(store.latest_independent_check(task.id).unwrap(), None);
+            }
+        }
+
+        // The other end: a list of nothing. Its only recorded name is empty,
+        // which the commit tool takes, and the head given is a fine one.
+        let task = store.create_task("Build nothing", "/work").unwrap();
+        record_commits(&store, task.id, &[""]);
+        let given = basis(&[""]);
+        let recorded = store.record_independent_check(
+            task.id,
+            &IndependentCheckResult {
+                head: "abcd",
+                ..result(&given, IndependentCheckVerdict::Pass)
+            },
+        );
+        assert!(
+            matches!(&recorded, Ok(IndependentCheckRecording::Unstorable { why }) if why.contains("1 to 20,000")),
+            "{recorded:?}"
+        );
+        assert_eq!(store.latest_independent_check(task.id).unwrap(), None);
     }
 
     #[test]

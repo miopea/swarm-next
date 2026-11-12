@@ -221,8 +221,8 @@ pub(crate) fn head_of(commits: &[CheckedCommit]) -> String {
         .unwrap_or_default()
 }
 
-/// The changes, or `None` when they are over the budget or the reads ran out
-/// of time.
+/// The changes, or `None` when git could not read one of the commits, they
+/// are over the budget, or the reads ran out of time.
 ///
 /// A merge is left out when the task also recorded ordinary commits, because
 /// its first-parent diff repeats them. A task that recorded only a merge gets
@@ -237,8 +237,10 @@ async fn read_patches(
     let mut remaining = PATCH_BUDGET_BYTES;
     let mut patches = Vec::new();
     for commit in commits {
+        // A commit git could not read at all is part of the change too, so
+        // the ones it did read would pose as the whole of it.
         let Some(full) = &commit.full else {
-            continue;
+            return None;
         };
         if commit.is_merge() && any_ordinary {
             continue;
@@ -377,15 +379,10 @@ fn checker_prompt(
                 let _ = writeln!(prompt, "\n=== {sha}\n{}", patch.trim_end());
             }
         }
-        Some(_) => {
-            prompt.push_str(
-                "\nNone of the changes could be read here. Read each commit with git show in its repository.\n",
-            );
-        }
-        None => {
+        _ => {
             prompt.push_str(
                 "\nThe changes are not included here: they are too large, or git could not read \
-                 every one of them in time. Read each commit yourself with \
+                 every one of them. Read each commit yourself with \
                  `git -C <repository> show <commit>`, using the repository named under it.\n",
             );
         }
@@ -602,15 +599,54 @@ pub(crate) mod tests {
                 .count(),
             2
         );
-        assert!(
-            input
-                .prompt
-                .contains("None of the changes could be read here")
-        );
+        assert!(!input.diff_included, "nothing read is not a whole diff");
+        assert!(input.prompt.contains("The changes are not included here"));
         assert_eq!(
             input.head, "deadbeef",
             "the last recorded when git read none"
         );
+    }
+
+    /// One commit git cannot read, beside commits it can, sends the checker
+    /// to git for all of them. The ones git did read are not passed off as
+    /// the whole change.
+    #[tokio::test]
+    async fn a_commit_git_cannot_read_beside_readable_ones_sends_the_checker_to_git_for_all() {
+        let repo = repository();
+        let first = commit_file(repo.path(), "stem.rs", "fn stem() {}\n", "feat: stem");
+        let second = commit_file(repo.path(), "petal.rs", "fn petal() {}\n", "feat: petal");
+        let mut gone = present("deadbeef", "src/root.rs");
+        gone.verdict = CommitVerdict::Missing;
+        // Recorded as present, but this repository does not have it.
+        let elsewhere = present("0123456789abcdef0123456789abcdef01234567", "src/leaf.rs");
+        for unreadable in [gone, elsewhere] {
+            let report = report(
+                repo.path(),
+                vec![
+                    present(&first, "stem.rs"),
+                    unreadable,
+                    present(&second, "petal.rs"),
+                ],
+            );
+            let commits = ordered_commits(&report).await;
+            assert_eq!(
+                commits
+                    .iter()
+                    .filter(|commit| commit.full.is_some())
+                    .count(),
+                2,
+                "two of three read"
+            );
+
+            assert_eq!(read_patches(&commits, later()).await, None);
+            let input = build_check_input(&task("Grow a stem and a petal."), &[], &report).await;
+            assert!(!input.diff_included);
+            assert!(!input.prompt.contains("+fn stem() {}"), "{}", input.prompt);
+            assert!(!input.prompt.contains("+fn petal() {}"), "{}", input.prompt);
+            assert!(input.prompt.contains("The changes are not included here"));
+            assert!(input.prompt.contains("git could not read this commit"));
+            assert_eq!(input.head, second, "the newest commit git read");
+        }
     }
 
     #[tokio::test]
