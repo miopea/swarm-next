@@ -130,7 +130,9 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
     const locked = new URLSearchParams(window.location.search).get("workerModel") === "locked";
     return { model: "sonnet", set_by_apiary: locked ? "sonnet" : null, workers_short: 3 };
   }
-  // The board's review task failed CI; anything else waiting on review passed.
+  // The board's review task failed CI, and its independent check went stale
+  // when a fix followed it; anything else waiting on review passed both
+  // (ADRs 0115 and 0171).
   if (path.startsWith("/api/v1/tasks/") && path.endsWith("/ci")) {
     const failed = path.includes("0199bbbb-0000-7000-8000-000000000004");
     return {
@@ -139,6 +141,9 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       observation: failed
         ? { commits: "4f2a9c1e,8b7d6e5f", judged: ["8b7d6e5f3a2c1b0e"], outcome: "failed", failing: ["rust", "web"], observed_at: now - 120 }
         : { commits: "1a2b3c4d", judged: ["1a2b3c4d5e6f7a8b"], outcome: "passed", observed_at: now - 600 },
+      independent_check: failed
+        ? { state: "stale", head: "4f2a9c1e7d6b5a49", verdict: "partial", recorded_at: now - 900, since: ["8b7d6e5f3a2c1b0e"] }
+        : { state: "checked", head: "1a2b3c4d5e6f7a8b", verdict: "pass", ran: "sh scripts/verify.sh all (exit 0)", findings: "", recorded_at: now - 700 },
     };
   }
   if (path === "/api/v1/presence/night-watch") {

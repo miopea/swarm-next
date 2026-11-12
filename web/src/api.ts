@@ -2836,8 +2836,26 @@ export type CiOutcome =
   | { outcome: "pending"; waiting: string[] }
   | { outcome: "unreadable"; why: string };
 export type CiObservation = CiOutcome & { commits: string; judged: string[]; observed_at: number };
-/** What the check gate knows about one task. No recorded commits means the gate never holds it. */
-export type TaskCi = { level: CheckGateLevel; recorded_commits: number; observation: CiObservation | null };
+export type IndependentCheckVerdict = "pass" | "partial" | "fail";
+/**
+ * The worker's independent check of a task's recorded commits (ADR 0171): a
+ * fresh checker's verdict, bound to the commits it read. Stale names the
+ * commits recorded after it. Shown beside the work; it never gates anything.
+ */
+export type IndependentCheck =
+  | { state: "not_checked" }
+  | { state: "checked"; head: string; verdict: IndependentCheckVerdict; ran: string; findings: string; recorded_at: number }
+  | { state: "stale"; head: string; verdict: IndependentCheckVerdict; recorded_at: number; since: string[] };
+/**
+ * What the check gate knows about one task. No recorded commits means the gate never holds it.
+ * `independent_check` is null when the task built no code.
+ */
+export type TaskCi = {
+  level: CheckGateLevel;
+  recorded_commits: number;
+  observation: CiObservation | null;
+  independent_check: IndependentCheck | null;
+};
 
 export async function fetchCheckGate(operatorToken: string, signal?: AbortSignal): Promise<CheckGate> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/check-gate", { signal });

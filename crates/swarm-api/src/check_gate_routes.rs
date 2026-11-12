@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use swarm_domain::{CheckGateLevel, CiObservation};
+use swarm_domain::{CheckGateLevel, CiObservation, IndependentCheckState, independent_check_state};
 
 use super::{
     ApiError, AppState, authorize, parse_task_id, task_store, task_store_error, unix_timestamp,
@@ -70,11 +70,14 @@ pub(super) async fn set_check_gate(
 
 /// What the check gate knows about one task: the level, how many commits the
 /// task recorded (none means the gate never holds it), and CI as last read.
+/// Beside it, the worker's independent check of those commits (ADR 0171),
+/// which is shown and never gates anything; null when the task built no code.
 #[derive(Serialize)]
 struct TaskCiView {
     level: CheckGateLevel,
     recorded_commits: usize,
     observation: Option<CiObservation>,
+    independent_check: Option<IndependentCheckState>,
 }
 
 pub(super) async fn task_ci(
@@ -89,19 +92,22 @@ pub(super) async fn task_ci(
         .check_gate()
         .map_err(|error| task_store_error(&error))?
         .level;
-    let recorded_commits = store
+    let report = store
         .task_commit_report(task_id)
-        .map_err(|error| task_store_error(&error))?
-        .map_or(0, |report| report.commits.len());
+        .map_err(|error| task_store_error(&error))?;
     let observation = store
         .ci_observation(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    let latest_check = store
+        .latest_independent_check(task_id)
         .map_err(|error| task_store_error(&error))?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(TaskCiView {
             level,
-            recorded_commits,
+            recorded_commits: report.as_ref().map_or(0, |report| report.commits.len()),
             observation,
+            independent_check: independent_check_state(report.as_ref(), latest_check.as_ref()),
         }),
     )
         .into_response())

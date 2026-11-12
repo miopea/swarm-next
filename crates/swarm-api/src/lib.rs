@@ -49,6 +49,7 @@ mod github_device;
 mod github_feedback;
 mod hive_capability;
 mod idle_engine_update;
+mod independent_check;
 mod jira;
 mod maintenance;
 mod mcp_oauth;
@@ -16136,6 +16137,92 @@ mod tests {
         observe(CiOutcome::Passed);
         assert_eq!(close(app).await.status(), StatusCode::OK);
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Completed);
+    }
+
+    /// The task card reads the worker's independent check beside CI (ADR
+    /// 0171): nothing for work with no commits, not checked once code is
+    /// recorded, the verdict once one is, and stale once more commits follow.
+    #[tokio::test]
+    async fn the_task_card_reads_the_independent_check_beside_ci() {
+        use swarm_domain::{
+            CommitRepositoryState, CommitVerdict, IndependentCheckVerdict, TaskCommit,
+            independent_check_basis,
+        };
+        use swarm_persistence::IndependentCheckResult;
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let task = store.create_task("Checked", "/workspace/petal").unwrap();
+        let uri = format!("/api/v1/tasks/{}/ci", task.id);
+        let read = |app: Router| authorized_get(app, &uri);
+        let record = |shas: &[&str], at: i64| {
+            let commits: Vec<TaskCommit> = shas
+                .iter()
+                .map(|sha| TaskCommit {
+                    sha: (*sha).to_owned(),
+                    verdict: CommitVerdict::Present,
+                    subject: "feat: checked".to_owned(),
+                    changed_paths: vec!["src/lib.rs".to_owned()],
+                    found_in: None,
+                })
+                .collect();
+            store
+                .record_task_commits(
+                    task.id,
+                    "/workspace/petal",
+                    CommitRepositoryState::Read,
+                    &commits,
+                    at,
+                )
+                .unwrap();
+        };
+
+        let nothing = response_json(read(app.clone()).await).await;
+        assert!(nothing["independent_check"].is_null(), "{nothing}");
+
+        let first = "1111aaaa2222bbbb";
+        record(&[first], 1_000);
+        let unchecked = response_json(read(app.clone()).await).await;
+        assert_eq!(
+            unchecked["independent_check"],
+            serde_json::json!({ "state": "not_checked" })
+        );
+
+        store
+            .record_independent_check(
+                task.id,
+                &IndependentCheckResult {
+                    basis: &independent_check_basis(&[first.to_owned()]),
+                    head: first,
+                    verdict: IndependentCheckVerdict::Partial,
+                    ran: "cargo test",
+                    findings: "src/lib.rs:4 leaves the old path in place.",
+                    now: 1_100,
+                },
+            )
+            .unwrap();
+        let checked = response_json(read(app.clone()).await).await;
+        assert_eq!(checked["independent_check"]["state"], "checked");
+        assert_eq!(checked["independent_check"]["verdict"], "partial");
+        assert_eq!(checked["independent_check"]["head"], first);
+        assert_eq!(
+            checked["independent_check"]["findings"],
+            "src/lib.rs:4 leaves the old path in place."
+        );
+
+        let second = "3333cccc4444dddd";
+        record(&[first, second], 1_200);
+        let stale = response_json(read(app).await).await;
+        assert_eq!(stale["independent_check"]["state"], "stale");
+        assert_eq!(stale["independent_check"]["head"], first);
+        assert_eq!(
+            stale["independent_check"]["since"],
+            serde_json::json!([second])
+        );
+        assert_eq!(stale["recorded_commits"], 2);
     }
 
     /// ⚠️ ADR 0118 END TO END ON ONE MEMBER, with the real host function: the
