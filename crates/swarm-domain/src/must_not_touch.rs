@@ -8,6 +8,8 @@
 //! The patterns are set by whoever files the task, then by Queen. The worker
 //! holding the task cannot change them.
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::TaskCommitReport;
@@ -177,6 +179,67 @@ fn part_matches(pattern: &str, text: &str) -> bool {
     pattern[p..].iter().all(|c| *c == '*')
 }
 
+/// A changed path as git printed it, read back as the path itself.
+///
+/// Git prints a path holding a non-ASCII byte, a `"`, a `\` or a control
+/// character inside double quotes, with C escapes, and a recorded commit keeps
+/// it as printed. Compared as printed, it would match no pattern and hide a
+/// crossing. A path git did not quote never starts with `"`, so it is returned
+/// as it is. An escape git does not write is kept as written, and bytes that
+/// are not UTF-8 read as U+FFFD, so the rest of the path still matches.
+#[must_use]
+pub fn unquoted_git_path(path: &str) -> Cow<'_, str> {
+    let Some(inner) = path
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return Cow::Borrowed(path);
+    };
+    let mut bytes = Vec::with_capacity(inner.len());
+    let mut rest = inner.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        rest = after;
+        if byte != b'\\' {
+            bytes.push(byte);
+            continue;
+        }
+        let named = match rest.first() {
+            Some(b'a') => Some(0x07),
+            Some(b'b') => Some(0x08),
+            Some(b't') => Some(b'\t'),
+            Some(b'n') => Some(b'\n'),
+            Some(b'v') => Some(0x0b),
+            Some(b'f') => Some(0x0c),
+            Some(b'r') => Some(b'\r'),
+            Some(b'"') => Some(b'"'),
+            Some(b'\\') => Some(b'\\'),
+            _ => None,
+        };
+        if let Some(named) = named {
+            bytes.push(named);
+            rest = &rest[1..];
+            continue;
+        }
+        let digits = rest
+            .iter()
+            .take(3)
+            .take_while(|digit| matches!(**digit, b'0'..=b'7'))
+            .count();
+        let value = rest[..digits]
+            .iter()
+            .fold(0_u32, |value, digit| value * 8 + u32::from(digit - b'0'));
+        if digits > 0
+            && let Ok(octal) = u8::try_from(value)
+        {
+            bytes.push(octal);
+            rest = &rest[digits..];
+        } else {
+            bytes.push(b'\\');
+        }
+    }
+    Cow::Owned(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// One changed path that fell under a pattern.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CrossedPath {
@@ -205,7 +268,8 @@ pub struct MustNotTouchReport {
     pub more_commits: usize,
 }
 
-/// Compares a task's patterns with its recorded commits' changed paths.
+/// Compares a task's patterns with its recorded commits' changed paths, each
+/// read back from git's quoting first, so a quoted name still crosses.
 /// Nothing when the task has no patterns, so a task without them reads as it
 /// always has.
 #[must_use]
@@ -222,13 +286,14 @@ pub fn must_not_touch_report(
     for commit in commits {
         let mut paths = Vec::new();
         let mut more_paths = 0;
-        for path in &commit.changed_paths {
-            let Some(pattern) = patterns.iter().find(|pattern| path_matches(pattern, path)) else {
+        for recorded in &commit.changed_paths {
+            let path = unquoted_git_path(recorded);
+            let Some(pattern) = patterns.iter().find(|pattern| path_matches(pattern, &path)) else {
                 continue;
             };
             if paths.len() < MAX_CROSSED_PATHS_PER_COMMIT {
                 paths.push(CrossedPath {
-                    path: path.clone(),
+                    path: path.into_owned(),
                     pattern: pattern.clone(),
                 });
             } else {
@@ -260,7 +325,7 @@ pub fn must_not_touch_report(
 mod tests {
     use super::{
         MAX_CROSSED_PATHS_PER_COMMIT, MAX_MUST_NOT_TOUCH_PATTERNS, must_not_touch_report,
-        path_matches, validate_must_not_touch,
+        path_matches, unquoted_git_path, validate_must_not_touch,
     };
     use crate::{CommitRepositoryState, CommitVerdict, TaskCommit, TaskCommitReport, TaskId};
 
@@ -424,6 +489,59 @@ mod tests {
                     "crates/swarm-terminal/**"
                 ),
                 ("Cargo.lock", "Cargo.lock")
+            ]
+        );
+    }
+
+    /// Git prints a path holding a non-ASCII byte, a `"`, a `\` or a control
+    /// character inside quotes, with C escapes, and the record keeps it so.
+    /// Read back, it is the path itself. A path git did not quote is untouched.
+    #[test]
+    fn a_path_git_quoted_reads_back_as_the_path_itself() {
+        let cases = [
+            ("docs/a.md", "docs/a.md"),
+            (r#""docs/caf\303\251.md""#, "docs/caf\u{e9}.md"),
+            (r#""web/say \"hi\".rs""#, "web/say \"hi\".rs"),
+            (r#""web/back\\slash.rs""#, "web/back\\slash.rs"),
+            (r#""web/tab\tname.rs""#, "web/tab\tname.rs"),
+            (r#""a\a\b\f\n\r\v""#, "a\u{7}\u{8}\u{c}\n\r\u{b}"),
+            // Bytes that are not UTF-8 leave the rest of the path readable.
+            (r#""docs/caf\351.md""#, "docs/caf\u{fffd}.md"),
+            // Not an escape git writes: kept as written rather than guessed at.
+            (r#""a\qb""#, "a\\qb"),
+            ("\"", "\""),
+        ];
+        for (recorded, expected) in cases {
+            assert_eq!(unquoted_git_path(recorded), expected, "{recorded}");
+        }
+    }
+
+    /// A crossing behind git's quoting is still a crossing, and it is shown as
+    /// the path rather than as git printed it (ADR 0172).
+    #[test]
+    fn a_quoted_path_crosses_like_any_other() {
+        let commits = report(vec![commit(
+            "aaa",
+            &[
+                r#""crates/swarm-terminal/caf\303\251.rs""#,
+                r#""crates/swarm-terminal/tab\tname.rs""#,
+                "web/a.ts",
+            ],
+        )]);
+
+        let found =
+            must_not_touch_report(&owned(&["crates/swarm-terminal/**"]), Some(&commits)).unwrap();
+
+        let crossed: Vec<&str> = found.crossings[0]
+            .paths
+            .iter()
+            .map(|crossed| crossed.path.as_str())
+            .collect();
+        assert_eq!(
+            crossed,
+            [
+                "crates/swarm-terminal/caf\u{e9}.rs",
+                "crates/swarm-terminal/tab\tname.rs"
             ]
         );
     }

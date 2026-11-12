@@ -2240,13 +2240,14 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
     // a folder a task must not touch, or out of code into docs, would be
     // recorded as touching only the destination.
     //
-    // core.quotePath=false: a path is recorded as written. Git's default
-    // quotes and escapes a non-ASCII name, which then matches no pattern.
+    // Paths are recorded as git prints them, quoted and escaped where git
+    // quotes them, as they always were, so which work reads as documentation
+    // only does not change. The must-not-touch comparison reads the quoting
+    // back (ADR 0172); git quotes a name holding a `"`, a `\` or a control
+    // character whatever its settings, so it could not be switched off here.
     let changed_paths = git(
         workspace,
         &[
-            "-c",
-            "core.quotePath=false",
             "show",
             "--pretty=format:",
             "--name-only",
@@ -2583,21 +2584,67 @@ mod commit_verification_tests {
         assert_eq!(paths, ["docs/note.md".to_owned(), "notes.md".to_owned()]);
     }
 
-    /// A non-ASCII path is recorded as written, not quoted and escaped, so a
-    /// pattern can match it.
+    /// A path git quotes is recorded as git prints it, as it always was, so
+    /// which work reads as documentation only is unchanged. The must-not-touch
+    /// comparison reads the quoting back, so the path still crosses a pattern
+    /// (ADR 0172). Git quotes a non-ASCII name by default, and a name holding
+    /// a `"`, a `\` or a tab whatever its settings.
     #[tokio::test]
-    async fn a_non_ascii_path_is_recorded_as_written() {
+    async fn a_quoted_path_is_recorded_as_git_prints_it_and_still_crosses() {
         let (dir, _) = repository_with_one_commit();
         let path = dir.path();
-        std::fs::write(path.join("docs/caf\u{e9}.md"), "a note\n").expect("write");
-        git_in(path, &["add", "docs/caf\u{e9}.md"]);
-        git_in(path, &["commit", "--quiet", "-m", "add a note"]);
+        for name in [
+            "docs/caf\u{e9}.md",
+            "docs/say \"hi\".md",
+            "docs/tab\tname.md",
+        ] {
+            std::fs::write(path.join(name), "a note\n").expect("write");
+            git_in(path, &["add", name]);
+        }
+        git_in(path, &["commit", "--quiet", "-m", "add notes"]);
         let sha = git_in(path, &["rev-parse", "HEAD"]);
 
-        let (_, commits) =
+        let (state, commits) =
             verify_reported_commits(path.to_str().unwrap(), &[], std::slice::from_ref(&sha)).await;
 
-        assert_eq!(commits[0].changed_paths, ["docs/caf\u{e9}.md".to_owned()]);
+        let mut recorded = commits[0].changed_paths.clone();
+        recorded.sort();
+        assert_eq!(
+            recorded,
+            [
+                r#""docs/caf\303\251.md""#.to_owned(),
+                r#""docs/say \"hi\".md""#.to_owned(),
+                r#""docs/tab\tname.md""#.to_owned(),
+            ]
+        );
+        let report = swarm_domain::TaskCommitReport {
+            task_id: swarm_domain::TaskId::new(),
+            workspace: path.to_str().unwrap().to_owned(),
+            repository_state: state,
+            reported_at: 1,
+            commits,
+        };
+        // Quoted, a documentation name reads as code, as it did before.
+        assert_eq!(
+            swarm_domain::commit_settlement(Some(&report)),
+            swarm_domain::CommitSettlement::BuiltCode
+        );
+        let found = swarm_domain::must_not_touch_report(&["docs/**".to_owned()], Some(&report))
+            .expect("the task has patterns");
+        let mut crossed: Vec<&str> = found.crossings[0]
+            .paths
+            .iter()
+            .map(|crossed| crossed.path.as_str())
+            .collect();
+        crossed.sort_unstable();
+        assert_eq!(
+            crossed,
+            [
+                "docs/caf\u{e9}.md",
+                "docs/say \"hi\".md",
+                "docs/tab\tname.md"
+            ]
+        );
     }
 
     #[tokio::test]

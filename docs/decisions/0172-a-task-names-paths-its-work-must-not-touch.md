@@ -79,8 +79,13 @@ not part of this.
      reached, so moving a file out of a protected folder is a crossing. This
      also means a rename out of code into documentation no longer reads as
      documentation only.
-   - A recorded path is written as git stores it, not quoted and escaped, so
-     a pattern matches a path with non-ASCII characters.
+   - A recorded path is kept as git prints it, as before: inside quotes, with
+     C escapes, when its name holds a non-ASCII byte, a `"`, a `\` or a
+     control character. The comparison reads the quoting back first, so such
+     a name still crosses, including in commits recorded before this change,
+     and the crossing shows the name itself. Git quotes the last three
+     whatever its settings, so turning its quoting off when recording would
+     not have been enough.
    - Git lists no paths for a merge commit, so a merge is compared as touching
      nothing. A task whose record holds only a merge commit shows no crossing.
      This is a known gap, not fixed here.
@@ -126,14 +131,20 @@ not part of this.
      decision, and it is unchanged.
 8. **A task without patterns behaves as it did before.** It has no row and
    no activity is written. The one exception is deliberate: commits are now
-   recorded with renames split and paths unquoted (5), for every task.
-   - Splitting renames is stricter: a rename out of code into documentation
-     is no longer settled as documentation only. It was accepted at review
-     on that basis.
-   - Unquoting is looser in one case. A documentation file whose name is not
-     ASCII now reads as documentation, so work that touched only such files
-     can be settled as documentation only. Before, git quoted the name, and
-     the quoting made it read as code.
+   recorded with renames split (5), for every task. That is stricter: a
+   rename out of code into documentation is no longer settled as
+   documentation only. It was accepted at review on that basis.
+
+   Paths are not recorded unquoted. A draft of this change did that, and it
+   was looser in one case: a documentation file whose name is not ASCII read
+   as documentation, so work touching only such files could settle as
+   documentation only. It also still missed crossings, for names git quotes
+   whatever its settings and for commits recorded before the change. The rule
+   set at review is that a must-not-touch comparison may flag too much but
+   must never miss a crossing. So the record stays as git prints it, and the
+   quoting is read back only where patterns are compared. Quoting can no
+   longer hide a crossing, and documentation-only settling reads paths
+   exactly as before.
 
    Otherwise, a task without patterns is listed, answered at Review and
    shown on Queen's board with nothing about them. The history's report and
