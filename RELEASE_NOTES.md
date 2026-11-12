@@ -12,6 +12,19 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.19.0
+
+Three database updates (225, 226 and 227), each adding new tables only. Your Hive backs up its database by itself before applying them. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting, on an engine from 1.18.0 or later. On a Hive still running the engine from 1.17.10 or earlier, update it once yourself from the Worker engine card in Settings. A worker or Queen session that was running before the update sees Swarm's new tools once it restarts.
+
+### New features
+- GitHub review requests addressed to you, and issues assigned to you, now arrive on the board as drafts for Queen to route. Swarm reads them through this machine's gh login, on every repository that login can reach, when it starts and every five minutes after. There is no switch to turn this off yet.
+- A worker can have its change read by a second agent that sees only the task and the diff, and the verdict shows on the task's card in Review. It is shown, never required: work without one reads "Not checked" and is not held for it.
+- A task can name paths its work must not touch, such as `crates/swarm-terminal/**`. Whoever files the task, or Queen, sets them; a worker can ask for a change but cannot loosen them. At Review, Swarm compares them with the task's commits and shows Queen any crossing on the card, and that work waits for her instead of closing by itself.
+
+### Fixes
+- A commit recorded by a short SHA or a branch name is now kept by its full SHA, so recording the same commit again no longer lists it twice.
+- Work that renamed a code file into a documentation folder could settle as documentation only. Each commit's changed paths are now recorded with a rename as both its old and new name.
+
 ## 1.18.5
 
 No database update. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting, on an engine from 1.18.0 or later. On a Hive still running the engine from 1.17.10 or earlier, update it once yourself from the Worker engine card in Settings.
