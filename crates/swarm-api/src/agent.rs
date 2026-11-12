@@ -6479,7 +6479,7 @@ fn record_task_commits_tool() -> Tool {
                     "type": "array",
                     "maxItems": 200,
                     "items": { "type": "string", "minLength": 4, "maxLength": 64 },
-                    "description": "The commit SHAs this task produced, full or abbreviated. Empty means the task built nothing."
+                    "description": "The commit SHAs this task produced, full or abbreviated. Each is recorded by the full SHA it resolves to, so recording a commit again in another form adds nothing. Empty means the task built nothing."
                 }
             },
             "required": ["task_id", "commits"],
