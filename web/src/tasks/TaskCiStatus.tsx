@@ -67,16 +67,17 @@ export function checkSummary(check: IndependentCheck | null): { tone: Tone; word
 
 /**
  * The task's must-not-touch patterns against its recorded commits (ADR 0172).
- * Nothing when it has no patterns or no commits to compare. A crossing reads
- * as something to look at, not a failure: some are needed, and Queen decides.
- * Patterns that cannot be read say so, never nothing, which would hide a
- * crossing.
+ * Nothing when it has no patterns. With patterns and no commits to compare,
+ * it says so: the coordinator holds such Review work for Queen. A crossing
+ * reads as something to look at, not a failure: some are needed, and Queen
+ * decides. Patterns that cannot be read say so, never nothing, which would
+ * hide a crossing.
  */
 export function scopeSummary(report: TaskCi["must_not_touch"]): { tone: Tone; word: string; text: string } | undefined {
   if (!report) return undefined;
   if ("state" in report) return { tone: "unchecked", word: "Unreadable", text: `This task's must-not-touch paths could not be read: ${sentence(report.why)}` };
-  if (report.commits_compared === 0) return undefined;
   const limits = report.patterns.join(", ");
+  if (report.commits_compared === 0) return { tone: "unchecked", word: "Not compared", text: `No recorded commits to compare with the paths this task must not touch: ${limits}.` };
   const crossed = report.crossings.length + report.more_commits;
   if (crossed === 0) {
     const commits = report.commits_compared === 1 ? "The recorded commit" : `None of the ${report.commits_compared} recorded commits`;

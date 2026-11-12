@@ -158,12 +158,14 @@ fn part_matches(pattern: &str, text: &str) -> bool {
     let (mut p, mut t) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
     while t < text.len() {
-        if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
-            p += 1;
-            t += 1;
-        } else if p < pattern.len() && pattern[p] == '*' {
+        // A `*` is tested first: as a wildcard it can always back off, and
+        // taken as a literal against a `*` in the path it could not.
+        if p < pattern.len() && pattern[p] == '*' {
             star = Some((p, t));
             p += 1;
+        } else if p < pattern.len() && (pattern[p] == '?' || pattern[p] == text[t]) {
+            p += 1;
+            t += 1;
         } else if let Some((star_p, star_t)) = star {
             p = star_p + 1;
             t = star_t + 1;
@@ -322,6 +324,12 @@ mod tests {
             ("**/migrations/**", "crates/p/src/migrations/0001.sql", true),
             ("**", "anything/at/all", true),
             ("./packaging/**", "packaging/linux/x", true),
+            // A `*` in the pattern is always a wildcard, even where the path
+            // has a `*` of its own, so it never stops matching early.
+            ("docs/*", "docs/*a.md", true),
+            ("docs/a*", "docs/a*b.md", true),
+            ("docs/*.md", "docs/*.md", true),
+            ("docs/*b", "docs/*a", false),
         ];
         for (pattern, path, expected) in cases {
             assert_eq!(path_matches(pattern, path), expected, "{pattern} vs {path}");

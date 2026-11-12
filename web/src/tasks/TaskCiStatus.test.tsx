@@ -93,10 +93,16 @@ test("the card shows the independent check with the CI gate off", async () => {
 });
 
 /** A crossing of the task's must-not-touch paths reads as something to look at, never a failure (ADR 0172). */
-test("the scope reads as within or crossed, and as nothing without patterns or commits", () => {
+test("the scope reads as within, crossed or not compared, and as nothing without patterns", () => {
   expect(scopeSummary(null)).toBeUndefined();
   const report = { patterns: ["crates/swarm-terminal/**"], commits_compared: 2, crossings: [], more_commits: 0 };
-  expect(scopeSummary({ ...report, commits_compared: 0 })).toBeUndefined();
+  // Patterns and nothing to compare them with: the coordinator holds such
+  // Review work for Queen, so the card says why rather than nothing.
+  expect(scopeSummary({ ...report, commits_compared: 0 })).toEqual({
+    tone: "unchecked",
+    word: "Not compared",
+    text: "No recorded commits to compare with the paths this task must not touch: crates/swarm-terminal/**.",
+  });
   expect(scopeSummary(report)).toEqual({
     tone: "good",
     word: "Within",

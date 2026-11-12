@@ -27,6 +27,8 @@ not part of this.
 1. **Patterns, relative to the task's repository.** For example
    `crates/swarm-terminal/**` or `web/node_modules/**`.
    - `*` matches within one part of a path and `?` matches one character.
+     In a pattern they are always wildcards, so a path whose name has a `*`
+     of its own is still matched.
    - `**` as a whole part matches any number of parts, including none.
    - A pattern with no wildcard, or one ending in `/`, also covers everything
      under it, so `web/node_modules` covers `web/node_modules/react/index.js`
@@ -94,8 +96,9 @@ not part of this.
    - `swarm_read_task_history` carries the full report.
    - The task card, as a "Scope" row beside CI for work in Review or Awaiting
      Release, read from `GET /api/v1/tasks/{id}/ci`: "Within" or "Crossed",
-     with the commits and paths in the tooltip and for screen readers, or
-     "Unreadable" when the patterns cannot be read (4). A crossing has the
+     with the commits and paths in the tooltip and for screen readers;
+     "Not compared" when it has patterns and no recorded commits to compare;
+     or "Unreadable" when the patterns cannot be read (4). A crossing has the
      amber tone of something to look at, not the red of a failure.
 7. **Shown, never refused, and never closed unseen.** Moving to Review,
    completion and the check gate do not read the patterns. Some crossings are
