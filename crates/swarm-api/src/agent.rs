@@ -3088,16 +3088,12 @@ impl AgentMcp {
         // Shown the same way (ADR 0172): the move stands, and a crossing is
         // something for the handoff to explain, not a reason to undo it.
         if input.state == TaskState::Review
-            && let Ok(Some(report)) = self.tasks.must_not_touch_report(task_id)
             && let Some(object) = payload.as_object_mut()
         {
-            if !report.crossings.is_empty() {
-                object.insert(
-                    "must_not_touch_step".to_owned(),
-                    json!(MUST_NOT_TOUCH_CROSSED),
-                );
+            for (key, value) in must_not_touch_for_review(self.tasks.must_not_touch_report(task_id))
+            {
+                object.insert(key.to_owned(), value);
             }
-            object.insert("must_not_touch_report".to_owned(), json!(report));
         }
         structured(payload)
     }
@@ -3608,10 +3604,10 @@ impl AgentMcp {
             .iter()
             .map(|task| {
                 let mut value = json!(task);
-                if let Some(patterns) = limits.remove(&task.id)
+                if let Some(limits) = must_not_touch_fields(limits.remove(&task.id))
                     && let Some(object) = value.as_object_mut()
                 {
-                    object.insert("must_not_touch".into(), json!(patterns));
+                    object.insert("must_not_touch".into(), limits);
                     object.insert("must_not_touch_note".into(), json!(MUST_NOT_TOUCH_NOTE));
                 }
                 let amendments = grouped.remove(&task.id).unwrap_or_default();
@@ -6335,6 +6331,40 @@ fn must_not_touch_for_queen(
     match read {
         Ok(report) => json!(report),
         Err(error) => json!({ "unreadable": error.to_string() }),
+    }
+}
+
+/// The patterns a task carries in a listing or its history (ADR 0172), or
+/// that they are unreadable when their row cannot be read, never nothing.
+fn must_not_touch_fields(
+    read: Option<Result<swarm_domain::MustNotTouchPatterns, swarm_persistence::TaskStoreError>>,
+) -> Option<Value> {
+    match read? {
+        Ok(patterns) => Some(json!(patterns)),
+        Err(error) => Some(json!({ "unreadable": error.to_string() })),
+    }
+}
+
+/// What a worker's Review response adds about its must-not-touch patterns
+/// (ADR 0172): the report, with a step when a commit crossed; that they are
+/// unreadable when their row cannot be read; nothing without patterns.
+fn must_not_touch_for_review(
+    read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
+) -> Vec<(&'static str, Value)> {
+    match read {
+        Ok(None) => Vec::new(),
+        Ok(Some(report)) => {
+            let mut fields = Vec::with_capacity(2);
+            if !report.crossings.is_empty() {
+                fields.push(("must_not_touch_step", json!(MUST_NOT_TOUCH_CROSSED)));
+            }
+            fields.push(("must_not_touch_report", json!(report)));
+            fields
+        }
+        Err(error) => vec![(
+            "must_not_touch_report",
+            json!({ "unreadable": error.to_string() }),
+        )],
     }
 }
 
@@ -15544,6 +15574,22 @@ mod tests {
         assert!(super::must_not_touch_on_board(unreadable()).unwrap()["unreadable"].is_string());
         assert!(super::must_not_touch_for_queen(Ok(None)).is_null());
         assert!(super::must_not_touch_for_queen(unreadable())["unreadable"].is_string());
+
+        // A listing or history that carries the patterns says the same, and
+        // one damaged row never takes the listing with it.
+        assert!(super::must_not_touch_fields(None).is_none());
+        let listed = super::must_not_touch_fields(Some(Err(
+            swarm_persistence::TaskStoreError::IntegrityFailure("damaged".into()),
+        )))
+        .unwrap();
+        assert!(listed["unreadable"].is_string(), "{listed}");
+
+        // So does the worker's own Review response.
+        assert!(super::must_not_touch_for_review(Ok(None)).is_empty());
+        let review = super::must_not_touch_for_review(unreadable());
+        assert_eq!(review.len(), 1, "{review:?}");
+        assert_eq!(review[0].0, "must_not_touch_report");
+        assert!(review[0].1["unreadable"].is_string(), "{review:?}");
     }
 
     /// Recording commits has no limit on how many, and the table holds a

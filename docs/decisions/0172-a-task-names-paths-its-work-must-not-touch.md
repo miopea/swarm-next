@@ -60,11 +60,13 @@ not part of this.
      today's rules, so tightening a rule later does not make older tasks
      unreadable.
    - A row that is not a list of strings is an integrity failure, never an
-     empty list, because an empty list would hide a crossing. Queen's board
-     and the task history say the patterns are unreadable, the coordinator
-     holds the task, and the card shows Scope as "Unreadable", with the
-     reason in the tooltip. The CI and Check rows beside it still show, as
-     they do for a check that cannot be read (ADR 0171).
+     empty list, because an empty list would hide a crossing. Queen's board,
+     the task history, the worker's own listing and its Review response say
+     the patterns are unreadable, and the coordinator holds the task. One
+     damaged row never takes a listing or the history with it. The card
+     shows Scope as "Unreadable", with the reason in the tooltip, and the CI
+     and Check rows beside it still show, as they do for a check that cannot
+     be read (ADR 0171).
 5. **The comparison.** At read time, every pattern against every changed path
    of every recorded commit. Each crossing names the commit, the path and the
    first pattern it fell under. A commit lists at most 20 crossed paths, and
@@ -121,12 +123,18 @@ not part of this.
      decision, and it is unchanged.
 8. **A task without patterns behaves as it did before.** It has no row and
    no activity is written. The one exception is deliberate: commits are now
-   recorded with renames split and paths unquoted (5), for every task, so a
-   rename out of code into documentation is no longer settled as
-   documentation only. It was accepted at review because it is stricter,
-   never looser. Its listing, its Review response and Queen's board
-   say nothing about patterns; the history's report and the card's read carry
-   `null`, and the card shows no Scope row.
+   recorded with renames split and paths unquoted (5), for every task.
+   - Splitting renames is stricter: a rename out of code into documentation
+     is no longer settled as documentation only. It was accepted at review
+     on that basis.
+   - Unquoting is looser in one case. A documentation file whose name is not
+     ASCII now reads as documentation, so work that touched only such files
+     can be settled as documentation only. Before, git quoted the name, and
+     the quoting made it read as code.
+
+   Otherwise, a task without patterns is listed, answered at Review and
+   shown on Queen's board with nothing about them. The history's report and
+   the card's read carry `null`, and the card shows no Scope row.
 
 ## Consequences
 

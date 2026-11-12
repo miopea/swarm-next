@@ -269,13 +269,16 @@ impl TaskStore {
     /// Patterns for each of these tasks that has any, in one read, for
     /// listings that show many tasks at once.
     ///
+    /// A stored row that no longer reads as patterns is that task's error,
+    /// never an empty list, and never the whole listing's: one damaged row
+    /// does not take the other tasks with it.
+    ///
     /// # Errors
-    /// Returns an error when persistence is unavailable or a stored row no
-    /// longer reads as valid patterns.
+    /// Returns an error when persistence is unavailable.
     pub fn must_not_touch_for_tasks(
         &self,
         ids: &[TaskId],
-    ) -> Result<HashMap<TaskId, MustNotTouchPatterns>, TaskStoreError> {
+    ) -> Result<HashMap<TaskId, Result<MustNotTouchPatterns, TaskStoreError>>, TaskStoreError> {
         let mut found = HashMap::new();
         if ids.is_empty() {
             return Ok(found);
@@ -292,7 +295,7 @@ impl TaskStore {
         for row in rows {
             let (task_id, encoded) = row?;
             let task_id = crate::parse_domain_id::<TaskId>(&task_id)?;
-            found.insert(task_id, decode(&encoded)?);
+            found.insert(task_id, decode(&encoded));
         }
         Ok(found)
     }
@@ -796,10 +799,29 @@ mod tests {
             store.task_must_not_touch(task.id),
             Err(TaskStoreError::IntegrityFailure(_))
         ));
+        // In a listing, the damaged row is that task's failure alone: the
+        // other tasks beside it still read.
+        let readable = store.create_task("Readable", "/work/petal").unwrap();
+        store
+            .set_must_not_touch(
+                readable.id,
+                &patterns(&["web/**"]),
+                "Routing.",
+                &TaskActivityActor::operator(),
+                5,
+            )
+            .unwrap();
+        let listed = store
+            .must_not_touch_for_tasks(&[task.id, readable.id])
+            .unwrap();
         assert!(matches!(
-            store.must_not_touch_for_tasks(&[task.id]),
+            listed[&task.id],
             Err(TaskStoreError::IntegrityFailure(_))
         ));
+        assert_eq!(
+            listed[&readable.id].as_ref().unwrap(),
+            &patterns(&["web/**"])
+        );
     }
 
     /// Stored patterns are read as they were accepted, so tightening the rules
@@ -844,7 +866,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(found.len(), 1);
-        assert_eq!(found[&scoped.id], patterns(&["web/**"]));
+        assert_eq!(found[&scoped.id].as_ref().unwrap(), &patterns(&["web/**"]));
         assert!(store.must_not_touch_for_tasks(&[]).unwrap().is_empty());
     }
 
