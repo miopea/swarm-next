@@ -2230,6 +2230,23 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
             found_in: None,
         };
     }
+    // RECORDED BY THE FULL SHA, not by the name given. An abbreviation kept
+    // as given makes the same commit recorded again by its full SHA a second
+    // row, and a branch name would later name other work.
+    let resolved = git(
+        workspace,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{sha}^{{commit}}"),
+        ],
+    )
+    .await
+    .map(|full| full.trim().to_owned())
+    .filter(|full| !full.is_empty())
+    .unwrap_or_else(|| sha.to_owned());
+    let sha = resolved.as_str();
     let subject = git(workspace, &["show", "--no-patch", "--format=%s", sha])
         .await
         .unwrap_or_default()
@@ -2564,6 +2581,55 @@ mod commit_verification_tests {
 
         assert_eq!(commits[0].verdict, CommitVerdict::Missing);
         assert_eq!(commits[0].found_in, None);
+    }
+
+    /// A commit named by an abbreviated SHA or a branch is recorded by the full
+    /// SHA it resolves to. Otherwise recording the same commit again in another
+    /// form adds a second row, and a branch name would later name other work.
+    /// A name that resolves to nothing is kept as given, since there is no SHA.
+    #[tokio::test]
+    async fn a_commit_is_recorded_by_the_full_sha_it_resolves_to() {
+        let (dir, sha) = repository_with_one_commit();
+        let workspace = dir.path().to_str().unwrap();
+        let invented = "0123456789abcdef".to_owned();
+
+        let (_, commits) = verify_reported_commits(
+            workspace,
+            &[],
+            &[sha[..8].to_owned(), "main".to_owned(), invented.clone()],
+        )
+        .await;
+        assert_eq!(commits[0].sha, sha);
+        assert_eq!(commits[0].verdict, CommitVerdict::Present);
+        assert_eq!(commits[1].sha, sha);
+        assert_eq!(commits[2].sha, invented);
+        assert_eq!(commits[2].verdict, CommitVerdict::Missing);
+
+        // Found in another workspace, it is still recorded by its full SHA.
+        let empty = tempfile::tempdir().unwrap();
+        git_in(empty.path(), &["init", "--quiet"]);
+        let (_, commits) = verify_reported_commits(
+            empty.path().to_str().unwrap(),
+            &[workspace.to_owned()],
+            &[sha[..8].to_owned()],
+        )
+        .await;
+        assert_eq!(commits[0].verdict, CommitVerdict::InAnotherWorkspace);
+        assert_eq!(commits[0].sha, sha);
+
+        // Recorded by its abbreviation and then by its full SHA, one row.
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let task = store.create_task("Built a note", workspace).unwrap();
+        for given in [sha[..8].to_owned(), sha.clone()] {
+            let (state, commits) =
+                verify_reported_commits(workspace, &[], std::slice::from_ref(&given)).await;
+            store
+                .record_task_commits(task.id, workspace, state, &commits, 1)
+                .unwrap();
+        }
+        let report = store.task_commit_report(task.id).unwrap().unwrap();
+        assert_eq!(report.commits.len(), 1, "{:?}", report.commits);
+        assert_eq!(report.commits[0].sha, sha);
     }
 
     /// A rename is recorded as both the path it left and the path it reached,
