@@ -34,9 +34,9 @@ test("the independent check reads as checked, stale or not checked", () => {
     .toEqual({ tone: "unchecked", word: "Not checked", text: "No independent check is recorded for these commits." });
   const checked = { state: "checked", head: "1111aaaa2222bbbb", ran: "cargo test", findings: "", recorded_at: 1 } as const;
   expect(checkSummary({ ...checked, verdict: "pass" }))
-    .toEqual({ tone: "good", word: "Passed", text: "Independent check at 1111aaaa: pass. Ran: cargo test." });
+    .toEqual({ tone: "good", word: "Passed", at: "1111aaaa", text: "Independent check at 1111aaaa: pass. Ran: cargo test." });
   expect(checkSummary({ ...checked, verdict: "partial", ran: "read only.", findings: "src/lib.rs:4 keeps the old path" }))
-    .toEqual({ tone: "waiting", word: "Partial", text: "Independent check at 1111aaaa: partial. Ran: read only. Findings: src/lib.rs:4 keeps the old path." });
+    .toEqual({ tone: "waiting", word: "Partial", at: "1111aaaa", text: "Independent check at 1111aaaa: partial. Ran: read only. Findings: src/lib.rs:4 keeps the old path." });
   expect(checkSummary({ ...checked, verdict: "fail", findings: "A test was deleted." })?.tone).toBe("bad");
   const stale = { state: "stale", head: "1111aaaa2222bbbb", verdict: "pass", recorded_at: 1 } as const;
   expect(checkSummary({ ...stale, since: ["3333cccc4444dddd"] }))
@@ -61,6 +61,8 @@ test("the card shows the independent check with the CI gate off", async () => {
   render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
 
   expect(await screen.findByText("Check")).toBeInTheDocument();
+  // The verdict and the commit it covers are read off the card, not only from a tooltip.
+  expect(screen.getByText("at 1111aaaa")).toBeVisible();
   expect(screen.getByText("Failed")).toHaveAttribute("title", "Independent check at 1111aaaa: fail. Ran: cargo test. Findings: A test was deleted.");
   expect(screen.queryByText("CI")).not.toBeInTheDocument();
 });

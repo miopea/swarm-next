@@ -39,9 +39,12 @@ a reading still covered the work after another commit.
    - the recorded commits, oldest first by commit time, each with its subject,
      repository and changed paths. Commit times are whole seconds, so within
      a tie a parent goes before its child. A commit git cannot read is listed
-     and marked so;
-   - the changes themselves, up to 48 KiB. Past that, no patches are sent, and
-     the checker is told to read each commit with `git -C <repo> show`;
+     and marked so. Each commit lists at most 30 paths, and the list stops at
+     16 KiB; what is left out is counted;
+   - the changes themselves, up to 48 KiB. Past that, or if git cannot read
+     any one of them, no patches are sent, and the checker is told to read
+     each commit with `git -C <repo> show`. Part of the change is never
+     passed off as all of it;
    - what to check: that the change does what the task asks, that it changes
      nothing else, that no test was removed or weakened, and the repository's
      own checks with their exit codes;
@@ -85,8 +88,9 @@ a reading still covered the work after another commit.
    - `swarm_read_task_history`.
    - Queen's board listing, on each task in Review.
    - The task card, as a "Check" row beside CI for work in Review or Awaiting
-     Release, read from `GET /api/v1/tasks/{id}/ci`. It shows whether or not
-     the check gate is on.
+     Release, read from `GET /api/v1/tasks/{id}/ci`: the verdict and the commit
+     it covers ("Partial at 8b7d6e5f"), "Stale" or "Not checked". It shows
+     whether or not the check gate is on.
 8. **Shown, never refused.** Moving to Review, the coordinator's settlement,
    completion and the check gate do not read it. A missing, failed or stale
    check is information for Queen.
@@ -100,6 +104,8 @@ a reading still covered the work after another commit.
   what the checker is given, not whether a checker answered.
 - Re-reporting the same commits keeps a check current. Adding one makes it
   stale, and the worker builds the input again.
+- Staleness follows the commits the worker records, as CI's binding does. A
+  commit made and never recorded leaves the check reading as current.
 - A large change sends the checker to git instead of carrying the diff, so the
   checker must be able to reach the task's repository.
 - Must-not-touch paths, the other idea kept in the same interview, are a

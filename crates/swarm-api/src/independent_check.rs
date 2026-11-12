@@ -21,6 +21,12 @@ use tokio::time::Instant;
 /// The most patch text one input carries. Past it the checker is given the
 /// commits and their paths and reads the changes itself.
 const PATCH_BUDGET_BYTES: usize = 48 * 1024;
+/// The most the list of commits and their paths may take. Commits accumulate
+/// across reports and a commit may touch thousands of paths, so past this the
+/// rest are counted, not listed.
+const LISTING_BUDGET_BYTES: usize = 16 * 1024;
+/// The most paths listed under one commit; the rest are counted.
+const PATHS_PER_COMMIT: usize = 30;
 /// The most a single commit's summary line read may return.
 const META_CAP_BYTES: usize = 4 * 1024;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -259,13 +265,45 @@ async fn read_patches(
                 remaining = remaining.saturating_sub(patch.len());
                 patches.push((full.clone(), patch));
             }
-            GitRead::TooLarge => return None,
-            // Some changes unread for want of time is not the whole change.
-            GitRead::Failed if Instant::now() >= deadline => return None,
-            GitRead::Failed => {}
+            // A change git read the summary of but not the patch, or ran out
+            // of time on, would leave the rest posing as the whole change.
+            GitRead::TooLarge | GitRead::Failed => return None,
         }
     }
     Some(patches)
+}
+
+/// The commits and their paths, within [`LISTING_BUDGET_BYTES`].
+fn commit_listing(commits: &[CheckedCommit]) -> String {
+    let mut listing = String::new();
+    for (listed, commit) in commits.iter().enumerate() {
+        if listing.len() >= LISTING_BUDGET_BYTES {
+            let _ = writeln!(
+                listing,
+                "- and {} more commits, not listed here. Find them on the task's branch with git log.",
+                commits.len() - listed
+            );
+            break;
+        }
+        let short = commit.shown().get(..12).unwrap_or(commit.shown());
+        let subject: String = commit.subject.trim().chars().take(200).collect();
+        let _ = write!(listing, "- {short} {subject}");
+        if commit.full.is_none() {
+            listing.push_str("  (git could not read this commit)");
+        }
+        let _ = writeln!(listing, "\n  in {}", commit.workspace);
+        for path in commit.paths.iter().take(PATHS_PER_COMMIT) {
+            let _ = writeln!(listing, "    {path}");
+        }
+        if commit.paths.len() > PATHS_PER_COMMIT {
+            let _ = writeln!(
+                listing,
+                "    and {} more paths; `git show --stat` lists them all",
+                commit.paths.len() - PATHS_PER_COMMIT
+            );
+        }
+    }
+    listing
 }
 
 /// The checker's input, built for one task.
@@ -331,18 +369,7 @@ fn checker_prompt(
         }
     }
     prompt.push_str("\nTHE WORK\nCommits, oldest first:\n");
-    for commit in commits {
-        let short = commit.shown().get(..12).unwrap_or(commit.shown());
-        let subject = commit.subject.trim();
-        let _ = write!(prompt, "- {short} {subject}");
-        if commit.full.is_none() {
-            prompt.push_str("  (git could not read this commit)");
-        }
-        let _ = writeln!(prompt, "\n  in {}", commit.workspace);
-        for path in &commit.paths {
-            let _ = writeln!(prompt, "    {path}");
-        }
-    }
+    prompt.push_str(&commit_listing(commits));
     match patches {
         Some(patches) if !patches.is_empty() => {
             prompt.push_str("\nThe changes:\n");
@@ -357,9 +384,9 @@ fn checker_prompt(
         }
         None => {
             prompt.push_str(
-                "\nThe changes are not included here: they are too large, or git took too long to \
-                 read them. Read each commit yourself with `git -C <repository> show <commit>`, \
-                 using the repository named under it.\n",
+                "\nThe changes are not included here: they are too large, or git could not read \
+                 every one of them in time. Read each commit yourself with \
+                 `git -C <repository> show <commit>`, using the repository named under it.\n",
             );
         }
     }
@@ -391,8 +418,9 @@ pub(crate) mod tests {
     use tokio::time::Instant;
 
     use super::{
-        CheckedCommit, GitRead, PATCH_BUDGET_BYTES, bounded_git, build_check_input, checker_prompt,
-        head_of, ordered_commits, ordered_commits_until, read_patches,
+        CheckedCommit, GitRead, LISTING_BUDGET_BYTES, PATCH_BUDGET_BYTES, bounded_git,
+        build_check_input, checker_prompt, commit_listing, head_of, ordered_commits,
+        ordered_commits_until, read_patches,
     };
 
     pub(crate) fn git(repo: &Path, args: &[&str]) -> String {
@@ -694,6 +722,59 @@ pub(crate) mod tests {
                 .await
                 .map(|patches| patches.len()),
             Some(2)
+        );
+    }
+
+    /// A commit whose summary git read but whose patch it could not is not
+    /// left out quietly: the checker is sent to git for all of the changes.
+    #[tokio::test]
+    async fn a_patch_git_cannot_read_sends_the_checker_to_git_for_all_of_them() {
+        let repo = repository();
+        let real = commit_file(repo.path(), "a.rs", "a", "feat: a");
+        let mut commits = ordered_commits(&report(repo.path(), vec![present(&real, "a.rs")])).await;
+        let mut lost = commits[0].clone();
+        lost.full = Some("0123456789abcdef0123456789abcdef01234567".to_owned());
+        commits.push(lost);
+
+        assert_eq!(read_patches(&commits, later()).await, None);
+        assert_eq!(
+            read_patches(&commits[..1], later())
+                .await
+                .map(|patches| patches.len()),
+            Some(1)
+        );
+    }
+
+    /// Thousands of paths, or hundreds of commits, do not grow the input past
+    /// its bound; what is left out is counted.
+    #[test]
+    fn the_commit_listing_is_bounded_and_counts_what_it_leaves_out() {
+        let commit = |n: usize, paths: usize| CheckedCommit {
+            recorded: format!("{n:012x}"),
+            full: Some(format!("{n:040x}")),
+            subject: "s".repeat(500),
+            paths: (0..paths)
+                .map(|p| format!("vendor/lib/file-{p}.rs"))
+                .collect(),
+            workspace: "/work".to_owned(),
+            committed_at: 0,
+            parents: vec![],
+        };
+        let wide = commit_listing(&[commit(1, 5_000)]);
+        assert!(wide.contains("and 4970 more paths"), "{wide}");
+        assert!(wide.len() < 4 * 1024, "{}", wide.len());
+
+        let many: Vec<CheckedCommit> = (0..1_000).map(|n| commit(n, 40)).collect();
+        let listing = commit_listing(&many);
+        assert!(
+            listing.contains("more commits, not listed here"),
+            "{}",
+            &listing[listing.len() - 200..]
+        );
+        assert!(
+            listing.len() < LISTING_BUDGET_BYTES + 4 * 1024,
+            "{}",
+            listing.len()
         );
     }
 

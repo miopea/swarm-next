@@ -2951,7 +2951,8 @@ impl AgentMcp {
             // fix one level up.
             "truncated": page.truncated,
             "evidence": evidence,
-            "independent_check": self.independent_check_state_of(task_id)?,
+            // Shown beside the history, never a reason the history fails.
+            "independent_check": self.independent_check_state_of(task_id).ok().flatten(),
             "independent_check_note": INDEPENDENT_CHECK_NOTE,
             "messages": messages,
             "review_request": review_request,
@@ -15102,6 +15103,41 @@ mod tests {
         assert_eq!(late["result"]["isError"], true, "{late}");
         let text = late["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("swarm_independent_check_input"), "{text}");
+
+        // RECOVERY: a new input covers both commits, and its answer makes
+        // the check current again.
+        let input = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_independent_check_input",
+            json!({ "task_id": id }),
+        )
+        .await;
+        let rebuilt = &input["result"]["structuredContent"];
+        assert_eq!(rebuilt["head"], json!(second));
+        assert_eq!(rebuilt["commits"], 2);
+        assert_ne!(rebuilt["basis"], json!(basis));
+        let again = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({
+                "task_id": id,
+                "basis": rebuilt["basis"],
+                "verdict": "partial",
+                "ran": "cargo test -p petal",
+                "findings": "stem.rs:1 has no test."
+            }),
+        )
+        .await;
+        assert_eq!(again["result"]["isError"], false, "{again}");
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert_eq!(
+            review_entry(&board, &task)["independent_check"],
+            json!({ "state": "checked", "verdict": "partial", "head": &second[..12] })
+        );
     }
 
     #[tokio::test]

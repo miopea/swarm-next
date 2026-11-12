@@ -41,7 +41,7 @@ function sentence(text: string) {
  * words. Nothing when the task built no code. It is shown, never enforced, so
  * a missing or stale check reads as a fact rather than a fault.
  */
-export function checkSummary(check: IndependentCheck | null): { tone: Tone; word: string; text: string } | undefined {
+export function checkSummary(check: IndependentCheck | null): { tone: Tone; word: string; at?: string; text: string } | undefined {
   if (!check) return undefined;
   switch (check.state) {
     case "not_checked":
@@ -49,7 +49,8 @@ export function checkSummary(check: IndependentCheck | null): { tone: Tone; word
     case "checked": {
       const { tone, word } = VERDICTS[check.verdict];
       const findings = check.findings.trim() ? ` Findings: ${sentence(check.findings)}` : "";
-      return { tone, word, text: `Independent check at ${check.head.slice(0, 8)}: ${check.verdict}. Ran: ${sentence(check.ran)}${findings}` };
+      const at = check.head.slice(0, 8);
+      return { tone, word, at, text: `Independent check at ${at}: ${check.verdict}. Ran: ${sentence(check.ran)}${findings}` };
     }
     case "stale": {
       const count = check.since.length;
@@ -86,7 +87,7 @@ export default function TaskCiStatus({ task, operatorToken }: { task: Task; oper
   return (
     <>
       {summary && <div><dt>CI</dt><dd><span className={`task-ci is-${summary.tone}`} title={summary.text}>{TONE_WORDS[summary.tone]}<span className="sr-only">: {summary.text}</span></span></dd></div>}
-      {check && <div><dt>Check</dt><dd><span className={`task-ci is-${check.tone}`} title={check.text}>{check.word}<span className="sr-only">: {check.text}</span></span></dd></div>}
+      {check && <div><dt>Check</dt><dd><span className={`task-ci is-${check.tone}`} title={check.text}>{check.word}{check.at && <span className="task-ci-at"> at {check.at}</span>}<span className="sr-only">: {check.text}</span></span></dd></div>}
     </>
   );
 }
