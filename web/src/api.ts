@@ -2857,6 +2857,8 @@ export type IndependentCheck =
 export type MustNotTouchReport = {
   patterns: string[];
   commits_compared: number;
+  /** Recorded commits with no paths to compare, never read as within. */
+  commits_not_compared: number;
   crossings: { commit: string; paths: { path: string; pattern: string }[]; more_paths: number }[];
   more_commits: number;
 };

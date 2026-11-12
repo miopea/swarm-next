@@ -158,10 +158,12 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
       must_not_touch: failed && new URLSearchParams(window.location.search).get("scope") === "unreadable"
         ? { state: "unreadable", why: "integrity failure: must-not-touch patterns are not a list" }
         : failed && new URLSearchParams(window.location.search).get("scope") === "notCompared"
-        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 0, crossings: [], more_commits: 0 }
+        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 0, commits_not_compared: 0, crossings: [], more_commits: 0 }
+        : failed && new URLSearchParams(window.location.search).get("scope") === "unread"
+        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 1, commits_not_compared: 1, crossings: [], more_commits: 0 }
         : failed
-        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 2, crossings: [{ commit: "8b7d6e5f3a2c1b0e", paths: [{ path: "migrations/0042_upload_retries.sql", pattern: "migrations/**" }], more_paths: 0 }], more_commits: 0 }
-        : { patterns: ["migrations/**"], commits_compared: 1, crossings: [], more_commits: 0 },
+        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 2, commits_not_compared: 0, crossings: [{ commit: "8b7d6e5f3a2c1b0e", paths: [{ path: "migrations/0042_upload_retries.sql", pattern: "migrations/**" }], more_paths: 0 }], more_commits: 0 }
+        : { patterns: ["migrations/**"], commits_compared: 1, commits_not_compared: 0, crossings: [], more_commits: 0 },
     };
   }
   if (path === "/api/v1/presence/night-watch") {

@@ -86,25 +86,34 @@ not part of this.
      and the crossing shows the name itself. Git quotes the last three
      whatever its settings, so turning its quoting off when recording would
      not have been enough.
-   - Git lists no paths for a merge commit, so a merge is compared as touching
-     nothing. A task whose record holds only a merge commit shows no crossing.
-     This is a known gap, not fixed here.
+   - A recorded commit with no paths is not compared, and is never counted as
+     within the limits. That is a commit Swarm could not find or read, or a
+     merge git lists no paths for. The report counts these commits apart
+     from the ones it compared.
+   - Known gap: a commit recorded before renames were split lists a rename
+     only where it went, so a rename out of a protected folder in such a
+     commit is not seen. Records are checked once and never recomputed.
 6. **Where it is shown.**
    - The worker's own Active and Ready tasks in `swarm_list_tasks`, and the
      task in `swarm_read_task_history`, carry the patterns and who changes
      them.
    - The response to a worker's move to Review carries the report. When a
      commit crossed, one line asks the worker to explain each crossing in its
-     handoff or undo it.
+     handoff or undo it. When a recorded commit could not be compared, one
+     line says so and asks for the commits that hold the work.
    - Queen's board listing, on each task in Review: how many commits were
-     compared and crossed, and the first three crossed paths.
+     compared, could not be compared, and crossed, and the first three
+     crossed paths.
    - `swarm_read_task_history` carries the full report.
    - The task card, as a "Scope" row beside CI for work in Review or Awaiting
      Release, read from `GET /api/v1/tasks/{id}/ci`: "Within" or "Crossed",
      with the commits and paths in the tooltip and for screen readers;
-     "Not compared" when it has patterns and no recorded commits to compare;
+     "Not compared" when it has patterns and no recorded commits to compare,
+     or when no commit crossed and a recorded commit has no paths;
      or "Unreadable" when the patterns cannot be read (4). A crossing has the
-     amber tone of something to look at, not the red of a failure.
+     amber tone of something to look at, not the red of a failure. The card
+     keeps reading while the task has patterns, so the row follows commits
+     recorded after it was opened.
 7. **Shown, never refused, and never closed unseen.** Moving to Review,
    completion and the check gate do not read the patterns. Some crossings are
    needed, and Queen decides. So the coordinator does not decide for her:
@@ -114,7 +123,8 @@ not part of this.
      woken for it and her board shows the crossing.
    - A task in Review with patterns and no recorded commits is held too,
      because a deployment can be recorded before the commits are, and nothing
-     has been compared yet.
+     has been compared yet. So is one with a recorded commit that could not be
+     compared (5), because its paths are unknown and could hide a crossing.
    - This is not the reviewer's hold the deployment pass overrides. A reviewer
      who holds work has looked at it, and nobody has looked at this.
    - Queen accepts it the way she accepts other reviewed work. Awaiting

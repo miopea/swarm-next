@@ -301,8 +301,9 @@ impl TaskStore {
     }
 
     /// Whether the coordinator must leave this task's Review work for Queen:
-    /// it has patterns, and either a recorded commit crossed one or no
-    /// commits are recorded yet, so nothing has been compared.
+    /// it has patterns, and a recorded commit crossed one, a recorded commit
+    /// has no paths to compare, or no commits are recorded yet, so nothing has
+    /// been compared.
     ///
     /// The coordinator's settlement passes ask this before closing Review work
     /// on their own, so a crossing waits for Queen rather than closing unseen,
@@ -321,7 +322,7 @@ impl TaskStore {
         };
         Ok(
             swarm_domain::must_not_touch_report(patterns.as_slice(), Some(&commits))
-                .is_some_and(|report| !report.crossings.is_empty()),
+                .is_some_and(|report| report.leaves_review_for_queen()),
         )
     }
 
@@ -440,6 +441,27 @@ mod tests {
             .map(|completion| completion.task_id)
             .collect();
         assert_eq!(closed, [crossed]);
+    }
+
+    /// A recorded commit with no paths, one Swarm could not read or a merge
+    /// git lists none for, has not been compared. Shipped work holding one
+    /// waits for Queen rather than closing as within its limits.
+    #[test]
+    fn shipped_work_with_a_commit_that_could_not_be_compared_waits() {
+        let store = TaskStore::in_memory().unwrap();
+        let unread = reviewed_with(&store, &["migrations/**"], &[]);
+        store
+            .record_task_deployment(unread, "production", "v1.2.3", 1_000)
+            .unwrap();
+
+        assert!(store.must_not_touch_holds(unread).unwrap());
+        assert!(
+            store
+                .complete_reviewed_work_with_deployment()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.get_task(unread).unwrap().state, TaskState::Review);
     }
 
     /// A deployment can be recorded before the commits are. Work with

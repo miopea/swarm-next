@@ -262,6 +262,7 @@ mod tests {
         let report = MustNotTouchReport {
             patterns: vec!["migrations/**".to_owned()],
             commits_compared: 1,
+            commits_not_compared: 0,
             crossings: Vec::new(),
             more_commits: 0,
         };

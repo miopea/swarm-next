@@ -261,15 +261,31 @@ pub struct PathCrossing {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MustNotTouchReport {
     pub patterns: Vec<String>,
-    /// How many recorded commits were compared.
+    /// How many recorded commits had paths, and were compared.
     pub commits_compared: usize,
+    /// Recorded commits with no paths to compare: one Swarm could not find or
+    /// read, or a merge git lists no paths for. Their paths are unknown, so
+    /// they are never counted as within the limits.
+    #[serde(default)]
+    pub commits_not_compared: usize,
     pub crossings: Vec<PathCrossing>,
     /// Commits with crossings beyond those listed.
     pub more_commits: usize,
 }
 
+impl MustNotTouchReport {
+    /// Whether Review work must wait for Queen rather than close on its own:
+    /// a commit crossed, or one could not be compared and so may hide a
+    /// crossing. Flagging too much is the safe side; missing a crossing is not.
+    #[must_use]
+    pub fn leaves_review_for_queen(&self) -> bool {
+        !self.crossings.is_empty() || self.more_commits > 0 || self.commits_not_compared > 0
+    }
+}
+
 /// Compares a task's patterns with its recorded commits' changed paths, each
-/// read back from git's quoting first, so a quoted name still crosses.
+/// read back from git's quoting first, so a quoted name still crosses. A
+/// commit with no recorded paths is counted as not compared, never as within.
 /// Nothing when the task has no patterns, so a task without them reads as it
 /// always has.
 #[must_use]
@@ -283,7 +299,14 @@ pub fn must_not_touch_report(
     let commits = report.map_or(&[][..], |report| report.commits.as_slice());
     let mut crossings = Vec::new();
     let mut more_commits = 0;
+    let mut commits_compared = 0;
+    let mut commits_not_compared = 0;
     for commit in commits {
+        if commit.changed_paths.is_empty() {
+            commits_not_compared += 1;
+            continue;
+        }
+        commits_compared += 1;
         let mut paths = Vec::new();
         let mut more_paths = 0;
         for recorded in &commit.changed_paths {
@@ -315,7 +338,8 @@ pub fn must_not_touch_report(
     }
     Some(MustNotTouchReport {
         patterns: patterns.to_vec(),
-        commits_compared: commits.len(),
+        commits_compared,
+        commits_not_compared,
         crossings,
         more_commits,
     })
@@ -550,7 +574,43 @@ mod tests {
     fn patterns_with_no_commits_yet_compare_nothing_and_cross_nothing() {
         let found = must_not_touch_report(&owned(&["web/**"]), None).unwrap();
         assert_eq!(found.commits_compared, 0);
+        assert_eq!(found.commits_not_compared, 0);
         assert!(found.crossings.is_empty());
+    }
+
+    /// A recorded commit with no paths, one Swarm could not find or read or a
+    /// merge git lists none for, is not compared. It never counts as within
+    /// the limits, and the work waits for Queen (ADR 0172).
+    #[test]
+    fn a_commit_without_paths_is_not_compared_and_never_within() {
+        let mut missing = commit("bbb", &[]);
+        missing.verdict = CommitVerdict::Missing;
+        let commits = report(vec![
+            commit("aaa", &["web/a.ts"]),
+            missing,
+            commit("ccc", &[]),
+        ]);
+
+        let found =
+            must_not_touch_report(&owned(&["crates/swarm-terminal/**"]), Some(&commits)).unwrap();
+
+        assert_eq!(found.commits_compared, 1);
+        assert_eq!(found.commits_not_compared, 2);
+        assert!(found.crossings.is_empty());
+        assert!(found.leaves_review_for_queen());
+
+        let within = must_not_touch_report(
+            &owned(&["crates/swarm-terminal/**"]),
+            Some(&report(vec![commit("aaa", &["web/a.ts"])])),
+        )
+        .unwrap();
+        assert!(!within.leaves_review_for_queen());
+        let crossed = must_not_touch_report(
+            &owned(&["web/**"]),
+            Some(&report(vec![commit("aaa", &["web/a.ts"])])),
+        )
+        .unwrap();
+        assert!(crossed.leaves_review_for_queen());
     }
 
     #[test]

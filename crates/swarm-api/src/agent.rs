@@ -6317,10 +6317,14 @@ fn independent_check_hint(check: &IndependentCheckState) -> Option<String> {
 }
 
 /// What a worker's listing says beside its task's must-not-touch patterns.
-const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relative to its repository, set by whoever filed it or by Queen (ADR 0172). Only Queen changes them: if the work needs one, ask her with swarm_message_queen before touching it. At Review, Queen sees which recorded commits touched one; nothing is refused for that, and she decides whether it was needed.";
+const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relative to its repository, set by whoever filed it or by Queen (ADR 0172). Only Queen changes them; a worker whose work needs one asks her with swarm_message_queen before touching it. At Review, Queen sees which recorded commits touched one; nothing is refused for that, and she decides whether it was needed.";
 
 /// The step a worker's Review response adds when its commits crossed.
 const MUST_NOT_TOUCH_CROSSED: &str = "Some of this task's commits changed paths it must not touch (must_not_touch_report). The move to Review stands. Say in your handoff why each crossing was needed, or undo it, so Queen can decide.";
+
+/// The step a worker's Review response adds when a recorded commit has no
+/// paths to compare.
+const MUST_NOT_TOUCH_NOT_COMPARED: &str = "Some of this task's recorded commits could not be compared with the paths it must not touch, because they have no recorded paths (must_not_touch_report.commits_not_compared): Swarm could not find or read them, or git lists no paths for a merge. The move to Review stands, and the work waits for Queen. Record the commits that hold the work, so they can be compared.";
 
 /// The must-not-touch report as Queen reads it in a task's history: null when
 /// the task has no patterns, and said to be unreadable when its row cannot be
@@ -6355,8 +6359,15 @@ fn must_not_touch_for_review(
         Ok(None) => Vec::new(),
         Ok(Some(report)) => {
             let mut fields = Vec::with_capacity(2);
-            if !report.crossings.is_empty() {
-                fields.push(("must_not_touch_step", json!(MUST_NOT_TOUCH_CROSSED)));
+            let steps: Vec<&str> = [
+                (!report.crossings.is_empty()).then_some(MUST_NOT_TOUCH_CROSSED),
+                (report.commits_not_compared > 0).then_some(MUST_NOT_TOUCH_NOT_COMPARED),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !steps.is_empty() {
+                fields.push(("must_not_touch_step", json!(steps.join(" "))));
             }
             fields.push(("must_not_touch_report", json!(report)));
             fields
@@ -6386,6 +6397,7 @@ fn must_not_touch_brief(report: &swarm_domain::MustNotTouchReport) -> Value {
     json!({
         "patterns": report.patterns.len(),
         "commits_compared": report.commits_compared,
+        "commits_not_compared": report.commits_not_compared,
         "crossed_commits": report.crossings.len() + report.more_commits,
         "first_crossed_paths": report
             .crossings
@@ -15523,6 +15535,7 @@ mod tests {
             json!({
                 "patterns": 1,
                 "commits_compared": 2,
+                "commits_not_compared": 0,
                 "crossed_commits": 1,
                 "first_crossed_paths": ["crates/swarm-terminal/src/ipc.rs"]
             })
@@ -15590,6 +15603,33 @@ mod tests {
         assert_eq!(review.len(), 1, "{review:?}");
         assert_eq!(review[0].0, "must_not_touch_report");
         assert!(review[0].1["unreadable"].is_string(), "{review:?}");
+    }
+
+    /// A recorded commit with no paths to compare is named to the worker at
+    /// Review and counted on Queen's board, never read as within (ADR 0172).
+    #[test]
+    fn commits_that_could_not_be_compared_are_named_at_review_and_on_the_board() {
+        let report = swarm_domain::MustNotTouchReport {
+            patterns: vec!["migrations/**".to_owned()],
+            commits_compared: 1,
+            commits_not_compared: 2,
+            crossings: Vec::new(),
+            more_commits: 0,
+        };
+
+        let review = super::must_not_touch_for_review(Ok(Some(report.clone())));
+        let step = review
+            .iter()
+            .find(|(key, _)| *key == "must_not_touch_step")
+            .unwrap_or_else(|| panic!("a step: {review:?}"));
+        assert!(
+            step.1.as_str().unwrap().contains("could not be compared"),
+            "{review:?}"
+        );
+        assert_eq!(
+            super::must_not_touch_on_board(Ok(Some(report))).unwrap()["commits_not_compared"],
+            2
+        );
     }
 
     /// Recording commits has no limit on how many, and the table holds a

@@ -1,10 +1,11 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { Task, TaskCi } from "../api";
 import TaskCiStatus, { checkSummary, ciSummary, scopeSummary } from "./TaskCiStatus";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -95,7 +96,7 @@ test("the card shows the independent check with the CI gate off", async () => {
 /** A crossing of the task's must-not-touch paths reads as something to look at, never a failure (ADR 0172). */
 test("the scope reads as within, crossed or not compared, and as nothing without patterns", () => {
   expect(scopeSummary(null)).toBeUndefined();
-  const report = { patterns: ["crates/swarm-terminal/**"], commits_compared: 2, crossings: [], more_commits: 0 };
+  const report = { patterns: ["crates/swarm-terminal/**"], commits_compared: 2, commits_not_compared: 0, crossings: [], more_commits: 0 };
   // Patterns and nothing to compare them with: the coordinator holds such
   // Review work for Queen, so the card says why rather than nothing.
   expect(scopeSummary({ ...report, commits_compared: 0 })).toEqual({
@@ -118,6 +119,52 @@ test("the scope reads as within, crossed or not compared, and as nothing without
   });
   expect(scopeSummary({ ...report, crossings, more_commits: 2 })?.text)
     .toBe("3 commits changed paths this task must not touch (crates/swarm-terminal/**): 3333cccc changed crates/swarm-terminal/src/ipc.rs and 4 more; and 2 more commits. Queen decides whether that was needed.");
+  // A recorded commit with no paths was not compared. It never reads as
+  // within, and beside a crossing it is still named.
+  expect(scopeSummary({ ...report, commits_compared: 1, commits_not_compared: 2 })).toEqual({
+    tone: "unchecked",
+    word: "Not compared",
+    text: "2 recorded commits have no paths to compare with the paths this task must not touch: crates/swarm-terminal/**. Swarm could not find or read them, or git lists no paths for a merge.",
+  });
+  expect(scopeSummary({ ...report, commits_compared: 0, commits_not_compared: 1 })?.text)
+    .toBe("A recorded commit has no paths to compare with the paths this task must not touch: crates/swarm-terminal/**. Swarm could not find or read it, or git lists no paths for a merge.");
+  expect(scopeSummary({ ...report, crossings, commits_not_compared: 1 })?.text)
+    .toBe("A commit changed paths this task must not touch (crates/swarm-terminal/**): 3333cccc changed crates/swarm-terminal/src/ipc.rs and 4 more. A recorded commit has no paths to compare. Queen decides whether that was needed.");
+});
+
+/**
+ * Patterns with nothing compared yet keep the card reading, so the Scope row
+ * follows the commits once the worker records them (ADR 0172).
+ */
+test("the card keeps reading while a task with patterns has no recorded commits", async () => {
+  vi.useFakeTimers();
+  const task: Task = { id: "petal", hive_id: "hive", title: "Petals", state: "review", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
+  const before: TaskCi = {
+    level: "off",
+    recorded_commits: 0,
+    observation: null,
+    independent_check: null,
+    must_not_touch: { patterns: ["packaging/**"], commits_compared: 0, commits_not_compared: 0, crossings: [], more_commits: 0 },
+  };
+  const after: TaskCi = {
+    ...before,
+    recorded_commits: 1,
+    must_not_touch: {
+      patterns: ["packaging/**"],
+      commits_compared: 1,
+      commits_not_compared: 0,
+      crossings: [{ commit: "3333cccc4444dddd", paths: [{ path: "packaging/linux/swarm-package", pattern: "packaging/**" }], more_paths: 0 }],
+      more_commits: 0,
+    },
+  };
+  const answer = (ci: TaskCi) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response);
+  vi.stubGlobal("fetch", vi.fn().mockImplementationOnce(() => answer(before)).mockImplementation(() => answer(after)));
+  render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByText("Not compared")).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(screen.getByText("Crossed")).toBeInTheDocument();
 });
 
 test("the card shows a crossing as a Scope row beside CI", async () => {
@@ -130,6 +177,7 @@ test("the card shows a crossing as a Scope row beside CI", async () => {
     must_not_touch: {
       patterns: ["packaging/**"],
       commits_compared: 1,
+      commits_not_compared: 0,
       crossings: [{ commit: "3333cccc4444dddd", paths: [{ path: "packaging/linux/swarm-package", pattern: "packaging/**" }], more_paths: 0 }],
       more_commits: 0,
     },

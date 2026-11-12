@@ -16282,6 +16282,7 @@ mod tests {
             serde_json::json!({
                 "patterns": ["packaging/**"],
                 "commits_compared": 2,
+                "commits_not_compared": 0,
                 "crossings": [{
                     "commit": "3333cccc4444dddd",
                     "paths": [{ "path": "packaging/linux/swarm-package", "pattern": "packaging/**" }],
