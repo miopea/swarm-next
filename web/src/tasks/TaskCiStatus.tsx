@@ -60,6 +60,8 @@ export function checkSummary(check: IndependentCheck | null): { tone: Tone; word
         text: `Independent check at ${check.head.slice(0, 8)} (${check.verdict}) does not cover ${count === 1 ? "a later commit" : `${count} later commits`}: ${short(check.since)}.`,
       };
     }
+    case "unreadable":
+      return { tone: "unchecked", word: "Unreadable", text: `The independent check could not be read: ${sentence(check.why)}` };
   }
 }
 
