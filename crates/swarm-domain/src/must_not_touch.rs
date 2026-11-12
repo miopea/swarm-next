@@ -109,28 +109,23 @@ pub fn validate_must_not_touch(patterns: &[String]) -> Result<MustNotTouchPatter
 ///
 /// - `*` matches any characters within one part of the path, `?` one.
 /// - `**` as a whole part matches any number of parts, including none.
-/// - A pattern ending in `/`, or with no `*` or `?` at all, also covers
-///   everything under it: `web/node_modules` covers `web/node_modules/x/y.js`.
+/// - A pattern also covers everything under a folder it matches, with or
+///   without a wildcard or a trailing `/`: `web/node_modules` and
+///   `**/node_modules` both cover `web/node_modules/x/y.js`. That can flag a
+///   path the filer did not mean, and never misses one they did (ADR 0172).
 #[must_use]
 pub fn path_matches(pattern: &str, path: &str) -> bool {
     let pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+    let pattern = pattern.strip_suffix('/').unwrap_or(pattern);
     let path = path.strip_prefix("./").unwrap_or(path);
-    if let Some(directory) = pattern.strip_suffix('/') {
-        return path_matches(&format!("{directory}/**"), path);
-    }
-    if !pattern.contains(['*', '?']) {
-        return path == pattern
-            || path
-                .strip_prefix(pattern)
-                .is_some_and(|rest| rest.starts_with('/'));
-    }
     let pattern: Vec<&str> = pattern.split('/').collect();
     let path: Vec<&str> = path.split('/').collect();
     parts_match(&pattern, &path)
 }
 
-/// Pattern parts against path parts, with `**` spanning parts. A table over
-/// both, so a pattern full of `**` cannot make the match exponential.
+/// Pattern parts against path parts, with `**` spanning parts: true when the
+/// pattern matches the whole path or a folder holding it. A table over both,
+/// so a pattern full of `**` cannot make the match exponential.
 fn parts_match(pattern: &[&str], path: &[&str]) -> bool {
     // reach[j]: the first i pattern parts can match the first j path parts.
     let mut reach = vec![false; path.len() + 1];
@@ -150,7 +145,9 @@ fn parts_match(pattern: &[&str], path: &[&str]) -> bool {
         }
         reach = next;
     }
-    reach[path.len()]
+    // Any reach[j] past zero: the whole path when j is its length, and a
+    // folder holding it when j is shorter.
+    reach.iter().skip(1).any(|reached| *reached)
 }
 
 /// One part, with `*` and `?` inside it.
@@ -423,6 +420,42 @@ mod tests {
         for (pattern, path, expected) in cases {
             assert_eq!(path_matches(pattern, path), expected, "{pattern} vs {path}");
         }
+    }
+
+    /// A wildcard pattern that names a folder covers what is in it, as a plain
+    /// one does. Otherwise `**/node_modules` or `crates/swarm-terminal/*`
+    /// would read as limits and never fire on the files below them.
+    #[test]
+    fn a_pattern_covers_everything_under_a_folder_it_matches() {
+        let cases = [
+            ("**/node_modules", "web/node_modules/react/index.js", true),
+            ("**/node_modules", "node_modules/a.js", true),
+            ("**/node_modules", "web/node_modules_extra/a.js", false),
+            (
+                "crates/swarm-terminal/*",
+                "crates/swarm-terminal/src/lib.rs",
+                true,
+            ),
+            ("crates/swarm-*", "crates/swarm-terminal/src/lib.rs", true),
+            ("crates/swarm-*", "crates/other/src/lib.rs", false),
+            ("crates/*/src", "crates/swarm-terminal/src/ipc/mod.rs", true),
+            ("crates/*/src", "crates/swarm-terminal/tests/ipc.rs", false),
+            ("docs/*/", "docs/decisions/0172.md", true),
+            ("docs/*.md", "docs/decisions/a.md", false),
+        ];
+        for (pattern, path, expected) in cases {
+            assert_eq!(path_matches(pattern, path), expected, "{pattern} vs {path}");
+        }
+        let report = must_not_touch_report(
+            &owned(&["**/node_modules"]),
+            Some(&report(vec![commit(
+                "abc",
+                &["web/node_modules/react/index.js"],
+            )])),
+        )
+        .expect("patterns give a report");
+        assert_eq!(report.crossings.len(), 1);
+        assert_eq!(report.crossings[0].paths[0].pattern, "**/node_modules");
     }
 
     /// Many `**` parts against a long path stay quick: the match is a table,

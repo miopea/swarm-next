@@ -5694,7 +5694,7 @@ fn create_task_tool() -> Tool {
                     "type": "array",
                     "maxItems": 32,
                     "items": { "type": "string", "minLength": 1, "maxLength": 256 },
-                    "description": "Optional. Paths the work must leave alone, relative to that repository, such as crates/swarm-terminal/** or web/node_modules/**. * matches within one folder name, ** across folders, and a path with no wildcard covers everything under it. Queen sees any commit that touched one at Review. Only Queen changes them after filing."
+                    "description": "Optional. Paths the work must leave alone, relative to that repository, such as crates/swarm-terminal/** or web/node_modules/**. * matches within one folder name, ** across folders, and a pattern covers everything under a folder it matches, as in .gitignore. Queen sees any commit that touched one at Review. Only Queen changes them after filing."
                 }
             },
             "required": ["title", "workspace"],
@@ -5885,7 +5885,7 @@ fn task_prerequisite_tool() -> Tool {
 fn set_task_must_not_touch_tool() -> Tool {
     tool(
         "swarm_set_task_must_not_touch",
-        "Queen only: replace the paths a task's work must not touch (ADR 0172), with a reason that goes on the task's record. Patterns are relative to the task's repository: * matches within one folder name, ** across folders, and a path with no wildcard covers everything under it. An empty list removes them. The filer sets them at swarm_create_task and only you change them afterwards, so a worker that needs a path asks you. At Review the task shows which of its recorded commits touched one; nothing is refused for a crossing, and you decide whether it was needed. Finished tasks are not changed.",
+        "Queen only: replace the paths a task's work must not touch (ADR 0172), with a reason that goes on the task's record. Patterns are relative to the task's repository: * matches within one folder name, ** across folders, and a pattern covers everything under a folder it matches, as in .gitignore. An empty list removes them. The filer sets them at swarm_create_task and only you change them afterwards, so a worker that needs a path asks you. At Review the task shows which of its recorded commits touched one; nothing is refused for a crossing, and you decide whether it was needed. Finished tasks are not changed.",
         &json!({"type":"object", "properties": {
             "task_id":{"type":"string","format":"uuid"},
             "patterns":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":256}},
@@ -6326,6 +6326,12 @@ const MUST_NOT_TOUCH_CROSSED: &str = "Some of this task's commits changed paths 
 /// paths to compare.
 const MUST_NOT_TOUCH_NOT_COMPARED: &str = "Some of this task's recorded commits could not be compared with the paths it must not touch, because they have no recorded paths (must_not_touch_report.commits_not_compared): Swarm could not find or read them, or git lists no paths for a merge. The move to Review stands, and the work waits for Queen. Record the commits that hold the work, so they can be compared.";
 
+/// The step a worker's Review response adds when the task has patterns and
+/// no recorded commits. The general Review step asks for commits only while no
+/// evidence is recorded, so a deployment recorded first would otherwise leave
+/// held work with nobody asked to record them.
+const MUST_NOT_TOUCH_NO_COMMITS: &str = "No commits of this task are recorded, so nothing was compared with the paths it must not touch (must_not_touch_report). The move to Review stands. If the work made commits, record them with swarm_record_task_commits so they can be compared; until then the work waits for Queen.";
+
 /// The must-not-touch report as Queen reads it in a task's history: null when
 /// the task has no patterns, and said to be unreadable when its row cannot be
 /// read, never shown as none, because none would hide a crossing (ADR 0172).
@@ -6350,8 +6356,9 @@ fn must_not_touch_fields(
 }
 
 /// What a worker's Review response adds about its must-not-touch patterns
-/// (ADR 0172): the report, with a step when a commit crossed; that they are
-/// unreadable when their row cannot be read; nothing without patterns.
+/// (ADR 0172): the report, with a step when a commit crossed, could not be
+/// compared, or none was recorded; that they are unreadable when their row
+/// cannot be read; nothing without patterns.
 fn must_not_touch_for_review(
     read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
 ) -> Vec<(&'static str, Value)> {
@@ -6359,9 +6366,11 @@ fn must_not_touch_for_review(
         Ok(None) => Vec::new(),
         Ok(Some(report)) => {
             let mut fields = Vec::with_capacity(2);
+            let nothing_recorded = report.commits_compared == 0 && report.commits_not_compared == 0;
             let steps: Vec<&str> = [
                 (!report.crossings.is_empty()).then_some(MUST_NOT_TOUCH_CROSSED),
                 (report.commits_not_compared > 0).then_some(MUST_NOT_TOUCH_NOT_COMPARED),
+                nothing_recorded.then_some(MUST_NOT_TOUCH_NO_COMMITS),
             ]
             .into_iter()
             .flatten()
@@ -15629,6 +15638,40 @@ mod tests {
         assert_eq!(
             super::must_not_touch_on_board(Ok(Some(report))).unwrap()["commits_not_compared"],
             2
+        );
+    }
+
+    /// Patterns with no recorded commits compare nothing, and the coordinator
+    /// holds that work for Queen. The worker is told to record its commits,
+    /// even when a deployment it recorded first keeps the general Review step
+    /// from asking (ADR 0172). Work that was compared and stayed within gets
+    /// no step.
+    #[test]
+    fn patterns_with_no_recorded_commits_ask_the_worker_to_record_them_at_review() {
+        let nothing_compared = swarm_domain::MustNotTouchReport {
+            patterns: vec!["migrations/**".to_owned()],
+            commits_compared: 0,
+            commits_not_compared: 0,
+            crossings: Vec::new(),
+            more_commits: 0,
+        };
+        let review = super::must_not_touch_for_review(Ok(Some(nothing_compared.clone())));
+        let step = review
+            .iter()
+            .find(|(key, _)| *key == "must_not_touch_step")
+            .unwrap_or_else(|| panic!("a step: {review:?}"));
+        let step = step.1.as_str().unwrap();
+        assert!(step.contains("swarm_record_task_commits"), "{step}");
+        assert!(step.contains("nothing was compared"), "{step}");
+
+        let within = swarm_domain::MustNotTouchReport {
+            commits_compared: 1,
+            ..nothing_compared
+        };
+        let review = super::must_not_touch_for_review(Ok(Some(within)));
+        assert!(
+            review.iter().all(|(key, _)| *key != "must_not_touch_step"),
+            "{review:?}"
         );
     }
 

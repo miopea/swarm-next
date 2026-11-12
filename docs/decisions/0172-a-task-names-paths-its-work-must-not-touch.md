@@ -30,9 +30,16 @@ not part of this.
      In a pattern they are always wildcards, so a path whose name has a `*`
      of its own is still matched.
    - `**` as a whole part matches any number of parts, including none.
-   - A pattern with no wildcard, or one ending in `/`, also covers everything
-     under it, so `web/node_modules` covers `web/node_modules/react/index.js`
-     and not `web/node_modules_extra/a.js`.
+   - A pattern also covers everything under a folder it matches, with or
+     without a wildcard, as `.gitignore` does. So `web/node_modules`,
+     `web/node_modules/` and `**/node_modules` all cover
+     `web/node_modules/react/index.js`, and none covers
+     `web/node_modules_extra/a.js`. `crates/swarm-*` covers
+     `crates/swarm-terminal/src/lib.rs`. A filer writing `**/node_modules`
+     or `crates/x/*` means the files below too, and a pattern that matched
+     only the folder's name would never fire on them. This can flag a path
+     the filer did not mean, such as a file under a folder named `a.md` for
+     `docs/*.md`, and never misses one they did.
    - The match is computed over a table of pattern and path parts, so a
      pattern full of `**` cannot make it slow.
 2. **What is refused when patterns are set.** A task carries at most 32, each
@@ -100,7 +107,11 @@ not part of this.
    - The response to a worker's move to Review carries the report. When a
      commit crossed, one line asks the worker to explain each crossing in its
      handoff or undo it. When a recorded commit could not be compared, one
-     line says so and asks for the commits that hold the work.
+     line says so and asks for the commits that hold the work. When no commit
+     is recorded, one line says nothing was compared and asks for the
+     commits, if the work made any. The general Review step asks for commits
+     only while no evidence is recorded, so a deployment recorded first would
+     otherwise leave held work with nobody asked.
    - Queen's board listing, on each task in Review: how many commits were
      compared, could not be compared, and crossed, and the first three
      crossed paths.
