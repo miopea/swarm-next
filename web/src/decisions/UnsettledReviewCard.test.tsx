@@ -167,3 +167,20 @@ test("a kind this build does not know still renders a row", () => {
   expect(screen.getByRole("heading", { name: /1 piece of finished work is waiting on Queen/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Ship the picker fix" })).toBeTruthy();
 });
+
+/** Work held for Queen because it crossed a path it must not touch. */
+test("a crossing held for Queen has its own chip, not Settling", () => {
+  render(
+    <UnsettledReviewCard
+      waiting={[
+        waiting({
+          kind: "scope_crossed",
+          reason: "its commits touched paths the task must not touch, which Queen decides",
+        }),
+      ]}
+    />,
+  );
+  const row = screen.getByRole("button", { name: "Ship the picker fix" }).closest("li");
+  expect(row?.textContent).toContain("Scope crossed");
+  expect(screen.queryByText("Settling")).toBeNull();
+});

@@ -54,6 +54,7 @@ const KIND_LABELS: Record<string, string> = {
   code_no_deployment: "Code, no deploy",
   nothing_reported: "Nothing reported",
   report_unsettled: "Report unchecked",
+  scope_crossed: "Scope crossed",
   settling: "Settling",
 };
 

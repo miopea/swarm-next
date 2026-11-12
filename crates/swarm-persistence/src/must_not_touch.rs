@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use rusqlite::{OptionalExtension as _, params};
 use swarm_domain::{
     ControlRoomEventKind, MustNotTouchPatterns, Task, TaskActivityActor, TaskId, TaskPriority,
-    validate_must_not_touch,
 };
 
 use crate::{TaskStore, TaskStoreError, insert_control_room_event};
@@ -22,7 +21,10 @@ pub(crate) fn migrate_must_not_touch(
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS task_must_not_touch (
              task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
-             patterns TEXT NOT NULL CHECK (length(patterns) BETWEEN 2 AND 20000),
+             patterns TEXT NOT NULL CHECK (
+                 length(patterns) BETWEEN 2 AND 20000
+                 AND json_valid(patterns) AND json_type(patterns) = 'array'
+             ),
              set_by_kind TEXT NOT NULL,
              set_by_id TEXT,
              set_at INTEGER NOT NULL
@@ -152,13 +154,17 @@ fn read_patterns(
     decode(&encoded)
 }
 
+/// Reads stored patterns as they were accepted.
+///
+/// NOT RE-CHECKED against today's rules. They were checked when written, and
+/// re-checking on read would make every task filed before a rule tightened
+/// unreadable. A row that is not a list of strings is an integrity failure,
+/// never an empty list, because an empty list would hide a crossing.
 fn decode(encoded: &str) -> Result<MustNotTouchPatterns, TaskStoreError> {
     let raw: Vec<String> = serde_json::from_str(encoded).map_err(|error| {
         TaskStoreError::IntegrityFailure(format!("stored must-not-touch patterns: {error}"))
     })?;
-    validate_must_not_touch(&raw).map_err(|reason| {
-        TaskStoreError::IntegrityFailure(format!("stored must-not-touch patterns: {reason}"))
-    })
+    Ok(MustNotTouchPatterns::stored(raw))
 }
 
 impl TaskStore {
@@ -291,6 +297,26 @@ impl TaskStore {
         Ok(found)
     }
 
+    /// Whether the task's recorded commits touched a path it must not touch.
+    ///
+    /// The coordinator's settlement passes ask this before closing Review work
+    /// on their own, so a crossing waits for Queen rather than closing unseen.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or a stored row no
+    /// longer reads as patterns.
+    pub fn must_not_touch_crossed(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+        let patterns = self.task_must_not_touch(task_id)?;
+        if patterns.is_empty() {
+            return Ok(false);
+        }
+        let commits = self.task_commit_report(task_id)?;
+        Ok(
+            swarm_domain::must_not_touch_report(patterns.as_slice(), commits.as_ref())
+                .is_some_and(|report| !report.crossings.is_empty()),
+        )
+    }
+
     /// The task's patterns, empty when it has none.
     ///
     /// # Errors
@@ -308,12 +334,12 @@ impl TaskStore {
 #[cfg(test)]
 mod tests {
     use swarm_domain::{
-        MustNotTouchPatterns, TaskActivityActor, TaskPriority, TaskState, WorkerId,
-        validate_must_not_touch,
+        CommitRepositoryState, CommitVerdict, MustNotTouchPatterns, TaskActivityActor, TaskCommit,
+        TaskId, TaskPriority, TaskState, WorkerId, validate_must_not_touch,
     };
 
     use super::MustNotTouchChange;
-    use crate::{TaskStore, TaskStoreError};
+    use crate::{CompletionEvidence, TaskStore, TaskStoreError};
 
     fn patterns(raw: &[&str]) -> MustNotTouchPatterns {
         let raw: Vec<String> = raw.iter().map(|pattern| (*pattern).to_owned()).collect();
@@ -333,6 +359,205 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+
+    /// Review work filed with these limits whose one recorded commit changed
+    /// these paths.
+    fn reviewed_with(store: &TaskStore, limits: &[&str], paths: &[&str]) -> TaskId {
+        let task = store
+            .create_task_with_must_not_touch_as(
+                "Scoped work",
+                "",
+                TaskPriority::Normal,
+                "/work/petal",
+                &TaskActivityActor::operator(),
+                &patterns(limits),
+            )
+            .unwrap()
+            .id;
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task, state).unwrap();
+        }
+        store
+            .record_task_commits(
+                task,
+                "/work/petal",
+                CommitRepositoryState::Read,
+                &[TaskCommit {
+                    sha: format!("{task}").replace('-', ""),
+                    verdict: CommitVerdict::Present,
+                    subject: "change".to_owned(),
+                    changed_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+                    found_in: None,
+                }],
+                900,
+            )
+            .unwrap();
+        task
+    }
+
+    /// Shipped work closes on its deployment, unless it crossed a limit
+    /// nobody has seen yet. Queen accepting it, by moving it to Awaiting
+    /// Release, lets the same pass close it.
+    #[test]
+    fn shipped_review_work_that_crossed_waits_for_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let crossed = reviewed_with(&store, &["migrations/**"], &["migrations/0001.sql"]);
+        let within = reviewed_with(&store, &["migrations/**"], &["src/app.rs"]);
+        for task in [crossed, within] {
+            store
+                .record_task_deployment(task, "production", "v1.2.3", 1_000)
+                .unwrap();
+        }
+        assert!(store.must_not_touch_crossed(crossed).unwrap());
+        assert!(!store.must_not_touch_crossed(within).unwrap());
+
+        let closed: Vec<TaskId> = store
+            .complete_reviewed_work_with_deployment()
+            .unwrap()
+            .into_iter()
+            .map(|completion| completion.task_id)
+            .collect();
+
+        assert_eq!(closed, [within]);
+        assert_eq!(store.get_task(crossed).unwrap().state, TaskState::Review);
+
+        store
+            .transition_task(crossed, TaskState::AwaitingRelease)
+            .unwrap();
+        let closed: Vec<TaskId> = store
+            .complete_reviewed_work_with_deployment()
+            .unwrap()
+            .into_iter()
+            .map(|completion| completion.task_id)
+            .collect();
+        assert_eq!(closed, [crossed]);
+    }
+
+    /// Documentation-only work settles itself, unless it crossed. Nothing is
+    /// claimed on its behalf, so it is still on the list waiting for judgment.
+    #[test]
+    fn documentation_only_work_that_crossed_is_not_settled() {
+        let store = TaskStore::in_memory().unwrap();
+        let crossed = reviewed_with(&store, &["docs/decisions/"], &["docs/decisions/0001.md"]);
+        let within = reviewed_with(&store, &["docs/decisions/"], &["docs/guide.md"]);
+
+        let page = store
+            .settle_reviewed_work_without_deployment_page(2_000, None)
+            .unwrap();
+
+        assert_eq!(page.closed, [within]);
+        assert_eq!(store.get_task(crossed).unwrap().state, TaskState::Review);
+        assert_eq!(
+            store.completion_evidence(crossed).unwrap(),
+            CompletionEvidence::None
+        );
+        assert_eq!(store.reviewed_work_awaiting_judgment().unwrap(), [crossed]);
+    }
+
+    /// A task without limits, and a crossing read from a row that cannot be
+    /// read, take the two sides they should: the first closes as before, the
+    /// second is held rather than closed.
+    #[test]
+    fn an_unreadable_row_holds_shipped_work_and_no_limits_changes_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let plain = reviewed_with(&store, &[], &["migrations/0001.sql"]);
+        let damaged = reviewed_with(&store, &["migrations/**"], &["src/app.rs"]);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_must_not_touch SET patterns = '[1]' WHERE task_id = ?1",
+                [damaged.to_string()],
+            )
+            .unwrap();
+        for task in [plain, damaged] {
+            store
+                .record_task_deployment(task, "production", "v1.2.3", 1_000)
+                .unwrap();
+        }
+
+        let closed: Vec<TaskId> = store
+            .complete_reviewed_work_with_deployment()
+            .unwrap()
+            .into_iter()
+            .map(|completion| completion.task_id)
+            .collect();
+
+        assert_eq!(closed, [plain]);
+        assert_eq!(store.get_task(damaged).unwrap().state, TaskState::Review);
+    }
+
+    /// A pattern write that fails files nothing: no task without the limits
+    /// its filer gave it, and no change half made. Recovery is filing again.
+    #[test]
+    fn a_failed_pattern_write_files_nothing_and_changes_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let count = |title: &str| -> i64 {
+            store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM tasks WHERE title = ?1",
+                    [title],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        let file = |title: &str| {
+            store.create_task_with_must_not_touch_as(
+                title,
+                "",
+                TaskPriority::Normal,
+                "/work/petal",
+                &TaskActivityActor::operator(),
+                &patterns(&["migrations/**"]),
+            )
+        };
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_pattern_write BEFORE INSERT ON task_must_not_touch
+                 BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;",
+            )
+            .unwrap();
+
+        assert!(file("Filed").is_err());
+        assert_eq!(
+            count("Filed"),
+            0,
+            "the task must not exist without its limits"
+        );
+
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TRIGGER fail_pattern_write;
+                 CREATE TRIGGER fail_change_note BEFORE INSERT ON task_activity
+                 WHEN NEW.kind = 'noted' AND NEW.note LIKE 'Must not touch changed%'
+                 BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;",
+            )
+            .unwrap();
+        let task = file("Filed").unwrap();
+        assert_eq!(count("Filed"), 1);
+        assert!(
+            store
+                .set_must_not_touch(
+                    task.id,
+                    &patterns(&["web/**"]),
+                    "Wider.",
+                    &TaskActivityActor::operator(),
+                    950,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.task_must_not_touch(task.id).unwrap(),
+            patterns(&["migrations/**"]),
+            "a change whose record failed is not made"
+        );
     }
 
     #[test]
@@ -470,26 +695,55 @@ mod tests {
         ));
     }
 
-    /// A row that no longer reads as valid patterns is reported, not shown as
-    /// "no limits": a silent empty would hide a crossing from Queen.
+    /// A row that is not a list of strings is reported, not shown as "no
+    /// limits": a silent empty would hide a crossing from Queen.
     #[test]
     fn a_damaged_row_is_an_integrity_failure_not_an_empty_list() {
         let store = TaskStore::in_memory().unwrap();
         let task = store.create_task("Damaged", "/work/petal").unwrap();
-        store
-            .connection()
-            .unwrap()
-            .execute(
-                "INSERT INTO task_must_not_touch (task_id, patterns, set_by_kind, set_at)
-                 VALUES (?1, '[\"../escape\"]', 'operator', 1)",
-                [task.id.to_string()],
+        let insert = |patterns: &str| {
+            store.connection().unwrap().execute(
+                "INSERT OR REPLACE INTO task_must_not_touch (task_id, patterns, set_by_kind, set_at)
+                 VALUES (?1, ?2, 'operator', 1)",
+                [task.id.to_string(), patterns.to_owned()],
             )
-            .unwrap();
+        };
+        // The table refuses anything that is not a JSON list.
+        assert!(insert("not json").is_err());
+        assert!(insert("{\"a\": 1}").is_err());
+        // A list of something other than strings gets past the table.
+        insert("[1]").unwrap();
 
         assert!(matches!(
             store.task_must_not_touch(task.id),
             Err(TaskStoreError::IntegrityFailure(_))
         ));
+        assert!(matches!(
+            store.must_not_touch_for_tasks(&[task.id]),
+            Err(TaskStoreError::IntegrityFailure(_))
+        ));
+    }
+
+    /// Stored patterns are read as they were accepted, so tightening the rules
+    /// later does not make a task filed before it unreadable.
+    #[test]
+    fn a_stored_pattern_today_s_rules_refuse_still_reads() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Older", "/work/petal").unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO task_must_not_touch (task_id, patterns, set_by_kind, set_at)
+                 VALUES (?1, '[\"crates//old\"]', 'operator', 1)",
+                [task.id.to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.task_must_not_touch(task.id).unwrap().as_slice(),
+            ["crates//old".to_owned()]
+        );
     }
 
     #[test]

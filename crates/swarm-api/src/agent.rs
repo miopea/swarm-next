@@ -6318,9 +6318,10 @@ fn independent_check_hint(check: &IndependentCheckState) -> Option<String> {
     }
 }
 
-/// The check, cut to what a brief board entry carries.
+/// What a worker's listing says beside its task's must-not-touch patterns.
 const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relative to its repository, set by whoever filed it or by Queen (ADR 0172). Only Queen changes them: if the work needs one, ask her with swarm_message_queen before touching it. At Review, Queen sees which recorded commits touched one; nothing is refused for that, and she decides whether it was needed.";
 
+/// The step a worker's Review response adds when its commits crossed.
 const MUST_NOT_TOUCH_CROSSED: &str = "Some of this task's commits changed paths it must not touch (must_not_touch_report). The move to Review stands. Say in your handoff why each crossing was needed, or undo it, so Queen can decide.";
 
 /// What Queen's board shows about a task's must-not-touch patterns at Review
@@ -6339,6 +6340,7 @@ fn must_not_touch_brief(report: &swarm_domain::MustNotTouchReport) -> Value {
     })
 }
 
+/// The check, cut to what a brief board entry carries.
 fn independent_check_brief(check: &IndependentCheckState) -> Value {
     match check {
         IndependentCheckState::NotChecked => json!({ "state": "not_checked" }),

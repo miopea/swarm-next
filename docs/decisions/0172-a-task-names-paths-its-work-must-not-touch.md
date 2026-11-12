@@ -35,7 +35,9 @@ not part of this.
      pattern full of `**` cannot make it slow.
 2. **What is refused when patterns are set.** A task carries at most 32, each
    at most 256 characters. A pattern is refused when it is empty, starts with
-   `/`, contains `\`, contains a `..` part, or contains a control character.
+   `/`, contains `\`, has an empty, `.` or `..` part, or contains a control
+   character. A pattern that could never match a changed path is refused
+   rather than accepted as a limit that never fires.
    Patterns are trimmed, a leading `./` is dropped, and duplicates are
    removed. Refusing a pattern at filing files nothing.
 3. **Who sets them.**
@@ -51,15 +53,27 @@ not part of this.
 4. **Recorded.** Every change writes an activity row naming the actor, the
    patterns before and after, and the reason, in the same transaction as the
    change. Each list is spelled out up to 1,000 bytes and the rest counted,
-   and the note is held to the 4,000 bytes other activity notes are. A table holds the current patterns, one row per task that has any
-   (schema 227). A row that no longer reads as valid patterns is an integrity
-   failure, never an empty list, because an empty list would hide a crossing.
+   and the note is held to the 4,000 bytes other activity notes are.
+   - A table holds the current patterns, one row per task that has any
+     (schema 227). It accepts only a JSON list.
+   - Stored patterns are read as they were accepted, not re-checked against
+     today's rules, so tightening a rule later does not make older tasks
+     unreadable.
+   - A row that is not a list of strings is an integrity failure, never an
+     empty list, because an empty list would hide a crossing.
 5. **The comparison.** At read time, every pattern against every changed path
    of every recorded commit. Each crossing names the commit, the path and the
    first pattern it fell under. A commit lists at most 20 crossed paths, and
    the report lists at most 50 commits; the rest are counted. Like CI and the
    independent check, it follows the commits the worker records, so a commit
    never recorded is never compared.
+   - A recorded commit lists a rename as both the path it left and the path it
+     reached, so moving a file out of a protected folder is a crossing. This
+     also means a rename out of code into documentation no longer reads as
+     documentation only.
+   - Git lists no paths for a merge commit, so a merge is compared as touching
+     nothing. A task whose record holds only a merge commit shows no crossing.
+     This is a known gap, not fixed here.
 6. **Where it is shown.**
    - The worker's own Active and Ready tasks in `swarm_list_tasks`, and the
      task in `swarm_read_task_history`, carry the patterns and who changes
@@ -75,9 +89,22 @@ not part of this.
      with the commits and paths in the tooltip and for screen readers. A
      crossing has the amber tone of something to look at, not the red of a
      failure.
-7. **Shown, never refused.** Moving to Review, the coordinator's settlement,
+7. **Shown, never refused, and never closed unseen.** Moving to Review,
    completion and the check gate do not read the patterns. Some crossings are
-   needed, and Queen decides.
+   needed, and Queen decides. So the coordinator does not decide for her:
+   - Its two passes that close Review work on their own, on a whole-task
+     deployment or on commits that touched only documentation, skip a task in
+     Review whose recorded commits crossed. It stays in Review, where Queen is
+     woken for it and her board shows the crossing.
+   - This is not the reviewer's hold the deployment pass overrides. A reviewer
+     who holds work has looked at it, and nobody has looked at this.
+   - Queen accepts it the way she accepts other reviewed work. Awaiting
+     Release is never held, so once she moves it there the deployment pass
+     closes it as usual.
+   - Skipped, not refused, so one task never stalls the rest. A row that
+     cannot be read is held, not closed.
+   - The operator's list of reviewed work nothing has settled names a held
+     documentation-only task "Scope crossed", not "Settling".
 8. **A task without patterns behaves as it did before.** It has no row and
    no activity is written. Its listing, its Review response and Queen's board
    say nothing about patterns; the history's report and the card's read carry
@@ -91,10 +118,13 @@ not part of this.
   touching it, or explain the crossing at Review. Either way she sees it.
 - The patterns are the filer's judgement at the time of filing. A wrong one
   produces crossings Queen dismisses, and she can correct it.
+- Shipped work that crossed waits in Review for Queen, rather than closing on
+  its deployment within one pass. That is the cost of her seeing it.
 - Not built:
   - a web editor for the patterns, so the operator sets them through Queen;
-  - patterns on drafts filed by the intake agent, which files from email and
-    other sources that rarely name paths;
+  - patterns at filing anywhere but `swarm_create_task`: the board's
+    new-task form, the intake agent, and drafts arriving from GitHub, Jira,
+    email or another Hive file without them, and Queen adds them after;
   - any comparison with commits the worker did not record.
 - Not proven by the tests: whether filers use the field, or whether workers
   ask Queen before crossing rather than explaining afterwards.

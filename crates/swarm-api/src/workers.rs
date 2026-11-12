@@ -2235,13 +2235,26 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
         .unwrap_or_default()
         .trim()
         .to_owned();
-    let changed_paths = git(workspace, &["show", "--pretty=format:", "--name-only", sha])
-        .await
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(str::to_owned)
-        .collect();
+    // --no-renames: a rename is listed as the path it left and the path it
+    // reached. Git's default lists only where it went, so moving a file out of
+    // a folder a task must not touch, or out of code into docs, would be
+    // recorded as touching only the destination.
+    let changed_paths = git(
+        workspace,
+        &[
+            "show",
+            "--pretty=format:",
+            "--name-only",
+            "--no-renames",
+            sha,
+        ],
+    )
+    .await
+    .unwrap_or_default()
+    .lines()
+    .filter(|line| !line.trim().is_empty())
+    .map(str::to_owned)
+    .collect();
     // REACHABLE, not merely present. `cat-file` still finds a commit that a
     // rebase orphaned, right up until it is collected — so a dangling SHA would
     // otherwise read exactly like a live one.
@@ -2545,6 +2558,24 @@ mod commit_verification_tests {
 
         assert_eq!(commits[0].verdict, CommitVerdict::Missing);
         assert_eq!(commits[0].found_in, None);
+    }
+
+    /// A rename is recorded as both the path it left and the path it reached,
+    /// so a move out of a protected folder is still seen to touch it.
+    #[tokio::test]
+    async fn a_rename_records_the_path_it_left_and_the_path_it_reached() {
+        let (dir, _) = repository_with_one_commit();
+        let path = dir.path();
+        git_in(path, &["mv", "docs/note.md", "notes.md"]);
+        git_in(path, &["commit", "--quiet", "-m", "move the note"]);
+        let sha = git_in(path, &["rev-parse", "HEAD"]);
+
+        let (_, commits) =
+            verify_reported_commits(path.to_str().unwrap(), &[], std::slice::from_ref(&sha)).await;
+
+        let mut paths = commits[0].changed_paths.clone();
+        paths.sort();
+        assert_eq!(paths, ["docs/note.md".to_owned(), "notes.md".to_owned()]);
     }
 
     #[tokio::test]

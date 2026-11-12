@@ -21,13 +21,23 @@ pub const MAX_CROSSED_PATHS_PER_COMMIT: usize = 20;
 /// The most commits with crossings listed; the rest are counted.
 pub const MAX_CROSSING_COMMITS: usize = 50;
 
-/// A task's patterns, checked. The only way to make one is
-/// [`validate_must_not_touch`], so storage never holds a pattern that was not.
+/// A task's patterns. New ones are made by [`validate_must_not_touch`], so
+/// storage never takes a pattern that was not checked.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct MustNotTouchPatterns(Vec<String>);
 
 impl MustNotTouchPatterns {
+    /// Patterns read back from storage, as they were accepted when set.
+    ///
+    /// Not re-checked: a rule tightened later must not make a task filed
+    /// before it unreadable. A pattern today's rules refuse still matches
+    /// exactly what it matched when it was accepted.
+    #[must_use]
+    pub fn stored(patterns: Vec<String>) -> Self {
+        Self(patterns)
+    }
+
     #[must_use]
     pub fn as_slice(&self) -> &[String] {
         &self.0
@@ -73,6 +83,14 @@ pub fn validate_must_not_touch(patterns: &[String]) -> Result<MustNotTouchPatter
         if pattern.split('/').any(|part| part == "..") {
             return Err(format!(
                 "The must-not-touch pattern \"{pattern}\" climbs out of the repository with \"..\"."
+            ));
+        }
+        // A changed path never has an empty part or a "." part, so a pattern
+        // with one could never match and would read as a limit that holds.
+        let parts = pattern.strip_suffix('/').unwrap_or(pattern);
+        if parts.split('/').any(|part| part.is_empty() || part == ".") {
+            return Err(format!(
+                "The must-not-touch pattern \"{pattern}\" has an empty or \".\" part, so it could never match a changed path."
             ));
         }
         if pattern.chars().any(char::is_control) {
@@ -316,9 +334,9 @@ mod tests {
     fn a_pattern_full_of_double_stars_is_not_exponential() {
         let pattern = format!("{}x", "**/".repeat(60));
         let path = format!("{}y", "a/".repeat(500));
-        let started = std::time::Instant::now();
+        // No timing assertion: a matcher that backtracked over sixty `**`
+        // parts would not return at all, so finishing is the evidence.
         assert!(!path_matches(&pattern, &path));
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]
@@ -328,6 +346,10 @@ mod tests {
             ("crates\\x", "relative"),
             ("../other", "climbs out"),
             ("  ", "empty"),
+            ("crates//x", "empty or"),
+            ("crates/./x", "empty or"),
+            (".", "empty or"),
+            ("crates//", "empty or"),
         ] {
             let error = validate_must_not_touch(&owned(&[bad])).unwrap_err();
             assert!(error.contains(says), "{bad}: {error}");

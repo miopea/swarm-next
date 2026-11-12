@@ -16292,6 +16292,76 @@ mod tests {
         );
     }
 
+    /// Documentation-only Review work that crossed is held for Queen, so the
+    /// operator's list must not call it settling (ADR 0172).
+    #[tokio::test]
+    async fn held_documentation_work_that_crossed_is_not_called_settling() {
+        use swarm_domain::{
+            CommitRepositoryState, CommitVerdict, TaskActivityActor, TaskCommit, TaskState,
+            validate_must_not_touch,
+        };
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let reviewed = |title: &str, path: &str| {
+            let task = store.create_task(title, "/workspace/petal").unwrap().id;
+            store
+                .set_must_not_touch(
+                    task,
+                    &validate_must_not_touch(&["docs/decisions/**".to_owned()]).unwrap(),
+                    "Routing.",
+                    &TaskActivityActor::operator(),
+                    900,
+                )
+                .unwrap();
+            for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+                store.transition_task(task, state).unwrap();
+            }
+            store
+                .record_task_commits(
+                    task,
+                    "/workspace/petal",
+                    CommitRepositoryState::Read,
+                    &[TaskCommit {
+                        sha: format!("{task}").replace('-', ""),
+                        verdict: CommitVerdict::Present,
+                        subject: "docs: write".to_owned(),
+                        changed_paths: vec![path.to_owned()],
+                        found_in: None,
+                    }],
+                    1_000,
+                )
+                .unwrap();
+            task
+        };
+        let crossed = reviewed("Crossed", "docs/decisions/0001.md");
+        let within = reviewed("Within", "docs/guide.md");
+
+        let status =
+            response_json(authorized_get(app, "/api/v1/orchestration/coordinator").await).await;
+        let kind_of = |task: swarm_domain::TaskId| {
+            status["unsettled_review"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["task_id"] == task.to_string())
+                .map(|row| row["kind"].clone())
+        };
+        assert_eq!(
+            kind_of(crossed),
+            Some(serde_json::json!("scope_crossed")),
+            "{status}"
+        );
+        assert_eq!(
+            kind_of(within),
+            Some(serde_json::json!("settling")),
+            "{status}"
+        );
+    }
+
     /// ⚠️ ADR 0118 END TO END ON ONE MEMBER, with the real host function: the
     /// Keeper's days reach the terminal host through the request file, and
     /// count as in effect only once the host says it keeps them.

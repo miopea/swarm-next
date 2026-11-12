@@ -214,11 +214,21 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
                         "report_unsettled",
                         "commits were reported and could not be checked in that workspace",
                     ),
-                    // Settleable, so the sweep will take it on its next pass.
-                    // Present here only in the seconds between the two.
+                    // Settleable, so the sweep will take it on its next pass
+                    // and it is here only in the seconds between the two --
+                    // unless it crossed a path it must not touch, which the
+                    // sweep leaves for Queen and the row must not call
+                    // settling (ADR 0172). Unreadable is held, so it says so.
                     swarm_domain::CommitSettlement::NothingBuilt
                     | swarm_domain::CommitSettlement::DocumentationOnly => {
-                        ("settling", "waiting for the coordinator to settle it")
+                        if store.must_not_touch_crossed(task_id).unwrap_or(true) {
+                            (
+                                "scope_crossed",
+                                "its commits touched paths the task must not touch, which Queen decides",
+                            )
+                        } else {
+                            ("settling", "waiting for the coordinator to settle it")
+                        }
                     }
                 }
             };
