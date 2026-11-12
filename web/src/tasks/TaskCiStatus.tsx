@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { fetchTaskCi, type IndependentCheck, type Task, type TaskCi } from "../api";
+import { fetchTaskCi, type IndependentCheck, type MustNotTouchReport, type Task, type TaskCi } from "../api";
 import { useVisiblePolling } from "../runtime/useVisiblePolling";
 
 function short(shas: string[]) {
@@ -64,6 +64,30 @@ export function checkSummary(check: IndependentCheck | null): { tone: Tone; word
 }
 
 /**
+ * The task's must-not-touch patterns against its recorded commits (ADR 0172).
+ * Nothing when it has no patterns or no commits to compare. A crossing reads
+ * as something to look at, not a failure: some are needed, and Queen decides.
+ */
+export function scopeSummary(report: MustNotTouchReport | null): { tone: Tone; word: string; text: string } | undefined {
+  if (!report || report.commits_compared === 0) return undefined;
+  const limits = report.patterns.join(", ");
+  const crossed = report.crossings.length + report.more_commits;
+  if (crossed === 0) {
+    const commits = report.commits_compared === 1 ? "The recorded commit" : `None of the ${report.commits_compared} recorded commits`;
+    return { tone: "good", word: "Within", text: `${commits} ${report.commits_compared === 1 ? "touches none of" : "touch"} the paths this task must not touch: ${limits}.` };
+  }
+  const listed = report.crossings
+    .map(({ commit, paths, more_paths }) => `${commit.slice(0, 8)} changed ${paths.map(({ path }) => path).join(", ")}${more_paths > 0 ? ` and ${more_paths} more` : ""}`)
+    .join("; ");
+  const more = report.more_commits > 0 ? `; and ${report.more_commits} more commits` : "";
+  return {
+    tone: "waiting",
+    word: "Crossed",
+    text: `${crossed === 1 ? "A commit" : `${crossed} commits`} changed paths this task must not touch (${limits}): ${listed}${more}. Queen decides whether that was needed.`,
+  };
+}
+
+/**
  * CI and the worker's independent check for work waiting on review or release
  * (ADRs 0115 and 0171), as rows of the task's details. Read while the task
  * has recorded commits, and again each minute while it waits, because the
@@ -82,12 +106,14 @@ export default function TaskCiStatus({ task, operatorToken }: { task: Task; oper
   useVisiblePolling(load, watching, 60_000);
   const summary = ci && ciSummary(ci);
   const check = ci && checkSummary(ci.independent_check);
-  if (!summary && !check) return null;
+  const scope = ci && scopeSummary(ci.must_not_touch);
+  if (!summary && !check && !scope) return null;
   // One word fits the details grid; the sentence is the tooltip and is read out.
   return (
     <>
       {summary && <div><dt>CI</dt><dd><span className={`task-ci is-${summary.tone}`} title={summary.text}>{TONE_WORDS[summary.tone]}<span className="sr-only">: {summary.text}</span></span></dd></div>}
       {check && <div><dt>Check</dt><dd><span className={`task-ci is-${check.tone}`} title={check.text}>{check.word}{check.at && <span className="task-ci-at"> at {check.at}</span>}<span className="sr-only">: {check.text}</span></span></dd></div>}
+      {scope && <div><dt>Scope</dt><dd><span className={`task-ci is-${scope.tone}`} title={scope.text}>{scope.word}<span className="sr-only">: {scope.text}</span></span></dd></div>}
     </>
   );
 }

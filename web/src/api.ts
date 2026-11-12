@@ -2847,14 +2847,27 @@ export type IndependentCheck =
   | { state: "checked"; head: string; verdict: IndependentCheckVerdict; ran: string; findings: string; recorded_at: number }
   | { state: "stale"; head: string; verdict: IndependentCheckVerdict; recorded_at: number; since: string[] };
 /**
+ * A task's must-not-touch patterns against the paths its recorded commits
+ * changed (ADR 0172). Shown, never enforced: Queen decides whether a crossing
+ * was needed.
+ */
+export type MustNotTouchReport = {
+  patterns: string[];
+  commits_compared: number;
+  crossings: { commit: string; paths: { path: string; pattern: string }[]; more_paths: number }[];
+  more_commits: number;
+};
+/**
  * What the check gate knows about one task. No recorded commits means the gate never holds it.
- * `independent_check` is null when the task built no code.
+ * `independent_check` is null when the task built no code; `must_not_touch` is
+ * null when the task carries no patterns.
  */
 export type TaskCi = {
   level: CheckGateLevel;
   recorded_commits: number;
   observation: CiObservation | null;
   independent_check: IndependentCheck | null;
+  must_not_touch: MustNotTouchReport | null;
 };
 
 export async function fetchCheckGate(operatorToken: string, signal?: AbortSignal): Promise<CheckGate> {

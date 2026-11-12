@@ -16182,6 +16182,7 @@ mod tests {
 
         let nothing = response_json(read(app.clone()).await).await;
         assert!(nothing["independent_check"].is_null(), "{nothing}");
+        assert!(nothing["must_not_touch"].is_null(), "{nothing}");
 
         let first = "1111aaaa2222bbbb";
         record(&[first], 1_000);
@@ -16223,6 +16224,72 @@ mod tests {
             serde_json::json!([second])
         );
         assert_eq!(stale["recorded_commits"], 2);
+    }
+
+    /// ADR 0172 on the card: which commits touched a path the task must not
+    /// touch, read beside CI.
+    #[tokio::test]
+    async fn the_task_card_shows_must_not_touch_crossings_beside_ci() {
+        use swarm_domain::{
+            CommitRepositoryState, CommitVerdict, TaskActivityActor, TaskCommit,
+            validate_must_not_touch,
+        };
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let task = store.create_task("Scoped", "/workspace/petal").unwrap();
+        let uri = format!("/api/v1/tasks/{}/ci", task.id);
+        store
+            .set_must_not_touch(
+                task.id,
+                &validate_must_not_touch(&["packaging/**".to_owned()]).unwrap(),
+                "Routing.",
+                &TaskActivityActor::operator(),
+                900,
+            )
+            .unwrap();
+
+        let before = response_json(authorized_get(app.clone(), &uri).await).await;
+        assert_eq!(before["must_not_touch"]["commits_compared"], 0, "{before}");
+        assert_eq!(before["must_not_touch"]["crossings"], serde_json::json!([]));
+
+        let commit = |sha: &str, path: &str| TaskCommit {
+            sha: sha.to_owned(),
+            verdict: CommitVerdict::Present,
+            subject: "feat: scoped".to_owned(),
+            changed_paths: vec![path.to_owned()],
+            found_in: None,
+        };
+        store
+            .record_task_commits(
+                task.id,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[
+                    commit("1111aaaa2222bbbb", "src/lib.rs"),
+                    commit("3333cccc4444dddd", "packaging/linux/swarm-package"),
+                ],
+                1_000,
+            )
+            .unwrap();
+
+        let after = response_json(authorized_get(app, &uri).await).await;
+        assert_eq!(
+            after["must_not_touch"],
+            serde_json::json!({
+                "patterns": ["packaging/**"],
+                "commits_compared": 2,
+                "crossings": [{
+                    "commit": "3333cccc4444dddd",
+                    "paths": [{ "path": "packaging/linux/swarm-package", "pattern": "packaging/**" }],
+                    "more_paths": 0
+                }],
+                "more_commits": 0
+            })
+        );
     }
 
     /// ⚠️ ADR 0118 END TO END ON ONE MEMBER, with the real host function: the

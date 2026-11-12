@@ -37,7 +37,7 @@ use swarm_domain::{
     OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
     Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    WorkerSessionId, validate_must_not_touch,
 };
 use swarm_persistence::{
     FollowedApproval, NewDecisionRequest, RefusalWording, RefusedCommand, RefusedCommandFiling,
@@ -46,7 +46,9 @@ use swarm_persistence::{
 use thiserror::Error;
 
 mod conversation_rotation;
+mod must_not_touch;
 pub use conversation_rotation::{QUEEN_CONVERSATION_SECONDS, conversation_due_for_rotation};
+pub use must_not_touch::MAX_MUST_NOT_TOUCH_REASON_CHARS;
 mod decision_clarification;
 mod workspace_settings;
 pub use workspace_settings::WorkspaceSettingsService;
@@ -4196,12 +4198,34 @@ impl TaskService {
         priority: TaskPriority,
         workspace: &str,
     ) -> Result<Task, ApplicationError> {
-        let task = self.store.create_task_with_details_as(
+        self.file_task(principal, title, description, priority, workspace, &[])
+    }
+
+    /// Files a draft as [`TaskService::create_task`] does, carrying the paths
+    /// its work must not touch (ADR 0172). The filer is the one caller other
+    /// than Queen who sets them, and only here, at filing.
+    ///
+    /// # Errors
+    /// Refuses unusable patterns before anything is written, and propagates
+    /// validation or persistence failures.
+    pub fn file_task(
+        &self,
+        principal: AgentPrincipal,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        workspace: &str,
+        must_not_touch: &[String],
+    ) -> Result<Task, ApplicationError> {
+        let patterns =
+            validate_must_not_touch(must_not_touch).map_err(ApplicationError::Refused)?;
+        let task = self.store.create_task_with_must_not_touch_as(
             title,
             description,
             priority,
             workspace,
             &TaskActivityActor::worker(principal.worker_id),
+            &patterns,
         )?;
         // Filing is the whole of what a worker can do here, so it has to reach
         // the one who routes. Queen already sees drafts; nothing told her one
@@ -5263,6 +5287,12 @@ pub struct DecisionRequestInput {
     /// answer unless this is set (ADR 0119). Ignored for Queen and for work
     /// that is not Active.
     pub keep_working: bool,
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0))
 }
 
 fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {

@@ -10,10 +10,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use swarm_domain::{CheckGateLevel, CiObservation, IndependentCheckState, independent_check_state};
+use swarm_domain::{
+    CheckGateLevel, CiObservation, IndependentCheckState, MustNotTouchReport,
+    independent_check_state,
+};
 
 use super::{
-    ApiError, AppState, authorize, parse_task_id, task_store, task_store_error, unix_timestamp,
+    ApiError, AppState, application_error, authorize, parse_task_id, task_service, task_store,
+    task_store_error, unix_timestamp,
 };
 
 /// The check gate in effect, and the level this Hive's Apiary sets, if any:
@@ -78,6 +82,9 @@ struct TaskCiView {
     recorded_commits: usize,
     observation: Option<CiObservation>,
     independent_check: Option<IndependentCheckState>,
+    /// The task's must-not-touch patterns against its commits (ADR 0172),
+    /// also shown and never gating; null when the task has none.
+    must_not_touch: Option<MustNotTouchReport>,
 }
 
 pub(super) async fn task_ci(
@@ -101,6 +108,9 @@ pub(super) async fn task_ci(
     let latest_check = store
         .latest_independent_check(task_id)
         .map_err(|error| task_store_error(&error))?;
+    let must_not_touch = task_service(&state)?
+        .must_not_touch_report(task_id)
+        .map_err(application_error)?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(TaskCiView {
@@ -108,6 +118,7 @@ pub(super) async fn task_ci(
             recorded_commits: report.as_ref().map_or(0, |report| report.commits.len()),
             observation,
             independent_check: independent_check_state(report.as_ref(), latest_check.as_ref()),
+            must_not_touch,
         }),
     )
         .into_response())
