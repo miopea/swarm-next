@@ -36,8 +36,8 @@ not part of this.
 2. **What is refused when patterns are set.** A task carries at most 32, each
    at most 256 characters. A pattern is refused when it is empty, starts with
    `/`, contains `\`, has an empty, `.` or `..` part, or contains a control
-   character. A pattern that could never match a changed path is refused
-   rather than accepted as a limit that never fires.
+   character. A changed path never has an empty or `.` part, so a pattern
+   with one is refused rather than accepted as a limit that never fires.
    Patterns are trimmed, a leading `./` is dropped, and duplicates are
    removed. Refusing a pattern at filing files nothing.
 3. **Who sets them.**
