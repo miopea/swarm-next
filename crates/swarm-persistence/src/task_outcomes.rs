@@ -2510,7 +2510,7 @@ impl TaskStore {
         let candidates = {
             let connection = self.connection()?;
             let mut statement = connection.prepare(
-                "SELECT task.id, task.title, deployment.environment, deployment.reference
+                "SELECT task.id, task.title, deployment.environment, deployment.reference, task.state
                  FROM tasks task
                  -- ONLY A DEPLOYMENT THAT CLAIMS THE WHOLE TASK COUNTS.
                  --
@@ -2571,16 +2571,32 @@ impl TaskStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
 
         let mut closed = Vec::new();
-        for (id, title, environment, reference) in candidates {
+        for (id, title, environment, reference, state) in candidates {
             let Ok(task_id) = TaskId::from_str(&id) else {
                 continue;
             };
+            // A CROSSING NOBODY HAS SEEN IS LEFT FOR QUEEN (ADR 0172).
+            //
+            // Not the reviewer's-hold case above, which this sweep overrides:
+            // a reviewer who holds work has looked at it, and nobody has looked
+            // at this. Review work stays in Review, where Queen is woken for
+            // it and her board shows the crossing; she accepts it by moving it
+            // on, and Awaiting Release is never held here. Work with patterns
+            // and no recorded commits is held too, since a deployment can be
+            // recorded before the commits are. Skipped, not refused, and a
+            // row that cannot be read is held, not closed.
+            if state == TaskState::Review.to_string()
+                && self.must_not_touch_holds(task_id).unwrap_or(true)
+            {
+                continue;
+            }
             // The note is derived from the evidence rather than written about
             // it. "Verified" would be a claim this pass is not entitled to
             // make; where it is running is what was actually established.
@@ -3713,6 +3729,12 @@ impl TaskStore {
                 | CommitSettlement::NotReported
                 | CommitSettlement::Unestablished => continue,
             };
+            // A crossing nobody has seen waits for Queen, before anything is
+            // claimed on the task's behalf (ADR 0172). A row that cannot be
+            // read is held, not closed.
+            if self.must_not_touch_holds(task_id).unwrap_or(true) {
+                continue;
+            }
             if self.completion_evidence(task_id)? != CompletionEvidence::ExemptionApproved {
                 self.claim_completion_exemption(task_id, reason, None, now)?;
                 self.approve_completion_exemption(task_id, "coordinator", basis, now)?;

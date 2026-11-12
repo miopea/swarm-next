@@ -878,7 +878,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 40;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 41;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -888,7 +888,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 40;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 39. Update this and the revision together.
+/// The served surface as of revision 41. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -897,7 +897,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 40;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "3df82163ab51880b4cec9326281e0750589ba44e05c608a4aa410933d663ea6d";
+    "f4aa612da541063f8693d74a6dd81f0efa8a01fb15b4690e10c0af8b8c3fe7ca";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1197,6 +1197,7 @@ impl ServerHandler for AgentMcp {
                 reconcile_task_message_tool(),
                 assign_task_tool(),
                 task_prerequisite_tool(),
+                set_task_must_not_touch_tool(),
                 task_decision_link_tool(),
                 reassess_task_block_tool(),
                 read_queen_review_evidence_tool(),
@@ -1274,6 +1275,7 @@ impl AgentMcp {
                 "swarm_create_task"
                 | "swarm_assign_task"
                 | "swarm_set_task_prerequisite"
+                | "swarm_set_task_must_not_touch"
                 | "swarm_set_task_decision_link"
                 | "swarm_reassess_task_block"
                 | "swarm_record_review_disposition"
@@ -1585,12 +1587,13 @@ impl AgentMcp {
             }
             "swarm_create_task" => parse::<CreateTaskInput>(arguments).and_then(|input| {
                 self.tasks
-                    .create_task(
+                    .file_task(
                         self.principal,
                         &input.title,
                         &input.description,
                         input.priority,
                         &input.workspace,
+                        &input.must_not_touch,
                     )
                     .and_then(|task| {
                         // The filing succeeded either way. A reference nobody
@@ -1604,6 +1607,25 @@ impl AgentMcp {
                         structured(Self::with_notice(json!(task), notice))
                     })
             }),
+            "swarm_set_task_must_not_touch" => parse::<SetMustNotTouchInput>(arguments)
+                .and_then(|input| {
+                    let task_id = TaskId::from_str(&input.task_id)
+                        .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
+                    let change = self.tasks.set_must_not_touch(
+                        self.principal,
+                        task_id,
+                        &input.patterns,
+                        &input.reason,
+                    )?;
+                    // The change has committed. A read that fails now leaves
+                    // these out rather than reporting it as an error.
+                    structured(json!({
+                        "task_id": task_id,
+                        "changed": change != swarm_persistence::MustNotTouchChange::Unchanged,
+                        "must_not_touch": self.tasks.store().task_must_not_touch(task_id).ok(),
+                        "must_not_touch_report": self.tasks.must_not_touch_report(task_id).ok().flatten(),
+                    }))
+                }),
             "swarm_set_task_prerequisite" => parse::<swarm_domain::TaskPrerequisiteChange>(arguments)
                 .and_then(|input| self.tasks.change_task_prerequisite(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
@@ -2954,6 +2976,7 @@ impl AgentMcp {
             // Shown beside the history, never a reason the history fails.
             "independent_check": self.independent_check_state_of(task_id).ok().flatten(),
             "independent_check_note": INDEPENDENT_CHECK_NOTE,
+            "must_not_touch_report": must_not_touch_for_queen(self.tasks.must_not_touch_report(task_id)),
             "messages": messages,
             "review_request": review_request,
             "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
@@ -3061,6 +3084,16 @@ impl AgentMcp {
                 object.insert("independent_check_step".to_owned(), json!(hint));
             }
             object.insert("independent_check".to_owned(), json!(check));
+        }
+        // Shown the same way (ADR 0172): the move stands, and a crossing is
+        // something for the handoff to explain, not a reason to undo it.
+        if input.state == TaskState::Review
+            && let Some(object) = payload.as_object_mut()
+        {
+            for (key, value) in must_not_touch_for_review(self.tasks.must_not_touch_report(task_id))
+            {
+                object.insert(key.to_owned(), value);
+            }
         }
         structured(payload)
     }
@@ -3566,10 +3599,17 @@ impl AgentMcp {
             }
         }
         let resolved = self.tasks.store().records_starting_with(&fragments)?;
+        let mut limits = self.tasks.store().must_not_touch_for_tasks(&ids)?;
         let values = tasks
             .iter()
             .map(|task| {
                 let mut value = json!(task);
+                if let Some(limits) = must_not_touch_fields(limits.remove(&task.id))
+                    && let Some(object) = value.as_object_mut()
+                {
+                    object.insert("must_not_touch".into(), limits);
+                    object.insert("must_not_touch_note".into(), json!(MUST_NOT_TOUCH_NOTE));
+                }
                 let amendments = grouped.remove(&task.id).unwrap_or_default();
                 let mut named: Vec<Value> = Vec::new();
                 let mut text = format!("{} {}", task.title, task.description);
@@ -3975,6 +4015,13 @@ swarm_read_task_history before acting on it."
                     && let Some(object) = entry.as_object_mut()
                 {
                     object.insert("independent_check".into(), independent_check_brief(&check));
+                }
+                if task.state == TaskState::Review
+                    && let Some(brief) =
+                        must_not_touch_on_board(self.tasks.must_not_touch_report(task.id))
+                    && let Some(object) = entry.as_object_mut()
+                {
+                    object.insert("must_not_touch".into(), brief);
                 }
                 entry
             })
@@ -4791,6 +4838,15 @@ struct CreateTaskInput {
     #[serde(default)]
     priority: TaskPriority,
     workspace: String,
+    #[serde(default)]
+    must_not_touch: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SetMustNotTouchInput {
+    task_id: String,
+    patterns: Vec<String>,
+    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -5633,7 +5689,13 @@ fn create_task_tool() -> Tool {
                 "title": { "type": "string", "minLength": 1, "maxLength": 240 },
                 "description": { "type": "string", "maxLength": 10000, "default": "" },
                 "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "default": "normal" },
-                "workspace": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Absolute path of the repository the work belongs to, which is what routing reads. Use the target repository's path, not your own, when the work belongs elsewhere." }
+                "workspace": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Absolute path of the repository the work belongs to, which is what routing reads. Use the target repository's path, not your own, when the work belongs elsewhere." },
+                "must_not_touch": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+                    "description": "Optional. Paths the work must leave alone, relative to that repository, such as crates/swarm-terminal/** or web/node_modules/**. * matches within one folder name, ** across folders, and a path with no wildcard covers everything under it. Queen sees any commit that touched one at Review. Only Queen changes them after filing."
+                }
             },
             "required": ["title", "workspace"],
             "additionalProperties": false
@@ -5816,6 +5878,19 @@ fn task_prerequisite_tool() -> Tool {
             "operation":{"type":"string","enum":["add","remove"]},
             "reason":{"type":"string","minLength":1,"maxLength":2048}
         }, "required":["task_id","prerequisite_id","operation","reason"],"additionalProperties":false}),
+        false,
+    )
+}
+
+fn set_task_must_not_touch_tool() -> Tool {
+    tool(
+        "swarm_set_task_must_not_touch",
+        "Queen only: replace the paths a task's work must not touch (ADR 0172), with a reason that goes on the task's record. Patterns are relative to the task's repository: * matches within one folder name, ** across folders, and a path with no wildcard covers everything under it. An empty list removes them. The filer sets them at swarm_create_task and only you change them afterwards, so a worker that needs a path asks you. At Review the task shows which of its recorded commits touched one; nothing is refused for a crossing, and you decide whether it was needed. Finished tasks are not changed.",
+        &json!({"type":"object", "properties": {
+            "task_id":{"type":"string","format":"uuid"},
+            "patterns":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":256}},
+            "reason":{"type":"string","minLength":1,"maxLength":1000}
+        }, "required":["task_id","patterns","reason"],"additionalProperties":false}),
         false,
     )
 }
@@ -6239,6 +6314,98 @@ fn independent_check_hint(check: &IndependentCheckState) -> Option<String> {
         )),
         IndependentCheckState::Checked { .. } => None,
     }
+}
+
+/// What a worker's listing says beside its task's must-not-touch patterns.
+const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relative to its repository, set by whoever filed it or by Queen (ADR 0172). Only Queen changes them; a worker whose work needs one asks her with swarm_message_queen before touching it. At Review, Queen sees which recorded commits touched one; nothing is refused for that, and she decides whether it was needed.";
+
+/// The step a worker's Review response adds when its commits crossed.
+const MUST_NOT_TOUCH_CROSSED: &str = "Some of this task's commits changed paths it must not touch (must_not_touch_report). The move to Review stands. Say in your handoff why each crossing was needed, or undo it, so Queen can decide.";
+
+/// The step a worker's Review response adds when a recorded commit has no
+/// paths to compare.
+const MUST_NOT_TOUCH_NOT_COMPARED: &str = "Some of this task's recorded commits could not be compared with the paths it must not touch, because they have no recorded paths (must_not_touch_report.commits_not_compared): Swarm could not find or read them, or git lists no paths for a merge. The move to Review stands, and the work waits for Queen. Record the commits that hold the work, so they can be compared.";
+
+/// The must-not-touch report as Queen reads it in a task's history: null when
+/// the task has no patterns, and said to be unreadable when its row cannot be
+/// read, never shown as none, because none would hide a crossing (ADR 0172).
+fn must_not_touch_for_queen(
+    read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
+) -> Value {
+    match read {
+        Ok(report) => json!(report),
+        Err(error) => json!({ "unreadable": error.to_string() }),
+    }
+}
+
+/// The patterns a task carries in a listing or its history (ADR 0172), or
+/// that they are unreadable when their row cannot be read, never nothing.
+fn must_not_touch_fields(
+    read: Option<Result<swarm_domain::MustNotTouchPatterns, swarm_persistence::TaskStoreError>>,
+) -> Option<Value> {
+    match read? {
+        Ok(patterns) => Some(json!(patterns)),
+        Err(error) => Some(json!({ "unreadable": error.to_string() })),
+    }
+}
+
+/// What a worker's Review response adds about its must-not-touch patterns
+/// (ADR 0172): the report, with a step when a commit crossed; that they are
+/// unreadable when their row cannot be read; nothing without patterns.
+fn must_not_touch_for_review(
+    read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
+) -> Vec<(&'static str, Value)> {
+    match read {
+        Ok(None) => Vec::new(),
+        Ok(Some(report)) => {
+            let mut fields = Vec::with_capacity(2);
+            let steps: Vec<&str> = [
+                (!report.crossings.is_empty()).then_some(MUST_NOT_TOUCH_CROSSED),
+                (report.commits_not_compared > 0).then_some(MUST_NOT_TOUCH_NOT_COMPARED),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !steps.is_empty() {
+                fields.push(("must_not_touch_step", json!(steps.join(" "))));
+            }
+            fields.push(("must_not_touch_report", json!(report)));
+            fields
+        }
+        Err(error) => vec![(
+            "must_not_touch_report",
+            json!({ "unreadable": error.to_string() }),
+        )],
+    }
+}
+
+/// What Queen's board entry for Review work says about must-not-touch
+/// patterns: nothing without them, the brief with them, and that they are
+/// unreadable when their row cannot be read, never nothing (ADR 0172).
+fn must_not_touch_on_board(
+    read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
+) -> Option<Value> {
+    match read {
+        Ok(report) => report.as_ref().map(must_not_touch_brief),
+        Err(error) => Some(json!({ "unreadable": error.to_string() })),
+    }
+}
+
+/// What Queen's board shows about a task's must-not-touch patterns at Review
+/// (ADR 0172): how many commits crossed, and the first few paths.
+fn must_not_touch_brief(report: &swarm_domain::MustNotTouchReport) -> Value {
+    json!({
+        "patterns": report.patterns.len(),
+        "commits_compared": report.commits_compared,
+        "commits_not_compared": report.commits_not_compared,
+        "crossed_commits": report.crossings.len() + report.more_commits,
+        "first_crossed_paths": report
+            .crossings
+            .iter()
+            .flat_map(|crossing| crossing.paths.iter().map(|crossed| crossed.path.as_str()))
+            .take(3)
+            .collect::<Vec<_>>(),
+    })
 }
 
 /// The check, cut to what a brief board entry carries.
@@ -8258,6 +8425,9 @@ mod tests {
         "swarm_assign_task",
         "swarm_list_jira_projects",
         "swarm_set_task_prerequisite",
+        // A worker cannot loosen the paths its own work must not touch, so it
+        // is never handed the tool that changes them (ADR 0172).
+        "swarm_set_task_must_not_touch",
         "swarm_set_task_decision_link",
         "swarm_reassess_task_block",
         "swarm_read_review_evidence",
@@ -15224,6 +15394,242 @@ mod tests {
         assert!(moved.get("independent_check").is_none(), "{review}");
         assert!(moved.get("independent_check_step").is_none(), "{review}");
         assert!(store.latest_independent_check(task.id).unwrap().is_none());
+        // A task without must-not-touch patterns reads as it always has.
+        assert!(moved.get("must_not_touch_report").is_none(), "{review}");
+        assert!(moved.get("must_not_touch_step").is_none(), "{review}");
+    }
+
+    /// ADR 0172 through the real tools: Queen files work with paths it must
+    /// not touch, the worker sees them and cannot change them, and a commit
+    /// that touches one is shown to the worker and to Queen at Review without
+    /// the move being refused. Then Queen, who decides, lifts the limit.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_crossing_is_shown_at_review_and_the_worker_cannot_loosen_the_limits() {
+        use crate::independent_check::tests::{commit_file, repository};
+
+        let (bridge, store, queen_id, _, _directory) = setup();
+        let state = plain_state();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let repo = repository();
+        let workspace = repo.path().to_str().unwrap();
+        let ok = |response: &Value| {
+            assert_eq!(response["result"]["isError"], false, "{response}");
+            response["result"]["structuredContent"].clone()
+        };
+
+        // An unusable pattern files nothing and says why.
+        let climbs = call_as(
+            &bridge,
+            &state,
+            &queen_token,
+            "swarm_create_task",
+            json!({ "title": "Climbs out", "workspace": workspace, "must_not_touch": ["../other/**"] }),
+        )
+        .await;
+        assert_eq!(climbs["result"]["isError"], true, "{climbs}");
+        assert!(climbs.to_string().contains("climbs out"), "{climbs}");
+
+        let filed = ok(&call_as(
+            &bridge,
+            &state,
+            &queen_token,
+            "swarm_create_task",
+            json!({
+                "title": "Make the petals bloom",
+                "workspace": workspace,
+                "must_not_touch": ["crates/swarm-terminal/**"]
+            }),
+        )
+        .await);
+        let task = store
+            .get_task(filed["id"].as_str().unwrap().parse().unwrap())
+            .unwrap();
+        let id = task.id.to_string();
+        let worker = store
+            .create_worker("Bloom", ProviderKind::ClaudeCode, workspace, false, 1)
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker.id).unwrap());
+
+        // The worker's brief carries the limits and says who changes them.
+        let listing = ok(&call_as(&bridge, &state, &token, "swarm_list_tasks", json!({})).await);
+        let own = listing["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == json!(task.id))
+            .expect("the worker's Active task is listed");
+        assert_eq!(own["must_not_touch"], json!(["crates/swarm-terminal/**"]));
+        assert!(
+            own["must_not_touch_note"]
+                .as_str()
+                .is_some_and(|note| note.contains("swarm_message_queen")),
+            "{own}"
+        );
+
+        // THE WORKER CANNOT LOOSEN THEM, whether it clears or narrows them.
+        for patterns in [json!([]), json!(["crates/other/**"])] {
+            let loosened = call_as(
+                &bridge,
+                &state,
+                &token,
+                "swarm_set_task_must_not_touch",
+                json!({ "task_id": id, "patterns": patterns, "reason": "I need the terminal." }),
+            )
+            .await;
+            assert_eq!(loosened["result"]["isError"], true, "{loosened}");
+        }
+        assert_eq!(
+            store.task_must_not_touch(task.id).unwrap().as_slice(),
+            ["crates/swarm-terminal/**"]
+        );
+
+        std::fs::create_dir_all(repo.path().join("web")).unwrap();
+        std::fs::create_dir_all(repo.path().join("crates/swarm-terminal/src")).unwrap();
+        let within = commit_file(repo.path(), "web/petal.ts", "export {};\n", "feat: petals");
+        let crossing = commit_file(
+            repo.path(),
+            "crates/swarm-terminal/src/ipc.rs",
+            "// bloom\n",
+            "fix: the terminal blooms",
+        );
+        ok(&call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_task_commits",
+            json!({ "task_id": id, "commits": [within, crossing] }),
+        )
+        .await);
+
+        // SHOWN, NEVER REFUSED. The move stands and names the crossing.
+        let moved = ok(&call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_transition_task",
+            json!({ "task_id": id, "state": "review", "note": "Built; touched the terminal." }),
+        )
+        .await);
+        assert_eq!(moved["state"], "review");
+        let report = &moved["must_not_touch_report"];
+        assert_eq!(report["commits_compared"], 2, "{moved}");
+        assert_eq!(report["crossings"].as_array().unwrap().len(), 1, "{moved}");
+        assert_eq!(report["crossings"][0]["commit"], json!(crossing));
+        assert_eq!(
+            report["crossings"][0]["paths"][0],
+            json!({ "path": "crates/swarm-terminal/src/ipc.rs", "pattern": "crates/swarm-terminal/**" })
+        );
+        assert!(moved["must_not_touch_step"].is_string(), "{moved}");
+
+        // Queen sees it on the board and in the history.
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert_eq!(
+            review_entry(&board, &task)["must_not_touch"],
+            json!({
+                "patterns": 1,
+                "commits_compared": 2,
+                "commits_not_compared": 0,
+                "crossed_commits": 1,
+                "first_crossed_paths": ["crates/swarm-terminal/src/ipc.rs"]
+            })
+        );
+        let history = ok(&call_as(
+            &bridge,
+            &state,
+            &queen_token,
+            "swarm_read_task_history",
+            json!({ "task_id": id }),
+        )
+        .await);
+        assert_eq!(
+            history["must_not_touch_report"]["crossings"][0]["commit"],
+            json!(crossing)
+        );
+        assert!(
+            history["events"]
+                .to_string()
+                .contains("Must not touch: crates/swarm-terminal/**."),
+            "who set them is on the record: {history}"
+        );
+
+        // Queen decides. Lifting the limit needs a reason and leaves no
+        // crossing to show.
+        let lifted = ok(&call_as(
+            &bridge,
+            &state,
+            &queen_token,
+            "swarm_set_task_must_not_touch",
+            json!({ "task_id": id, "patterns": [], "reason": "The terminal change is the fix." }),
+        )
+        .await);
+        assert_eq!(lifted["changed"], true);
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert!(review_entry(&board, &task).get("must_not_touch").is_none());
+    }
+
+    /// An unreadable patterns row is said to be unreadable on Queen's board
+    /// and in the history, never shown as no patterns (ADR 0172).
+    #[test]
+    fn unreadable_must_not_touch_is_never_shown_as_none() {
+        let unreadable = || {
+            Err(ApplicationError::Store(
+                swarm_persistence::TaskStoreError::IntegrityFailure("damaged".into()),
+            ))
+        };
+        assert!(super::must_not_touch_on_board(Ok(None)).is_none());
+        assert!(super::must_not_touch_on_board(unreadable()).unwrap()["unreadable"].is_string());
+        assert!(super::must_not_touch_for_queen(Ok(None)).is_null());
+        assert!(super::must_not_touch_for_queen(unreadable())["unreadable"].is_string());
+
+        // A listing or history that carries the patterns says the same, and
+        // one damaged row never takes the listing with it.
+        assert!(super::must_not_touch_fields(None).is_none());
+        let listed = super::must_not_touch_fields(Some(Err(
+            swarm_persistence::TaskStoreError::IntegrityFailure("damaged".into()),
+        )))
+        .unwrap();
+        assert!(listed["unreadable"].is_string(), "{listed}");
+
+        // So does the worker's own Review response.
+        assert!(super::must_not_touch_for_review(Ok(None)).is_empty());
+        let review = super::must_not_touch_for_review(unreadable());
+        assert_eq!(review.len(), 1, "{review:?}");
+        assert_eq!(review[0].0, "must_not_touch_report");
+        assert!(review[0].1["unreadable"].is_string(), "{review:?}");
+    }
+
+    /// A recorded commit with no paths to compare is named to the worker at
+    /// Review and counted on Queen's board, never read as within (ADR 0172).
+    #[test]
+    fn commits_that_could_not_be_compared_are_named_at_review_and_on_the_board() {
+        let report = swarm_domain::MustNotTouchReport {
+            patterns: vec!["migrations/**".to_owned()],
+            commits_compared: 1,
+            commits_not_compared: 2,
+            crossings: Vec::new(),
+            more_commits: 0,
+        };
+
+        let review = super::must_not_touch_for_review(Ok(Some(report.clone())));
+        let step = review
+            .iter()
+            .find(|(key, _)| *key == "must_not_touch_step")
+            .unwrap_or_else(|| panic!("a step: {review:?}"));
+        assert!(
+            step.1.as_str().unwrap().contains("could not be compared"),
+            "{review:?}"
+        );
+        assert_eq!(
+            super::must_not_touch_on_board(Ok(Some(report))).unwrap()["commits_not_compared"],
+            2
+        );
     }
 
     /// Recording commits has no limit on how many, and the table holds a

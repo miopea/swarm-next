@@ -66,10 +66,51 @@ export function checkSummary(check: IndependentCheck | null): { tone: Tone; word
 }
 
 /**
+ * The task's must-not-touch patterns against its recorded commits (ADR 0172).
+ * Nothing when it has no patterns. With patterns and no commits to compare,
+ * or a recorded commit with no paths, it says so: the coordinator holds such
+ * Review work for Queen, and a commit nobody could compare is never within.
+ * A crossing reads as something to look at, not a failure: some are needed,
+ * and Queen decides. Patterns that cannot be read say so, never nothing,
+ * which would hide a crossing.
+ */
+export function scopeSummary(report: TaskCi["must_not_touch"]): { tone: Tone; word: string; text: string } | undefined {
+  if (!report) return undefined;
+  if ("state" in report) return { tone: "unchecked", word: "Unreadable", text: `This task's must-not-touch paths could not be read: ${sentence(report.why)}` };
+  const limits = report.patterns.join(", ");
+  const unread = report.commits_not_compared;
+  const noPaths = unread === 1 ? "A recorded commit has no paths to compare" : `${unread} recorded commits have no paths to compare`;
+  const crossed = report.crossings.length + report.more_commits;
+  if (crossed === 0 && unread > 0) {
+    return {
+      tone: "unchecked",
+      word: "Not compared",
+      text: `${noPaths} with the paths this task must not touch: ${limits}. Swarm could not find or read ${unread === 1 ? "it" : "them"}, or git lists no paths for a merge.`,
+    };
+  }
+  if (report.commits_compared === 0) return { tone: "unchecked", word: "Not compared", text: `No recorded commits to compare with the paths this task must not touch: ${limits}.` };
+  if (crossed === 0) {
+    const commits = report.commits_compared === 1 ? "The recorded commit" : `None of the ${report.commits_compared} recorded commits`;
+    return { tone: "good", word: "Within", text: `${commits} ${report.commits_compared === 1 ? "touches none of" : "touch"} the paths this task must not touch: ${limits}.` };
+  }
+  const listed = report.crossings
+    .map(({ commit, paths, more_paths }) => `${commit.slice(0, 8)} changed ${paths.map(({ path }) => path).join(", ")}${more_paths > 0 ? ` and ${more_paths} more` : ""}`)
+    .join("; ");
+  const more = report.more_commits > 0 ? `; and ${report.more_commits} more commits` : "";
+  const alsoUnread = unread > 0 ? ` ${noPaths}.` : "";
+  return {
+    tone: "waiting",
+    word: "Crossed",
+    text: `${crossed === 1 ? "A commit" : `${crossed} commits`} changed paths this task must not touch (${limits}): ${listed}${more}.${alsoUnread} Queen decides whether that was needed.`,
+  };
+}
+
+/**
  * CI and the worker's independent check for work waiting on review or release
  * (ADRs 0115 and 0171), as rows of the task's details. Read while the task
- * has recorded commits, and again each minute while it waits, because the
- * Hive reads GitHub on its own schedule and the worker may record a check.
+ * has recorded commits or must-not-touch patterns (ADR 0172), and again each
+ * minute while it waits, because the Hive reads GitHub on its own schedule
+ * and the worker may record a check or its commits.
  */
 export default function TaskCiStatus({ task, operatorToken }: { task: Task; operatorToken: string }) {
   const [ci, setCi] = useState<TaskCi>();
@@ -80,16 +121,20 @@ export default function TaskCiStatus({ task, operatorToken }: { task: Task; oper
       // Keep what was shown; the next read replaces it.
     }
   }, [operatorToken, task.id]);
-  const watching = ci === undefined || ci.recorded_commits > 0;
+  // Patterns keep it reading too, so a Scope row of "Not compared" follows
+  // the commits once the worker records them.
+  const watching = ci === undefined || ci.recorded_commits > 0 || ci.must_not_touch !== null;
   useVisiblePolling(load, watching, 60_000);
   const summary = ci && ciSummary(ci);
   const check = ci && checkSummary(ci.independent_check);
-  if (!summary && !check) return null;
+  const scope = ci && scopeSummary(ci.must_not_touch);
+  if (!summary && !check && !scope) return null;
   // One word fits the details grid; the sentence is the tooltip and is read out.
   return (
     <>
       {summary && <div><dt>CI</dt><dd><span className={`task-ci is-${summary.tone}`} title={summary.text}>{TONE_WORDS[summary.tone]}<span className="sr-only">: {summary.text}</span></span></dd></div>}
       {check && <div><dt>Check</dt><dd><span className={`task-ci is-${check.tone}`} title={check.text}>{check.word}{check.at && <span className="task-ci-at"> at {check.at}</span>}<span className="sr-only">: {check.text}</span></span></dd></div>}
+      {scope && <div><dt>Scope</dt><dd><span className={`task-ci is-${scope.tone}`} title={scope.text}>{scope.word}<span className="sr-only">: {scope.text}</span></span></dd></div>}
     </>
   );
 }

@@ -134,7 +134,10 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
   // when a fix followed it; anything else waiting on review passed both
   // (ADRs 0115 and 0171). ?independentCheck=checked shows that task's check
   // current instead, with a partial verdict, and =unreadable shows a check
-  // the Hive could not read.
+  // the Hive could not read. The review task also touched a path it must
+  // not touch; the others stayed within theirs (ADR 0172). ?scope=unreadable
+  // shows that task's patterns as ones the Hive could not read, and
+  // =notCompared as patterns with no recorded commits to compare.
   if (path.startsWith("/api/v1/tasks/") && path.endsWith("/ci")) {
     const failed = path.includes("0199bbbb-0000-7000-8000-000000000004");
     const shown = new URLSearchParams(window.location.search).get("independentCheck");
@@ -152,6 +155,15 @@ export function hiveFixture(path: string, query = new URLSearchParams()): unknow
         : failed
         ? { state: "stale", head: "4f2a9c1e7d6b5a49", verdict: "partial", recorded_at: now - 900, since: ["8b7d6e5f3a2c1b0e"] }
         : { state: "checked", head: "1a2b3c4d5e6f7a8b", verdict: "pass", ran: "sh scripts/verify.sh all (exit 0)", findings: "", recorded_at: now - 700 },
+      must_not_touch: failed && new URLSearchParams(window.location.search).get("scope") === "unreadable"
+        ? { state: "unreadable", why: "integrity failure: must-not-touch patterns are not a list" }
+        : failed && new URLSearchParams(window.location.search).get("scope") === "notCompared"
+        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 0, commits_not_compared: 0, crossings: [], more_commits: 0 }
+        : failed && new URLSearchParams(window.location.search).get("scope") === "unread"
+        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 1, commits_not_compared: 1, crossings: [], more_commits: 0 }
+        : failed
+        ? { patterns: ["src/billing/**", "migrations/**"], commits_compared: 2, commits_not_compared: 0, crossings: [{ commit: "8b7d6e5f3a2c1b0e", paths: [{ path: "migrations/0042_upload_retries.sql", pattern: "migrations/**" }], more_paths: 0 }], more_commits: 0 }
+        : { patterns: ["migrations/**"], commits_compared: 1, commits_not_compared: 0, crossings: [], more_commits: 0 },
     };
   }
   if (path === "/api/v1/presence/night-watch") {

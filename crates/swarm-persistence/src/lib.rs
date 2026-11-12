@@ -48,8 +48,10 @@ mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod github_asks;
 mod independent_checks;
+mod must_not_touch;
 pub use github_asks::{GithubAskArrival, GithubAskFiling, StandingGithubAsk};
 pub use independent_checks::{IndependentCheckRecording, IndependentCheckResult};
+pub use must_not_touch::MustNotTouchChange;
 mod queen_grants;
 mod queen_releases;
 mod settings_restart;
@@ -478,7 +480,9 @@ const GITHUB_ASKS_SCHEMA_MARKER: i64 = 225;
 /// A worker's independent checks of its task's commits, bound to the commits
 /// each was built from (ADR 0171).
 const INDEPENDENT_CHECKS_SCHEMA_MARKER: i64 = 226;
-const CURRENT_SCHEMA_VERSION: i64 = INDEPENDENT_CHECKS_SCHEMA_MARKER;
+/// Paths a task's work must not touch (ADR 0172).
+const MUST_NOT_TOUCH_SCHEMA_MARKER: i64 = 227;
+const CURRENT_SCHEMA_VERSION: i64 = MUST_NOT_TOUCH_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5085,6 +5089,9 @@ fn migrate_queen_release_schema_steps(
             transaction,
             INDEPENDENT_CHECKS_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < MUST_NOT_TOUCH_SCHEMA_MARKER {
+        crate::must_not_touch::migrate_must_not_touch(transaction, MUST_NOT_TOUCH_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11465,6 +11472,14 @@ mod tests {
             undo_sql: "DROP TABLE task_independent_checks;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'task_independent_checks'",
+        },
+        // Paths a task's work must not touch (ADR 0172).
+        SchemaStep {
+            table: "task_must_not_touch",
+            artifact: "task_must_not_touch",
+            undo_sql: "DROP TABLE task_must_not_touch;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'task_must_not_touch'",
         },
     ];
 

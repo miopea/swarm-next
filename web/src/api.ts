@@ -409,7 +409,8 @@ export type UnsettledReview = {
   worker_name: string;
   /**
    * Which state this row is in, as a stable label rather than prose:
-   * "claim_unapproved", "code_no_deployment", "nothing_reported" or "settling".
+   * "claim_unapproved", "code_no_deployment", "nothing_reported",
+   * "report_unsettled", "scope_crossed", "scope_unreadable" or "settling".
    *
    * The card chips this and says `reason` once, because seven of eleven rows
    * carried the same forty-eight character sentence and it drowned the titles.
@@ -2849,14 +2850,30 @@ export type IndependentCheck =
   | { state: "stale"; head: string; verdict: IndependentCheckVerdict; recorded_at: number; since: string[] }
   | { state: "unreadable"; why: string };
 /**
+ * A task's must-not-touch patterns against the paths its recorded commits
+ * changed (ADR 0172). Shown, never enforced: Queen decides whether a crossing
+ * was needed.
+ */
+export type MustNotTouchReport = {
+  patterns: string[];
+  commits_compared: number;
+  /** Recorded commits with no paths to compare, never read as within. */
+  commits_not_compared: number;
+  crossings: { commit: string; paths: { path: string; pattern: string }[]; more_paths: number }[];
+  more_commits: number;
+};
+/**
  * What the check gate knows about one task. No recorded commits means the gate never holds it.
- * `independent_check` is null when the task built no code.
+ * `independent_check` is null when the task built no code; `must_not_touch` is
+ * null when the task carries no patterns, and says it is unreadable when its
+ * patterns cannot be read, never null.
  */
 export type TaskCi = {
   level: CheckGateLevel;
   recorded_commits: number;
   observation: CiObservation | null;
   independent_check: IndependentCheck | null;
+  must_not_touch: MustNotTouchReport | { state: "unreadable"; why: string } | null;
 };
 
 export async function fetchCheckGate(operatorToken: string, signal?: AbortSignal): Promise<CheckGate> {

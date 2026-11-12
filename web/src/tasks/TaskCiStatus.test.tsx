@@ -1,10 +1,11 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { Task, TaskCi } from "../api";
-import TaskCiStatus, { checkSummary, ciSummary } from "./TaskCiStatus";
+import TaskCiStatus, { checkSummary, ciSummary, scopeSummary } from "./TaskCiStatus";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -12,14 +13,14 @@ const observed = (outcome: object) => ({ commits: "1111aaaa2222", judged: ["1111
 
 /** What a task's CI reads as on the board (ADR 0115). */
 test("CI reads as what it means for closing the work", () => {
-  const require = (observation: TaskCi["observation"]): TaskCi => ({ level: "require", recorded_commits: 1, observation, independent_check: null });
-  expect(ciSummary({ level: "off", recorded_commits: 3, observation: null, independent_check: null })).toBeUndefined();
-  expect(ciSummary({ level: "require", recorded_commits: 0, observation: null, independent_check: null })).toBeUndefined();
+  const require = (observation: TaskCi["observation"]): TaskCi => ({ level: "require", recorded_commits: 1, observation, independent_check: null, must_not_touch: null });
+  expect(ciSummary({ level: "off", recorded_commits: 3, observation: null, independent_check: null, must_not_touch: null })).toBeUndefined();
+  expect(ciSummary({ level: "require", recorded_commits: 0, observation: null, independent_check: null, must_not_touch: null })).toBeUndefined();
   expect(ciSummary(require(null))).toEqual({ tone: "waiting", text: "Not read yet. It can't close until it is." });
   expect(ciSummary(require(observed({ outcome: "passed" })))).toEqual({ tone: "good", text: "Passed on 1111aaaa." });
   expect(ciSummary(require(observed({ outcome: "failed", failing: ["rust", "web"] }))))
     .toEqual({ tone: "bad", text: "Failed on 1111aaaa: rust, web. It can't close until this passes." });
-  expect(ciSummary({ level: "warn", recorded_commits: 1, observation: observed({ outcome: "failed", failing: ["rust"] }), independent_check: null }))
+  expect(ciSummary({ level: "warn", recorded_commits: 1, observation: observed({ outcome: "failed", failing: ["rust"] }), independent_check: null, must_not_touch: null }))
     .toEqual({ tone: "bad", text: "Failed on 1111aaaa: rust." });
   expect(ciSummary(require(observed({ outcome: "pending", waiting: ["the push to GitHub"] }))))
     .toEqual({ tone: "waiting", text: "Waiting for the push to GitHub on 1111aaaa. It can't close until CI passes." });
@@ -59,6 +60,7 @@ test("a check that cannot be read reads as unreadable beside CI", async () => {
     recorded_commits: 1,
     observation: observed({ outcome: "passed" }),
     independent_check: { state: "unreadable", why: "the database is damaged" },
+    must_not_touch: null,
   };
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response)));
   render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
@@ -79,6 +81,7 @@ test("the card shows the independent check with the CI gate off", async () => {
     recorded_commits: 1,
     observation: null,
     independent_check: { state: "checked", head: "1111aaaa2222bbbb", verdict: "fail", ran: "cargo test", findings: "A test was deleted.", recorded_at: 1 },
+    must_not_touch: null,
   };
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response)));
   render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
@@ -88,4 +91,129 @@ test("the card shows the independent check with the CI gate off", async () => {
   expect(screen.getByText("at 1111aaaa")).toBeVisible();
   expect(screen.getByText("Failed")).toHaveAttribute("title", "Independent check at 1111aaaa: fail. Ran: cargo test. Findings: A test was deleted.");
   expect(screen.queryByText("CI")).not.toBeInTheDocument();
+});
+
+/** A crossing of the task's must-not-touch paths reads as something to look at, never a failure (ADR 0172). */
+test("the scope reads as within, crossed or not compared, and as nothing without patterns", () => {
+  expect(scopeSummary(null)).toBeUndefined();
+  const report = { patterns: ["crates/swarm-terminal/**"], commits_compared: 2, commits_not_compared: 0, crossings: [], more_commits: 0 };
+  // Patterns and nothing to compare them with: the coordinator holds such
+  // Review work for Queen, so the card says why rather than nothing.
+  expect(scopeSummary({ ...report, commits_compared: 0 })).toEqual({
+    tone: "unchecked",
+    word: "Not compared",
+    text: "No recorded commits to compare with the paths this task must not touch: crates/swarm-terminal/**.",
+  });
+  expect(scopeSummary(report)).toEqual({
+    tone: "good",
+    word: "Within",
+    text: "None of the 2 recorded commits touch the paths this task must not touch: crates/swarm-terminal/**.",
+  });
+  expect(scopeSummary({ ...report, commits_compared: 1 })?.text)
+    .toBe("The recorded commit touches none of the paths this task must not touch: crates/swarm-terminal/**.");
+  const crossings = [{ commit: "3333cccc4444dddd", paths: [{ path: "crates/swarm-terminal/src/ipc.rs", pattern: "crates/swarm-terminal/**" }], more_paths: 4 }];
+  expect(scopeSummary({ ...report, crossings })).toEqual({
+    tone: "waiting",
+    word: "Crossed",
+    text: "A commit changed paths this task must not touch (crates/swarm-terminal/**): 3333cccc changed crates/swarm-terminal/src/ipc.rs and 4 more. Queen decides whether that was needed.",
+  });
+  expect(scopeSummary({ ...report, crossings, more_commits: 2 })?.text)
+    .toBe("3 commits changed paths this task must not touch (crates/swarm-terminal/**): 3333cccc changed crates/swarm-terminal/src/ipc.rs and 4 more; and 2 more commits. Queen decides whether that was needed.");
+  // A recorded commit with no paths was not compared. It never reads as
+  // within, and beside a crossing it is still named.
+  expect(scopeSummary({ ...report, commits_compared: 1, commits_not_compared: 2 })).toEqual({
+    tone: "unchecked",
+    word: "Not compared",
+    text: "2 recorded commits have no paths to compare with the paths this task must not touch: crates/swarm-terminal/**. Swarm could not find or read them, or git lists no paths for a merge.",
+  });
+  expect(scopeSummary({ ...report, commits_compared: 0, commits_not_compared: 1 })?.text)
+    .toBe("A recorded commit has no paths to compare with the paths this task must not touch: crates/swarm-terminal/**. Swarm could not find or read it, or git lists no paths for a merge.");
+  expect(scopeSummary({ ...report, crossings, commits_not_compared: 1 })?.text)
+    .toBe("A commit changed paths this task must not touch (crates/swarm-terminal/**): 3333cccc changed crates/swarm-terminal/src/ipc.rs and 4 more. A recorded commit has no paths to compare. Queen decides whether that was needed.");
+});
+
+/**
+ * Patterns with nothing compared yet keep the card reading, so the Scope row
+ * follows the commits once the worker records them (ADR 0172).
+ */
+test("the card keeps reading while a task with patterns has no recorded commits", async () => {
+  vi.useFakeTimers();
+  const task: Task = { id: "petal", hive_id: "hive", title: "Petals", state: "review", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
+  const before: TaskCi = {
+    level: "off",
+    recorded_commits: 0,
+    observation: null,
+    independent_check: null,
+    must_not_touch: { patterns: ["packaging/**"], commits_compared: 0, commits_not_compared: 0, crossings: [], more_commits: 0 },
+  };
+  const after: TaskCi = {
+    ...before,
+    recorded_commits: 1,
+    must_not_touch: {
+      patterns: ["packaging/**"],
+      commits_compared: 1,
+      commits_not_compared: 0,
+      crossings: [{ commit: "3333cccc4444dddd", paths: [{ path: "packaging/linux/swarm-package", pattern: "packaging/**" }], more_paths: 0 }],
+      more_commits: 0,
+    },
+  };
+  const answer = (ci: TaskCi) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response);
+  vi.stubGlobal("fetch", vi.fn().mockImplementationOnce(() => answer(before)).mockImplementation(() => answer(after)));
+  render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
+
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByText("Not compared")).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+  expect(screen.getByText("Crossed")).toBeInTheDocument();
+});
+
+test("the card shows a crossing as a Scope row beside CI", async () => {
+  const task: Task = { id: "petal", hive_id: "hive", title: "Petals", state: "review", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
+  const ci: TaskCi = {
+    level: "off",
+    recorded_commits: 1,
+    observation: null,
+    independent_check: null,
+    must_not_touch: {
+      patterns: ["packaging/**"],
+      commits_compared: 1,
+      commits_not_compared: 0,
+      crossings: [{ commit: "3333cccc4444dddd", paths: [{ path: "packaging/linux/swarm-package", pattern: "packaging/**" }], more_paths: 0 }],
+      more_commits: 0,
+    },
+  };
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response)));
+  render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
+
+  expect(await screen.findByText("Scope")).toBeInTheDocument();
+  expect(screen.getByText("Crossed")).toHaveAttribute(
+    "title",
+    "A commit changed paths this task must not touch (packaging/**): 3333cccc changed packaging/linux/swarm-package. Queen decides whether that was needed.",
+  );
+  expect(screen.queryByText("Check")).not.toBeInTheDocument();
+});
+
+/**
+ * Patterns the Hive cannot read say so beside CI and the check. They never
+ * read as no limits, which would hide a crossing (ADR 0172).
+ */
+test("a scope that cannot be read reads as unreadable beside CI and the check", async () => {
+  expect(scopeSummary({ state: "unreadable", why: "integrity failure: must-not-touch patterns are not a list" }))
+    .toEqual({ tone: "unchecked", word: "Unreadable", text: "This task's must-not-touch paths could not be read: integrity failure: must-not-touch patterns are not a list." });
+
+  const task: Task = { id: "petal", hive_id: "hive", title: "Petals", state: "review", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
+  const ci: TaskCi = {
+    level: "require",
+    recorded_commits: 1,
+    observation: observed({ outcome: "passed" }),
+    independent_check: { state: "checked", head: "1111aaaa2222bbbb", verdict: "pass", ran: "cargo test", findings: "", recorded_at: 1 },
+    must_not_touch: { state: "unreadable", why: "the database is damaged" },
+  };
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response)));
+  render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
+
+  expect(await screen.findByText("Scope")).toBeInTheDocument();
+  expect(screen.getByText("Unreadable")).toHaveAttribute("title", "This task's must-not-touch paths could not be read: the database is damaged.");
+  expect(screen.getByText("CI")).toBeInTheDocument();
+  expect(screen.getByText("Check")).toBeInTheDocument();
 });

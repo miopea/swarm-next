@@ -2235,13 +2235,32 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
         .unwrap_or_default()
         .trim()
         .to_owned();
-    let changed_paths = git(workspace, &["show", "--pretty=format:", "--name-only", sha])
-        .await
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(str::to_owned)
-        .collect();
+    // --no-renames: a rename is listed as the path it left and the path it
+    // reached. Git's default lists only where it went, so moving a file out of
+    // a folder a task must not touch, or out of code into docs, would be
+    // recorded as touching only the destination.
+    //
+    // Paths are recorded as git prints them, quoted and escaped where git
+    // quotes them, as they always were, so which work reads as documentation
+    // only does not change. The must-not-touch comparison reads the quoting
+    // back (ADR 0172); git quotes a name holding a `"`, a `\` or a control
+    // character whatever its settings, so it could not be switched off here.
+    let changed_paths = git(
+        workspace,
+        &[
+            "show",
+            "--pretty=format:",
+            "--name-only",
+            "--no-renames",
+            sha,
+        ],
+    )
+    .await
+    .unwrap_or_default()
+    .lines()
+    .filter(|line| !line.trim().is_empty())
+    .map(str::to_owned)
+    .collect();
     // REACHABLE, not merely present. `cat-file` still finds a commit that a
     // rebase orphaned, right up until it is collected — so a dangling SHA would
     // otherwise read exactly like a live one.
@@ -2545,6 +2564,87 @@ mod commit_verification_tests {
 
         assert_eq!(commits[0].verdict, CommitVerdict::Missing);
         assert_eq!(commits[0].found_in, None);
+    }
+
+    /// A rename is recorded as both the path it left and the path it reached,
+    /// so a move out of a protected folder is still seen to touch it.
+    #[tokio::test]
+    async fn a_rename_records_the_path_it_left_and_the_path_it_reached() {
+        let (dir, _) = repository_with_one_commit();
+        let path = dir.path();
+        git_in(path, &["mv", "docs/note.md", "notes.md"]);
+        git_in(path, &["commit", "--quiet", "-m", "move the note"]);
+        let sha = git_in(path, &["rev-parse", "HEAD"]);
+
+        let (_, commits) =
+            verify_reported_commits(path.to_str().unwrap(), &[], std::slice::from_ref(&sha)).await;
+
+        let mut paths = commits[0].changed_paths.clone();
+        paths.sort();
+        assert_eq!(paths, ["docs/note.md".to_owned(), "notes.md".to_owned()]);
+    }
+
+    /// A path git quotes is recorded as git prints it, as it always was, so
+    /// which work reads as documentation only is unchanged. The must-not-touch
+    /// comparison reads the quoting back, so the path still crosses a pattern
+    /// (ADR 0172). Git quotes a non-ASCII name by default, and a name holding
+    /// a `"`, a `\` or a tab whatever its settings.
+    #[tokio::test]
+    async fn a_quoted_path_is_recorded_as_git_prints_it_and_still_crosses() {
+        let (dir, _) = repository_with_one_commit();
+        let path = dir.path();
+        for name in [
+            "docs/caf\u{e9}.md",
+            "docs/say \"hi\".md",
+            "docs/tab\tname.md",
+        ] {
+            std::fs::write(path.join(name), "a note\n").expect("write");
+            git_in(path, &["add", name]);
+        }
+        git_in(path, &["commit", "--quiet", "-m", "add notes"]);
+        let sha = git_in(path, &["rev-parse", "HEAD"]);
+
+        let (state, commits) =
+            verify_reported_commits(path.to_str().unwrap(), &[], std::slice::from_ref(&sha)).await;
+
+        let mut recorded = commits[0].changed_paths.clone();
+        recorded.sort();
+        assert_eq!(
+            recorded,
+            [
+                r#""docs/caf\303\251.md""#.to_owned(),
+                r#""docs/say \"hi\".md""#.to_owned(),
+                r#""docs/tab\tname.md""#.to_owned(),
+            ]
+        );
+        let report = swarm_domain::TaskCommitReport {
+            task_id: swarm_domain::TaskId::new(),
+            workspace: path.to_str().unwrap().to_owned(),
+            repository_state: state,
+            reported_at: 1,
+            commits,
+        };
+        // Quoted, a documentation name reads as code, as it did before.
+        assert_eq!(
+            swarm_domain::commit_settlement(Some(&report)),
+            swarm_domain::CommitSettlement::BuiltCode
+        );
+        let found = swarm_domain::must_not_touch_report(&["docs/**".to_owned()], Some(&report))
+            .expect("the task has patterns");
+        let mut crossed: Vec<&str> = found.crossings[0]
+            .paths
+            .iter()
+            .map(|crossed| crossed.path.as_str())
+            .collect();
+        crossed.sort_unstable();
+        assert_eq!(
+            crossed,
+            [
+                "docs/caf\u{e9}.md",
+                "docs/say \"hi\".md",
+                "docs/tab\tname.md"
+            ]
+        );
     }
 
     #[tokio::test]
