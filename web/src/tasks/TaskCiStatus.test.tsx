@@ -46,6 +46,29 @@ test("the independent check reads as checked, stale or not checked", () => {
 });
 
 /**
+ * A check the Hive cannot read says so beside CI. It is not shown as no
+ * check, and it does not take the CI row with it.
+ */
+test("a check that cannot be read reads as unreadable beside CI", async () => {
+  expect(checkSummary({ state: "unreadable", why: "integrity failure: unknown independent check verdict maybe" }))
+    .toEqual({ tone: "unchecked", word: "Unreadable", text: "The independent check could not be read: integrity failure: unknown independent check verdict maybe." });
+
+  const task: Task = { id: "petal", hive_id: "hive", title: "Petals", state: "review", description: "", operator_instruction: "", priority: "normal", workspace: "/demo", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1 };
+  const ci: TaskCi = {
+    level: "require",
+    recorded_commits: 1,
+    observation: observed({ outcome: "passed" }),
+    independent_check: { state: "unreadable", why: "the database is damaged" },
+  };
+  vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ci) } as Response)));
+  render(<dl><TaskCiStatus task={task} operatorToken="token" /></dl>);
+
+  expect(await screen.findByText("Unreadable")).toHaveAttribute("title", "The independent check could not be read: the database is damaged.");
+  expect(screen.getByText("CI")).toBeInTheDocument();
+  expect(screen.getByText("Passed")).toHaveAttribute("title", "Passed on 1111aaaa.");
+});
+
+/**
  * The check is not part of the CI gate, so a Hive with the gate off still
  * shows it on the card, and shows no CI row beside it.
  */

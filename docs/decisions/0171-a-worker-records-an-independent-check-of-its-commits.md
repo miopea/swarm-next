@@ -68,9 +68,15 @@ a reading still covered the work after another commit.
      inside the store's transaction, so an answer built before more commits
      were recorded cannot be filed against them;
    - when `ran` is blank or over 1,000 characters, findings are over 4,000,
-     or a `partial` or `fail` has no findings.
+     or a `partial` or `fail` has no findings;
+   - when the task's commits, listed, are not 1 to 20,000 characters long
+     (20,000 is about 480 full commit names), or the head is not 4 to 64
+     characters.
+     Recording commits has neither limit, and the table does, so these are
+     refused in words before the table's own constraint is reached.
 
-   The head stored with it is the newest of those commits git can read.
+   The head stored with it is the newest of those commits git can read, or
+   the last recorded when git can read none.
 5. **State.**
    - `not_checked`: the task built code and no check is recorded. A commit
      report git could not settle also counts, when it names commits.
@@ -90,7 +96,9 @@ a reading still covered the work after another commit.
    - The task card, as a "Check" row beside CI for work in Review or Awaiting
      Release, read from `GET /api/v1/tasks/{id}/ci`: the verdict and the commit
      it covers ("Partial at 8b7d6e5f"), "Stale" or "Not checked". It shows
-     whether or not the check gate is on.
+     whether or not the check gate is on. A check the Hive cannot read shows
+     as "Unreadable", with the reason in the tooltip, and the CI row beside it
+     still shows.
 8. **Shown, never refused.** Moving to Review, the coordinator's settlement,
    completion and the check gate do not read it. A missing, failed or stale
    check is information for Queen.
@@ -106,8 +114,12 @@ a reading still covered the work after another commit.
   stale, and the worker builds the input again.
 - Staleness follows the commits the worker records, as CI's binding does. A
   commit made and never recorded leaves the check reading as current.
-- A large change sends the checker to git instead of carrying the diff, so the
-  checker must be able to reach the task's repository.
+- A large change, or one with a commit git cannot read, sends the checker to
+  git instead of carrying the diff, so the checker must be able to reach the
+  task's repository.
+- A task with more recorded commits than fit 20,000 characters cannot have a
+  check recorded. That is refused in words, and Queen sees the task as not
+  checked, or its earlier check as stale.
 - Must-not-touch paths, the other idea kept in the same interview, are a
   separate decision.
 - Not proven by the tests: a check run by a real fresh agent on live work, or
