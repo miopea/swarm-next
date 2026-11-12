@@ -34,13 +34,15 @@ use swarm_application::{
 };
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
-    HiveId, JiraProjectBindingId, LaunchModelChange, QueenActionClass, QueenAutomationOutcome,
-    QueenAutomationState, TaskId, TaskPriority, TaskState, WorkerId, WorkerMessagePurpose,
-    WorkerRole, launch_model_change,
+    HiveId, IndependentCheckState, IndependentCheckVerdict, JiraProjectBindingId,
+    LaunchModelChange, QueenActionClass, QueenAutomationOutcome, QueenAutomationState, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerMessagePurpose, WorkerRole, independent_check_basis,
+    independent_check_state, launch_model_change, validate_independent_check,
 };
 use swarm_persistence::{
-    CompletionEvidence, JiraIssueSnapshot, MAX_PENDING_REFUSED_COMMANDS,
-    MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish, TaskStore, TaskStoreError,
+    CompletionEvidence, IndependentCheckRecording, IndependentCheckResult, JiraIssueSnapshot,
+    MAX_PENDING_REFUSED_COMMANDS, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish, TaskStore,
+    TaskStoreError,
 };
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -876,7 +878,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 39;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 40;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -895,7 +897,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 39;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "f9c8103945a8d0958ddee483a69ff7d81a198f9d47d3e688aaee25c308755358";
+    "3df82163ab51880b4cec9326281e0750589ba44e05c608a4aa410933d663ea6d";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1162,6 +1164,8 @@ impl ServerHandler for AgentMcp {
             comment_jira_task_tool(),
             record_deployment_tool(),
             record_task_commits_tool(),
+            independent_check_input_tool(),
+            record_independent_check_tool(),
             correct_task_record_tool(),
             amend_task_facts_tool(),
             record_task_note_tool(),
@@ -1344,6 +1348,10 @@ impl AgentMcp {
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
             "swarm_record_task_commits" => self.record_task_commits(arguments).await,
+            "swarm_independent_check_input" => self.independent_check_input(arguments).await,
+            "swarm_record_independent_check" => {
+                self.record_independent_check(arguments).await
+            }
             "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_withdraw_no_deployment" => self.withdraw_no_deployment(arguments),
             "swarm_withdraw_decision" => self.withdraw_decision(arguments),
@@ -2042,6 +2050,7 @@ impl AgentMcp {
                     && request.name.as_ref() != "swarm_list_coordination_attention"
                     && request.name.as_ref() != "swarm_read_jira_attachment"
                     && request.name.as_ref() != "swarm_list_command_cards"
+                    && request.name.as_ref() != "swarm_independent_check_input"
                 {
                     self.changed.notify_waiters();
                     self.deliver_after
@@ -2942,6 +2951,9 @@ impl AgentMcp {
             // fix one level up.
             "truncated": page.truncated,
             "evidence": evidence,
+            // Shown beside the history, never a reason the history fails.
+            "independent_check": self.independent_check_state_of(task_id).ok().flatten(),
+            "independent_check_note": INDEPENDENT_CHECK_NOTE,
             "messages": messages,
             "review_request": review_request,
             "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
@@ -3036,6 +3048,19 @@ impl AgentMcp {
         })?;
         if let (Some(next_step), Some(object)) = (next_step, payload.as_object_mut()) {
             object.insert("next_step".to_owned(), json!(next_step));
+        }
+        // SHOWN, NEVER REFUSED (ADR 0171). The move has already happened; this
+        // only tells the worker what Queen will see beside it, so a failed
+        // read leaves it out rather than reporting a move that succeeded as
+        // an error.
+        if input.state == TaskState::Review
+            && let Ok(Some(check)) = self.independent_check_state_of(task_id)
+            && let Some(object) = payload.as_object_mut()
+        {
+            if let Some(hint) = independent_check_hint(&check) {
+                object.insert("independent_check_step".to_owned(), json!(hint));
+            }
+            object.insert("independent_check".to_owned(), json!(check));
         }
         structured(payload)
     }
@@ -3943,9 +3968,111 @@ swarm_read_task_history before acting on it."
                 if let Some(facts) = intake.remove(&task.id) {
                     add_intake(&mut entry, task, &facts);
                 }
+                // Review is where Queen judges the work, so that is where the
+                // check is put in front of her (ADR 0171).
+                if task.state == TaskState::Review
+                    && let Ok(Some(check)) = self.independent_check_state_of(task.id)
+                    && let Some(object) = entry.as_object_mut()
+                {
+                    object.insert("independent_check".into(), independent_check_brief(&check));
+                }
                 entry
             })
             .collect())
+    }
+
+    /// What the board shows about this task's independent check (ADR 0171).
+    fn independent_check_state_of(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<IndependentCheckState>, ApplicationError> {
+        let store = self.tasks.store();
+        let report = store.task_commit_report(task_id)?;
+        let latest = store.latest_independent_check(task_id)?;
+        Ok(independent_check_state(report.as_ref(), latest.as_ref()))
+    }
+
+    /// Builds what an independent checker of this task's commits is given.
+    ///
+    /// The worker supplies the task and nothing else. What the checker reads
+    /// is Swarm's to write, so the work's author cannot steer it (ADR 0171).
+    async fn independent_check_input(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<IndependentCheckInputInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let report = self
+            .tasks
+            .store()
+            .task_commit_report(task_id)?
+            .filter(|report| !report.commits.is_empty())
+            .ok_or_else(|| ApplicationError::Refused(NO_COMMITS_TO_CHECK.to_owned()))?;
+        let task = self.tasks.store().get_task(task_id)?;
+        let amendments = self
+            .tasks
+            .store()
+            .amendments_for_tasks(&[task_id])?
+            .remove(&task_id)
+            .unwrap_or_default();
+        let shas: Vec<String> = report
+            .commits
+            .iter()
+            .map(|commit| commit.sha.clone())
+            .collect();
+        let built = crate::independent_check::build_check_input(&task, &amendments, &report).await;
+        structured(json!({
+            "task_id": task_id,
+            "basis": independent_check_basis(&shas),
+            "head": built.head,
+            "commits": built.commits.len(),
+            "diff_included": built.diff_included,
+            "checker_prompt": built.prompt,
+            "next": "Give checker_prompt to a fresh agent that has not seen your work, such as a new subagent, exactly as it is. Add nothing: not your summary, not what you already ran, not what to skip. Then record its answer with swarm_record_independent_check and this basis. If you commit and record more commits first, build the input again.",
+        }))
+    }
+
+    /// Records what the checker answered, bound to the commits it was given.
+    async fn record_independent_check(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RecordIndependentCheckInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        validate_independent_check(input.verdict, &input.ran, &input.findings)
+            .map_err(ApplicationError::Refused)?;
+        let report = self
+            .tasks
+            .store()
+            .task_commit_report(task_id)?
+            .filter(|report| !report.commits.is_empty())
+            .ok_or_else(|| ApplicationError::Refused(NO_COMMITS_TO_CHECK.to_owned()))?;
+        let commits = crate::independent_check::ordered_commits(&report).await;
+        let head = crate::independent_check::head_of(&commits);
+        let recording = self.tasks.store().record_independent_check(
+            task_id,
+            &IndependentCheckResult {
+                basis: &input.basis,
+                head: &head,
+                verdict: input.verdict,
+                ran: &input.ran,
+                findings: &input.findings,
+                now: crate::unix_timestamp(),
+            },
+        )?;
+        match recording {
+            IndependentCheckRecording::Recorded(_) => structured(json!({
+                "task_id": task_id,
+                "independent_check": self.independent_check_state_of(task_id)?,
+                "next": "Recorded. Queen sees it beside this task in Review. It goes stale if you record more commits, and nothing is refused for it either way.",
+            })),
+            IndependentCheckRecording::NoCommits => {
+                Err(ApplicationError::Refused(NO_COMMITS_TO_CHECK.to_owned()))
+            }
+            IndependentCheckRecording::CommitsMoved { .. } => Err(ApplicationError::Refused(
+                "This task's recorded commits changed after the checker's input was built, so this answer does not cover all of the work. Build the input again with swarm_independent_check_input and have that checked.".to_owned(),
+            )),
+        }
     }
 
     /// The visible tasks, and — when there are none — why.
@@ -4903,6 +5030,24 @@ struct RecordTaskNoteInput {
 struct RetitleTaskInput {
     task_id: String,
     title: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IndependentCheckInputInput {
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordIndependentCheckInput {
+    task_id: String,
+    /// The basis `swarm_independent_check_input` returned.
+    basis: String,
+    verdict: IndependentCheckVerdict,
+    ran: String,
+    #[serde(default)]
+    findings: String,
 }
 
 #[derive(Deserialize)]
@@ -6070,6 +6215,84 @@ fn record_task_note_tool() -> Tool {
                 }
             },
             "required": ["task_id", "note"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+const NO_COMMITS_TO_CHECK: &str = "This task has no recorded commits, so there is nothing for a checker to read. Record them with swarm_record_task_commits first.";
+
+const INDEPENDENT_CHECK_NOTE: &str = "The worker's independent check of its own commits (ADR 0171): not_checked, checked (verdict, what ran, findings) or stale (commits recorded after it, named in since). Null when the task built no code. The worker ran the check from an input Swarm built; nothing is refused for a missing, failed or stale one.";
+
+/// A short line for the worker who just moved work to Review, when the check
+/// is missing or stale. Nothing is said about a current check.
+fn independent_check_hint(check: &IndependentCheckState) -> Option<String> {
+    match check {
+        IndependentCheckState::NotChecked => Some(
+            "Not checked: Queen sees that beside this task. Nothing is refused for it. To add one, swarm_independent_check_input builds what a fresh checker is given.".to_owned(),
+        ),
+        IndependentCheckState::Stale { since, .. } => Some(format!(
+            "Your last independent check does not cover {} commit(s) recorded after it, so Queen sees it as stale. swarm_independent_check_input builds a new input.",
+            since.len()
+        )),
+        IndependentCheckState::Checked { .. } => None,
+    }
+}
+
+/// The check, cut to what a brief board entry carries.
+fn independent_check_brief(check: &IndependentCheckState) -> Value {
+    match check {
+        IndependentCheckState::NotChecked => json!({ "state": "not_checked" }),
+        IndependentCheckState::Checked { head, verdict, .. } => json!({
+            "state": "checked",
+            "verdict": verdict,
+            "head": head.get(..12).unwrap_or(head),
+        }),
+        IndependentCheckState::Stale {
+            head,
+            verdict,
+            since,
+            ..
+        } => json!({
+            "state": "stale",
+            "verdict": verdict,
+            "head": head.get(..12).unwrap_or(head),
+            "commits_since": since.len(),
+        }),
+    }
+}
+
+fn independent_check_input_tool() -> Tool {
+    tool(
+        "swarm_independent_check_input",
+        "Build the input for an independent check of your task's recorded commits (ADR 0171). Swarm writes it: the task's description and amendments, the commits, their changes (or, past a size cap, the commits and paths with how to read them), and fixed instructions for the checker. Give checker_prompt to a fresh agent that has not seen your work, such as a new subagent, exactly as returned, and add nothing of yours. Then record its answer with swarm_record_independent_check and the basis returned here. Record your commits with swarm_record_task_commits first. Queen sees the check beside the task in Review; moving to Review is never refused for want of one.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["task_id"],
+            "additionalProperties": false
+        }),
+        true,
+    )
+}
+
+fn record_independent_check_tool() -> Tool {
+    tool(
+        "swarm_record_independent_check",
+        "Record what the independent checker answered, for the commits its input was built from (ADR 0171). Pass the basis swarm_independent_check_input returned. If your task recorded more commits since, this is refused: build the input again so the answer covers all of the work. A later commit makes a recorded check stale. Queen sees the verdict, what ran and the findings beside the task.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "basis": { "type": "string", "minLength": 1, "maxLength": 64, "description": "The basis from swarm_independent_check_input." },
+                "verdict": { "type": "string", "enum": ["pass", "partial", "fail"], "description": "The checker's verdict, not yours." },
+                "ran": { "type": "string", "minLength": 1, "maxLength": 1000, "description": "The commands the checker ran, or \"read only\"." },
+                "findings": { "type": "string", "maxLength": 4000, "description": "Each problem the checker found, with file and line. Required unless the verdict is pass." }
+            },
+            "required": ["task_id", "basis", "verdict", "ran"],
             "additionalProperties": false
         }),
         false,
@@ -11187,6 +11410,10 @@ mod tests {
                 // session's commits belong to this task rather than the one it
                 // interleaved with.
                 "swarm_record_task_commits",
+                // A check of that work by a fresh agent is the worker's to run
+                // and record; Queen only reads it (ADR 0171).
+                "swarm_independent_check_input",
+                "swarm_record_independent_check",
                 // Correcting your own handoff is worker work: the worker is the
                 // one whose note went stale, and it must not cost a trip out of
                 // Review to say so.
@@ -14652,6 +14879,350 @@ mod tests {
             "a claimed exemption must still name the action that supersedes it: {settled}"
         );
         assert!(!settled.contains("nothing further is needed"), "{settled}");
+    }
+
+    /// A worker whose checkout is `workspace`, holding one Active task there.
+    /// The task takes its workspace from the worker it is assigned to.
+    fn active_task_in(store: &TaskStore, workspace: &Path) -> (WorkerId, swarm_domain::Task) {
+        let workspace = workspace.to_str().unwrap();
+        let worker = store
+            .create_worker("Bloom", ProviderKind::ClaudeCode, workspace, false, 1)
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Make the petals bloom", workspace)
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        (worker.id, task)
+    }
+
+    fn review_entry<'a>(listing: &'a Value, task: &swarm_domain::Task) -> &'a Value {
+        listing["result"]["structuredContent"]["tasks"]
+            .as_array()
+            .expect("tasks are listed")
+            .iter()
+            .find(|entry| entry["id"] == json!(task.id))
+            .unwrap_or_else(|| panic!("the task is on Queen's board: {listing}"))
+    }
+
+    /// The whole loop through the real tools (ADR 0171): the worker records
+    /// its commits, Swarm builds the checker's input from git, the verdict is
+    /// bound to those commits, Queen sees it, and a later commit makes it
+    /// stale without refusing anything.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_recorded_check_is_shown_to_queen_and_a_later_commit_makes_it_stale() {
+        use crate::independent_check::tests::{commit_file, repository};
+
+        let (bridge, store, queen_id, _, _directory) = setup();
+        let state = plain_state();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let repo = repository();
+        let first = commit_file(
+            repo.path(),
+            "petal.rs",
+            "fn bloom() {}\n",
+            "feat: petals bloom",
+        );
+        let (worker_id, task) = active_task_in(&store, repo.path());
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let id = task.id.to_string();
+
+        let recorded = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_task_commits",
+            json!({ "task_id": id, "commits": [first] }),
+        )
+        .await;
+        assert_eq!(recorded["result"]["isError"], false, "{recorded}");
+
+        // NOT CHECKED NEVER STOPS THE MOVE. It is said, and Queen sees it.
+        let review = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_transition_task",
+            json!({ "task_id": id, "state": "review", "note": "Built." }),
+        )
+        .await;
+        assert_eq!(review["result"]["isError"], false, "{review}");
+        let moved = &review["result"]["structuredContent"];
+        assert_eq!(moved["state"], "review");
+        assert_eq!(moved["independent_check"]["state"], "not_checked");
+        assert!(
+            moved["independent_check_step"]
+                .as_str()
+                .is_some_and(|step| step.contains("swarm_independent_check_input")),
+            "{review}"
+        );
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert_eq!(
+            review_entry(&board, &task)["independent_check"],
+            json!({ "state": "not_checked" })
+        );
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        let input = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_independent_check_input",
+            json!({ "task_id": id }),
+        )
+        .await;
+        assert_eq!(input["result"]["isError"], false, "{input}");
+        let built = &input["result"]["structuredContent"];
+        assert_eq!(built["head"], json!(first));
+        assert_eq!(built["diff_included"], true);
+        let prompt = built["checker_prompt"].as_str().unwrap();
+        assert!(prompt.contains("Make the petals bloom"), "{prompt}");
+        assert!(
+            prompt.contains("fn bloom() {}"),
+            "the diff itself: {prompt}"
+        );
+        let basis = built["basis"].as_str().unwrap().to_owned();
+
+        // A basis that is not this task's commits is refused, and nothing is
+        // stored for it.
+        let wrong = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({ "task_id": id, "basis": "0000000000000000", "verdict": "pass", "ran": "cargo test" }),
+        )
+        .await;
+        assert_eq!(wrong["result"]["isError"], true, "{wrong}");
+        assert!(store.latest_independent_check(task.id).unwrap().is_none());
+
+        let passed = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({ "task_id": id, "basis": basis, "verdict": "pass", "ran": "cargo test -p petal" }),
+        )
+        .await;
+        assert_eq!(passed["result"]["isError"], false, "{passed}");
+        let check = &passed["result"]["structuredContent"]["independent_check"];
+        assert_eq!(check["state"], "checked");
+        assert_eq!(check["verdict"], "pass");
+        assert_eq!(check["head"], json!(first));
+        assert_eq!(check["ran"], "cargo test -p petal");
+
+        let history = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_read_task_history",
+            json!({ "task_id": id }),
+        )
+        .await;
+        assert_eq!(
+            history["result"]["structuredContent"]["independent_check"]["state"], "checked",
+            "{history}"
+        );
+
+        let review = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_transition_task",
+            json!({ "task_id": id, "state": "review", "note": "Built and checked." }),
+        )
+        .await;
+        let moved = &review["result"]["structuredContent"];
+        assert_eq!(moved["independent_check"]["state"], "checked");
+        assert!(
+            moved.get("independent_check_step").is_none(),
+            "a current check needs no prompt: {review}"
+        );
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert_eq!(
+            review_entry(&board, &task)["independent_check"],
+            json!({ "state": "checked", "verdict": "pass", "head": &first[..12] })
+        );
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        // MORE WORK AFTER THE CHECK. The old answer no longer covers it.
+        let second = commit_file(repo.path(), "stem.rs", "fn grow() {}\n", "feat: stems grow");
+        let recorded = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_task_commits",
+            json!({ "task_id": id, "commits": [first, second] }),
+        )
+        .await;
+        assert_eq!(recorded["result"]["isError"], false, "{recorded}");
+
+        let review = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_transition_task",
+            json!({ "task_id": id, "state": "review", "note": "One more fix." }),
+        )
+        .await;
+        assert_eq!(
+            review["result"]["isError"], false,
+            "stale is shown, never refused: {review}"
+        );
+        let moved = &review["result"]["structuredContent"];
+        assert_eq!(moved["state"], "review");
+        assert_eq!(moved["independent_check"]["state"], "stale");
+        assert_eq!(moved["independent_check"]["since"], json!([second]));
+        assert!(
+            moved["independent_check_step"]
+                .as_str()
+                .is_some_and(|step| step.contains("1 commit(s)")),
+            "{review}"
+        );
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert_eq!(
+            review_entry(&board, &task)["independent_check"],
+            json!({ "state": "stale", "verdict": "pass", "head": &first[..12], "commits_since": 1 })
+        );
+
+        // The answer built from the old input cannot be recorded against the
+        // new commits.
+        let late = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({ "task_id": id, "basis": basis, "verdict": "pass", "ran": "cargo test" }),
+        )
+        .await;
+        assert_eq!(late["result"]["isError"], true, "{late}");
+        let text = late["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("swarm_independent_check_input"), "{text}");
+
+        // RECOVERY: a new input covers both commits, and its answer makes
+        // the check current again.
+        let input = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_independent_check_input",
+            json!({ "task_id": id }),
+        )
+        .await;
+        let rebuilt = &input["result"]["structuredContent"];
+        assert_eq!(rebuilt["head"], json!(second));
+        assert_eq!(rebuilt["commits"], 2);
+        assert_ne!(rebuilt["basis"], json!(basis));
+        let again = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({
+                "task_id": id,
+                "basis": rebuilt["basis"],
+                "verdict": "partial",
+                "ran": "cargo test -p petal",
+                "findings": "stem.rs:1 has no test."
+            }),
+        )
+        .await;
+        assert_eq!(again["result"]["isError"], false, "{again}");
+        let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
+        assert_eq!(
+            review_entry(&board, &task)["independent_check"],
+            json!({ "state": "checked", "verdict": "partial", "head": &second[..12] })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_check_needs_commits_and_a_reason_and_no_check_never_blocks_review() {
+        use crate::independent_check::tests::repository;
+
+        let (bridge, store, _, _, _directory) = setup();
+        let state = plain_state();
+        let repo = repository();
+        let (worker_id, task) = active_task_in(&store, repo.path());
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let id = task.id.to_string();
+        let refused = |response: &Value, needle: &str| {
+            assert_eq!(response["result"]["isError"], true, "{response}");
+            let text = response["result"]["content"][0]["text"].to_string();
+            assert!(text.contains(needle), "{needle} not in {text}");
+        };
+
+        // Nothing recorded, then an empty report: there is nothing to read.
+        for commits in [None, Some(json!([]))] {
+            if let Some(commits) = commits {
+                let _ = call_as(
+                    &bridge,
+                    &state,
+                    &token,
+                    "swarm_record_task_commits",
+                    json!({ "task_id": id, "commits": commits }),
+                )
+                .await;
+            }
+            let input = call_as(
+                &bridge,
+                &state,
+                &token,
+                "swarm_independent_check_input",
+                json!({ "task_id": id }),
+            )
+            .await;
+            refused(&input, "swarm_record_task_commits");
+            let record = call_as(
+                &bridge,
+                &state,
+                &token,
+                "swarm_record_independent_check",
+                json!({ "task_id": id, "basis": "0000000000000000", "verdict": "pass", "ran": "cargo test" }),
+            )
+            .await;
+            refused(&record, "swarm_record_task_commits");
+        }
+
+        // A failure must say what failed, and the schema is closed.
+        let unexplained = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({ "task_id": id, "basis": "0000000000000000", "verdict": "fail", "ran": "cargo test" }),
+        )
+        .await;
+        refused(&unexplained, "findings");
+        let unknown = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_record_independent_check",
+            json!({ "task_id": id, "basis": "0000000000000000", "verdict": "pass", "ran": "cargo test", "summary": "trust me" }),
+        )
+        .await;
+        assert_eq!(unknown["result"]["isError"], true, "{unknown}");
+
+        // Nothing built: Review is entered and no check is spoken of at all.
+        let review = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_transition_task",
+            json!({ "task_id": id, "state": "review", "note": "Nothing to change." }),
+        )
+        .await;
+        assert_eq!(review["result"]["isError"], false, "{review}");
+        let moved = &review["result"]["structuredContent"];
+        assert_eq!(moved["state"], "review");
+        assert!(moved.get("independent_check").is_none(), "{review}");
+        assert!(moved.get("independent_check_step").is_none(), "{review}");
+        assert!(store.latest_independent_check(task.id).unwrap().is_none());
     }
 
     #[tokio::test]

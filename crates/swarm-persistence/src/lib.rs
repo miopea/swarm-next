@@ -47,7 +47,9 @@ mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod github_asks;
+mod independent_checks;
 pub use github_asks::{GithubAskArrival, GithubAskFiling, StandingGithubAsk};
+pub use independent_checks::{IndependentCheckRecording, IndependentCheckResult};
 mod queen_grants;
 mod queen_releases;
 mod settings_restart;
@@ -473,7 +475,10 @@ const QUEEN_WAITS_SCHEMA_MARKER: i64 = 224;
 /// What GitHub asks of the operator is linked to the draft it filed, and how
 /// the last read of GitHub went (ADR 0170).
 const GITHUB_ASKS_SCHEMA_MARKER: i64 = 225;
-const CURRENT_SCHEMA_VERSION: i64 = GITHUB_ASKS_SCHEMA_MARKER;
+/// A worker's independent checks of its task's commits, bound to the commits
+/// each was built from (ADR 0171).
+const INDEPENDENT_CHECKS_SCHEMA_MARKER: i64 = 226;
+const CURRENT_SCHEMA_VERSION: i64 = INDEPENDENT_CHECKS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5074,6 +5079,12 @@ fn migrate_queen_release_schema_steps(
     }
     if schema_version < GITHUB_ASKS_SCHEMA_MARKER {
         crate::github_asks::migrate_github_asks(transaction, GITHUB_ASKS_SCHEMA_MARKER)?;
+    }
+    if schema_version < INDEPENDENT_CHECKS_SCHEMA_MARKER {
+        crate::independent_checks::migrate_independent_checks(
+            transaction,
+            INDEPENDENT_CHECKS_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -11446,6 +11457,14 @@ mod tests {
                 DROP TABLE github_ask_reading;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('github_ask_links', 'github_ask_reading')",
+        },
+        // A worker's independent checks of its task's commits (ADR 0171).
+        SchemaStep {
+            table: "task_independent_checks",
+            artifact: "task_independent_checks",
+            undo_sql: "DROP TABLE task_independent_checks;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'task_independent_checks'",
         },
     ];
 

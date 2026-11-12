@@ -1302,6 +1302,8 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .task-ci { color: var(--muted); }
 .task-ci.is-bad { color: var(--bad-strong); font-weight: 650; }
 .task-ci.is-waiting { color: var(--warn-strong); }
+/* The commit an independent check covers, quieter than its verdict (ADR 0171). */
+.task-ci-at { color: var(--muted); font-weight: 400; }
 .task-description { grid-area: description; display: -webkit-box; align-self: start; margin: 0; overflow: hidden; color: var(--muted); font-size: .75rem; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .task-assignment-cell { grid-area: assignment; display: grid; align-content: center; gap: 7px; min-width: 0; }
