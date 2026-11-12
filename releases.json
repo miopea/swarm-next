@@ -1,36 +1,36 @@
 {
   "payload": {
     "schema_version": 1,
-    "issued_at": 1794366273,
+    "issued_at": 1794510582,
     "releases": [
       {
-        "version": "1.18.5",
+        "version": "1.19.0",
         "protocol": "19",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.5/swarm-1.18.5-linux-x86_64.tar.gz",
-        "artifact_sha256": "c8d3874650c187d2f824e61ec34c162b10f84722b73fef1be169216a3a8a98ce",
-        "artifact_bytes": 24074575,
-        "worker_engine_build_id": "9d02c9e43fb78ee9c6fcabbee2e4c10e2d0aa02e5af0c1810db12cf0ed3cf3db",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.19.0/swarm-1.19.0-linux-x86_64.tar.gz",
+        "artifact_sha256": "198c5a309a87ac954b23f33073c92be0b05d8d83205a08519521e298839643f1",
+        "artifact_bytes": 24236811,
+        "worker_engine_build_id": "36ca67ecb1a17fd37e036ea0435b7ebcd1f69c2979610601e945a5a078a2aac5",
         "notes_url": null
       },
       {
-        "version": "1.18.5",
+        "version": "1.19.0",
         "protocol": "18",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.5/swarm-1.18.5-linux-x86_64.tar.gz",
-        "artifact_sha256": "c8d3874650c187d2f824e61ec34c162b10f84722b73fef1be169216a3a8a98ce",
-        "artifact_bytes": 24074575,
-        "worker_engine_build_id": "9d02c9e43fb78ee9c6fcabbee2e4c10e2d0aa02e5af0c1810db12cf0ed3cf3db",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.19.0/swarm-1.19.0-linux-x86_64.tar.gz",
+        "artifact_sha256": "198c5a309a87ac954b23f33073c92be0b05d8d83205a08519521e298839643f1",
+        "artifact_bytes": 24236811,
+        "worker_engine_build_id": "36ca67ecb1a17fd37e036ea0435b7ebcd1f69c2979610601e945a5a078a2aac5",
         "notes_url": null
       },
       {
-        "version": "1.18.5",
+        "version": "1.19.0",
         "protocol": "17",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.18.5/swarm-1.18.5-linux-x86_64.tar.gz",
-        "artifact_sha256": "c8d3874650c187d2f824e61ec34c162b10f84722b73fef1be169216a3a8a98ce",
-        "artifact_bytes": 24074575,
-        "worker_engine_build_id": "9d02c9e43fb78ee9c6fcabbee2e4c10e2d0aa02e5af0c1810db12cf0ed3cf3db",
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.19.0/swarm-1.19.0-linux-x86_64.tar.gz",
+        "artifact_sha256": "198c5a309a87ac954b23f33073c92be0b05d8d83205a08519521e298839643f1",
+        "artifact_bytes": 24236811,
+        "worker_engine_build_id": "36ca67ecb1a17fd37e036ea0435b7ebcd1f69c2979610601e945a5a078a2aac5",
         "notes_url": null
       }
     ]
   },
-  "signature": "6mqxd0A72-1RKM1LFGA0kVm8SWF8UU_oaucdBo91cQnpkzU9yxP09-3p3B-dz-69q-OW4Q_F_aONgcYhQeZaAg"
+  "signature": "ViXNQ71zjGelezC7aOleLsk_KmGLbQuxZhDrW4QCNqGKUmERqRSi2u3snzQh4VpiEkZxz_16yJQ-5TFUhIo3DQ"
 }
