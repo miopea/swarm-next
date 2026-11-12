@@ -2588,10 +2588,12 @@ impl TaskStore {
             // a reviewer who holds work has looked at it, and nobody has looked
             // at this. Review work stays in Review, where Queen is woken for
             // it and her board shows the crossing; she accepts it by moving it
-            // on, and Awaiting Release is never held here. Skipped, not
-            // refused, and a row that cannot be read is held, not closed.
+            // on, and Awaiting Release is never held here. Work with patterns
+            // and no recorded commits is held too, since a deployment can be
+            // recorded before the commits are. Skipped, not refused, and a
+            // row that cannot be read is held, not closed.
             if state == TaskState::Review.to_string()
-                && self.must_not_touch_crossed(task_id).unwrap_or(true)
+                && self.must_not_touch_holds(task_id).unwrap_or(true)
             {
                 continue;
             }
@@ -3730,7 +3732,7 @@ impl TaskStore {
             // A crossing nobody has seen waits for Queen, before anything is
             // claimed on the task's behalf (ADR 0172). A row that cannot be
             // read is held, not closed.
-            if self.must_not_touch_crossed(task_id).unwrap_or(true) {
+            if self.must_not_touch_holds(task_id).unwrap_or(true) {
                 continue;
             }
             if self.completion_evidence(task_id)? != CompletionEvidence::ExemptionApproved {

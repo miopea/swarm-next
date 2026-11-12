@@ -2976,7 +2976,7 @@ impl AgentMcp {
             // Shown beside the history, never a reason the history fails.
             "independent_check": self.independent_check_state_of(task_id).ok().flatten(),
             "independent_check_note": INDEPENDENT_CHECK_NOTE,
-            "must_not_touch_report": self.tasks.must_not_touch_report(task_id).ok().flatten(),
+            "must_not_touch_report": must_not_touch_for_queen(self.tasks.must_not_touch_report(task_id)),
             "messages": messages,
             "review_request": review_request,
             "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
@@ -4021,10 +4021,11 @@ swarm_read_task_history before acting on it."
                     object.insert("independent_check".into(), independent_check_brief(&check));
                 }
                 if task.state == TaskState::Review
-                    && let Ok(Some(report)) = self.tasks.must_not_touch_report(task.id)
+                    && let Some(brief) =
+                        must_not_touch_on_board(self.tasks.must_not_touch_report(task.id))
                     && let Some(object) = entry.as_object_mut()
                 {
-                    object.insert("must_not_touch".into(), must_not_touch_brief(&report));
+                    object.insert("must_not_touch".into(), brief);
                 }
                 entry
             })
@@ -6323,6 +6324,30 @@ const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relati
 
 /// The step a worker's Review response adds when its commits crossed.
 const MUST_NOT_TOUCH_CROSSED: &str = "Some of this task's commits changed paths it must not touch (must_not_touch_report). The move to Review stands. Say in your handoff why each crossing was needed, or undo it, so Queen can decide.";
+
+/// The must-not-touch report as Queen reads it in a task's history: null when
+/// the task has no patterns, and said to be unreadable when its row cannot be
+/// read, never shown as none, because none would hide a crossing (ADR 0172).
+fn must_not_touch_for_queen(
+    read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
+) -> Value {
+    match read {
+        Ok(report) => json!(report),
+        Err(error) => json!({ "unreadable": error.to_string() }),
+    }
+}
+
+/// What Queen's board entry for Review work says about must-not-touch
+/// patterns: nothing without them, the brief with them, and that they are
+/// unreadable when their row cannot be read, never nothing (ADR 0172).
+fn must_not_touch_on_board(
+    read: Result<Option<swarm_domain::MustNotTouchReport>, ApplicationError>,
+) -> Option<Value> {
+    match read {
+        Ok(report) => report.as_ref().map(must_not_touch_brief),
+        Err(error) => Some(json!({ "unreadable": error.to_string() })),
+    }
+}
 
 /// What Queen's board shows about a task's must-not-touch patterns at Review
 /// (ADR 0172): how many commits crossed, and the first few paths.
@@ -15503,6 +15528,21 @@ mod tests {
         assert_eq!(lifted["changed"], true);
         let board = call_as(&bridge, &state, &queen_token, "swarm_list_tasks", json!({})).await;
         assert!(review_entry(&board, &task).get("must_not_touch").is_none());
+    }
+
+    /// An unreadable patterns row is said to be unreadable on Queen's board
+    /// and in the history, never shown as no patterns (ADR 0172).
+    #[test]
+    fn unreadable_must_not_touch_is_never_shown_as_none() {
+        let unreadable = || {
+            Err(ApplicationError::Store(
+                swarm_persistence::TaskStoreError::IntegrityFailure("damaged".into()),
+            ))
+        };
+        assert!(super::must_not_touch_on_board(Ok(None)).is_none());
+        assert!(super::must_not_touch_on_board(unreadable()).unwrap()["unreadable"].is_string());
+        assert!(super::must_not_touch_for_queen(Ok(None)).is_null());
+        assert!(super::must_not_touch_for_queen(unreadable())["unreadable"].is_string());
     }
 
     #[tokio::test]

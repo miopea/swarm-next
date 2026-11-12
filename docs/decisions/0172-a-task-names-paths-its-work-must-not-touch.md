@@ -60,7 +60,9 @@ not part of this.
      today's rules, so tightening a rule later does not make older tasks
      unreadable.
    - A row that is not a list of strings is an integrity failure, never an
-     empty list, because an empty list would hide a crossing.
+     empty list, because an empty list would hide a crossing. Queen's board
+     and the task history say the patterns are unreadable, the coordinator
+     holds the task, and the card's read fails rather than showing no limits.
 5. **The comparison.** At read time, every pattern against every changed path
    of every recorded commit. Each crossing names the commit, the path and the
    first pattern it fell under. A commit lists at most 20 crossed paths, and
@@ -71,6 +73,8 @@ not part of this.
      reached, so moving a file out of a protected folder is a crossing. This
      also means a rename out of code into documentation no longer reads as
      documentation only.
+   - A recorded path is written as git stores it, not quoted and escaped, so
+     a pattern matches a path with non-ASCII characters.
    - Git lists no paths for a merge commit, so a merge is compared as touching
      nothing. A task whose record holds only a merge commit shows no crossing.
      This is a known gap, not fixed here.
@@ -96,6 +100,9 @@ not part of this.
      deployment or on commits that touched only documentation, skip a task in
      Review whose recorded commits crossed. It stays in Review, where Queen is
      woken for it and her board shows the crossing.
+   - A task in Review with patterns and no recorded commits is held too,
+     because a deployment can be recorded before the commits are, and nothing
+     has been compared yet.
    - This is not the reviewer's hold the deployment pass overrides. A reviewer
      who holds work has looked at it, and nobody has looked at this.
    - Queen accepts it the way she accepts other reviewed work. Awaiting
@@ -104,9 +111,17 @@ not part of this.
    - Skipped, not refused, so one task never stalls the rest. A row that
      cannot be read is held, not closed.
    - The operator's list of reviewed work nothing has settled names a held
-     documentation-only task "Scope crossed", not "Settling".
+     documentation-only task "Scope crossed", or "Scope unreadable" when its
+     row cannot be read, never "Settling".
+   - Outside the coordinator, a task linked to a Jira issue still follows that
+     issue: moved there to a status mapped to Completed, Done by default, it
+     closes here without the comparison. That is a person's or Jira's
+     decision, and it is unchanged.
 8. **A task without patterns behaves as it did before.** It has no row and
-   no activity is written. Its listing, its Review response and Queen's board
+   no activity is written. The one exception is deliberate: commits are now
+   recorded with renames split and paths unquoted (5), for every task, so a
+   rename out of code into documentation is no longer settled as
+   documentation only. Its listing, its Review response and Queen's board
    say nothing about patterns; the history's report and the card's read carry
    `null`, and the card shows no Scope row.
 
@@ -118,8 +133,9 @@ not part of this.
   touching it, or explain the crossing at Review. Either way she sees it.
 - The patterns are the filer's judgement at the time of filing. A wrong one
   produces crossings Queen dismisses, and she can correct it.
-- Shipped work that crossed waits in Review for Queen, rather than closing on
-  its deployment within one pass. That is the cost of her seeing it.
+- Shipped work that crossed, or that has patterns and no recorded commits,
+  waits in Review for Queen rather than closing on its deployment within one
+  pass. That is the cost of her seeing it.
 - Not built:
   - a web editor for the patterns, so the operator sets them through Queen;
   - patterns at filing anywhere but `swarm_create_task`: the board's

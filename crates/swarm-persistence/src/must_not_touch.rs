@@ -297,22 +297,27 @@ impl TaskStore {
         Ok(found)
     }
 
-    /// Whether the task's recorded commits touched a path it must not touch.
+    /// Whether the coordinator must leave this task's Review work for Queen:
+    /// it has patterns, and either a recorded commit crossed one or no
+    /// commits are recorded yet, so nothing has been compared.
     ///
     /// The coordinator's settlement passes ask this before closing Review work
-    /// on their own, so a crossing waits for Queen rather than closing unseen.
+    /// on their own, so a crossing waits for Queen rather than closing unseen,
+    /// including one whose commits are recorded after its deployment.
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable or a stored row no
     /// longer reads as patterns.
-    pub fn must_not_touch_crossed(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+    pub fn must_not_touch_holds(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
         let patterns = self.task_must_not_touch(task_id)?;
         if patterns.is_empty() {
             return Ok(false);
         }
-        let commits = self.task_commit_report(task_id)?;
+        let Some(commits) = self.task_commit_report(task_id)? else {
+            return Ok(true);
+        };
         Ok(
-            swarm_domain::must_not_touch_report(patterns.as_slice(), commits.as_ref())
+            swarm_domain::must_not_touch_report(patterns.as_slice(), Some(&commits))
                 .is_some_and(|report| !report.crossings.is_empty()),
         )
     }
@@ -409,8 +414,8 @@ mod tests {
                 .record_task_deployment(task, "production", "v1.2.3", 1_000)
                 .unwrap();
         }
-        assert!(store.must_not_touch_crossed(crossed).unwrap());
-        assert!(!store.must_not_touch_crossed(within).unwrap());
+        assert!(store.must_not_touch_holds(crossed).unwrap());
+        assert!(!store.must_not_touch_holds(within).unwrap());
 
         let closed: Vec<TaskId> = store
             .complete_reviewed_work_with_deployment()
@@ -434,6 +439,63 @@ mod tests {
         assert_eq!(closed, [crossed]);
     }
 
+    /// A deployment can be recorded before the commits are. Work with
+    /// patterns and nothing compared yet waits; once the commits are recorded
+    /// and stay within, it closes.
+    #[test]
+    fn shipped_work_with_patterns_and_no_recorded_commits_waits() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task_with_must_not_touch_as(
+                "Shipped first",
+                "",
+                TaskPriority::Normal,
+                "/work/petal",
+                &TaskActivityActor::operator(),
+                &patterns(&["migrations/**"]),
+            )
+            .unwrap()
+            .id;
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task, state).unwrap();
+        }
+        store
+            .record_task_deployment(task, "production", "v1.2.3", 1_000)
+            .unwrap();
+
+        assert!(store.must_not_touch_holds(task).unwrap());
+        assert!(
+            store
+                .complete_reviewed_work_with_deployment()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+
+        store
+            .record_task_commits(
+                task,
+                "/work/petal",
+                CommitRepositoryState::Read,
+                &[TaskCommit {
+                    sha: "abcdef0123456789".to_owned(),
+                    verdict: CommitVerdict::Present,
+                    subject: "change".to_owned(),
+                    changed_paths: vec!["src/app.rs".to_owned()],
+                    found_in: None,
+                }],
+                1_100,
+            )
+            .unwrap();
+        let closed: Vec<TaskId> = store
+            .complete_reviewed_work_with_deployment()
+            .unwrap()
+            .into_iter()
+            .map(|completion| completion.task_id)
+            .collect();
+        assert_eq!(closed, [task]);
+    }
+
     /// Documentation-only work settles itself, unless it crossed. Nothing is
     /// claimed on its behalf, so it is still on the list waiting for judgment.
     #[test]
@@ -453,6 +515,22 @@ mod tests {
             CompletionEvidence::None
         );
         assert_eq!(store.reviewed_work_awaiting_judgment().unwrap(), [crossed]);
+
+        // A row that cannot be read is held here too, not settled.
+        let damaged = reviewed_with(&store, &["docs/decisions/"], &["docs/guide.md"]);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_must_not_touch SET patterns = '[1]' WHERE task_id = ?1",
+                [damaged.to_string()],
+            )
+            .unwrap();
+        let page = store
+            .settle_reviewed_work_without_deployment_page(2_100, None)
+            .unwrap();
+        assert!(page.closed.is_empty(), "{:?}", page.closed);
+        assert_eq!(store.get_task(damaged).unwrap().state, TaskState::Review);
     }
 
     /// A task without limits, and a crossing read from a row that cannot be

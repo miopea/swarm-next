@@ -216,19 +216,12 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
                     ),
                     // Settleable, so the sweep will take it on its next pass
                     // and it is here only in the seconds between the two --
-                    // unless it crossed a path it must not touch, which the
-                    // sweep leaves for Queen and the row must not call
-                    // settling (ADR 0172). Unreadable is held, so it says so.
+                    // unless the sweep leaves it for Queen because it crossed
+                    // a path it must not touch, or its patterns cannot be
+                    // read. Neither may be called settling (ADR 0172).
                     swarm_domain::CommitSettlement::NothingBuilt
                     | swarm_domain::CommitSettlement::DocumentationOnly => {
-                        if store.must_not_touch_crossed(task_id).unwrap_or(true) {
-                            (
-                                "scope_crossed",
-                                "its commits touched paths the task must not touch, which Queen decides",
-                            )
-                        } else {
-                            ("settling", "waiting for the coordinator to settle it")
-                        }
+                        settleable_row(&store.must_not_touch_holds(task_id))
                     }
                 }
             };
@@ -266,6 +259,24 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
             .then(left.created_at.cmp(&right.created_at))
     });
     Ok(rows)
+}
+
+/// What a row says about reviewed work the documentation-only pass could
+/// settle: settling, unless the pass leaves it for Queen because it crossed a
+/// path it must not touch or its patterns cannot be read (ADR 0172). The label
+/// follows the pass, which holds both.
+fn settleable_row<E>(holds: &Result<bool, E>) -> (&'static str, &'static str) {
+    match holds {
+        Ok(false) => ("settling", "waiting for the coordinator to settle it"),
+        Ok(true) => (
+            "scope_crossed",
+            "its commits touched paths the task must not touch, which Queen decides",
+        ),
+        Err(_) => (
+            "scope_unreadable",
+            "its must-not-touch patterns cannot be read, so the coordinator leaves it",
+        ),
+    }
 }
 
 /// What a row says when its worker cannot be named.
@@ -587,6 +598,16 @@ pub(super) async fn run_queen_automation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Work the documentation-only pass leaves for Queen is never called
+    /// settling: a crossing says so, and an unreadable row says that instead
+    /// of claiming a crossing (ADR 0172).
+    #[test]
+    fn a_held_settleable_row_is_never_called_settling() {
+        assert_eq!(super::settleable_row::<()>(&Ok(false)).0, "settling");
+        assert_eq!(super::settleable_row::<()>(&Ok(true)).0, "scope_crossed");
+        assert_eq!(super::settleable_row(&Err(())).0, "scope_unreadable");
+    }
 
     fn waiting(held_behind: Option<swarm_persistence::HeldBehindTask>) -> HeldDeliveryResponse {
         held_message(swarm_persistence::TaskMessageAttention {

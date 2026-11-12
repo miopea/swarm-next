@@ -410,7 +410,7 @@ export type UnsettledReview = {
   /**
    * Which state this row is in, as a stable label rather than prose:
    * "claim_unapproved", "code_no_deployment", "nothing_reported",
-   * "report_unsettled", "scope_crossed" or "settling".
+   * "report_unsettled", "scope_crossed", "scope_unreadable" or "settling".
    *
    * The card chips this and says `reason` once, because seven of eleven rows
    * carried the same forty-eight character sentence and it drowned the titles.

@@ -2239,9 +2239,14 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
     // reached. Git's default lists only where it went, so moving a file out of
     // a folder a task must not touch, or out of code into docs, would be
     // recorded as touching only the destination.
+    //
+    // core.quotePath=false: a path is recorded as written. Git's default
+    // quotes and escapes a non-ASCII name, which then matches no pattern.
     let changed_paths = git(
         workspace,
         &[
+            "-c",
+            "core.quotePath=false",
             "show",
             "--pretty=format:",
             "--name-only",
@@ -2576,6 +2581,23 @@ mod commit_verification_tests {
         let mut paths = commits[0].changed_paths.clone();
         paths.sort();
         assert_eq!(paths, ["docs/note.md".to_owned(), "notes.md".to_owned()]);
+    }
+
+    /// A non-ASCII path is recorded as written, not quoted and escaped, so a
+    /// pattern can match it.
+    #[tokio::test]
+    async fn a_non_ascii_path_is_recorded_as_written() {
+        let (dir, _) = repository_with_one_commit();
+        let path = dir.path();
+        std::fs::write(path.join("docs/caf\u{e9}.md"), "a note\n").expect("write");
+        git_in(path, &["add", "docs/caf\u{e9}.md"]);
+        git_in(path, &["commit", "--quiet", "-m", "add a note"]);
+        let sha = git_in(path, &["rev-parse", "HEAD"]);
+
+        let (_, commits) =
+            verify_reported_commits(path.to_str().unwrap(), &[], std::slice::from_ref(&sha)).await;
+
+        assert_eq!(commits[0].changed_paths, ["docs/caf\u{e9}.md".to_owned()]);
     }
 
     #[tokio::test]

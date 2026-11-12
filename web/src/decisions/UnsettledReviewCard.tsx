@@ -55,6 +55,7 @@ const KIND_LABELS: Record<string, string> = {
   nothing_reported: "Nothing reported",
   report_unsettled: "Report unchecked",
   scope_crossed: "Scope crossed",
+  scope_unreadable: "Scope unreadable",
   settling: "Settling",
 };
 

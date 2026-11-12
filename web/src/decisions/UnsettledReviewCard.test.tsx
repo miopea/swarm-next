@@ -184,3 +184,20 @@ test("a crossing held for Queen has its own chip, not Settling", () => {
   expect(row?.textContent).toContain("Scope crossed");
   expect(screen.queryByText("Settling")).toBeNull();
 });
+
+/** Work held because its limits cannot be read is not said to have crossed. */
+test("an unreadable limit has its own chip, not Scope crossed", () => {
+  render(
+    <UnsettledReviewCard
+      waiting={[
+        waiting({
+          kind: "scope_unreadable",
+          reason: "its must-not-touch patterns cannot be read, so the coordinator leaves it",
+        }),
+      ]}
+    />,
+  );
+  const row = screen.getByRole("button", { name: "Ship the picker fix" }).closest("li");
+  expect(row?.textContent).toContain("Scope unreadable");
+  expect(row?.textContent).not.toContain("Scope crossed");
+});
