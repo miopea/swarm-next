@@ -686,35 +686,18 @@ async fn recover_unconfirmed_writes_on(
     for write in writes {
         match unconfirmed_write_verdict(open_input, visible.as_bytes(), last_output_at, write) {
             UnconfirmedWriteVerdict::UnsentInPrompt(marker) => {
-                tracing::info!(
-                    %session_id,
-                    claim_id = %write.claim_id,
-                    messages = write.message_ids.len(),
-                    "an unconfirmed message write is unsent in the prompt; submitting it"
-                );
-                let submitted = submit_rendered_message(
-                    client,
-                    session_id,
-                    provider,
-                    marker.as_bytes(),
-                    snapshot.sequence,
-                    None,
-                )
-                .await;
-                if matches!(submitted, Ok(TerminalSubmission::Acknowledged)) {
-                    let now = unix_timestamp();
-                    if let Err(error) = store.record_coordination_delivery(session_id, now) {
-                        tracing::warn!(message = %error, %session_id, "a recovered write landed but its cooldown could not be recorded");
-                    }
-                    changed |= settle_unconfirmed_write(
-                        store,
-                        write,
-                        swarm_persistence::UnconfirmedWriteSettlement::Delivered,
-                    );
-                }
                 // One Enter per terminal per pass. Whatever it did, the read
                 // above no longer describes this prompt.
-                return changed;
+                return send_stranded_write(
+                    store,
+                    client,
+                    provider,
+                    write,
+                    marker,
+                    snapshot.sequence,
+                )
+                .await
+                    || changed;
             }
             UnconfirmedWriteVerdict::NotInPrompt if !write.was_redelivery => {
                 tracing::info!(
@@ -733,6 +716,55 @@ async fn recover_unconfirmed_writes_on(
         }
     }
     changed
+}
+
+/// Presses Enter on a write of Swarm's own found unsent in its recipient's
+/// prompt, and settles it delivered once the terminal acknowledges.
+///
+/// The Enter delivers it, so it waits out the terminal's cooldown like the
+/// delivery it completes. The prompt holds the write either way, and the next
+/// pass after the cooldown sends it.
+async fn send_stranded_write(
+    store: &TaskStore,
+    client: &HostClient,
+    provider: ProviderKind,
+    write: &UnconfirmedTaskMessageWrite,
+    marker: &str,
+    sequence: u64,
+) -> bool {
+    let session_id = write.session_id;
+    if store
+        .coordination_is_cooling_down(session_id, unix_timestamp())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    tracing::info!(
+        %session_id,
+        claim_id = %write.claim_id,
+        messages = write.message_ids.len(),
+        "an unconfirmed message write is unsent in the prompt; submitting it"
+    );
+    let submitted = submit_rendered_message(
+        client,
+        session_id,
+        provider,
+        marker.as_bytes(),
+        sequence,
+        None,
+    )
+    .await;
+    if !matches!(submitted, Ok(TerminalSubmission::Acknowledged)) {
+        return false;
+    }
+    if let Err(error) = store.record_coordination_delivery(session_id, unix_timestamp()) {
+        tracing::warn!(message = %error, %session_id, "a recovered write landed but its cooldown could not be recorded");
+    }
+    settle_unconfirmed_write(
+        store,
+        write,
+        swarm_persistence::UnconfirmedWriteSettlement::Delivered,
+    )
 }
 
 fn settle_unconfirmed_write(
@@ -775,10 +807,7 @@ fn unconfirmed_write_verdict<'a>(
         return write
             .message_ids
             .iter()
-            .find(|id| {
-                visible_marker_position(visible, id.as_bytes()).is_some()
-                    && !resting_prompt_follows_marker(visible, id.as_bytes())
-            })
+            .find(|id| unsent_write_is_whole(visible, id.as_bytes()))
             .map_or(UnconfirmedWriteVerdict::Undetermined, |id| {
                 UnconfirmedWriteVerdict::UnsentInPrompt(id)
             });
@@ -833,7 +862,9 @@ pub(super) async fn submit_coordination_message(
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     // ONE GATE, HERE, because every delivery path already funnels through this
     // function. Putting the check in each caller is how the six marker pairings
-    // drifted into two wrong ones this morning.
+    // drifted into two wrong ones this morning. The one Enter that does not
+    // come through here, on a stranded write of Swarm's own, checks the same
+    // cooldown first (ADR 0173).
     //
     // A store error does NOT hold the message. Failing to read the cooldown is
     // not evidence that one is in effect, and treating it as one would turn a
@@ -1010,8 +1041,7 @@ fn baseline_from_response(
                 // carries THIS delivery's marker it is our own stranded
                 // message, and appending is not what it needs — Enter is.
                 let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
-                let ours = visible_marker_position(visible.as_bytes(), marker).is_some()
-                    && !resting_prompt_follows_marker(visible.as_bytes(), marker);
+                let ours = unsent_write_is_whole(visible.as_bytes(), marker);
                 if ours {
                     return Baseline::HoldsOurUnsentMessage {
                         sequence: snapshot.sequence,
@@ -1389,6 +1419,42 @@ async fn observe_stable_marker(
 /// the paste (ADR 0173).
 fn write_is_rendered(framed: bool, marker_is_visible: bool, new_paste_is_visible: bool) -> bool {
     new_paste_is_visible || (marker_is_visible && !framed)
+}
+
+/// Whether `marker` stands in the prompt for a whole write nobody has sent.
+///
+/// Unsent: drawn, with no resting prompt after it. Whole: a marker found as a
+/// marked paste's typed lead is only the start of that write until Claude's
+/// chip follows it, because the lead is drawn before the paste behind it.
+/// Enter on the lead alone sends the lead and strands the paste, unmarked,
+/// which is the stall this marker exists to end (ADR 0173). A typed write
+/// carries its marker inside its own text, so there the marker is enough.
+///
+/// Nothing may follow the chip on its row either. Text there was typed after
+/// Swarm's write, by somebody, and Enter would send it too.
+fn unsent_write_is_whole(visible: &[u8], marker: &[u8]) -> bool {
+    const CHIP: &[u8] = b"[Pasted text #";
+    let Some(position) = visible_marker_position(visible, marker) else {
+        return false;
+    };
+    if resting_prompt_follows_marker(visible, marker) {
+        return false;
+    }
+    let lead = MARKED_PASTE_LEAD.trim_ascii_end();
+    if !visible[..position].trim_ascii_end().ends_with(lead) {
+        return true;
+    }
+    let after = &visible[position..];
+    let Some(chip) = after.windows(CHIP.len()).position(|part| part == CHIP) else {
+        return false;
+    };
+    let Some(close) = after[chip..].iter().position(|byte| *byte == b']') else {
+        return false;
+    };
+    after[chip + close + 1..]
+        .split(|byte| *byte == b'\n')
+        .next()
+        .is_some_and(|rest_of_row| rest_of_row.trim_ascii().is_empty())
 }
 
 fn latest_claude_paste_placeholder(snapshot: &[u8]) -> Option<&[u8]> {
@@ -3398,6 +3464,58 @@ mod tests {
         assert!(write_is_rendered(true, false, true));
         assert!(write_is_rendered(false, true, false));
         assert!(!write_is_rendered(false, false, false));
+    }
+
+    /// The same holds for a write left in the prompt. A lead whose chip is not
+    /// drawn yet is not a write to send: Enter would send the lead alone and
+    /// strand the paste behind it with no marker at all. Nor is one somebody
+    /// has typed after, because Enter would send their text with it.
+    #[test]
+    fn a_lead_without_its_chip_is_not_sent() {
+        let lead_only = "❯ [Swarm delivery m-head] \r\nauto mode on";
+        let whole = "❯ [Swarm delivery m-head] [Pasted text #1 +40 lines]\r\nauto mode on";
+        assert!(!unsent_write_is_whole(lead_only.as_bytes(), b"m-head"));
+        assert!(unsent_write_is_whole(whole.as_bytes(), b"m-head"));
+        assert!(
+            !unsent_write_is_whole(
+                "❯ [Swarm delivery m-head] [Pasted text #1 +40 lines] and check the tag\r\nauto mode on"
+                    .as_bytes(),
+                b"m-head"
+            ),
+            "somebody typed after the write, and Enter would send their text too"
+        );
+        assert!(
+            unsent_write_is_whole(
+                "❯ [Messages (1) via Swarm · other]\r\n[Petal — message m-head]\r\nauto mode on"
+                    .as_bytes(),
+                b"m-head"
+            ),
+            "a typed write carries its marker in its own text"
+        );
+
+        let session = WorkerSessionId::new();
+        let baseline = baseline_from_response(
+            session,
+            ProviderKind::ClaudeCode,
+            b"m-head",
+            BusyPolicy::Wait,
+            prompt_observation(session, lead_only, true),
+        );
+        assert!(
+            !matches!(baseline, Baseline::HoldsOurUnsentMessage { .. }),
+            "{baseline:?}"
+        );
+        let write = UnconfirmedTaskMessageWrite {
+            session_id: session,
+            claim_id: "claim".into(),
+            message_ids: vec!["m-head".into()],
+            given_up_at: 1_000,
+            was_redelivery: false,
+        };
+        assert_eq!(
+            unconfirmed_write_verdict(true, lead_only.as_bytes(), Some(1_001), &write),
+            UnconfirmedWriteVerdict::Undetermined
+        );
     }
 
     /// Only the write's own marker, unsent, makes the prompt's text its. An

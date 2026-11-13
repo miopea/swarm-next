@@ -541,13 +541,25 @@ impl TaskStore {
     /// Writes of task messages whose arrival delivery could not confirm, on
     /// terminals that are still running (ADR 0173).
     ///
-    /// One entry per write: its claim names it, and it lists every message the
-    /// write carried in the order they were written, so the first is the marker
-    /// the recipient's prompt shows. A write to a session that has since ended
-    /// is not here. Whatever it left in that prompt ended with it, and Queen
-    /// still reconciles it from her attention list. Nor is a write to a
-    /// terminal the operator is engaged in, exactly as a delivery to it waits:
-    /// what follows Swarm's text in that prompt may be theirs, half typed.
+    /// One entry per write, listing every message it carried in the order they
+    /// were written, so the first is the marker the recipient's prompt shows.
+    ///
+    /// ⚠️ A WRITE IS ITS TERMINAL AND THE MOMENT DELIVERY GAVE UP ON IT, NOT ITS
+    /// CLAIM. A pass makes one write per terminal and settles every claim in it
+    /// at the same moment, and only a change of state moves that time. Claims
+    /// were minted per message before ADR 0173, so five messages pasted as one
+    /// write carried five claims, and keyed on the claim they would be resent
+    /// as five writes, one per cooldown, with newer messages waiting behind.
+    ///
+    /// Newest first, so a write stranded now is never crowded out by older
+    /// ones only Queen can settle. A write the row limit cuts short is left for
+    /// a later pass rather than settled in part.
+    ///
+    /// A write to a session that has since ended is not here. Whatever it left
+    /// in that prompt ended with it, and Queen still reconciles it from her
+    /// attention list. Nor is a write to a terminal the operator is engaged in,
+    /// exactly as a delivery to it waits: what follows Swarm's text in that
+    /// prompt may be theirs, half typed.
     ///
     /// # Errors
     /// Returns database failures, never an empty healthy result on a failed read.
@@ -565,34 +577,37 @@ impl TaskStore {
              WHERE d.state = 'uncertain' AND d.claim_id IS NOT NULL
                AND NOT EXISTS(SELECT 1 FROM worker_engagements e
                  WHERE e.worker_id = s.worker_id AND e.expires_at > ?3)
-             ORDER BY d.session_id, d.claim_id, m.created_at, m.id
+             ORDER BY d.updated_at DESC, d.session_id, m.created_at, m.id
              LIMIT ?2",
         )?;
-        let rows = statement.query_map(
-            params![
-                REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
-                i64::try_from(UNCONFIRMED_WRITE_ROW_LIMIT).unwrap_or(i64::MAX),
-                now
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, bool>(4)?,
-                ))
-            },
-        )?;
+        let rows = statement
+            .query_map(
+                params![
+                    REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
+                    i64::try_from(UNCONFIRMED_WRITE_ROW_LIMIT).unwrap_or(i64::MAX),
+                    now
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, bool>(4)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let full = rows.len() >= UNCONFIRMED_WRITE_ROW_LIMIT;
         let mut writes: Vec<UnconfirmedTaskMessageWrite> = Vec::new();
-        for row in rows {
-            let (session, claim_id, message_id, given_up_at, redelivered) = row?;
+        for (session, claim_id, message_id, given_up_at, redelivered) in rows {
             let session_id = swarm_domain::WorkerSessionId::from_str(&session)
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
             match writes.last_mut() {
-                Some(write) if write.session_id == session_id && write.claim_id == claim_id => {
+                Some(write)
+                    if write.session_id == session_id && write.given_up_at == given_up_at =>
+                {
                     write.message_ids.push(message_id);
-                    write.given_up_at = write.given_up_at.max(given_up_at);
                     write.was_redelivery |= redelivered;
                 }
                 _ => writes.push(UnconfirmedTaskMessageWrite {
@@ -604,15 +619,20 @@ impl TaskStore {
                 }),
             }
         }
+        if full && writes.len() > 1 {
+            writes.pop();
+        }
         Ok(writes)
     }
 
     /// Settles one unconfirmed write from what its recipient's prompt showed.
     ///
     /// `Delivered` is for a write Swarm has just seen submitted. `Redeliver`
-    /// queues the write's messages again, once: a message that was already a
-    /// second attempt stays uncertain for Queen to reconcile, and a superseded
-    /// one is never sent again. Returns how many messages changed.
+    /// queues the write's messages again, once, under the write's own claim so
+    /// they go again as one write: a message that was already a second attempt
+    /// stays uncertain for Queen to reconcile, and a superseded one is never
+    /// sent again. Only the write's messages that are still uncertain on its
+    /// terminal change. Returns how many did.
     ///
     /// # Errors
     /// Returns database failures.
@@ -625,34 +645,38 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
         let session = write.session_id.to_string();
-        let changed = match settlement {
-            UnconfirmedWriteSettlement::Delivered => {
-                tx.execute(
-                    "UPDATE task_messages SET delivered_at = ?3, delivered_session_id = ?1
-                     WHERE delivered_at IS NULL AND id IN (
-                         SELECT message_id FROM task_message_deliveries
-                         WHERE session_id = ?1 AND claim_id = ?2 AND state = 'uncertain')",
-                    params![session, write.claim_id, now],
-                )?;
-                tx.execute(
-                    "UPDATE task_message_deliveries SET state = 'delivered', updated_at = ?3
-                     WHERE session_id = ?1 AND claim_id = ?2 AND state = 'uncertain'",
-                    params![session, write.claim_id, now],
-                )?
-            }
-            UnconfirmedWriteSettlement::Redeliver => tx.execute(
-                "UPDATE task_message_deliveries SET state = 'queued', updated_at = ?3,
-                     resolution_reason = ?4
-                 WHERE session_id = ?1 AND claim_id = ?2 AND state = 'uncertain'
-                   AND superseded = 0 AND COALESCE(resolution_reason, '') <> ?4",
-                params![
-                    session,
-                    write.claim_id,
-                    now,
-                    REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE
-                ],
-            )?,
-        };
+        let mut changed = 0;
+        for message_id in &write.message_ids {
+            changed += match settlement {
+                UnconfirmedWriteSettlement::Delivered => {
+                    tx.execute(
+                        "UPDATE task_messages SET delivered_at = ?3, delivered_session_id = ?2
+                         WHERE id = ?1 AND delivered_at IS NULL AND EXISTS(
+                             SELECT 1 FROM task_message_deliveries
+                             WHERE message_id = ?1 AND session_id = ?2 AND state = 'uncertain')",
+                        params![message_id, session, now],
+                    )?;
+                    tx.execute(
+                        "UPDATE task_message_deliveries SET state = 'delivered', updated_at = ?3
+                         WHERE message_id = ?1 AND session_id = ?2 AND state = 'uncertain'",
+                        params![message_id, session, now],
+                    )?
+                }
+                UnconfirmedWriteSettlement::Redeliver => tx.execute(
+                    "UPDATE task_message_deliveries SET state = 'queued', updated_at = ?3,
+                         resolution_reason = ?4, claim_id = ?5
+                     WHERE message_id = ?1 AND session_id = ?2 AND state = 'uncertain'
+                       AND superseded = 0 AND COALESCE(resolution_reason, '') <> ?4",
+                    params![
+                        message_id,
+                        session,
+                        now,
+                        REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
+                        write.claim_id
+                    ],
+                )?,
+            };
+        }
         if changed > 0 {
             crate::insert_control_room_event(
                 &tx,
@@ -676,6 +700,8 @@ const UNCONFIRMED_WRITE_ROW_LIMIT: usize = 64;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnconfirmedTaskMessageWrite {
     pub session_id: swarm_domain::WorkerSessionId,
+    /// The claim of its first message. A resend goes under it, so the write's
+    /// messages go again together.
     pub claim_id: String,
     /// In the order they were written; the first is the write's marker.
     pub message_ids: Vec<String>,
@@ -1984,5 +2010,84 @@ mod tests {
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].message.message_id, newer);
         assert_eq!(next[0].message.repeats_write, None);
+    }
+
+    /// ⚠️ BEFORE ADR 0173 EVERY MESSAGE HAD ITS OWN CLAIM, so the writes
+    /// already waiting when it lands carry one claim per message. Found by
+    /// claim, a five-message paste would go again as five writes, one per
+    /// cooldown, with newer messages queued behind them. Found by terminal and
+    /// give-up time, it is one write and goes again as one.
+    #[test]
+    fn a_write_from_before_shared_claims_is_found_and_sent_again_whole() {
+        let (store, task, worker) = fixture();
+        let sent = [
+            send(&store, task, worker),
+            send(&store, task, worker),
+            send(&store, task, worker),
+        ];
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        {
+            let connection = store.connection().unwrap();
+            for id in &sent {
+                connection
+                    .execute(
+                        "UPDATE task_message_deliveries SET claim_id = 'legacy-' || message_id
+                         WHERE message_id = ?1",
+                        params![id],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let writes = store.unconfirmed_task_message_writes(40).unwrap();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].message_ids, sent);
+        assert_eq!(writes[0].claim_id, format!("legacy-{}", sent[0]));
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &writes[0],
+                    UnconfirmedWriteSettlement::Redeliver,
+                    30
+                )
+                .unwrap(),
+            3
+        );
+        let resend = store.claim_task_messages(31).unwrap();
+        assert_eq!(resend.len(), 3);
+        assert!(
+            resend
+                .iter()
+                .all(|claim| claim.claim_id == resend[0].claim_id
+                    && claim.message.repeats_write.as_deref() == Some(writes[0].claim_id.as_str()))
+        );
+    }
+
+    /// The newest stranded write is the one most likely to be in the prompt
+    /// now, so it comes first and older ones only Queen can settle never crowd
+    /// it out. A write the row limit cuts short waits for a later pass rather
+    /// than being settled in part.
+    #[test]
+    fn unconfirmed_writes_are_found_newest_first_and_only_whole() {
+        let (store, task, worker) = fixture();
+        for (pass, count) in [(20, 16), (30, 16), (40, 16), (50, 16), (60, 1)] {
+            for _ in 0..count {
+                send(&store, task, worker);
+            }
+            let claims = store.claim_task_messages(pass).unwrap();
+            assert_eq!(claims.len(), count);
+            give_up_on(&store, &claims, pass + 1);
+        }
+
+        let writes = store.unconfirmed_task_message_writes(90).unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| (write.given_up_at, write.message_ids.len()))
+                .collect::<Vec<_>>(),
+            [(61, 1), (51, 16), (41, 16), (31, 16)],
+            "65 rows, 64 read: the oldest write is cut short and left out"
+        );
     }
 }

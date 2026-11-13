@@ -70,17 +70,26 @@ Measured on Claude Code 2.1.325 in a throwaway session (Queen runs 2.1.323):
      strand the paste.
    - An unframed write is typed whole, so its marker still proves the render,
      as before.
-2. **One write, one claim.** The messages a pass writes to one terminal share
-   one claim, so the write can be found again whole.
+   - The same holds for a write found later, left in the prompt. A lead with
+     no chip after it is not a write Swarm sends. Nor is one with text after
+     its chip on that row: somebody typed it, and Enter would send it too.
+2. **One write, one claim.**
+   - The messages a pass writes to one terminal share one claim.
+   - A write is found again by its terminal and the moment delivery gave up
+     on it, which every message in it shares. Writes made before this change
+     carry one claim per message, and are found whole the same way. Found by
+     claim, a five-message paste would go again as five writes, one per
+     cooldown, with newer messages waiting behind them.
 3. **An unconfirmed write is settled from its recipient's prompt.**
    - This happens at the start of every pass, before anything it would hold.
    - It reads each live terminal holding uncertain message writes once, under
      the same policy and activity checks as any delivery. A terminal the
      operator is engaged in is skipped, as a delivery to it would wait: what
      follows Swarm's text in that prompt may be theirs, half typed.
-   - **The write's marker is unsent in the prompt.** Swarm presses Enter once,
-     the write's messages are delivered, and the terminal's cooldown starts.
-     This is how a delivery already sends its own unsent message.
+   - **The write's marker is unsent in the prompt.** Once the terminal's
+     cooldown has passed, Swarm presses Enter once, the write's messages are
+     delivered, and the cooldown starts again. This is how a delivery already
+     sends its own unsent message, and the Enter is paced like one.
    - **The prompt is empty and has drawn since delivery gave up.** The write
      is not waiting there. Its messages are queued once more, and each says
      so: "Swarm could not confirm an earlier delivery of message `<id>`, so you
@@ -94,7 +103,9 @@ Measured on Claude Code 2.1.325 in a throwaway session (Queen runs 2.1.323):
      superseded one is never sent again. Both stay uncertain for Queen, as
      ADR 0067 describes.
    - Bounded: at most 64 uncertain messages per pass, one Enter per terminal
-     per pass, and live sessions only.
+     per pass, and live sessions only. The newest write comes first, since it
+     is the one most likely to be in a prompt now. A write the limit cuts
+     short waits for a later pass rather than being settled in part.
 4. **Queen's oldest wait goes first.**
    - Each pass reads, for Queen's live terminal, when her oldest queued
      message, her oldest queued outcome, and her queued review began waiting.

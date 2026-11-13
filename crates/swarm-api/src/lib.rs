@@ -3361,8 +3361,12 @@ impl AppState {
                 Ok(TerminalSubmission::Rejected { .. }) => TaskMessageResult::Rejected,
                 Ok(TerminalSubmission::Uncertain) | Err(_) => TaskMessageResult::Uncertain,
             };
+            // One moment for the whole write: a write is found again later as
+            // its terminal and this time (ADR 0173), so a group settled across
+            // a second boundary would come back as two writes.
+            let finished_at = unix_timestamp();
             for claim in group {
-                match store.finish_task_message(&claim, result, unix_timestamp()) {
+                match store.finish_task_message(&claim, result, finished_at) {
                     Ok(true) => changed |= !matches!(result, TaskMessageResult::Deferred),
                     Ok(false) => {}
                     Err(error) => {
