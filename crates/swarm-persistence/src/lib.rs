@@ -167,8 +167,9 @@ mod operator_statements;
 mod operator_submissions;
 mod review_answers;
 pub use message_delivery::{
-    ClaimedTaskMessage, TASK_MESSAGE_BATCH_LIMIT, TASK_MESSAGE_QUEUE_LIMIT, TaskMessageAttention,
-    TaskMessageAttentionPage, TaskMessageResult,
+    ClaimedTaskMessage, REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE, TASK_MESSAGE_BATCH_LIMIT,
+    TASK_MESSAGE_QUEUE_LIMIT, TaskMessageAttention, TaskMessageAttentionPage, TaskMessageResult,
+    UnconfirmedTaskMessageWrite, UnconfirmedWriteSettlement,
 };
 pub use native_operator_interviews::{NativeInterviewStoreError, StoredNativeInterview};
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
@@ -208,7 +209,9 @@ mod ops_tickets;
 mod orchestration;
 pub use ops_tickets::{OpsDeploymentPage, OpsDeploymentRecord, OpsTicketReceipt};
 mod queen_conductor;
-pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure, QueenAutomationFinish};
+pub use queen_conductor::{
+    QueenAutomationDelivery, QueenAutomationFailure, QueenAutomationFinish, QueenPacedWaits,
+};
 mod presentation;
 pub use presentation::{PresentationColorTheme, PresentationDeviceClass, PresentationPreferences};
 mod task_dispatches;

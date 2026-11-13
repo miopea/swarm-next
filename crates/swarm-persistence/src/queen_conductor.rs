@@ -33,6 +33,41 @@ const RUN_TIMEOUT_SECONDS: i64 = 60 * 60;
 /// chance first, and short enough that a night does not die on one restart.
 const ABANDON_UNSETTLED_UNCERTAIN_SECONDS: i64 = 30 * 60;
 
+/// When each of Queen's paced queues started waiting, where anything waits.
+///
+/// Five-minute pacing gives Queen's terminal one write per pause, and the first
+/// queue to write in a pass takes it. Outcome reports and review runs could
+/// take turns for an hour while a worker's message waited behind both. These
+/// say which queue has waited longest, so it goes first (ADR 0173).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QueenPacedWaits {
+    pub oldest_message: Option<i64>,
+    pub oldest_outcome: Option<i64>,
+    pub review_requested_at: Option<i64>,
+}
+
+impl QueenPacedWaits {
+    /// A worker's message has waited longer than any outcome report. Equal is
+    /// not longer, so outcomes keep their place on a tie.
+    #[must_use]
+    pub fn messages_before_outcomes(&self) -> bool {
+        matches!(
+            (self.oldest_message, self.oldest_outcome),
+            (Some(message), Some(outcome)) if message < outcome
+        )
+    }
+
+    /// A worker's message has waited longer than the queued review, so the
+    /// review does not go ahead of it even after yielding once.
+    #[must_use]
+    pub fn message_before_review(&self) -> bool {
+        matches!(
+            (self.oldest_message, self.review_requested_at),
+            (Some(message), Some(review)) if message < review
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueenAutomationDelivery {
     pub run_id: String,
@@ -181,6 +216,52 @@ impl TaskStore {
                 .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
         })
         .transpose()
+    }
+
+    /// When each of Queen's paced queues started waiting for her live terminal
+    /// (ADR 0173).
+    ///
+    /// Ordering evidence, like the yield below, never delivery permission. A
+    /// queue whose oldest item is held for its own reason can be put first in a
+    /// pass and write nothing, so it cannot block the others. Outcomes date from
+    /// the report that raised them. A message counts only while Queen could take
+    /// it: queued, not superseded, its task not removed, and nobody engaged in
+    /// her terminal.
+    ///
+    /// # Errors
+    /// Returns an error when the queues cannot be read.
+    pub fn queen_paced_waits(&self, now: i64) -> Result<QueenPacedWaits, TaskStoreError> {
+        Ok(self
+            .connection()?
+            .query_row(
+                "SELECT
+                   (SELECT MIN(m.created_at) FROM task_messages m
+                      JOIN task_message_deliveries d ON d.message_id = m.id
+                      JOIN tasks t ON t.id = m.task_id AND t.removed_at IS NULL
+                      WHERE m.recipient = 'queen' AND m.delivered_at IS NULL
+                        AND d.state = 'queued' AND d.superseded = 0
+                        AND NOT EXISTS(SELECT 1 FROM worker_engagements e
+                            WHERE e.worker_id = queen.id AND e.expires_at > ?1)),
+                   (SELECT MIN(a.occurred_at) FROM task_outcome_deliveries o
+                      JOIN task_activity a ON a.sequence = o.activity_sequence
+                      WHERE o.recipient_worker_id = queen.id AND o.state = 'queued'),
+                   (SELECT requested_at FROM queen_automation WHERE id = 1 AND state = 'queued')
+                 FROM worker_profiles queen
+                 JOIN worker_sessions session
+                   ON session.worker_id = queen.id AND session.ended_at IS NULL
+                 WHERE queen.role = 'queen'
+                 LIMIT 1",
+                [now],
+                |row| {
+                    Ok(QueenPacedWaits {
+                        oldest_message: row.get(0)?,
+                        oldest_outcome: row.get(1)?,
+                        review_requested_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_default())
     }
 
     /// A queued review that has already yielded to a confirmed delivery gets
@@ -3433,5 +3514,127 @@ mod tests {
         store.assign_task(task.id, worker_session).unwrap();
 
         assert!(!store.observe_queen_automation(11).unwrap());
+    }
+
+    /// Queen's terminal takes one paced write per pause, so the queue that has
+    /// waited longest is told apart from the rest. On 2026-11-13 outcome
+    /// reports and review runs took turns for most of an hour while a worker's
+    /// message, older than both, waited behind them.
+    #[test]
+    fn queen_paced_waits_name_the_oldest_wait_in_each_queue() {
+        let store = TaskStore::in_memory().unwrap();
+        assert_eq!(
+            store.queen_paced_waits(0).unwrap(),
+            QueenPacedWaits::default()
+        );
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let queen_session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, queen_session).unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let worker_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(worker.id, worker_session)
+            .unwrap();
+        let task = store
+            .create_task_with_details(
+                "Polish mobile controls",
+                "Keep voice dictation first class.",
+                TaskPriority::High,
+                "/workspace/petal",
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, worker_session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_worker_task(task.id, TaskState::Blocked, "Need a ruling", worker_session)
+            .unwrap();
+        let reported = store
+            .queen_paced_waits(0)
+            .unwrap()
+            .oldest_outcome
+            .expect("the blocked report waits for Queen");
+
+        let message = |at: i64| {
+            store
+                .send_task_message(
+                    task.id,
+                    crate::MessageEnd::worker(worker.id),
+                    crate::MessageEnd::queen(),
+                    "Found a regression",
+                    at,
+                )
+                .unwrap()
+        };
+        message(reported - 5);
+        message(reported + 5);
+        store
+            .set_queen_automation_enabled(true, reported - 1)
+            .unwrap();
+        store.request_queen_automation_run(reported - 1).unwrap();
+        let waits = store.queen_paced_waits(reported).unwrap();
+        assert_eq!(
+            waits,
+            QueenPacedWaits {
+                oldest_message: Some(reported - 5),
+                oldest_outcome: Some(reported),
+                review_requested_at: Some(reported - 1),
+            }
+        );
+        assert!(waits.messages_before_outcomes());
+        assert!(waits.message_before_review());
+
+        store
+            .renew_worker_engagement(queen_session, None, reported, 60)
+            .unwrap();
+        assert_eq!(
+            store.queen_paced_waits(reported).unwrap().oldest_message,
+            None,
+            "a message the operator's engagement holds is not waiting on pacing"
+        );
+        assert_eq!(
+            store
+                .queen_paced_waits(reported + 61)
+                .unwrap()
+                .oldest_message,
+            Some(reported - 5)
+        );
+
+        assert!(
+            store
+                .release_worker_session_because(queen_session, None)
+                .unwrap()
+        );
+        assert_eq!(
+            store.queen_paced_waits(reported).unwrap(),
+            QueenPacedWaits::default(),
+            "nothing is paced for a Queen with no live terminal"
+        );
+    }
+
+    #[test]
+    fn a_tie_or_a_newer_message_keeps_the_existing_order() {
+        let at = |message, outcome, review| QueenPacedWaits {
+            oldest_message: message,
+            oldest_outcome: outcome,
+            review_requested_at: review,
+        };
+        assert!(!at(Some(10), Some(10), Some(10)).messages_before_outcomes());
+        assert!(!at(Some(10), Some(10), Some(10)).message_before_review());
+        assert!(!at(Some(11), Some(10), Some(10)).messages_before_outcomes());
+        assert!(!at(Some(11), Some(10), Some(10)).message_before_review());
+        assert!(!at(None, Some(10), Some(10)).messages_before_outcomes());
+        assert!(!at(Some(9), None, None).messages_before_outcomes());
+        assert!(!at(Some(9), None, None).message_before_review());
+        assert!(at(Some(9), Some(10), None).messages_before_outcomes());
+        assert!(at(Some(9), None, Some(10)).message_before_review());
     }
 }

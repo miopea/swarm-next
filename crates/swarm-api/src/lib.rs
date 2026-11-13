@@ -2235,6 +2235,12 @@ impl AppState {
                 return;
             }
         }
+        // A message write whose arrival was never confirmed may be sitting
+        // unsent in its recipient's prompt, holding every delivery behind it.
+        // Settled first, so this pass can deliver past it (ADR 0173).
+        if coordination_delivery::recover_unconfirmed_task_messages(store, client).await {
+            self.control_room_notify.notify_waiters();
+        }
         // Work whose wait has cleared comes back to its worker before the
         // briefings below are delivered, so its briefing can go in this same
         // pass (ADR 0119).
@@ -2255,8 +2261,21 @@ impl AppState {
         // A review may yield once to notifications, but a continuing stream
         // must not renew Queen's cooldown ahead of it forever. The common
         // submission gate still prevents two cooled writes in one pause.
+        //
+        // ⚠️ AND NEITHER MAY STARVE A WORKER'S MESSAGE. Queen's terminal takes
+        // one paced write per pause, and the first queue to write in a pass
+        // takes it. On 2026-11-13 outcome reports and review runs took turns
+        // for 55 minutes while worker messages waited behind both. Whichever
+        // has waited longest now goes first; a tie keeps the old order
+        // (ADR 0173). Ordering only: every gate still applies.
+        let waits = store
+            .queen_paced_waits(unix_timestamp())
+            .unwrap_or_else(|error| {
+                tracing::warn!(message = %error, "Queen's paced queues could not be read");
+                swarm_persistence::QueenPacedWaits::default()
+            });
         let review_first = match store.queen_review_has_yielded_to_delivery() {
-            Ok(value) => value,
+            Ok(value) => value && !waits.message_before_review(),
             Err(error) => {
                 tracing::warn!(message = %error, "Queen delivery ordering could not be read");
                 false
@@ -2268,8 +2287,13 @@ impl AppState {
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_clarifications(store, client).await;
         self.deliver_task_briefs(store, client).await;
-        self.deliver_task_outcomes(store, client).await;
-        self.deliver_task_messages(store, client).await;
+        if waits.messages_before_outcomes() {
+            self.deliver_task_messages(store, client).await;
+            self.deliver_task_outcomes(store, client).await;
+        } else {
+            self.deliver_task_outcomes(store, client).await;
+            self.deliver_task_messages(store, client).await;
+        }
         self.deliver_operator_broadcasts(store, client).await;
         if let Err(error) = store.observe_queen_automation(unix_timestamp()) {
             tracing::warn!(message = %error, "Queen automation queue could not be observed");
@@ -3308,6 +3332,29 @@ impl AppState {
         let mut changed = false;
         for (group, submission) in settled {
             use swarm_persistence::TaskMessageResult;
+            // HELD MESSAGES SAY SO. Outcomes and reviews held at a prompt are
+            // recorded as delivery holds and listed in Queues; messages were
+            // not, so a terminal holding only messages stalled in silence
+            // (ADR 0173). One hold per terminal, because one prompt holds
+            // every message waiting there, and a delivery to that terminal or
+            // a busy provider clears it.
+            if let Some(first) = group.first() {
+                let subject = format!("message-delivery:{}", first.message.session_id);
+                match &submission {
+                    Ok(TerminalSubmission::Deferred(reason)) => record_delivery_hold(
+                        store,
+                        &subject,
+                        first.message.recipient_worker_id,
+                        first.message.session_id,
+                        *reason,
+                        "A message",
+                    ),
+                    Ok(TerminalSubmission::Acknowledged) => {
+                        clear_held_delivery_refusals(store, &subject);
+                    }
+                    _ => {}
+                }
+            }
             let result = match submission {
                 Ok(TerminalSubmission::Acknowledged) => TaskMessageResult::Delivered,
                 Ok(TerminalSubmission::Deferred(_)) => TaskMessageResult::Deferred,
