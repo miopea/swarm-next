@@ -336,8 +336,36 @@ impl TaskStore {
         cancel_undeliverable_worker_messages(&tx, now)?;
         let messages = Self::read_pending_task_message_dispatches(&tx)?;
         let mut claims = Vec::with_capacity(messages.len());
+        // ONE CLAIM PER TERMINAL, because one terminal gets one write. The claim
+        // then names that write, so a write whose arrival could not be confirmed
+        // can be found again as a whole: every message it carried, and only
+        // those (ADR 0173). Minted per message, five messages pasted together
+        // were five unrelated claims, and nothing could say which of them were
+        // sitting unsent in the prompt.
+        //
+        // ⚠️ A RESEND IS THE WRITE IT REPEATS, NOTHING ADDED. Its marker is the
+        // same head message, so it finds a late copy of the original unsent in
+        // the prompt and presses Enter on it rather than writing again. That
+        // Enter delivers what the original carried. A newer message riding in
+        // the same batch would be recorded delivered without ever being
+        // written, so it waits for the next write instead.
+        let mut write_for_terminal: std::collections::HashMap<
+            swarm_domain::WorkerSessionId,
+            (String, Option<String>),
+        > = std::collections::HashMap::new();
         for message in messages {
-            let claim_id = uuid::Uuid::now_v7().to_string();
+            let (claim_id, repeats) = write_for_terminal
+                .entry(message.session_id)
+                .or_insert_with(|| {
+                    (
+                        uuid::Uuid::now_v7().to_string(),
+                        message.repeats_write.clone(),
+                    )
+                })
+                .clone();
+            if repeats != message.repeats_write {
+                continue;
+            }
             let changed = tx.execute(
                 "UPDATE task_message_deliveries SET state = 'dispatching', claim_id = ?2,
                     session_id = ?3, updated_at = ?4, attempts = attempts + 1
@@ -509,6 +537,188 @@ impl TaskStore {
         tx.commit()?;
         Ok(changed == 1)
     }
+
+    /// Writes of task messages whose arrival delivery could not confirm, on
+    /// terminals that are still running (ADR 0173).
+    ///
+    /// One entry per write, listing every message it carried in the order they
+    /// were written, so the first is the marker the recipient's prompt shows.
+    ///
+    /// ⚠️ A WRITE IS ITS TERMINAL AND THE MOMENT DELIVERY GAVE UP ON IT, NOT ITS
+    /// CLAIM. A pass makes one write per terminal and settles every claim in it
+    /// at the same moment, and only a change of state moves that time. Claims
+    /// were minted per message before ADR 0173, so five messages pasted as one
+    /// write carried five claims, and keyed on the claim they would be resent
+    /// as five writes, one per cooldown, with newer messages waiting behind.
+    ///
+    /// Newest first, so a write stranded now is never crowded out by older
+    /// ones only Queen can settle. A write the row limit cuts short is left for
+    /// a later pass rather than settled in part.
+    ///
+    /// A write to a session that has since ended is not here. Whatever it left
+    /// in that prompt ended with it, and Queen still reconciles it from her
+    /// attention list. Nor is a write to a terminal the operator is engaged in,
+    /// exactly as a delivery to it waits: what follows Swarm's text in that
+    /// prompt may be theirs, half typed.
+    ///
+    /// # Errors
+    /// Returns database failures, never an empty healthy result on a failed read.
+    pub fn unconfirmed_task_message_writes(
+        &self,
+        now: i64,
+    ) -> Result<Vec<UnconfirmedTaskMessageWrite>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT d.session_id, d.claim_id, d.message_id, d.updated_at,
+                    COALESCE(d.resolution_reason = ?1, 0)
+             FROM task_message_deliveries d
+             JOIN task_messages m ON m.id = d.message_id
+             JOIN worker_sessions s ON s.session_id = d.session_id AND s.ended_at IS NULL
+             WHERE d.state = 'uncertain' AND d.claim_id IS NOT NULL
+               AND NOT EXISTS(SELECT 1 FROM worker_engagements e
+                 WHERE e.worker_id = s.worker_id AND e.expires_at > ?3)
+             ORDER BY d.updated_at DESC, d.session_id, m.created_at, m.id
+             LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(
+                params![
+                    REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
+                    i64::try_from(UNCONFIRMED_WRITE_ROW_LIMIT).unwrap_or(i64::MAX),
+                    now
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, bool>(4)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let full = rows.len() >= UNCONFIRMED_WRITE_ROW_LIMIT;
+        let mut writes: Vec<UnconfirmedTaskMessageWrite> = Vec::new();
+        for (session, claim_id, message_id, given_up_at, redelivered) in rows {
+            let session_id = swarm_domain::WorkerSessionId::from_str(&session)
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            match writes.last_mut() {
+                Some(write)
+                    if write.session_id == session_id && write.given_up_at == given_up_at =>
+                {
+                    write.message_ids.push(message_id);
+                    write.was_redelivery |= redelivered;
+                }
+                _ => writes.push(UnconfirmedTaskMessageWrite {
+                    session_id,
+                    claim_id,
+                    message_ids: vec![message_id],
+                    given_up_at,
+                    was_redelivery: redelivered,
+                }),
+            }
+        }
+        if full && writes.len() > 1 {
+            writes.pop();
+        }
+        Ok(writes)
+    }
+
+    /// Settles one unconfirmed write from what its recipient's prompt showed.
+    ///
+    /// `Delivered` is for a write Swarm has just seen submitted. `Redeliver`
+    /// queues the write's messages again, once, under the write's own claim so
+    /// they go again as one write: a message that was already a second attempt
+    /// stays uncertain for Queen to reconcile, and a superseded one is never
+    /// sent again. Only the write's messages that are still uncertain on its
+    /// terminal change. Returns how many did.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn settle_unconfirmed_task_message_write(
+        &self,
+        write: &UnconfirmedTaskMessageWrite,
+        settlement: UnconfirmedWriteSettlement,
+        now: i64,
+    ) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        let session = write.session_id.to_string();
+        let mut changed = 0;
+        for message_id in &write.message_ids {
+            changed += match settlement {
+                UnconfirmedWriteSettlement::Delivered => {
+                    tx.execute(
+                        "UPDATE task_messages SET delivered_at = ?3, delivered_session_id = ?2
+                         WHERE id = ?1 AND delivered_at IS NULL AND EXISTS(
+                             SELECT 1 FROM task_message_deliveries
+                             WHERE message_id = ?1 AND session_id = ?2 AND state = 'uncertain')",
+                        params![message_id, session, now],
+                    )?;
+                    tx.execute(
+                        "UPDATE task_message_deliveries SET state = 'delivered', updated_at = ?3
+                         WHERE message_id = ?1 AND session_id = ?2 AND state = 'uncertain'",
+                        params![message_id, session, now],
+                    )?
+                }
+                UnconfirmedWriteSettlement::Redeliver => tx.execute(
+                    "UPDATE task_message_deliveries SET state = 'queued', updated_at = ?3,
+                         resolution_reason = ?4, claim_id = ?5
+                     WHERE message_id = ?1 AND session_id = ?2 AND state = 'uncertain'
+                       AND superseded = 0 AND COALESCE(resolution_reason, '') <> ?4",
+                    params![
+                        message_id,
+                        session,
+                        now,
+                        REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
+                        write.claim_id
+                    ],
+                )?,
+            };
+        }
+        if changed > 0 {
+            crate::insert_control_room_event(
+                &tx,
+                swarm_domain::ControlRoomEventKind::TasksChanged,
+            )?;
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+}
+
+/// Recorded on a message Swarm sends a second time because the first write
+/// could not be confirmed. It marks the message as possibly repeated for its
+/// reader, and it is why a message is only ever sent again once (ADR 0173).
+pub const REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE: &str = "redelivered after an unconfirmed write";
+
+/// How many unconfirmed messages one delivery pass looks at.
+const UNCONFIRMED_WRITE_ROW_LIMIT: usize = 64;
+
+/// One write of task messages whose arrival delivery could not confirm.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnconfirmedTaskMessageWrite {
+    pub session_id: swarm_domain::WorkerSessionId,
+    /// The claim of its first message. A resend goes under it, so the write's
+    /// messages go again together.
+    pub claim_id: String,
+    /// In the order they were written; the first is the write's marker.
+    pub message_ids: Vec<String>,
+    /// When delivery stopped waiting to see it.
+    pub given_up_at: i64,
+    /// Whether this write was already a second attempt.
+    pub was_redelivery: bool,
+}
+
+/// What the recipient's prompt established about an unconfirmed write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnconfirmedWriteSettlement {
+    /// Swarm found the write unsent in the prompt and submitted it.
+    Delivered,
+    /// The prompt is empty and has drawn since, so the write is not waiting
+    /// there. Sending it again may repeat it, and the reader is told so.
+    Redeliver,
 }
 
 #[cfg(test)]
@@ -1452,5 +1662,432 @@ mod tests {
         store.transition_task(task, TaskState::Completed).unwrap();
         assert!(store.claim_task_messages(12).unwrap().is_empty());
         assert_eq!(delivery_state(&store, task, &go), "cancelled");
+    }
+
+    fn give_up_on(store: &TaskStore, claims: &[ClaimedTaskMessage], now: i64) {
+        for claim in claims {
+            assert!(
+                store
+                    .finish_task_message(claim, TaskMessageResult::Uncertain, now)
+                    .unwrap()
+            );
+        }
+    }
+
+    /// One terminal gets one write, so the messages it carried share one claim
+    /// and can be found again together. Another terminal's write is its own.
+    #[test]
+    fn the_messages_one_write_carries_share_one_claim() {
+        let (store, task, worker) = fixture();
+        send(&store, task, worker);
+        send(&store, task, worker);
+        let other = store
+            .create_worker("Fern", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+        store
+            .bind_worker_session(other.id, WorkerSessionId::new())
+            .unwrap();
+        let theirs = store.create_task("Theirs", "/workspace").unwrap();
+        store.transition_task(theirs.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(theirs.id, other.id).unwrap();
+        send(&store, theirs.id, other.id);
+
+        let claims = store.claim_task_messages(20).unwrap();
+        assert_eq!(claims.len(), 3);
+        let (ours, others): (Vec<_>, Vec<_>) = claims
+            .iter()
+            .partition(|claim| claim.message.recipient_worker_id == worker);
+        assert_eq!(ours.len(), 2);
+        assert_eq!(ours[0].claim_id, ours[1].claim_id);
+        assert_eq!(others.len(), 1);
+        assert_eq!(others[0].message.recipient_worker_id, other.id);
+        assert_ne!(others[0].claim_id, ours[0].claim_id);
+    }
+
+    /// A write delivery could not confirm is found whole, in the order it was
+    /// written, while its terminal runs. A terminal that ended took the prompt
+    /// with it, so its write is left to Queen's reconciliation.
+    #[test]
+    fn an_unconfirmed_write_is_found_whole_while_its_terminal_runs() {
+        let (store, task, worker) = fixture();
+        let first = send(&store, task, worker);
+        let second = send(&store, task, worker);
+        let claims = store.claim_task_messages(20).unwrap();
+        assert_eq!(claims[0].message.repeats_write, None);
+        give_up_on(&store, &claims, 21);
+
+        let writes = store.unconfirmed_task_message_writes(40).unwrap();
+        assert_eq!(
+            writes,
+            [UnconfirmedTaskMessageWrite {
+                session_id: claims[0].message.session_id,
+                claim_id: claims[0].claim_id.clone(),
+                message_ids: vec![first, second],
+                given_up_at: 21,
+                was_redelivery: false,
+            }]
+        );
+
+        store
+            .renew_worker_engagement(claims[0].message.session_id, None, 30, 60)
+            .unwrap();
+        assert!(
+            store
+                .unconfirmed_task_message_writes(40)
+                .unwrap()
+                .is_empty(),
+            "the operator is engaged in that terminal; its prompt may hold their typing"
+        );
+        assert_eq!(store.unconfirmed_task_message_writes(91).unwrap().len(), 1);
+
+        assert!(
+            store
+                .release_worker_session_because(claims[0].message.session_id, None)
+                .unwrap()
+        );
+        assert!(
+            store
+                .unconfirmed_task_message_writes(91)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .task_message_attention(i64::MAX, i64::MAX)
+                .unwrap()
+                .total,
+            2,
+            "Queen still sees what the ended terminal may have lost"
+        );
+    }
+
+    /// Swarm found its own write unsent in the prompt and sent it.
+    #[test]
+    fn a_write_seen_submitted_is_delivered() {
+        let (store, task, worker) = fixture();
+        let first = send(&store, task, worker);
+        let second = send(&store, task, worker);
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        let write = store.unconfirmed_task_message_writes(40).unwrap().remove(0);
+
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &write,
+                    UnconfirmedWriteSettlement::Delivered,
+                    30
+                )
+                .unwrap(),
+            2
+        );
+        for message in [&first, &second] {
+            let row = store
+                .task_messages(task)
+                .unwrap()
+                .into_iter()
+                .find(|m| &m.id == message)
+                .unwrap();
+            assert_eq!(row.delivery_state, "delivered");
+            assert_eq!(row.delivered_at, Some(30));
+            assert_eq!(row.delivered_session_id, Some(write.session_id));
+        }
+        assert!(
+            store
+                .unconfirmed_task_message_writes(40)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .task_message_attention(i64::MAX, i64::MAX)
+                .unwrap()
+                .total,
+            0
+        );
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &write,
+                    UnconfirmedWriteSettlement::Delivered,
+                    31
+                )
+                .unwrap(),
+            0,
+            "settling the same write twice changes nothing"
+        );
+    }
+
+    /// A write that is not waiting in the prompt is sent once more, marked so
+    /// its reader knows it may be a repeat. A second unconfirmed attempt stays
+    /// with Queen: nothing is sent a third time on Swarm's own judgement.
+    #[test]
+    fn a_lost_write_is_sent_again_once_and_says_so() {
+        let (store, task, worker) = fixture();
+        let id = send(&store, task, worker);
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        let write = store.unconfirmed_task_message_writes(40).unwrap().remove(0);
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &write,
+                    UnconfirmedWriteSettlement::Redeliver,
+                    30
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(delivery_state(&store, task, &id), "queued");
+
+        let again = store.claim_task_messages(31).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].message.repeats_write, Some(write.claim_id.clone()));
+        assert_ne!(again[0].claim_id, write.claim_id);
+        give_up_on(&store, &again, 32);
+
+        let second = store.unconfirmed_task_message_writes(40).unwrap().remove(0);
+        assert!(second.was_redelivery);
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &second,
+                    UnconfirmedWriteSettlement::Redeliver,
+                    33
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(delivery_state(&store, task, &id), "uncertain");
+        let attention = store.task_message_attention(i64::MAX, i64::MAX).unwrap();
+        assert_eq!(attention.total, 1);
+        assert_eq!(attention.items[0].message_id, id);
+    }
+
+    /// A deferral between the two attempts keeps the mark: the reader is told
+    /// whenever the message finally arrives.
+    #[test]
+    fn a_deferred_resend_still_says_it_may_be_a_repeat() {
+        let (store, task, worker) = fixture();
+        send(&store, task, worker);
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        let write = store.unconfirmed_task_message_writes(40).unwrap().remove(0);
+        store
+            .settle_unconfirmed_task_message_write(
+                &write,
+                UnconfirmedWriteSettlement::Redeliver,
+                30,
+            )
+            .unwrap();
+        let deferred = store.claim_task_messages(31).unwrap().remove(0);
+        store
+            .finish_task_message(&deferred, TaskMessageResult::Deferred, 32)
+            .unwrap();
+        assert_eq!(
+            store.claim_task_messages(33).unwrap()[0]
+                .message
+                .repeats_write,
+            Some(deferred.claim_id),
+            "still the same write, still said to be a repeat"
+        );
+    }
+
+    /// A superseded request is never written again, even once.
+    #[test]
+    fn a_superseded_message_is_not_sent_again() {
+        let (store, task, worker) = fixture();
+        let kept = send(&store, task, worker);
+        let dropped = send(&store, task, worker);
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_message_deliveries SET superseded = 1 WHERE message_id = ?1",
+                [&dropped],
+            )
+            .unwrap();
+        let write = store.unconfirmed_task_message_writes(40).unwrap().remove(0);
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &write,
+                    UnconfirmedWriteSettlement::Redeliver,
+                    30
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(delivery_state(&store, task, &kept), "queued");
+        assert_eq!(delivery_state(&store, task, &dropped), "uncertain");
+    }
+
+    /// A held message raises one card for its terminal, and the card goes
+    /// once nothing waits there, whichever way the message left.
+    #[test]
+    fn a_held_message_card_lasts_while_a_message_waits() {
+        let (store, task, worker) = fixture();
+        send(&store, task, worker);
+        let claim = store.claim_task_messages(20).unwrap().remove(0);
+        store
+            .finish_task_message(&claim, TaskMessageResult::Deferred, 21)
+            .unwrap();
+        let subject = format!("message-delivery:{}", claim.message.session_id);
+        store
+            .record_coordinator_refusal(
+                crate::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+                &subject,
+                Some(worker),
+                Some(claim.message.session_id),
+                "A message is waiting",
+                22,
+            )
+            .unwrap();
+        let standing = |store: &TaskStore| {
+            store
+                .standing_coordinator_refusals(23, 0)
+                .unwrap()
+                .into_iter()
+                .filter(|refusal| refusal.subject == subject)
+                .count()
+        };
+        assert_eq!(standing(&store), 1);
+        let again = store.claim_task_messages(24).unwrap().remove(0);
+        assert_eq!(standing(&store), 1, "still waiting while it is written");
+        store
+            .finish_task_message(&again, TaskMessageResult::Delivered, 25)
+            .unwrap();
+        assert_eq!(standing(&store), 0);
+    }
+
+    /// A resend carries what the write it repeats carried, nothing added. Its
+    /// marker can find a late copy of the original unsent in the prompt, and
+    /// the Enter that sends that copy delivers exactly what the copy holds.
+    #[test]
+    fn a_resend_is_written_alone_as_the_write_it_repeats() {
+        let (store, task, worker) = fixture();
+        let first = send(&store, task, worker);
+        let second = send(&store, task, worker);
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        let write = store.unconfirmed_task_message_writes(40).unwrap().remove(0);
+        store
+            .settle_unconfirmed_task_message_write(
+                &write,
+                UnconfirmedWriteSettlement::Redeliver,
+                30,
+            )
+            .unwrap();
+        let newer = store
+            .send_task_message(
+                task,
+                MessageEnd::queen(),
+                MessageEnd::worker(worker),
+                "And the tag?",
+                31,
+            )
+            .unwrap()
+            .id;
+
+        let resend = store.claim_task_messages(32).unwrap();
+        assert_eq!(
+            resend
+                .iter()
+                .map(|claim| claim.message.message_id.clone())
+                .collect::<Vec<_>>(),
+            [first, second],
+            "the original's messages in the original's order, so its head marker"
+        );
+        for claim in &resend {
+            store
+                .finish_task_message(claim, TaskMessageResult::Delivered, 33)
+                .unwrap();
+        }
+        assert_eq!(delivery_state(&store, task, &newer), "queued");
+        let next = store.claim_task_messages(34).unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].message.message_id, newer);
+        assert_eq!(next[0].message.repeats_write, None);
+    }
+
+    /// ⚠️ BEFORE ADR 0173 EVERY MESSAGE HAD ITS OWN CLAIM, so the writes
+    /// already waiting when it lands carry one claim per message. Found by
+    /// claim, a five-message paste would go again as five writes, one per
+    /// cooldown, with newer messages queued behind them. Found by terminal and
+    /// give-up time, it is one write and goes again as one.
+    #[test]
+    fn a_write_from_before_shared_claims_is_found_and_sent_again_whole() {
+        let (store, task, worker) = fixture();
+        let sent = [
+            send(&store, task, worker),
+            send(&store, task, worker),
+            send(&store, task, worker),
+        ];
+        let claims = store.claim_task_messages(20).unwrap();
+        give_up_on(&store, &claims, 21);
+        {
+            let connection = store.connection().unwrap();
+            for id in &sent {
+                connection
+                    .execute(
+                        "UPDATE task_message_deliveries SET claim_id = 'legacy-' || message_id
+                         WHERE message_id = ?1",
+                        params![id],
+                    )
+                    .unwrap();
+            }
+        }
+
+        let writes = store.unconfirmed_task_message_writes(40).unwrap();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].message_ids, sent);
+        assert_eq!(writes[0].claim_id, format!("legacy-{}", sent[0]));
+        assert_eq!(
+            store
+                .settle_unconfirmed_task_message_write(
+                    &writes[0],
+                    UnconfirmedWriteSettlement::Redeliver,
+                    30
+                )
+                .unwrap(),
+            3
+        );
+        let resend = store.claim_task_messages(31).unwrap();
+        assert_eq!(resend.len(), 3);
+        assert!(
+            resend
+                .iter()
+                .all(|claim| claim.claim_id == resend[0].claim_id
+                    && claim.message.repeats_write.as_deref() == Some(writes[0].claim_id.as_str()))
+        );
+    }
+
+    /// The newest stranded write is the one most likely to be in the prompt
+    /// now, so it comes first and older ones only Queen can settle never crowd
+    /// it out. A write the row limit cuts short waits for a later pass rather
+    /// than being settled in part.
+    #[test]
+    fn unconfirmed_writes_are_found_newest_first_and_only_whole() {
+        let (store, task, worker) = fixture();
+        for (pass, count) in [(20, 16), (30, 16), (40, 16), (50, 16), (60, 1)] {
+            for _ in 0..count {
+                send(&store, task, worker);
+            }
+            let claims = store.claim_task_messages(pass).unwrap();
+            assert_eq!(claims.len(), count);
+            give_up_on(&store, &claims, pass + 1);
+        }
+
+        let writes = store.unconfirmed_task_message_writes(90).unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| (write.given_up_at, write.message_ids.len()))
+                .collect::<Vec<_>>(),
+            [(61, 1), (51, 16), (41, 16), (31, 16)],
+            "65 rows, 64 read: the oldest write is cut short and left out"
+        );
     }
 }

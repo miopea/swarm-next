@@ -581,6 +581,12 @@ pub struct TaskMessageDispatch {
     pub sender: MessageParty,
     pub sender_name: String,
     pub body: String,
+    /// Who it is addressed to: the worker, or whoever holds Queen's role.
+    pub recipient_worker_id: WorkerId,
+    /// The claim of an earlier write of this message that could not be
+    /// confirmed, when this is that write being sent again. The recipient may
+    /// already have it (ADR 0173).
+    pub repeats_write: Option<String>,
 }
 
 impl TaskStore {
@@ -617,7 +623,9 @@ impl TaskStore {
         // query and the broadcast one cannot drift apart on it again.
         let sql = format!(
             "SELECT m.id, m.task_id, task.title, session.session_id, m.sender,
-                    COALESCE(sender.name, 'Queen'), m.body
+                    COALESCE(sender.name, 'Queen'), m.body, recipient.id,
+                    CASE WHEN delivery.resolution_reason = '{redelivered}'
+                         THEN delivery.claim_id END
              FROM task_messages m
              JOIN task_message_deliveries delivery ON delivery.message_id = m.id
              JOIN tasks task ON task.id = m.task_id AND task.removed_at IS NULL
@@ -638,6 +646,7 @@ impl TaskStore {
                  MIN(delivery.attempts) OVER (PARTITION BY recipient.id), m.created_at, m.id LIMIT {limit}",
             handed_off = handed_off_by_recipient!(),
             limit = crate::TASK_MESSAGE_BATCH_LIMIT,
+            redelivered = crate::REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
             live_session = LIVE_RECIPIENT_SESSION_JOIN.replace("{recipient}", "recipient.id"),
         );
         let mut statement = connection.prepare(&sql)?;
@@ -660,6 +669,9 @@ impl TaskStore {
                     },
                     sender_name: row.get(5)?,
                     body: row.get(6)?,
+                    recipient_worker_id: WorkerId::from_str(&row.get::<_, String>(7)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    repeats_write: row.get(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

@@ -10,7 +10,9 @@
 //!
 //! It fails closed. When the delivery cannot be confirmed it reports
 //! uncertainty rather than writing again, because a replayed briefing is worse
-//! than one the operator is told about.
+//! than one the operator is told about. The one exception is a task message
+//! whose recipient's prompt later shows it is not waiting there: it is sent
+//! once more, labelled as possibly repeated (ADR 0173).
 
 use std::time::{Duration, Instant};
 
@@ -18,7 +20,7 @@ use futures_util::future::join_all;
 use swarm_domain::{DecisionRequestId, ProviderKind, WorkerSessionId};
 use swarm_persistence::{
     CommandGrantOutcome, DecisionDispatch, OperatorBroadcastDispatch, QueenAutomationDelivery,
-    TaskDispatch, TaskMessageDispatch, TaskOutcomeDispatch, TaskStore,
+    TaskDispatch, TaskMessageDispatch, TaskOutcomeDispatch, TaskStore, UnconfirmedTaskMessageWrite,
 };
 use swarm_terminal::{
     HostRequest, HostResponse, ProviderActivity, snapshot_bracketed_paste, snapshot_plain_text,
@@ -107,7 +109,7 @@ impl DeferralReason {
                 "{subject} is queued because the provider's current state could not be determined"
             ),
             Self::PromptHoldsUnsentText => format!(
-                "{subject} is waiting because this terminal's prompt holds text that was typed but never sent — clear the line to release it"
+                "{subject} is waiting because this terminal's prompt holds unsent text that Swarm cannot match to one of its deliveries — send it or clear it to release it"
             ),
             Self::ProviderPolicy => format!(
                 "{subject} is queued until this provider is eligible for automation; experimental providers wait until Night Watch ends"
@@ -605,6 +607,244 @@ pub(super) async fn submit_task_message_groups(
     .await
 }
 
+/// Settles task-message writes whose arrival delivery could not confirm, from
+/// what each recipient's prompt shows now (ADR 0173).
+///
+/// ⚠️ THE STALL THIS ENDS. A write whose render was not seen in time was left
+/// "uncertain" and never looked at again. When it then arrived late, it sat
+/// unsent in the recipient's prompt, and every later delivery held behind it as
+/// somebody's typing. On one Hive that held Queen's terminal six times in five
+/// days, for up to nine hours, until a person pressed Enter.
+///
+/// Runs before anything is claimed in a pass, so a stranded write is settled
+/// before the deliveries it would hold. One read per terminal decides:
+///
+/// - The write's marker is unsent in the prompt: it arrived and was never
+///   sent. Enter sends it, exactly as a delivery finding its own unsent message
+///   does, and its messages are delivered.
+/// - The prompt is empty, at rest, and has drawn since delivery gave up: the
+///   write is not waiting there. Its messages are queued once more and labelled
+///   as possibly repeated. A message already sent twice stays for Queen.
+/// - Anything else, somebody's text in the prompt or a terminal that has not
+///   drawn since: nothing is decided, and the next pass looks again.
+///
+/// A terminal the operator is engaged in is not read at all, as a delivery to
+/// it would wait.
+///
+/// Returns whether any message changed.
+pub(super) async fn recover_unconfirmed_task_messages(
+    store: &TaskStore,
+    client: &HostClient,
+) -> bool {
+    let writes = match store.unconfirmed_task_message_writes(unix_timestamp()) {
+        Ok(writes) => writes,
+        Err(error) => {
+            tracing::warn!(message = %error, "unconfirmed task-message writes could not be read");
+            return false;
+        }
+    };
+    let mut changed = false;
+    for terminal in group_by_terminal(writes, |write| write.session_id) {
+        changed |= recover_unconfirmed_writes_on(store, client, &terminal).await;
+    }
+    changed
+}
+
+async fn recover_unconfirmed_writes_on(
+    store: &TaskStore,
+    client: &HostClient,
+    writes: &[UnconfirmedTaskMessageWrite],
+) -> bool {
+    let Some(session_id) = writes.first().map(|write| write.session_id) else {
+        return false;
+    };
+    let Ok(provider) = store.provider_for_active_session(session_id) else {
+        return false;
+    };
+    // The policy check every coordination write passes, Enter included.
+    if !store
+        .operator_presence(unix_timestamp())
+        .is_ok_and(|presence| provider.permits_automation_in(presence.mode))
+    {
+        return false;
+    }
+    let Ok(Some(HostResponse::Output {
+        session_id: observed,
+        running: true,
+        resume: swarm_terminal::Resume::Snapshot { snapshot },
+        provider_turn,
+        last_output_at,
+        ..
+    })) = coordination_request(
+        client,
+        &HostRequest::Read {
+            session_id,
+            after_sequence: None,
+        },
+    )
+    .await
+    else {
+        return false;
+    };
+    if observed != session_id {
+        return false;
+    }
+    let activity = provider_activity::observed_signals(
+        provider,
+        &snapshot,
+        provider_turn.as_ref(),
+        last_output_at,
+        unix_timestamp(),
+    )
+    .activity;
+    if activity_deferral(activity, BusyPolicy::Wait).is_some() {
+        return false;
+    }
+    let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
+    let open_input = provider_activity::has_open_provider_input(provider, &snapshot);
+    let mut changed = false;
+    for write in writes {
+        match unconfirmed_write_verdict(open_input, visible.as_bytes(), last_output_at, write) {
+            UnconfirmedWriteVerdict::UnsentInPrompt(marker) => {
+                // One Enter per terminal per pass. Whatever it did, the read
+                // above no longer describes this prompt.
+                return send_stranded_write(
+                    store,
+                    client,
+                    provider,
+                    write,
+                    marker,
+                    snapshot.sequence,
+                )
+                .await
+                    || changed;
+            }
+            UnconfirmedWriteVerdict::NotInPrompt if !write.was_redelivery => {
+                tracing::info!(
+                    %session_id,
+                    claim_id = %write.claim_id,
+                    messages = write.message_ids.len(),
+                    "an unconfirmed message write is not in the prompt; sending it once more"
+                );
+                changed |= settle_unconfirmed_write(
+                    store,
+                    write,
+                    swarm_persistence::UnconfirmedWriteSettlement::Redeliver,
+                );
+            }
+            UnconfirmedWriteVerdict::NotInPrompt | UnconfirmedWriteVerdict::Undetermined => {}
+        }
+    }
+    changed
+}
+
+/// Presses Enter on a write of Swarm's own found unsent in its recipient's
+/// prompt, and settles it delivered once the terminal acknowledges.
+///
+/// The Enter delivers it, so it waits out the terminal's cooldown like the
+/// delivery it completes. The prompt holds the write either way, and the next
+/// pass after the cooldown sends it.
+async fn send_stranded_write(
+    store: &TaskStore,
+    client: &HostClient,
+    provider: ProviderKind,
+    write: &UnconfirmedTaskMessageWrite,
+    marker: &str,
+    sequence: u64,
+) -> bool {
+    let session_id = write.session_id;
+    if store
+        .coordination_is_cooling_down(session_id, unix_timestamp())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    tracing::info!(
+        %session_id,
+        claim_id = %write.claim_id,
+        messages = write.message_ids.len(),
+        "an unconfirmed message write is unsent in the prompt; submitting it"
+    );
+    let submitted = submit_rendered_message(
+        client,
+        session_id,
+        provider,
+        marker.as_bytes(),
+        sequence,
+        None,
+    )
+    .await;
+    if !matches!(submitted, Ok(TerminalSubmission::Acknowledged)) {
+        return false;
+    }
+    if let Err(error) = store.record_coordination_delivery(session_id, unix_timestamp()) {
+        tracing::warn!(message = %error, %session_id, "a recovered write landed but its cooldown could not be recorded");
+    }
+    // The prompt no longer holds the text the terminal's hold describes.
+    crate::clear_held_delivery_refusals(store, &crate::message_delivery_hold_subject(session_id));
+    settle_unconfirmed_write(
+        store,
+        write,
+        swarm_persistence::UnconfirmedWriteSettlement::Delivered,
+    )
+}
+
+fn settle_unconfirmed_write(
+    store: &TaskStore,
+    write: &UnconfirmedTaskMessageWrite,
+    settlement: swarm_persistence::UnconfirmedWriteSettlement,
+) -> bool {
+    match store.settle_unconfirmed_task_message_write(write, settlement, unix_timestamp()) {
+        Ok(changed) => changed > 0,
+        Err(error) => {
+            tracing::warn!(message = %error, claim_id = %write.claim_id, ?settlement, "an unconfirmed message write could not be settled");
+            false
+        }
+    }
+}
+
+/// What one read of the recipient's prompt establishes about an unconfirmed
+/// write.
+#[derive(Debug, Eq, PartialEq)]
+enum UnconfirmedWriteVerdict<'a> {
+    /// Unsent in the prompt, found by this marker.
+    UnsentInPrompt(&'a str),
+    /// Not waiting in the prompt.
+    NotInPrompt,
+    /// Nothing this read can settle.
+    Undetermined,
+}
+
+fn unconfirmed_write_verdict<'a>(
+    open_input: bool,
+    visible: &[u8],
+    last_output_at: Option<i64>,
+    write: &'a UnconfirmedTaskMessageWrite,
+) -> UnconfirmedWriteVerdict<'a> {
+    if open_input {
+        // Only the write's own marker, unsent, makes the prompt's text its.
+        // A marked paste shows the first message's id; a typed write shows
+        // every id it carried. Any of them, followed by a resting prompt, is
+        // history, not input.
+        return write
+            .message_ids
+            .iter()
+            .find(|id| unsent_write_is_whole(visible, id.as_bytes()))
+            .map_or(UnconfirmedWriteVerdict::Undetermined, |id| {
+                UnconfirmedWriteVerdict::UnsentInPrompt(id)
+            });
+    }
+    // An empty prompt says the write is not waiting there only once the
+    // terminal has drawn since delivery gave up on it. A provider that has not
+    // drawn may not have read its input yet: on 2026-11-13 Queen's terminal drew
+    // nothing for ten seconds after a write, and the paste arrived after that.
+    if last_output_at.is_some_and(|at| at > write.given_up_at) {
+        UnconfirmedWriteVerdict::NotInPrompt
+    } else {
+        UnconfirmedWriteVerdict::Undetermined
+    }
+}
+
 /// Gathers deliveries into one group per terminal, keeping each terminal's own
 /// messages in the order they were claimed.
 ///
@@ -644,7 +884,9 @@ pub(super) async fn submit_coordination_message(
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     // ONE GATE, HERE, because every delivery path already funnels through this
     // function. Putting the check in each caller is how the six marker pairings
-    // drifted into two wrong ones this morning.
+    // drifted into two wrong ones this morning. The one Enter that does not
+    // come through here, on a stranded write of Swarm's own, checks the same
+    // cooldown first (ADR 0173).
     //
     // A store error does NOT hold the message. Failing to read the cooldown is
     // not evidence that one is in effect, and treating it as one would turn a
@@ -821,8 +1063,7 @@ fn baseline_from_response(
                 // carries THIS delivery's marker it is our own stranded
                 // message, and appending is not what it needs — Enter is.
                 let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
-                let ours = visible_marker_position(visible.as_bytes(), marker).is_some()
-                    && !resting_prompt_follows_marker(visible.as_bytes(), marker);
+                let ours = unsent_write_is_whole(visible.as_bytes(), marker);
                 if ours {
                     return Baseline::HoldsOurUnsentMessage {
                         sequence: snapshot.sequence,
@@ -867,7 +1108,7 @@ async fn submit_terminal_message(
     if submit {
         bytes.pop();
     }
-    let (baseline, baseline_paste_placeholder) =
+    let (baseline, baseline_paste_placeholder, framed) =
         match delivery_baseline(client, session_id, provider, marker, busy).await? {
             Baseline::Ready {
                 sequence,
@@ -876,11 +1117,14 @@ async fn submit_terminal_message(
             } => {
                 // Only a message Claude would treat as a paste anyway. A
                 // shorter one is typed whole and keeps its marker visible,
-                // which is what finding it unsent in a prompt relies on.
-                if accepts_framed_paste && bytes.len() > CLAUDE_LONGEST_TYPED_READ {
-                    bytes = framed_paste(bytes);
+                // which is what finding it unsent in a prompt relies on. A
+                // framed one carries its marker in front of the paste for the
+                // same reason.
+                let framed = accepts_framed_paste && bytes.len() > CLAUDE_LONGEST_TYPED_READ;
+                if framed {
+                    bytes = marked_framed_paste(marker, bytes);
                 }
-                (sequence, paste_placeholder)
+                (sequence, paste_placeholder, framed)
             }
             // ALREADY WRITTEN, NEVER SUBMITTED. Skip straight to Enter rather
             // than writing the message a second time underneath itself — the
@@ -947,6 +1191,7 @@ async fn submit_terminal_message(
         marker,
         baseline,
         baseline_paste_placeholder.as_deref(),
+        framed,
     )
     .await?
     {
@@ -1003,6 +1248,9 @@ const CLAUDE_LONGEST_TYPED_READ: usize = 800;
 ///
 /// Any escape byte inside becomes a space. `ESC[201~` ends the frame, so a
 /// message carrying one would end its own paste and have the rest read as keys.
+///
+/// Written only through `marked_framed_paste`, which puts the marker where the
+/// prompt shows it.
 fn framed_paste(bytes: Vec<u8>) -> Vec<u8> {
     let mut framed = Vec::with_capacity(bytes.len() + 12);
     framed.extend_from_slice(b"\x1b[200~");
@@ -1014,6 +1262,33 @@ fn framed_paste(bytes: Vec<u8>) -> Vec<u8> {
     framed.extend_from_slice(b"\x1b[201~");
     framed
 }
+
+/// A framed paste led by its marker, typed, so the prompt shows whose it is.
+///
+/// Claude draws a paste as a `[Pasted text #N]` chip and hides everything in
+/// it, the marker included. A paste whose render was not seen in time could
+/// then sit unsent in the prompt with nothing on screen to say Swarm wrote it,
+/// and every later delivery held behind it as somebody's typing. That happened
+/// six times on one Hive between 2026-11-09 and 2026-11-13, and held Queen's
+/// terminal for up to nine hours (ADR 0173).
+///
+/// Measured on Claude Code 2.1.325, one write of this shape shows
+/// `❯ [Swarm delivery <marker>] [Pasted text #1 +40 lines]`, and Enter sends
+/// both. The marker is an id, so it has no control byte to act as a key.
+fn marked_framed_paste(marker: &[u8], bytes: Vec<u8>) -> Vec<u8> {
+    let mut written = Vec::with_capacity(bytes.len() + marker.len() + 32);
+    written.extend_from_slice(MARKED_PASTE_LEAD);
+    written.extend(
+        marker
+            .iter()
+            .map(|byte| if byte.is_ascii_control() { b' ' } else { *byte }),
+    );
+    written.extend_from_slice(b"] ");
+    written.extend(framed_paste(bytes));
+    written
+}
+
+const MARKED_PASTE_LEAD: &[u8] = b"[Swarm delivery ";
 
 /// Presses Enter on a message already rendered in the prompt, and confirms it.
 ///
@@ -1073,6 +1348,7 @@ async fn observe_stable_marker(
     marker: &[u8],
     baseline: u64,
     baseline_paste_placeholder: Option<&[u8]>,
+    framed: bool,
 ) -> Result<MarkerObservation, swarm_terminal::IpcError> {
     let render_deadline = Instant::now() + Duration::from_secs(10);
     let mut rendered_stability = RenderStability::default();
@@ -1117,15 +1393,14 @@ async fn observe_stable_marker(
             .flatten()
             .filter(|placeholder| Some(*placeholder) != baseline_paste_placeholder);
         let new_claude_paste_is_visible = new_claude_paste.is_some();
-        if (marker_is_visible || new_claude_paste_is_visible)
-            && rendered_stability.observe(Instant::now(), Duration::from_millis(750))
-        {
+        let rendered = write_is_rendered(framed, marker_is_visible, new_claude_paste_is_visible);
+        if rendered && rendered_stability.observe(Instant::now(), Duration::from_millis(750)) {
             return Ok(MarkerObservation::Rendered {
                 sequence: snapshot.sequence,
                 paste_placeholder: new_claude_paste.map(<[u8]>::to_vec),
             });
         }
-        if marker_is_visible || new_claude_paste_is_visible {
+        if rendered {
             ever_rendered = true;
             last_rendered = Some((snapshot.sequence, new_claude_paste.map(<[u8]>::to_vec)));
         } else {
@@ -1156,6 +1431,52 @@ async fn observe_stable_marker(
             });
         }
     }
+}
+
+/// Whether what is on screen proves the whole write arrived.
+///
+/// A marked paste shows its marker as soon as the typed lead is drawn, ahead
+/// of the paste behind it. Only the chip proves the paste arrived, so Enter
+/// waits for it: pressed on the marker alone it would send the lead and strand
+/// the paste (ADR 0173).
+fn write_is_rendered(framed: bool, marker_is_visible: bool, new_paste_is_visible: bool) -> bool {
+    new_paste_is_visible || (marker_is_visible && !framed)
+}
+
+/// Whether `marker` stands in the prompt for a whole write nobody has sent.
+///
+/// Unsent: drawn, with no resting prompt after it. Whole: a marker found as a
+/// marked paste's typed lead is only the start of that write until Claude's
+/// chip follows it, because the lead is drawn before the paste behind it.
+/// Enter on the lead alone sends the lead and strands the paste, unmarked,
+/// which is the stall this marker exists to end (ADR 0173). A typed write
+/// carries its marker inside its own text, so there the marker is enough.
+///
+/// Nothing may follow the chip on its row either. Text there was typed after
+/// Swarm's write, by somebody, and Enter would send it too.
+fn unsent_write_is_whole(visible: &[u8], marker: &[u8]) -> bool {
+    const CHIP: &[u8] = b"[Pasted text #";
+    let Some(position) = visible_marker_position(visible, marker) else {
+        return false;
+    };
+    if resting_prompt_follows_marker(visible, marker) {
+        return false;
+    }
+    let lead = MARKED_PASTE_LEAD.trim_ascii_end();
+    if !visible[..position].trim_ascii_end().ends_with(lead) {
+        return true;
+    }
+    let after = &visible[position..];
+    let Some(chip) = after.windows(CHIP.len()).position(|part| part == CHIP) else {
+        return false;
+    };
+    let Some(close) = after[chip..].iter().position(|byte| *byte == b']') else {
+        return false;
+    };
+    after[chip + close + 1..]
+        .split(|byte| *byte == b'\n')
+        .next()
+        .is_some_and(|rest_of_row| rest_of_row.trim_ascii().is_empty())
 }
 
 fn latest_claude_paste_placeholder(snapshot: &[u8]) -> Option<&[u8]> {
@@ -1904,6 +2225,17 @@ pub(super) fn task_message_message(messages: &[TaskMessageDispatch]) -> Coordina
             message.message_id,
             message.body
         );
+        // SAID, NOT HIDDEN. Swarm sends a message again only when an earlier
+        // write could not be confirmed and the prompt shows it is not waiting
+        // there (ADR 0173). It may still have been read, so the reader is told
+        // rather than left to act on the same request twice.
+        if message.repeats_write.is_some() {
+            let _ = writeln!(
+                text,
+                "(Swarm could not confirm an earlier delivery of message {}, so you may already have it. Act on it once.)",
+                message.message_id
+            );
+        }
         if message.sender == swarm_persistence::MessageParty::Queen {
             let _ = writeln!(
                 text,
@@ -3074,7 +3406,9 @@ mod tests {
             "x".repeat(900)
         );
         let body = &long.as_bytes()[..long.len() - 1];
-        let mut framed = b"\x1b[200~".to_vec();
+        // Led by its marker, typed, so a copy left unsent in the prompt can be
+        // recognised as this delivery's (ADR 0173).
+        let mut framed = b"[Swarm delivery m1] \x1b[200~".to_vec();
         framed.extend_from_slice(body);
         framed.extend_from_slice(b"\x1b[201~");
         assert_eq!(
@@ -3120,6 +3454,193 @@ mod tests {
                 "{provider:?} {prompt:?}"
             );
         }
+    }
+
+    /// ⚠️ THE BLINDNESS THAT HELD QUEEN'S TERMINAL FOR HOURS. A framed paste
+    /// shows only Claude's chip, so one left unsent looked like somebody's
+    /// typing to every later delivery, its own retry included. With its marker
+    /// typed in front, the prompt says whose it is (ADR 0173). The screen here
+    /// is the one measured on Claude Code 2.1.325.
+    #[test]
+    fn a_marked_paste_left_in_the_prompt_is_recognised_as_ours() {
+        let session = WorkerSessionId::new();
+        let baseline = |text: &str| {
+            baseline_from_response(
+                session,
+                ProviderKind::ClaudeCode,
+                b"m-head",
+                BusyPolicy::Wait,
+                prompt_observation(session, text, true),
+            )
+        };
+        let marked =
+            baseline("❯ [Swarm delivery m-head] [Pasted text #1 +40 lines]\r\nauto mode on");
+        assert!(
+            matches!(marked, Baseline::HoldsOurUnsentMessage { .. }),
+            "{marked:?}"
+        );
+        let bare = baseline("❯ [Pasted text #1 +40 lines]\r\nauto mode on");
+        assert!(
+            matches!(
+                bare,
+                Baseline::Refused(TerminalSubmission::Deferred(
+                    DeferralReason::PromptHoldsUnsentText
+                ))
+            ),
+            "a chip with no marker is still nobody's to send: {bare:?}"
+        );
+    }
+
+    /// The lead is drawn before the paste behind it, so seeing the marker is
+    /// not seeing the write. Enter on the lead alone would send it and strand
+    /// the paste. An unframed write is typed whole, so its marker is enough.
+    #[test]
+    fn a_marked_paste_counts_as_rendered_only_once_its_chip_is() {
+        assert!(!write_is_rendered(true, true, false));
+        assert!(write_is_rendered(true, true, true));
+        assert!(write_is_rendered(true, false, true));
+        assert!(write_is_rendered(false, true, false));
+        assert!(!write_is_rendered(false, false, false));
+    }
+
+    /// The same holds for a write left in the prompt. A lead whose chip is not
+    /// drawn yet is not a write to send: Enter would send the lead alone and
+    /// strand the paste behind it with no marker at all. Nor is one somebody
+    /// has typed after, because Enter would send their text with it.
+    #[test]
+    fn a_lead_without_its_chip_is_not_sent() {
+        let lead_only = "❯ [Swarm delivery m-head] \r\nauto mode on";
+        let whole = "❯ [Swarm delivery m-head] [Pasted text #1 +40 lines]\r\nauto mode on";
+        assert!(!unsent_write_is_whole(lead_only.as_bytes(), b"m-head"));
+        assert!(unsent_write_is_whole(whole.as_bytes(), b"m-head"));
+        assert!(
+            !unsent_write_is_whole(
+                "❯ [Swarm delivery m-head] [Pasted text #1 +40 lines] and check the tag\r\nauto mode on"
+                    .as_bytes(),
+                b"m-head"
+            ),
+            "somebody typed after the write, and Enter would send their text too"
+        );
+        assert!(
+            unsent_write_is_whole(
+                "❯ [Messages (1) via Swarm · other]\r\n[Petal — message m-head]\r\nauto mode on"
+                    .as_bytes(),
+                b"m-head"
+            ),
+            "a typed write carries its marker in its own text"
+        );
+
+        let session = WorkerSessionId::new();
+        let baseline = baseline_from_response(
+            session,
+            ProviderKind::ClaudeCode,
+            b"m-head",
+            BusyPolicy::Wait,
+            prompt_observation(session, lead_only, true),
+        );
+        assert!(
+            !matches!(baseline, Baseline::HoldsOurUnsentMessage { .. }),
+            "{baseline:?}"
+        );
+        let write = UnconfirmedTaskMessageWrite {
+            session_id: session,
+            claim_id: "claim".into(),
+            message_ids: vec!["m-head".into()],
+            given_up_at: 1_000,
+            was_redelivery: false,
+        };
+        assert_eq!(
+            unconfirmed_write_verdict(true, lead_only.as_bytes(), Some(1_001), &write),
+            UnconfirmedWriteVerdict::Undetermined
+        );
+    }
+
+    /// Only the write's own marker, unsent, makes the prompt's text its. An
+    /// empty prompt clears it only once the terminal has drawn since delivery
+    /// gave up: on 2026-11-13 a paste reached Queen's prompt after ten seconds
+    /// in which her terminal drew nothing.
+    #[test]
+    fn an_unconfirmed_write_is_settled_only_by_what_its_prompt_shows() {
+        let write = UnconfirmedTaskMessageWrite {
+            session_id: WorkerSessionId::new(),
+            claim_id: "claim".into(),
+            message_ids: vec!["head-id".into(), "second-id".into()],
+            given_up_at: 1_000,
+            was_redelivery: false,
+        };
+        let verdict = |open: bool, text: &str, drawn: Option<i64>| {
+            unconfirmed_write_verdict(open, text.as_bytes(), drawn, &write)
+        };
+        assert_eq!(
+            verdict(
+                true,
+                "❯ [Swarm delivery head-id] [Pasted text #1 +40 lines]\nauto mode on",
+                Some(1_001)
+            ),
+            UnconfirmedWriteVerdict::UnsentInPrompt("head-id")
+        );
+        assert_eq!(
+            verdict(
+                true,
+                "❯ [Messages (2) via Swarm · other]\n[Petal — message second-id]\nauto mode on",
+                Some(1_001)
+            ),
+            UnconfirmedWriteVerdict::UnsentInPrompt("second-id"),
+            "a typed write shows every id it carried"
+        );
+        assert_eq!(
+            verdict(true, "❯ operator draft\nauto mode on", Some(1_001)),
+            UnconfirmedWriteVerdict::Undetermined
+        );
+        assert_eq!(
+            verdict(
+                true,
+                "❯ [Swarm delivery head-id] [Pasted text #1 +40 lines]\n● Done.\n❯ operator draft\nauto mode on",
+                Some(1_001)
+            ),
+            UnconfirmedWriteVerdict::Undetermined,
+            "sent already, with somebody's text below it"
+        );
+        assert_eq!(
+            verdict(false, "❯ \nauto mode on", Some(1_001)),
+            UnconfirmedWriteVerdict::NotInPrompt
+        );
+        assert_eq!(
+            verdict(false, "❯ \nauto mode on", Some(1_000)),
+            UnconfirmedWriteVerdict::Undetermined
+        );
+        assert_eq!(
+            verdict(false, "❯ \nauto mode on", None),
+            UnconfirmedWriteVerdict::Undetermined
+        );
+    }
+
+    /// A message sent again says so, by id, so its reader acts on it once.
+    #[test]
+    fn a_message_sent_again_tells_its_reader_it_may_be_a_repeat() {
+        let dispatch = |repeats_write: Option<&str>| TaskMessageDispatch {
+            message_id: "m-again".to_owned(),
+            task_id: TaskId::new(),
+            task_title: "Ship it".to_owned(),
+            session_id: WorkerSessionId::new(),
+            sender: swarm_persistence::MessageParty::Worker,
+            sender_name: "Petal".to_owned(),
+            body: "Ready for review.".to_owned(),
+            recipient_worker_id: WorkerId::new(),
+            repeats_write: repeats_write.map(str::to_owned),
+        };
+        let again = task_message_message(&[dispatch(Some("earlier-claim"))]);
+        let text = std::str::from_utf8(&again.bytes).unwrap();
+        assert!(
+            text.contains("earlier delivery of message m-again, so you may already have it"),
+            "{text}"
+        );
+        let first = task_message_message(&[dispatch(None)]);
+        assert!(
+            !std::str::from_utf8(&first.bytes)
+                .unwrap()
+                .contains("may already have it")
+        );
     }
 
     #[cfg(unix)]
@@ -3990,8 +4511,11 @@ mod tests {
         let unsent_text = unsent.describe("Queen's review");
         assert_ne!(busy_text, unsent_text);
         assert!(busy_text.contains("unanswered prompt"), "{busy_text}");
-        // The remedy, not the state: there is nothing here to answer.
-        assert!(unsent_text.contains("clear the line"), "{unsent_text}");
+        // The remedy, not the state: there is nothing here to answer. And
+        // not "clear the line" alone: Swarm submits its own stranded writes
+        // (ADR 0173), so what is left is somebody's text, which may be meant
+        // to go.
+        assert!(unsent_text.contains("send it or clear it"), "{unsent_text}");
         assert!(!unsent_text.contains("unanswered"), "{unsent_text}");
     }
 
@@ -4202,6 +4726,8 @@ mod tests {
                     sender: swarm_persistence::MessageParty::Queen,
                     sender_name: "Queen".to_owned(),
                     body: "Which SHA did this ship as?".to_owned(),
+                    recipient_worker_id: WorkerId::new(),
+                    repeats_write: None,
                 }])
                 .cadence,
             ),
@@ -4327,6 +4853,8 @@ mod tests {
                     sender: swarm_persistence::MessageParty::Queen,
                     sender_name: "Queen".to_owned(),
                     body: "Which SHA did this ship as?".to_owned(),
+                    recipient_worker_id: WorkerId::new(),
+                    repeats_write: None,
                 }]),
             ),
             (
@@ -4429,6 +4957,8 @@ mod tests {
             sender: swarm_persistence::MessageParty::Queen,
             sender_name: "Queen".to_owned(),
             body: "Which SHA did this ship as?".to_owned(),
+            recipient_worker_id: WorkerId::new(),
+            repeats_write: None,
         }]);
         assert_eq!(
             message.bytes.last(),
@@ -4451,6 +4981,8 @@ mod tests {
                 sender,
                 sender_name: "Sender".to_owned(),
                 body: "Check the current task and its remaining gate.".to_owned(),
+                recipient_worker_id: WorkerId::new(),
+                repeats_write: None,
             }]);
             let text = std::str::from_utf8(&message.bytes).unwrap();
             assert!(!text.contains("This is a question, not an instruction"));
@@ -4484,6 +5016,8 @@ mod tests {
                 sender: swarm_persistence::MessageParty::Queen,
                 sender_name: "Queen".into(),
                 body: "Provide the missing verification.".into(),
+                recipient_worker_id: WorkerId::new(),
+                repeats_write: None,
             })
             .collect::<Vec<_>>();
         let message = task_message_message(&messages);

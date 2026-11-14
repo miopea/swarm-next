@@ -141,14 +141,14 @@ test("counts unstarted work when several workers never started", () => {
  * Telling someone to answer a question that does not exist is worse than saying
  * nothing: it spends the one look they were going to give it.
  */
-test("tells the operator to clear the line, not to answer a question", () => {
+test("tells the operator to send or clear the line, not to answer a question", () => {
   render(
     <HeldDeliveryAttentionCard
       held={[held({ kind: "delivery_held_unsent_text", observations: 388 })]}
     />,
   );
 
-  expect(screen.getByText("Queen cannot review until her prompt is cleared")).toBeInTheDocument();
+  expect(screen.getByText("Queen cannot review until her prompt is sent or cleared")).toBeInTheDocument();
   expect(screen.getByText(/holds unsent text/)).toBeInTheDocument();
   expect(screen.queryByText(/Answer it and the review resumes/)).not.toBeInTheDocument();
 });
@@ -167,7 +167,7 @@ test("says the same for a worker that is not Queen", () => {
   );
 
   expect(screen.getByText("Sculpt Studio has an unsent line at its prompt")).toBeInTheDocument();
-  expect(screen.getByText(/Clear the line and this delivers itself/)).toBeInTheDocument();
+  expect(screen.getByText(/Send it or clear it, and this delivers itself/)).toBeInTheDocument();
 });
 
 /**

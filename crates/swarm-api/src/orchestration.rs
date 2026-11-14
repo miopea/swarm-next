@@ -376,7 +376,7 @@ fn held_message(message: swarm_persistence::TaskMessageAttention) -> HeldDeliver
         subject: message.message_id.clone(),
         worker_name: Some("Queen".into()),
         reason: format!(
-            "{}: {} delivery. Queen must inspect task {} and message {} before resolving or explicitly retrying. No automatic replay.{}",
+            "{}: {} delivery. Queen must inspect task {} and message {} before resolving or explicitly retrying. Swarm sends one again by itself at most once, labelled as a possible repeat, and only when the recipient's prompt shows it is not waiting there.{}",
             message.task_title,
             message.state,
             message.task_id,
