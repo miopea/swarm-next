@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.20.0
+
+One database update (228), adding a new table only. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged. A worker or Queen session that was running before the update may only see Swarm's new tool once it restarts.
+
+### New features
+- You can add screenshots when you answer a request in Needs you. Paste one into "Tell the worker what to do instead", "Add an optional note" or "Ask a question", or use "Attach screenshot". Up to 4 go with one answer. The worker the answer goes to is told to open them, and only that worker, a worker holding the task, and Queen can see them. They stay on your Hive, kept while the request is open and for at least 90 days after.
+
+### Fixes
+- Messages from workers to Queen no longer stall when a long batch sits unsent in Queen's prompt. Swarm now finds its own unconfirmed message and sends it, or sends it once more labelled as a possible repeat. The oldest item waiting for Queen goes first, and a message held at a prompt shows under Queues.
+- quinn-udp is updated to 0.5.16 for a published security advisory (RUSTSEC-2026-0538).
+
 ## 1.19.0
 
 Three database updates (225, 226 and 227), each adding new tables only. Your Hive backs up its database by itself before applying them. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting, on an engine from 1.18.0 or later. On a Hive still running the engine from 1.17.10 or earlier, update it once yourself from the Worker engine card in Settings. A worker or Queen session that was running before the update sees Swarm's new tools once it restarts.
