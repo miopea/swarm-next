@@ -2131,6 +2131,22 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .decision-prose-folded { display: grid; justify-items: start; gap: 4px; }
 .decision-own-words { display: grid; width: 100%; justify-items: start; gap: 7px; margin-top: 8px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-soft); }
 .decision-own-words label { display: grid; width: 100%; gap: 4px; }
+/* Screenshots going with an answer field, or already sent with one (ADR 0174). */
+.answer-images { display: grid; width: 100%; gap: 6px; }
+.answer-images-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.answer-images-controls .text-button { padding-inline: 6px; }
+.answer-images > p { margin: 0; }
+.answer-image-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.answer-image-list li { display: grid; justify-items: center; gap: 2px; }
+.answer-image-list img, .answer-image-loading { display: block; width: 104px; height: 72px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); object-fit: cover; }
+.answer-image-loading { display: grid; place-items: center; padding: 4px; color: var(--muted); font-size: .68rem; text-align: center; }
+.answer-image-list a { display: block; border-radius: 8px; }
+/* Only a card carrying screenshots wraps, so every other answered card keeps
+   its delivery badge beside the answer. Width, not flex-basis: on a phone this
+   row is a column, where a basis is a height and pushed the screenshots out of
+   the card. */
+.decision-resolved:has(> .sent-images) { flex-wrap: wrap; }
+.decision-resolved > .sent-images { width: 100%; margin: 0; }
 .decision-interview { display: grid; gap: 11px; }
 .decision-question { display: grid; gap: 7px; margin: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-soft); }
 .decision-question legend { padding: 0 5px; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }

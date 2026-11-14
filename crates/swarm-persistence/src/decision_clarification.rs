@@ -88,9 +88,12 @@ pub struct DecisionClarification {
     pub delivery_state: ClarificationDeliveryState,
     pub delivery_claim_id: Option<uuid::Uuid>,
     pub delivery_session_id: Option<WorkerSessionId>,
+    /// Images the operator sent with this question (ADR 0174).
+    pub image_count: usize,
 }
 
-const SELECT: &str = "SELECT c.id,c.decision_id,c.operator_id,c.question,c.asked_at,c.reply,c.replied_at,c.replying_worker_id,c.replying_session_id,c.delivery_state,c.claim_id,c.delivery_session_id
+const SELECT: &str = "SELECT c.id,c.decision_id,c.operator_id,c.question,c.asked_at,c.reply,c.replied_at,c.replying_worker_id,c.replying_session_id,c.delivery_state,c.claim_id,c.delivery_session_id,
+    (SELECT COUNT(*) FROM decision_images i WHERE i.clarification_id=c.id)
     FROM decision_clarifications c JOIN decision_requests d ON d.id=c.decision_id
     JOIN local_hive_identity l ON l.hive_id=d.hive_id AND l.singleton=1";
 
@@ -133,6 +136,7 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionClarification> 
             .map(|id| id.parse())
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        image_count: row.get(12)?,
     })
 }
 
@@ -193,6 +197,23 @@ impl TaskStore {
         question: &str,
         now: i64,
     ) -> Result<DecisionClarification, TaskStoreError> {
+        self.ask_decision_clarification_with_images(id, decision, question, &[], now)
+    }
+
+    /// Asks like `ask_decision_clarification`, with the images the operator
+    /// sent recorded in the same transaction (ADR 0174). A replay of a saved
+    /// question records none: the first request's images are the question's.
+    /// # Errors
+    /// Rejects what that refuses, and too many or unusable images, or a full
+    /// image store.
+    pub fn ask_decision_clarification_with_images(
+        &self,
+        id: DecisionClarificationId,
+        decision: DecisionRequestId,
+        question: &str,
+        images: &[crate::NewDecisionImage],
+        now: i64,
+    ) -> Result<DecisionClarification, TaskStoreError> {
         validate_clarification_text(question)?;
         if now < 0 {
             return Err(Refusal::InvalidText.into());
@@ -240,6 +261,7 @@ impl TaskStore {
         )?;
         tx.execute("INSERT INTO decision_clarifications(id,decision_id,operator_id,question,asked_at,round_index) VALUES(?1,?2,?3,?4,?5,?6)",
             params![id.to_string(),decision.to_string(),operator,question,now,count + 1])?;
+        crate::decision_images::attach(&tx, decision, Some(id), images, now)?;
         // Asking is an explicit operator request to the author, not permission
         // for the task. Reuse the owned, bounded return queue when that author
         // is asleep. Never replace an existing promise or erase a failed attempt.

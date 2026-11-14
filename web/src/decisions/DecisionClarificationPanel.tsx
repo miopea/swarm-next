@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import type { DecisionClarification } from "../api";
+import type { DecisionClarification, DecisionImage } from "../api";
+import AnswerImages, { SentImages, type FetchDecisionImage } from "./AnswerImages";
+import { MAX_ANSWER_IMAGES, toSentImages, type DraftImage, type SentImage } from "./answerImages";
 import LongText from "./LongText";
 import ClarificationRecovery, { type ReconcileClarification } from "./ClarificationRecovery";
 
@@ -15,21 +17,26 @@ type Props = {
   replyAvailable?: boolean;
   loadError?: string;
   onReload: () => void;
-  onAsk: (id: string, question: string) => Promise<DecisionClarification>;
+  /** `images` is passed only when the operator attached some (ADR 0174). */
+  onAsk: (id: string, question: string, images?: SentImage[]) => Promise<DecisionClarification>;
   onReconcile?: ReconcileClarification;
+  /** Screenshots already sent on this request; each question shows its own. */
+  sentImages?: readonly DecisionImage[];
+  onFetchImage?: FetchDecisionImage;
 };
 
 /** No answer/resolve callback: an explanation cannot accidentally become approval. */
 export default function DecisionClarificationPanel({
-  requester, pending, waiting, history, roundCount = history.length, workerNames, loading = false, loaded = true, replyAvailable = false, loadError, onReload, onAsk, onReconcile,
+  requester, pending, waiting, history, roundCount = history.length, workerNames, loading = false, loaded = true, replyAvailable = false, loadError, onReload, onAsk, onReconcile, sentImages = [], onFetchImage,
 }: Props) {
   const labelId = useId();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [images, setImages] = useState<DraftImage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const [sentId, setSentId] = useState<string>();
-  const attempt = useRef<{ id: string; question: string } | undefined>(undefined);
+  const attempt = useRef<{ id: string; question: string; images: string } | undefined>(undefined);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const askButton = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
@@ -67,20 +74,26 @@ export default function DecisionClarificationPanel({
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!pending || awaitingReply || inFlight.current || !draft.trim() || bytes > 4000) return;
-    if (!attempt.current || attempt.current.question !== draft) {
-      attempt.current = { id: crypto.randomUUID(), question: draft };
+    // A retry reuses the id only for the same question with the same images:
+    // the Hive keeps the first request's images for a repeated id.
+    const imageKeys = images.map((image) => image.key).join(",");
+    if (!attempt.current || attempt.current.question !== draft || attempt.current.images !== imageKeys) {
+      attempt.current = { id: crypto.randomUUID(), question: draft, images: imageKeys };
     }
     const current = attempt.current;
     inFlight.current = true;
     setSending(true);
     setError(undefined);
     try {
-      const saved = await onAsk(current.id, current.question);
+      const saved = await (images.length
+        ? onAsk(current.id, current.question, toSentImages(images))
+        : onAsk(current.id, current.question));
       // Keep the keyboard at the result of this submission, but never pull it
       // back from another decision the operator focused while the send waited.
       focusReceipt.current = Boolean(region.current?.contains(document.activeElement)) || document.activeElement === document.body;
       setSentId(saved.id);
       setDraft("");
+      setImages([]);
       setEditing(false);
       attempt.current = undefined;
     } catch (failure) {
@@ -102,10 +115,12 @@ export default function DecisionClarificationPanel({
     {pending && editing && <form onSubmit={(event) => { void send(event); }}>
       <label htmlFor={labelId}>What would you like clarified?</label>
       <p id={`${labelId}-hint`} className="muted">Ask without deciding. Your original choices stay available.</p>
-      <textarea ref={textarea} id={labelId} rows={3} value={draft} disabled={sending}
-        aria-describedby={`${labelId}-hint${bytes > 4000 ? ` ${labelId}-limit` : ""}`}
-        aria-invalid={bytes > 4000 || undefined}
-        onChange={(event) => { setDraft(event.target.value); setError(undefined); }} />
+      <AnswerImages images={images} onChange={setImages} limit={MAX_ANSWER_IMAGES} disabled={sending}>
+        <textarea ref={textarea} id={labelId} rows={3} value={draft} disabled={sending}
+          aria-describedby={`${labelId}-hint${bytes > 4000 ? ` ${labelId}-limit` : ""}`}
+          aria-invalid={bytes > 4000 || undefined}
+          onChange={(event) => { setDraft(event.target.value); setError(undefined); }} />
+      </AnswerImages>
       {bytes > 4000 && <p id={`${labelId}-limit`} role="alert">Please shorten your question (4,000-byte limit).</p>}
       {error && <p role="alert">{error}</p>}
       <div className="decision-actions">
@@ -122,6 +137,7 @@ export default function DecisionClarificationPanel({
       <ol>{history.map((round) => <li key={round.id}>
         <p className="eyebrow">You asked</p>
         <LongText text={round.question} label="your question" foldAbove={450} />
+        <SentImages images={sentImages.filter((image) => image.clarification_id === round.id)} onFetchImage={onFetchImage} label="Screenshots you sent with this question" />
         {pending && !round.reply && round.delivery_state === "uncertain" && round.delivery_claim_id && round.delivery_session_id && onReconcile &&
           <ClarificationRecovery key={round.delivery_claim_id} round={round} onReconcile={onReconcile} onReload={onReload} />}
         {round.reply ? <><p className="eyebrow">{workerNames.get(round.replying_worker_id ?? "") ?? "Worker"} replied</p><LongText text={round.reply} label="this reply" foldAbove={450} /></>

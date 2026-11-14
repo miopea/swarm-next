@@ -5,6 +5,7 @@ import {
   RuntimeRequestError,
 } from "./api/request";
 import type { PresenceDeviceClass } from "./api/presence";
+import type { SentImage } from "./decisions/answerImages";
 import type { JiraConnectionState } from "./api/jira";
 import type { Task, TaskPriority, TaskState } from "./api/tasks";
 
@@ -1282,6 +1283,8 @@ export type DecisionRequest = {
    * cannot work, which is the failure this exists to stop.
    */
   terminal_answerable?: boolean;
+  /** Images the operator sent with the answer or a question (ADR 0174). */
+  images?: DecisionImage[];
   /** Compact server-owned facts; history text is fetched only on demand. */
   clarification?: {
     round_count: number;
@@ -2423,6 +2426,17 @@ export async function fetchDecisions(operatorToken: string, signal?: AbortSignal
 /** Which control the operator used, recorded so a disputed answer can be traced. */
 export type DecisionSurface = "inbox_action" | "inbox_dismiss" | "inbox_interview";
 
+/** An image the operator sent with an answer or a question (ADR 0174). */
+export type DecisionImage = {
+  id: string;
+  decision_id: string;
+  /** Set when it went with a question rather than with the answer. */
+  clarification_id: string | null;
+  media_type: string;
+  byte_len: number;
+  attached_at: number;
+};
+
 export type DecisionClarification = {
   id: string;
   decision_id: string;
@@ -2436,6 +2450,8 @@ export type DecisionClarification = {
   delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
   delivery_claim_id?: string | null;
   delivery_session_id?: string | null;
+  /** Images the operator sent with this question. Absent from older Hives. */
+  image_count?: number;
 };
 
 export type ClarificationReconciliation = {
@@ -2502,11 +2518,12 @@ export async function askDecisionClarification(
   decisionId: string,
   id: string,
   question: string,
+  images: SentImage[] = [],
 ): Promise<DecisionClarification> {
   const response = await authenticatedFetch(operatorToken,
     `/api/v1/decisions/${encodeURIComponent(decisionId)}/clarifications`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, question }),
+      body: JSON.stringify(images.length ? { id, question, images } : { id, question }),
     });
   return response.json() as Promise<DecisionClarification>;
 }
@@ -2517,11 +2534,12 @@ export async function resolveDecision(
   action: string,
   note = "",
   surface: DecisionSurface | "" = "",
+  images: SentImage[] = [],
 ): Promise<DecisionRequest> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, note, surface }) },
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(images.length ? { action, note, surface, images } : { action, note, surface }) },
   );
   return response.json() as Promise<DecisionRequest>;
 }
@@ -2534,13 +2552,29 @@ export async function answerDecision(
   note = "",
   surface: DecisionSurface | "" = "inbox_interview",
   questions?: DecisionQuestion[],
+  images: SentImage[] = [],
 ): Promise<DecisionRequest> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, note, surface, questions }) },
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(images.length ? { answers, note, surface, questions, images } : { answers, note, surface, questions }) },
   );
   return response.json() as Promise<DecisionRequest>;
+}
+
+/** One image sent with an answer or question, read back to show it. */
+export async function fetchDecisionImage(
+  operatorToken: string,
+  decisionId: string,
+  imageId: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(decisionId)}/images/${encodeURIComponent(imageId)}`,
+    { signal },
+  );
+  return response.blob();
 }
 export async function startClaudeSession(operatorToken: string, workspace: string): Promise<string> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions", {

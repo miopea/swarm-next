@@ -17,7 +17,7 @@
 use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
-use swarm_domain::{ProviderKind, WorkerSessionId};
+use swarm_domain::{DecisionRequestId, ProviderKind, WorkerSessionId};
 use swarm_persistence::{
     CommandGrantOutcome, DecisionDispatch, OperatorBroadcastDispatch, QueenAutomationDelivery,
     TaskDispatch, TaskMessageDispatch, TaskOutcomeDispatch, TaskStore, UnconfirmedTaskMessageWrite,
@@ -367,8 +367,9 @@ fn clarification_message(claim: &swarm_persistence::ClarificationDispatch) -> Co
         busy: BusyPolicy::Wait,
         marker: delivery_marker(claim.claim_id),
         bytes: format!(
-            "[Swarm clarification delivery {}] The operator asks about pending decision {}. Clarification ID: {}. This is a question, NOT a final answer, approval, or permission to resume work. Read the original decision using swarm_list_decisions if needed. Reply with swarm_reply_clarification using the exact clarification ID; do not resolve the original decision. Operator question: {}\r",
+            "[Swarm clarification delivery {}] The operator asks about pending decision {}. Clarification ID: {}. This is a question, NOT a final answer, approval, or permission to resume work. Read the original decision using swarm_list_decisions if needed. Reply with swarm_reply_clarification using the exact clarification ID; do not resolve the original decision. Operator question: {}{}\r",
             claim.claim_id, claim.clarification.decision_id, claim.clarification.id, question,
+            images_sentence(claim.clarification.image_count, claim.clarification.decision_id),
         ).into_bytes(),
     }
 }
@@ -429,6 +430,25 @@ mod clarification_tests {
         assert!(text.contains("NOT a final answer, approval, or permission"));
         assert!(text.contains("swarm_reply_clarification"));
         assert!(!text.contains('\u{1b}'));
+        assert_eq!(text.matches('\r').count(), 1);
+        assert!(text.ends_with('\r'));
+        assert!(!text.contains("swarm_read_decision_image"));
+    }
+
+    /// ADR 0174. A question sent with screenshots says so, and how to see
+    /// them; one sent without says nothing about images.
+    #[test]
+    fn a_question_with_images_tells_the_worker_to_look_at_them() {
+        let (_, mut claim) = fixture();
+        claim.clarification.image_count = 2;
+        let text = String::from_utf8(clarification_message(&claim).bytes).unwrap();
+        assert!(
+            text.contains(&format!(
+                "The operator attached 2 images: see them with swarm_read_decision_image and decision_id {}",
+                claim.clarification.decision_id
+            )),
+            "{text}"
+        );
         assert_eq!(text.matches('\r').count(), 1);
         assert!(text.ends_with('\r'));
     }
@@ -1793,14 +1813,29 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Coordina
         cadence: Cadence::Immediate,
         busy: BusyPolicy::Wait,
         bytes: format!(
-            "[Swarm decision {} resolved] {}{} {author} {} Use swarm_list_decisions for the full request context.\r",
+            "[Swarm decision {} resolved] {}{} {author} {}{} Use swarm_list_decisions for the full request context.\r",
             delivery.decision_id,
             outcome,
             command_grant_sentence(delivery),
             note,
+            images_sentence(delivery.image_count, delivery.decision_id),
         )
         .into_bytes(),
         marker: delivery_marker(delivery.decision_id),
+    }
+}
+
+/// Says the operator sent images and how to see them (ADR 0174). A worker
+/// told only the text would act on half of what they said.
+fn images_sentence(count: usize, decision: DecisionRequestId) -> String {
+    match count {
+        0 => String::new(),
+        1 => format!(
+            " The operator attached 1 image: see it with swarm_read_decision_image and decision_id {decision} before you act."
+        ),
+        count => format!(
+            " The operator attached {count} images: see them with swarm_read_decision_image and decision_id {decision} before you act."
+        ),
     }
 }
 
@@ -4677,6 +4712,7 @@ mod tests {
                     command: CommandGrantOutcome::NotRequested,
                     approval: false,
                     granted_by_queen: false,
+                    image_count: 0,
                 })
                 .cadence,
             ),
@@ -4800,6 +4836,7 @@ mod tests {
                     command: CommandGrantOutcome::NotRequested,
                     approval: false,
                     granted_by_queen: false,
+                    image_count: 0,
                 }),
             ),
             (

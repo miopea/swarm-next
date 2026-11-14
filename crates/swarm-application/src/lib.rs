@@ -4904,9 +4904,10 @@ impl TaskService {
         note: &str,
         surface: &str,
         displayed: Option<&[swarm_domain::DecisionQuestion]>,
+        images: &[swarm_persistence::NewDecisionImage],
     ) -> Result<DecisionRequest, ApplicationError> {
         self.store
-            .answer_decision_request_from_snapshot(id, answers, note, surface, displayed)
+            .answer_decision_request_with_images(id, answers, note, surface, displayed, images)
             .map_err(Into::into)
     }
 
@@ -4921,9 +4922,25 @@ impl TaskService {
         note: &str,
         surface: &str,
     ) -> Result<DecisionRequest, ApplicationError> {
+        self.resolve_operator_decision_with_images(id, action, note, surface, &[])
+    }
+
+    /// Resolves like `resolve_operator_decision`, with the images the operator
+    /// sent recorded in the same transaction (ADR 0174).
+    ///
+    /// # Errors
+    /// Propagates what that does, and refused images.
+    pub fn resolve_operator_decision_with_images(
+        &self,
+        id: DecisionRequestId,
+        action: &str,
+        note: &str,
+        surface: &str,
+        images: &[swarm_persistence::NewDecisionImage],
+    ) -> Result<DecisionRequest, ApplicationError> {
         let resolved = self
             .store
-            .resolve_decision_request(id, action, note, surface)?;
+            .resolve_decision_request_with_images(id, action, note, surface, images)?;
         self.release_blocks_this_answer_freed(&resolved);
         self.ask_about_blocks_this_answer_left_parked(&resolved);
         Ok(resolved)

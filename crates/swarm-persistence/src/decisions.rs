@@ -307,6 +307,8 @@ pub struct DecisionDispatch {
     /// Queen granted this command card, not the operator (ADR 0158), so the
     /// note the worker reads is hers.
     pub granted_by_queen: bool,
+    /// Images the operator sent with the answer (ADR 0174).
+    pub image_count: usize,
 }
 
 /// A grant that is unspent, whose task is still on the board, and whose
@@ -1060,6 +1062,24 @@ impl TaskStore {
         surface: &str,
         displayed: Option<&[DecisionQuestion]>,
     ) -> Result<DecisionRequest, TaskStoreError> {
+        self.answer_decision_request_with_images(id, answers, note, surface, displayed, &[])
+    }
+
+    /// Answers like `answer_decision_request_from_snapshot`, recording the
+    /// images the operator sent with it in the same transaction (ADR 0174).
+    ///
+    /// # Errors
+    /// Rejects what that refuses, and too many or unusable images, or a full
+    /// image store.
+    pub fn answer_decision_request_with_images(
+        &self,
+        id: DecisionRequestId,
+        answers: &BTreeMap<String, Vec<String>>,
+        note: &str,
+        surface: &str,
+        displayed: Option<&[DecisionQuestion]>,
+        images: &[crate::NewDecisionImage],
+    ) -> Result<DecisionRequest, TaskStoreError> {
         if note.len() > MAX_RESOLUTION_NOTE_BYTES || surface.len() > MAX_RESOLUTION_SURFACE_BYTES {
             return Err(TaskStoreError::InvalidDecisionResolution);
         }
@@ -1103,6 +1123,13 @@ impl TaskStore {
             {
                 return Err(TaskStoreError::InvalidDecisionResolution);
             }
+            crate::decision_images::attach(
+                &transaction,
+                id,
+                None,
+                images,
+                crate::decision_images::now(),
+            )?;
             record_answers(transaction, id, answers, note, surface)?;
             drop(connection);
             return self.get_decision_request(id);
@@ -1115,6 +1142,13 @@ impl TaskStore {
         if !answered_every_question || answers.len() != declared.len() {
             return Err(TaskStoreError::IncompleteDecisionAnswers);
         }
+        crate::decision_images::attach(
+            &transaction,
+            id,
+            None,
+            images,
+            crate::decision_images::now(),
+        )?;
         record_answers(transaction, id, answers, note, surface)?;
         drop(connection);
         self.get_decision_request(id)
@@ -1130,6 +1164,23 @@ impl TaskStore {
         action: &str,
         note: &str,
         surface: &str,
+    ) -> Result<DecisionRequest, TaskStoreError> {
+        self.resolve_decision_request_with_images(id, action, note, surface, &[])
+    }
+
+    /// Resolves like `resolve_decision_request`, recording the images the
+    /// operator sent with it in the same transaction (ADR 0174).
+    ///
+    /// # Errors
+    /// Rejects what that refuses, and too many or unusable images, or a full
+    /// image store.
+    pub fn resolve_decision_request_with_images(
+        &self,
+        id: DecisionRequestId,
+        action: &str,
+        note: &str,
+        surface: &str,
+        images: &[crate::NewDecisionImage],
     ) -> Result<DecisionRequest, TaskStoreError> {
         if action.is_empty()
             || action.len() > MAX_ACTION_BYTES
@@ -1191,6 +1242,13 @@ impl TaskStore {
         if updated != 1 {
             return Err(TaskStoreError::DecisionAlreadyResolved);
         }
+        crate::decision_images::attach(
+            &transaction,
+            id,
+            None,
+            images,
+            crate::decision_images::now(),
+        )?;
         // The grant, and the whole safety of it is that this is an EQUALITY
         // check rather than a reading of the operator's prose. It fires only
         // when they pressed the button naming the exact command, so what they
@@ -1330,7 +1388,9 @@ impl TaskStore {
                         d.requested_command,
                         EXISTS (SELECT 1 FROM decision_command_grants g
                                 WHERE g.decision_id = d.id),
-                        d.kind = 'approval', d.granted_by_queen IS NOT NULL
+                        d.kind = 'approval', d.granted_by_queen IS NOT NULL,
+                        (SELECT COUNT(*) FROM decision_images i
+                         WHERE i.decision_id = d.id AND i.clarification_id IS NULL)
                  FROM decision_deliveries dd
                  JOIN decision_requests d ON d.id = dd.decision_id
                  JOIN worker_sessions ws ON ws.worker_id = dd.worker_id AND ws.ended_at IS NULL
@@ -1359,6 +1419,7 @@ impl TaskStore {
                         },
                         approval: row.get(8)?,
                         granted_by_queen: row.get(9)?,
+                        image_count: row.get(10)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?

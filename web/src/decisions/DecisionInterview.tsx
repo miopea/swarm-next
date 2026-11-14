@@ -1,6 +1,8 @@
 import { useState } from "react";
 
 import type { DecisionQuestion } from "../api";
+import AnswerImages from "./AnswerImages";
+import { MAX_ANSWER_IMAGES, toSentImages, type DraftImage, type SentImage } from "./answerImages";
 
 const OTHER = Symbol("custom answer");
 
@@ -24,7 +26,8 @@ function optionDescription(question: DecisionQuestion, option: string): string {
 type DecisionInterviewProps = {
   questions: DecisionQuestion[];
   busy: boolean;
-  onAnswer: (answers: Record<string, string[]>, note: string) => void;
+  /** `images` is passed only when the operator attached some (ADR 0174). */
+  onAnswer: (answers: Record<string, string[]>, note: string, images?: SentImage[]) => void;
 };
 
 export default function DecisionInterview(props: DecisionInterviewProps) {
@@ -42,6 +45,7 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
   const [choices, setChoices] = useState<Map<string, (string | typeof OTHER)[]>>(() => new Map());
   const [other, setOther] = useState<Map<string, string>>(() => new Map());
   const [note, setNote] = useState("");
+  const [images, setImages] = useState<DraftImage[]>([]);
 
   const answerFor = (question: DecisionQuestion): string[] => {
     const chosen = choices.get(question.header) ?? [];
@@ -112,18 +116,20 @@ function InterviewAnswers({ questions, busy, onAnswer }: DecisionInterviewProps)
         );
       })}
       <details className="decision-argument decision-note">
-        <summary>{note.trim() ? "Edit your note" : "Add an optional note"}</summary>
-        <label>
-          <span>Anything else the worker should know</span>
-          <textarea value={note} maxLength={4000} disabled={busy} onChange={(event) => setNote(event.target.value)} placeholder="Optional" />
-        </label>
+        <summary>{note.trim() || images.length ? "Edit your note" : "Add an optional note"}{images.length ? ` · ${images.length} ${images.length === 1 ? "screenshot" : "screenshots"}` : ""}</summary>
+        <AnswerImages images={images} onChange={setImages} limit={MAX_ANSWER_IMAGES} disabled={busy}>
+          <label>
+            <span>Anything else the worker should know</span>
+            <textarea value={note} maxLength={4000} disabled={busy} onChange={(event) => setNote(event.target.value)} placeholder="Optional" />
+          </label>
+        </AnswerImages>
       </details>
       <div className="decision-actions">
         <button
           type="button"
           className="primary-action"
           disabled={busy || unanswered.length > 0}
-          onClick={() => onAnswer(answers, note)}
+          onClick={() => images.length ? onAnswer(answers, note, toSentImages(images)) : onAnswer(answers, note)}
         >Send answers</button>
         {unanswered.length > 0 ? (
           <small role="status">

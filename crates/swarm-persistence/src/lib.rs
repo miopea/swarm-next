@@ -28,8 +28,13 @@ mod attention;
 mod coordinator;
 mod database_integrity;
 mod decision_clarification;
+mod decision_images;
 pub use decision_clarification::{
     ClarificationAttention, ClarificationDispatch, DecisionClarification,
+};
+pub use decision_images::{
+    DECISION_IMAGE_MEDIA_TYPES, DecisionImage, MAX_DECISION_IMAGE_BYTES, MAX_IMAGES_PER_SUBMISSION,
+    NewDecisionImage,
 };
 mod apiary_policy;
 mod apiary_watch;
@@ -485,7 +490,9 @@ const GITHUB_ASKS_SCHEMA_MARKER: i64 = 225;
 const INDEPENDENT_CHECKS_SCHEMA_MARKER: i64 = 226;
 /// Paths a task's work must not touch (ADR 0172).
 const MUST_NOT_TOUCH_SCHEMA_MARKER: i64 = 227;
-const CURRENT_SCHEMA_VERSION: i64 = MUST_NOT_TOUCH_SCHEMA_MARKER;
+/// Images the operator sends with an answer or a question (ADR 0174).
+const DECISION_IMAGES_SCHEMA_MARKER: i64 = 228;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_IMAGES_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -723,6 +730,14 @@ pub enum TaskStoreError {
     IncompleteDecisionAnswers,
     #[error("dismissing an interview needs a reason the asking worker can act on")]
     DismissedInterviewNeedsReason,
+    #[error("send at most {limit} images here; nothing was sent")]
+    TooManyDecisionImages { limit: usize },
+    #[error("an image must be a PNG, JPEG, GIF or WebP of at most 3.75 MiB; nothing was sent")]
+    InvalidDecisionImage,
+    #[error(
+        "Swarm's image storage for requests is full; send this without images, or try again after older requests have closed"
+    )]
+    DecisionImageStorageFull,
     #[error("decision request deadline is invalid")]
     InvalidDecisionDeadline,
     #[error("decision request is already resolved")]
@@ -5095,6 +5110,12 @@ fn migrate_queen_release_schema_steps(
     }
     if schema_version < MUST_NOT_TOUCH_SCHEMA_MARKER {
         crate::must_not_touch::migrate_must_not_touch(transaction, MUST_NOT_TOUCH_SCHEMA_MARKER)?;
+    }
+    if schema_version < DECISION_IMAGES_SCHEMA_MARKER {
+        crate::decision_images::migrate_decision_images(
+            transaction,
+            DECISION_IMAGES_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -11483,6 +11504,14 @@ mod tests {
             undo_sql: "DROP TABLE task_must_not_touch;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'task_must_not_touch'",
+        },
+        // Images the operator sends with an answer or a question (ADR 0174).
+        SchemaStep {
+            table: "decision_images",
+            artifact: "decision_images",
+            undo_sql: "DROP TABLE decision_images;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'decision_images'",
         },
     ];
 
