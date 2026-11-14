@@ -164,6 +164,11 @@ use swarm_persistence::{
     REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT, REFUSAL_WAKE_UNCERTAIN,
 };
 
+/// The one delivery hold for task messages waiting at a terminal (ADR 0173).
+fn message_delivery_hold_subject(session: WorkerSessionId) -> String {
+    format!("message-delivery:{session}")
+}
+
 /// Clears both ways a delivery can be held, for one subject.
 ///
 /// A delivery held first because the provider was busy and then because the
@@ -3339,7 +3344,7 @@ impl AppState {
             // every message waiting there, and a delivery to that terminal or
             // a busy provider clears it.
             if let Some(first) = group.first() {
-                let subject = format!("message-delivery:{}", first.message.session_id);
+                let subject = message_delivery_hold_subject(first.message.session_id);
                 match &submission {
                     Ok(TerminalSubmission::Deferred(reason)) => record_delivery_hold(
                         store,

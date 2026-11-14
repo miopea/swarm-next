@@ -493,3 +493,79 @@ async fn a_stranded_write_waits_out_the_cooldown() {
     );
     server.abort();
 }
+
+/// The hold a stranded write raised describes text the Enter has just sent,
+/// so sending it releases the hold, even while newer messages still wait
+/// out the cooldown it starts.
+#[cfg(unix)]
+#[tokio::test]
+async fn sending_a_stranded_write_releases_its_hold() {
+    use std::str::FromStr;
+    let (store, session, task, ids) = unconfirmed_messages_to_queen(1);
+    let sender = store.task_messages(task).unwrap()[0]
+        .sender_worker_id
+        .clone()
+        .unwrap();
+    store
+        .send_task_message(
+            task,
+            MessageEnd::worker(swarm_domain::WorkerId::from_str(&sender).unwrap()),
+            MessageEnd::queen(),
+            "And the tag?",
+            30,
+        )
+        .unwrap();
+    // A pass found it held at the prompt and raised the hold.
+    for claim in store.claim_task_messages(31).unwrap() {
+        assert!(
+            store
+                .finish_task_message(&claim, swarm_persistence::TaskMessageResult::Deferred, 32)
+                .unwrap()
+        );
+    }
+    let subject = crate::message_delivery_hold_subject(session);
+    store
+        .record_coordinator_refusal(
+            swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+            &subject,
+            None,
+            Some(session),
+            "held",
+            crate::unix_timestamp(),
+        )
+        .unwrap();
+    let holds = |store: &TaskStore| {
+        store
+            .standing_coordinator_refusals(crate::unix_timestamp(), 0)
+            .unwrap()
+            .into_iter()
+            .filter(|refusal| refusal.subject == subject)
+            .count()
+    };
+    assert_eq!(holds(&store), 1);
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("host.sock");
+    let (server, writes) = serve_terminal(
+        tokio::net::UnixListener::bind(&socket).unwrap(),
+        screen(
+            session,
+            &format!(
+                "● Done.\r\n\r\n❯ [Swarm delivery {}] [Pasted text #1 +40 lines]\r\n  auto mode on",
+                ids[0]
+            ),
+            None,
+        ),
+        screen(session, "✻ Thinking… (esc to interrupt)\r\n❯ ", None),
+    );
+
+    assert!(
+        crate::coordination_delivery::recover_unconfirmed_task_messages(
+            &store,
+            &HostClient::new(socket)
+        )
+        .await
+    );
+    assert_eq!(writes.lock().unwrap().len(), 1);
+    assert_eq!(holds(&store), 0, "the prompt no longer holds that text");
+    server.abort();
+}

@@ -144,6 +144,10 @@ Measured on Claude Code 2.1.325 in a throwaway session (Queen runs 2.1.323):
   terminals are settled.** Any whose marker is unsent in the prompt are sent.
   Those whose prompt is empty are sent once more, labelled. A reader may
   already have handled them.
+- A paste written before this release carries no marker. If one is still in
+  a prompt, Swarm cannot tell it is its own, so it stays listed in Queues for
+  the operator to send or clear, as before. Once the prompt is empty, its
+  messages are sent once more, labelled.
 - Queen still reconciles what Swarm cannot settle, from the same attention
   list. That covers a second loss, a superseded request, and a write to a
   session that has ended.

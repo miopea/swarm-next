@@ -760,6 +760,8 @@ async fn send_stranded_write(
     if let Err(error) = store.record_coordination_delivery(session_id, unix_timestamp()) {
         tracing::warn!(message = %error, %session_id, "a recovered write landed but its cooldown could not be recorded");
     }
+    // The prompt no longer holds the text the terminal's hold describes.
+    crate::clear_held_delivery_refusals(store, &crate::message_delivery_hold_subject(session_id));
     settle_unconfirmed_write(
         store,
         write,
