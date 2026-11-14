@@ -243,6 +243,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map_or_else(|| PathBuf::from("."), Path::to_path_buf),
         )
         .with_email_attachment_store(email_attachment_root_from_database(&database_path))
+        .with_decision_image_store(decision_image_root_from_database(&database_path))
         .with_legacy_database_path(legacy_database_path_from_env())
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
         .with_package_lifecycle_lock_path(
@@ -881,6 +882,16 @@ fn email_attachment_root_from_database(database_path: &std::path::Path) -> PathB
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("email-attachments")
+}
+
+/// Images the operator sent with answers and questions (ADR 0174). Kept apart
+/// from terminal attachments, which expire after a week regardless of whether
+/// a request still holds them.
+fn decision_image_root_from_database(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("decision-images")
 }
 
 /// Configures Jira, or leaves it off and says why.

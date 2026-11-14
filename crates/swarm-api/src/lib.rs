@@ -19,6 +19,7 @@ use coordination_delivery::{
 };
 mod database_integrity;
 mod decision_clarification;
+mod decision_images;
 mod decisions;
 pub use coordination_deadline::CoordinationDeadline;
 pub use database_integrity::monitor_database_integrity;
@@ -530,6 +531,7 @@ pub struct AppState {
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
+    decision_image_store: Option<decision_images::DecisionImageStore>,
     /// Where this Hive's database lives, so a reload that carries a migration
     /// can put its backup beside the operator's own.
     database_directory: Option<Arc<PathBuf>>,
@@ -687,6 +689,7 @@ impl AppState {
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
+            decision_image_store: None,
             database_directory: None,
             legacy_database_path: None,
             workspace_roots: Arc::new(Vec::new()),
@@ -935,6 +938,12 @@ impl AppState {
     #[must_use]
     pub fn with_attachment_store(mut self, root: PathBuf) -> Self {
         self.attachment_store = Some(AttachmentStore::new(root));
+        self
+    }
+
+    #[must_use]
+    pub fn with_decision_image_store(mut self, root: PathBuf) -> Self {
+        self.decision_image_store = Some(decision_images::DecisionImageStore::new(root));
         self
     }
 
@@ -5216,11 +5225,18 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/decisions/{decision_id}/clarifications",
-            get(decision_clarification::history).post(decision_clarification::ask),
+            get(decision_clarification::history)
+                .post(decision_clarification::ask)
+                .layer(DefaultBodyLimit::max(decision_images::MAX_BODY_WITH_IMAGES)),
         )
         .route(
             "/api/v1/decisions/{decision_id}/resolution",
-            patch(decisions::resolve_decision),
+            patch(decisions::resolve_decision)
+                .layer(DefaultBodyLimit::max(decision_images::MAX_BODY_WITH_IMAGES)),
+        )
+        .route(
+            "/api/v1/decisions/{decision_id}/images/{image_id}",
+            get(decisions::decision_image),
         )
         .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
         .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
@@ -11191,6 +11207,21 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "dismissed_interview_needs_reason",
             error.to_string(),
         ),
+        TaskStoreError::TooManyDecisionImages { .. } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "too_many_decision_images",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidDecisionImage => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_decision_image",
+            error.to_string(),
+        ),
+        TaskStoreError::DecisionImageStorageFull => ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "decision_image_storage_full",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidMigrationBundle => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_migration_bundle",
@@ -12092,12 +12123,42 @@ mod tests {
             command: swarm_persistence::CommandGrantOutcome::NotRequested,
             approval: false,
             granted_by_queen: false,
+            image_count: 0,
         };
         let message = decision_delivery_message(&delivery).bytes;
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
         assert!(String::from_utf8_lossy(&message).contains("ship now"));
+        assert!(!String::from_utf8_lossy(&message).contains("swarm_read_decision_image"));
+    }
+
+    /// ADR 0174. An answer sent with a screenshot says so, names the tool and
+    /// the request, and stays one submission.
+    #[test]
+    fn an_answer_with_an_image_tells_the_worker_to_look_at_it() {
+        let decision_id = DecisionRequestId::new();
+        let delivery = DecisionDispatch {
+            decision_id,
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            action: "Change it".into(),
+            note: "Like this".into(),
+            answers: std::collections::BTreeMap::new(),
+            command: swarm_persistence::CommandGrantOutcome::NotRequested,
+            approval: false,
+            granted_by_queen: false,
+            image_count: 1,
+        };
+        let text = String::from_utf8(decision_delivery_message(&delivery).bytes).unwrap();
+        assert!(
+            text.contains(&format!(
+                "Operator note: Like this The operator attached 1 image: see it with swarm_read_decision_image and decision_id {decision_id} before you act."
+            )),
+            "{text}"
+        );
+        assert_eq!(text.matches('\r').count(), 1);
+        assert!(text.ends_with('\r'));
     }
 
     /// ADR 0129: the worker is told plainly whether its command may now run,
@@ -12116,6 +12177,7 @@ mod tests {
                 command,
                 approval,
                 granted_by_queen: false,
+                image_count: 0,
             };
             String::from_utf8(decision_delivery_message(&delivery).bytes).unwrap()
         };
@@ -12197,6 +12259,7 @@ mod tests {
                     },
                     approval: false,
                     granted_by_queen,
+                    image_count: 0,
                 })
                 .bytes,
             )
@@ -12240,6 +12303,7 @@ mod tests {
             command: swarm_persistence::CommandGrantOutcome::NotRequested,
             approval: false,
             granted_by_queen: false,
+            image_count: 0,
         };
 
         let message = decision_delivery_message(&delivery).bytes;

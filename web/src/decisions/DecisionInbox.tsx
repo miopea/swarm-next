@@ -3,6 +3,8 @@ import { refusedNativeAnswerNotice } from "./refusedNativeAnswer";
 
 import type { DecisionClarification, DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import DecisionClarificationPanel from "./DecisionClarificationPanel";
+import AnswerImages, { SentImages, type FetchDecisionImage } from "./AnswerImages";
+import { MAX_ANSWER_IMAGES, toSentImages, type DraftImage, type SentImage } from "./answerImages";
 import type { ReconcileClarification } from "./ClarificationRecovery";
 import { useDecisionClarifications, type ReadClarifications } from "./useDecisionClarifications";
 import { needsOperatorDecision, waitingForClarification } from "./decisionAttention";
@@ -48,14 +50,17 @@ type Props = {
   trailingCards?: ReactNode;
   onOpenTask?: (taskId: string) => void;
   onFetchActivity?: (signal: AbortSignal) => Promise<TaskActivityPage>;
-  onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
-  onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
+  /** `images` is passed only when the operator attached some (ADR 0174). */
+  onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface, images?: SentImage[]) => Promise<void>;
+  onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string, images?: SentImage[]) => Promise<void>;
   onFetchClarifications?: ReadClarifications;
   onReconcileClarification?: ReconcileClarification;
-  onAskClarification?: (decision: DecisionRequest, id: string, question: string) => Promise<DecisionClarification>;
+  onAskClarification?: (decision: DecisionRequest, id: string, question: string, images?: SentImage[]) => Promise<DecisionClarification>;
+  /** Reads back a sent screenshot to show it. Without it, sent ones are counted. */
+  onFetchImage?: FetchDecisionImage;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification, onFetchImage }: Props) {
   const [view, setView] = useState<"attention" | "activity" | "parked">("attention");
   const clarifications = useDecisionClarifications(decisions, view === "attention" ? onFetchClarifications : undefined);
   const tabId = useId();
@@ -68,6 +73,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const [dismissConfirmId, setDismissConfirmId] = useState<string>();
   const [speakingId, setSpeakingId] = useState<string>();
   const [spoken, setSpoken] = useState<Record<string, string>>({});
+  // Screenshots going with a decision's note (`<id>:note`) or its answer in
+  // the operator's own words (`<id>:words`). Kept here for the same reason the
+  // text is: a refresh or a tab switch must not lose them.
+  const [drafts, setDrafts] = useState<Record<string, DraftImage[]>>({});
   const [submissionErrors, setSubmissionErrors] = useState<Record<string, string>>({});
   const [submittingIds, setSubmittingIds] = useState<Set<string>>(new Set());
   const inFlight = useRef(new Set<string>());
@@ -130,6 +139,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     setNotes(prune);
     setSpoken(prune);
     setSubmissionErrors(prune);
+    setDrafts((previous) => {
+      const entries = Object.entries(previous).filter(([key]) => pendingIds.has(key.slice(0, key.indexOf(":"))));
+      return entries.length === Object.keys(previous).length ? previous : Object.fromEntries(entries);
+    });
     setSpeakingId((id) => id && pendingIds.has(id) ? id : undefined);
     setDismissConfirmId((id) => id && pendingIds.has(id) ? id : undefined);
   }, [decisions]);
@@ -152,12 +165,23 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     }
   }
 
-  function submitAnswer(decision: DecisionRequest, answers: Record<string, string[]>, note: string) {
+  function submitAnswer(decision: DecisionRequest, answers: Record<string, string[]>, note: string, images: SentImage[] = []) {
     return submitDecision(decision, async () => {
       if (!onAnswer) throw new Error("Answers cannot be sent from this view. Your text has been kept.");
-      await onAnswer(decision, answers, note);
+      await (images.length ? onAnswer(decision, answers, note, images) : onAnswer(decision, answers, note));
     });
   }
+
+  /** A ruling or dismissal carries the note's screenshots. */
+  function resolveWithNote(decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) {
+    const images = toSentImages(drafts[`${decision.id}:note`] ?? []);
+    return submitDecision(decision, () => images.length
+      ? onResolve(decision, action, note, surface, images)
+      : onResolve(decision, action, note, surface));
+  }
+
+  const changeDrafts = (key: string) => (update: (current: DraftImage[]) => DraftImage[]) =>
+    setDrafts((current) => ({ ...current, [key]: update(current[key] ?? []) }));
 
   // Navigation owns one focus request, including when its data arrives later.
   // Refreshes cannot create another request or pull the operator out of Activity.
@@ -291,6 +315,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
             const repo = (decision.task_id ? taskRepos.get(decision.task_id) : undefined)
               ?? workerRepos.get(decision.requesting_worker_id);
             const note = notes[decision.id] ?? "";
+            const noteImages = drafts[`${decision.id}:note`] ?? [];
+            const wordsImages = drafts[`${decision.id}:words`] ?? [];
             const decisionBusy = busy || submittingIds.has(decision.id);
             // Combine only an exact displayed match. Authored commands and
             // identifiers are case-sensitive; a similar answer is not advice.
@@ -358,11 +384,15 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     clarifications.reload(decision.id);
                     return saved;
                   } : undefined}
-                  onAsk={async (id, question) => {
-                    const saved = await onAskClarification(decision, id, question);
+                  onAsk={async (id, question, images = []) => {
+                    const saved = await (images.length
+                      ? onAskClarification(decision, id, question, images)
+                      : onAskClarification(decision, id, question));
                     clarifications.reload(decision.id);
                     return saved;
                   }}
+                  sentImages={decision.images ?? []}
+                  onFetchImage={onFetchImage}
                 />}
                 {decision.state === "pending" && decision.questions?.length ? (
                   <div className="decision-resolution">
@@ -373,7 +403,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     <DecisionInterview
                       questions={decision.questions}
                       busy={decisionBusy}
-                      onAnswer={(answers, answerNote) => { setDismissConfirmId(undefined); void submitAnswer(decision, answers, answerNote); }}
+                      onAnswer={(answers, answerNote, images = []) => { setDismissConfirmId(undefined); void submitAnswer(decision, answers, answerNote, images); }}
                     />
                     <div className="decision-actions">
                       <button
@@ -434,8 +464,10 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       </div>
                     ) : null}
                     <details className="decision-argument decision-note">
-                      <summary>{note.trim() ? "Edit your note" : "Add an optional note"}</summary>
-                      <label><span>Optional note</span><textarea value={note} maxLength={4000} disabled={decisionBusy} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
+                      <summary>{note.trim() || noteImages.length ? "Edit your note" : "Add an optional note"}{noteImages.length ? ` · ${noteImages.length} ${noteImages.length === 1 ? "screenshot" : "screenshots"}` : ""}</summary>
+                      <AnswerImages images={noteImages} onChange={changeDrafts(`${decision.id}:note`)} limit={MAX_ANSWER_IMAGES - wordsImages.length} disabled={decisionBusy}>
+                        <label><span>Optional note</span><textarea value={note} maxLength={4000} disabled={decisionBusy} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
+                      </AnswerImages>
                     </details>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action) => (
@@ -443,7 +475,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                           className={action === recommendedAction ? "primary-action decision-recommended-action" : "secondary-button"}
                           aria-describedby={action === recommendedAction ? recommendationId : undefined}
                           disabled={decisionBusy}
-                          onClick={() => { setDismissConfirmId(undefined); void submitDecision(decision, () => onResolve(decision, action, note, "inbox_action")); }}>
+                          onClick={() => { setDismissConfirmId(undefined); void resolveWithNote(decision, action, note, "inbox_action"); }}>
                           {action === recommendedAction && <span id={recommendationId} className="decision-action-recommendation" aria-hidden="true">{requester} recommends</span>}
                           <span>{humanize(action)}</span>
                         </button>
@@ -471,7 +503,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             return;
                           }
                           setDismissConfirmId(undefined);
-                          void submitDecision(decision, () => onResolve(decision, "dismissed", note, "inbox_dismiss"));
+                          void resolveWithNote(decision, "dismissed", note, "inbox_dismiss");
                         }}
                       >
                         {dismissConfirmId === decision.id ? "Confirm dismiss" : "Dismiss request"}
@@ -479,23 +511,26 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     </div>
                     {speakingId === decision.id ? (
                       <div id={`${tabId}-answer-${decision.id}`} className="decision-own-words" role="group" aria-label="Answer in your own words">
-                        <label>
-                          <span>Tell the worker what to do instead</span>
-                          <textarea
-                            rows={3}
-                            disabled={decisionBusy}
-                            value={spoken[decision.id] ?? ""}
-                            maxLength={4000}
-                            placeholder="Describe the outcome you want instead"
-                            onChange={(event) => setSpoken((current) => ({ ...current, [decision.id]: event.target.value }))}
-                          />
-                        </label>
+                        <AnswerImages images={wordsImages} onChange={changeDrafts(`${decision.id}:words`)} limit={MAX_ANSWER_IMAGES - noteImages.length} disabled={decisionBusy}>
+                          <label>
+                            <span>Tell the worker what to do instead</span>
+                            <textarea
+                              rows={3}
+                              disabled={decisionBusy}
+                              value={spoken[decision.id] ?? ""}
+                              maxLength={4000}
+                              placeholder="Describe the outcome you want instead"
+                              onChange={(event) => setSpoken((current) => ({ ...current, [decision.id]: event.target.value }))}
+                            />
+                          </label>
+                        </AnswerImages>
                         <button
                           type="button"
                           className="primary-action"
                           disabled={decisionBusy || !(spoken[decision.id] ?? "").trim()}
                           onClick={() => {
-                            void submitAnswer(decision, { Answer: [(spoken[decision.id] ?? "").trim()] }, note);
+                            // The note goes too, so its screenshots do.
+                            void submitAnswer(decision, { Answer: [(spoken[decision.id] ?? "").trim()] }, note, toSentImages([...wordsImages, ...noteImages]));
                           }}
                         >Send this instead</button>
                       </div>
@@ -504,7 +539,9 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 ) : decision.state === "withdrawn" ? (
                   <div className="decision-resolved"><p><strong>Withdrawn</strong>{decision.withdrawal_reason ? ` · ${decision.withdrawal_reason}` : ""}</p><span>No operator decision or approval was recorded.</span></div>
                 ) : (
-                  <div className="decision-resolved"><p>{decision.granted_by_queen ? "Granted by Queen: " : null}<strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
+                  <div className="decision-resolved"><p>{decision.granted_by_queen ? "Granted by Queen: " : null}<strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span>
+                    <SentImages images={(decision.images ?? []).filter((image) => !image.clarification_id)} onFetchImage={onFetchImage} label="Screenshots you sent with this answer" />
+                  </div>
                 )}
                 {decision.state === "pending" && submissionErrors[decision.id] && <p className="field-error" role="alert">{submissionErrors[decision.id]}</p>}
                 <details className="decision-argument">

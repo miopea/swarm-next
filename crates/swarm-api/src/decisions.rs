@@ -34,6 +34,9 @@ pub(super) struct ResolveDecisionRequest {
     /// answers "where did this arrive from", not "who was allowed to send it".
     #[serde(default)]
     surface: String,
+    /// Images the operator sent with this answer (ADR 0174).
+    #[serde(default)]
+    images: Vec<crate::decision_images::SentImage>,
 }
 
 pub(super) async fn list_decisions(
@@ -44,7 +47,56 @@ pub(super) async fn list_decisions(
     let decisions = task_service(&state)?
         .operator_decision_inbox()
         .map_err(application_error)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(decisions)).into_response())
+    let ids: Vec<_> = decisions.iter().map(|entry| entry.decision.id).collect();
+    let mut images = task_store(&state)?
+        .decision_images(&ids)
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .fold(
+            std::collections::HashMap::<_, Vec<_>>::new(),
+            |mut by_decision, image| {
+                by_decision
+                    .entry(image.decision_id)
+                    .or_default()
+                    .push(image);
+                by_decision
+            },
+        );
+    let listed: Vec<_> = decisions
+        .iter()
+        .map(|entry| ListedDecision {
+            images: images.remove(&entry.decision.id).unwrap_or_default(),
+            entry,
+        })
+        .collect();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(listed)).into_response())
+}
+
+/// A request as the inbox lists it, with the images the operator sent on it
+/// (ADR 0174). The images are listed here rather than on the shared record so
+/// the record a worker engine reads does not change.
+#[derive(serde::Serialize)]
+struct ListedDecision<'a> {
+    #[serde(flatten)]
+    entry: &'a swarm_domain::DecisionInboxEntry,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<swarm_persistence::DecisionImage>,
+}
+
+/// One image the operator sent with an answer or question on this request.
+pub(super) async fn decision_image(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((decision_id, image_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let decision_id = parse_decision_id(&decision_id)?;
+    let image_id = image_id.parse::<uuid::Uuid>().map_err(|_| {
+        crate::decision_images::decision_image_error(
+            crate::decision_images::DecisionImageError::NotFound,
+        )
+    })?;
+    crate::decision_images::image_response(&state, task_store(&state)?, decision_id, image_id).await
 }
 
 pub(super) async fn resolve_decision(
@@ -56,15 +108,18 @@ pub(super) async fn resolve_decision(
     authorize(&state, &headers)?;
     let decision_id = parse_decision_id(&decision_id)?;
     let service = task_service(&state)?;
+    let images =
+        crate::decision_images::write_sent(&state, task_store(&state)?, &request.images).await?;
     // Answers and an action are different resolutions of different record
     // shapes, and the store rejects each against the wrong one, so this only
     // has to route.
     let resolved = if request.answers.is_empty() {
-        service.resolve_operator_decision(
+        service.resolve_operator_decision_with_images(
             decision_id,
             &request.action,
             &request.note,
             &request.surface,
+            &images,
         )
     } else {
         service.answer_operator_decision_from_snapshot(
@@ -73,13 +128,21 @@ pub(super) async fn resolve_decision(
             &request.note,
             &request.surface,
             request.questions.as_deref(),
+            &images,
         )
-    }
-    .map_err(application_error)?;
+    };
+    let resolved = match resolved {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            crate::decision_images::discard(&state, &images).await;
+            return Err(application_error(error));
+        }
+    };
     tracing::info!(
         decision_id = %decision_id,
         action = %if request.answers.is_empty() { request.action.as_str() } else { "answered" },
         answered_questions = request.answers.len(),
+        images = images.len(),
         surface = %if request.surface.is_empty() { "unreported" } else { &request.surface },
         "operator resolved a decision"
     );

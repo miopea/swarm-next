@@ -56,11 +56,12 @@ impl TaskService {
         id: DecisionClarificationId,
         decision: DecisionRequestId,
         question: &str,
+        images: &[swarm_persistence::NewDecisionImage],
         now: i64,
     ) -> Result<DecisionClarification, ApplicationError> {
         Ok(self
             .store
-            .ask_decision_clarification(id, decision, question, now)?)
+            .ask_decision_clarification_with_images(id, decision, question, images, now)?)
     }
 
     /// Reads bounded history as the operator, requester or current Queen.
@@ -240,7 +241,7 @@ mod tests {
         let service = TaskService::new(store.clone());
         let id = DecisionClarificationId::new();
         service
-            .ask_operator_clarification(id, parent.id, "Why?", 100)
+            .ask_operator_clarification(id, parent.id, "Why?", &[], 100)
             .unwrap();
         assert_eq!(
             service

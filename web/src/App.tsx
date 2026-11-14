@@ -24,6 +24,7 @@ import {
   type DevelopmentRuntime,
   answerDecision,
   askDecisionClarification,
+  fetchDecisionImage,
   reconcileDecisionClarification,
   fetchDecisionClarifications,
   resolveDecision,
@@ -143,6 +144,7 @@ import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPr
 import { foreignEngagement, workerSwitcherLine } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import { needsOperatorDecision } from "./decisions/decisionAttention";
+import type { SentImage } from "./decisions/answerImages";
 import DogfoodFeedbackDialog from "./feedback/FeedbackDialog";
 import ShellModal from "./terminal/ShellModal";
 import ExperimentalHandoffDialog from "./workers/ExperimentalHandoffDialog";
@@ -586,6 +588,11 @@ export function App() {
   useVisiblePolling(refreshTakeovers, Boolean(operatorToken) && !detached, 5_000);
 
   const [presence, setPresence] = useState<OperatorPresence>();
+  // Stable, because each change refetches the screenshots shown on a card.
+  const readDecisionImage = useCallback((decisionId: string, imageId: string, signal: AbortSignal) => {
+    if (!operatorToken) return Promise.reject(new Error("Operator session is unavailable"));
+    return fetchDecisionImage(operatorToken, decisionId, imageId, signal);
+  }, [operatorToken]);
   const readRecentActivity = useCallback((signal: AbortSignal) => {
     if (!operatorToken) return Promise.reject(new Error("Operator session is unavailable"));
     return fetchRecentTaskActivity(operatorToken, 100, signal);
@@ -1244,18 +1251,18 @@ export function App() {
     setQueenAutomation(await runQueenAutomation(operatorToken));
   }
 
-  async function answerInboxDecision(decision: DecisionRequest, answers: Record<string, string[]>, note: string) {
+  async function answerInboxDecision(decision: DecisionRequest, answers: Record<string, string[]>, note: string, images: SentImage[] = []) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await answerDecision(operatorToken, decision.id, answers, note, "inbox_interview", decision.questions);
+      const updated = await answerDecision(operatorToken, decision.id, answers, note, "inbox_interview", decision.questions, images);
       setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
     }, "Sending your answers…", true);
   }
 
-  async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) {
+  async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string, surface: DecisionSurface, images: SentImage[] = []) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await resolveDecision(operatorToken, decision.id, action, note, surface);
+      const updated = await resolveDecision(operatorToken, decision.id, action, note, surface, images);
       setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
     }, "Saving your decision…", true);
   }
@@ -2747,7 +2754,8 @@ export function App() {
               onResolve={resolveInboxDecision}
               onAnswer={answerInboxDecision}
               onFetchClarifications={(decisionId, signal) => fetchDecisionClarifications(operatorToken, decisionId, signal)}
-              onAskClarification={(decision, id, question) => askDecisionClarification(operatorToken, decision.id, id, question)}
+              onAskClarification={(decision, id, question, images) => askDecisionClarification(operatorToken, decision.id, id, question, images)}
+              onFetchImage={readDecisionImage}
               onReconcileClarification={request => reconcileDecisionClarification(operatorToken, request)}
             />
           </div>

@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 
 import {
   answerDecision,
+  askDecisionClarification,
   assignTask,
   fetchBrowserEvidence,
   recordBrowserEvidence,
@@ -13,6 +14,7 @@ import {
   recoverTransientRuntime,
   renameApiary,
   renameHive,
+  resolveDecision,
   RuntimeRequestError,
 } from "./api";
 
@@ -26,6 +28,18 @@ test("interview answers carry the exact rendered snapshot without automatic retr
     await expect(answerDecision("operator", "decision-id", { Scope: ["Narrow"] }, "", "inbox_interview", questions)).rejects.toThrow();
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ answers: { Scope: ["Narrow"] }, note: "", surface: "inbox_interview", questions });
+  } finally { fetch.mockRestore(); }
+});
+
+test("screenshots go in the same request as the answer, ruling or question they were sent with", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200 }));
+  const images = [{ media_type: "image/png", data: "iVBORw0KGgo=" }];
+  try {
+    await answerDecision("operator", "decision-id", { Scope: ["Narrow"] }, "Like this", "inbox_interview", undefined, images);
+    await resolveDecision("operator", "decision-id", "Change it", "See the screenshot", "inbox_action", images);
+    await askDecisionClarification("operator", "decision-id", "question-id", "Is this the screen?", images);
+    const bodies = fetch.mock.calls.map(([, init]) => JSON.parse(String(init?.body)) as { images?: unknown });
+    expect(bodies.map((body) => body.images)).toEqual([images, images, images]);
   } finally { fetch.mockRestore(); }
 });
 

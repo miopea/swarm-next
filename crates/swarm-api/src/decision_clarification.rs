@@ -18,6 +18,9 @@ use std::sync::Arc;
 pub(super) struct AskClarificationRequest {
     id: swarm_domain::DecisionClarificationId,
     question: String,
+    /// Images the operator sent with this question (ADR 0174).
+    #[serde(default)]
+    images: Vec<crate::decision_images::SentImage>,
 }
 
 pub(super) async fn reconcile(
@@ -62,14 +65,31 @@ pub(super) async fn ask(
 ) -> Result<Response, ApiError> {
     // General localhost authorization is not proof the human authored a question.
     crate::auth::authorize_operator_credential(&state, &headers)?;
-    let saved = task_service(&state)?
-        .ask_operator_clarification(
-            request.id,
-            parse_decision_id(&decision)?,
-            &request.question,
-            unix_timestamp(),
-        )
-        .map_err(application_error)?;
+    let decision = parse_decision_id(&decision)?;
+    let store = crate::task_store(&state)?;
+    let images = crate::decision_images::write_sent(&state, store, &request.images).await?;
+    let saved = match task_service(&state)?.ask_operator_clarification(
+        request.id,
+        decision,
+        &request.question,
+        &images,
+        unix_timestamp(),
+    ) {
+        Ok(saved) => saved,
+        Err(error) => {
+            crate::decision_images::discard(&state, &images).await;
+            return Err(application_error(error));
+        }
+    };
+    // A repeat of a question already saved keeps the first request's images,
+    // so this one's files are not the question's. Only a read that finds no
+    // row removes a file: one that fails leaves it for the sweep, which never
+    // removes a file a row names.
+    let unrecorded: Vec<_> = images
+        .into_iter()
+        .filter(|image| matches!(store.decision_image(decision, image.id), Ok(None)))
+        .collect();
+    crate::decision_images::discard(&state, &unrecorded).await;
     state.control_room_notify.notify_waiters();
     state.coordination_wakeup.notify_one();
     // The existing coordinator owns delivery. Return the durable receipt without
