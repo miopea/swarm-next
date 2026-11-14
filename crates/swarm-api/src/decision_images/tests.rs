@@ -231,7 +231,7 @@ async fn an_answer_with_a_screenshot_reaches_the_inbox_and_can_be_opened() {
     let hive = hive();
     let images = json!([{ "media_type": "image/png", "data": Base64::encode_string(PNG) }]);
 
-    let (status, _) = send(
+    let (status, answered) = send(
         &hive.app,
         "PATCH",
         &format!("/api/v1/decisions/{}/resolution", hive.decision),
@@ -239,6 +239,10 @@ async fn an_answer_with_a_screenshot_reaches_the_inbox_and_can_be_opened() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    // The page shows the answered card from this reply, before any refresh.
+    let answered: Value = serde_json::from_slice(&answered).unwrap();
+    assert_eq!(answered["resolution_action"], "Change it");
+    assert_eq!(answered["images"].as_array().unwrap().len(), 1);
 
     let (status, listed) = send(&hive.app, "GET", "/api/v1/decisions", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -336,6 +340,50 @@ async fn a_question_with_a_screenshot_is_recorded_once_however_often_it_is_sent(
         vec![format!("{}.jpg", recorded[0].id)],
         "the repeat's own file is not kept"
     );
+}
+
+#[tokio::test]
+async fn four_full_size_screenshots_fit_in_one_question_and_in_one_answer() {
+    // Each is as large as one image may be, so four of them, base64-encoded,
+    // are about 21 MiB: ten times the body any other route accepts.
+    let mut largest =
+        vec![0_u8; usize::try_from(swarm_persistence::MAX_DECISION_IMAGE_BYTES).unwrap()];
+    largest[..PNG.len()].copy_from_slice(PNG);
+    let four = json!(vec![
+        json!({ "media_type": "image/png", "data": Base64::encode_string(&largest) });
+        4
+    ]);
+    let hive = hive();
+
+    let (status, _) = send(
+        &hive.app,
+        "POST",
+        &format!("/api/v1/decisions/{}/clarifications", hive.decision),
+        Some(json!({
+            "id": swarm_domain::DecisionClarificationId::new(),
+            "question": "Which of these?",
+            "images": four,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        &hive.app,
+        "PATCH",
+        &format!("/api/v1/decisions/{}/resolution", hive.decision),
+        Some(json!({ "action": "Change it", "images": four })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let recorded = hive.store.decision_images(&[hive.decision]).unwrap();
+    assert_eq!(recorded.len(), 8);
+    assert!(
+        recorded
+            .iter()
+            .all(|image| image.byte_len == swarm_persistence::MAX_DECISION_IMAGE_BYTES)
+    );
+    assert_eq!(files_in(&hive.root).len(), 8);
 }
 
 #[tokio::test]

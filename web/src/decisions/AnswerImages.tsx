@@ -128,9 +128,9 @@ export function SentImages({ images, onFetchImage, label }: {
 
   if (!images.length) return null;
   const count = `${images.length} ${images.length === 1 ? "screenshot" : "screenshots"}`;
-  if (!onFetchImage || failed) return <p className="muted">{count} sent{failed ? " · could not be shown here" : ""}</p>;
+  if (!onFetchImage || failed) return <p className="muted sent-images">{count} sent{failed ? " · could not be shown here" : ""}</p>;
   return (
-    <ul className="answer-image-list sent" aria-label={label}>
+    <ul className="answer-image-list sent-images" aria-label={label}>
       {images.map((image, index) => (
         <li key={image.id}>
           {urls[image.id]

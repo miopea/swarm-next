@@ -64,7 +64,7 @@ pub(super) async fn list_decisions(
         );
     let listed: Vec<_> = decisions
         .iter()
-        .map(|entry| ListedDecision {
+        .map(|entry| WithImages {
             images: images.remove(&entry.decision.id).unwrap_or_default(),
             entry,
         })
@@ -72,13 +72,13 @@ pub(super) async fn list_decisions(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(listed)).into_response())
 }
 
-/// A request as the inbox lists it, with the images the operator sent on it
-/// (ADR 0174). The images are listed here rather than on the shared record so
-/// the record a worker engine reads does not change.
+/// A request as the operator's page reads it, with the images the operator
+/// sent on it (ADR 0174). The images are added here rather than on the shared
+/// record so the record a worker engine reads does not change.
 #[derive(serde::Serialize)]
-struct ListedDecision<'a> {
+struct WithImages<'a, T> {
     #[serde(flatten)]
-    entry: &'a swarm_domain::DecisionInboxEntry,
+    entry: &'a T,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     images: Vec<swarm_persistence::DecisionImage>,
 }
@@ -171,8 +171,18 @@ pub(super) async fn resolve_decision(
     }
     state.control_room_notify.notify_waiters();
     state.deliver_coordination().await;
-    let decision = task_store(&state)?
+    let store = task_store(&state)?;
+    let decision = store
         .get_decision_request(decision_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(Json(decision).into_response())
+    // The page puts this in place of the card it answered, so it carries what
+    // was sent with it, as the inbox listing does.
+    let images = store
+        .decision_images(&[decision_id])
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(WithImages {
+        entry: &decision,
+        images,
+    })
+    .into_response())
 }

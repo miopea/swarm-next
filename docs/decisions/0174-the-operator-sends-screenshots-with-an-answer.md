@@ -80,8 +80,10 @@ returns one as an MCP image block, up to 3,932,160 bytes (5 MiB of base64).
 - The operator can show a worker what they saw, in the answer, instead of
   describing it.
 - Screenshots of a signed-in page can hold personal data. They stay on the
-  Hive, readable only by the operator and the workers named above, and go
-  after 90 days.
+  Hive, readable only by the operator and the workers named above. Those of
+  a request closed more than 90 days ago go when the next image is sent;
+  nothing removes them on a timer, so on a Hive where nobody sends another
+  image they stay, within the 512-image cap.
 - A request that stays open keeps its images, so a Hive with many open
   requests carrying images can fill the 512-image store. The operator is then
   refused with a reason and can still answer in words.
