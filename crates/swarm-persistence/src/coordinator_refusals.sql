@@ -50,6 +50,17 @@ SELECT refusal.kind, refusal.subject, refusal.worker_id, worker.name,
                           AND outcome.recipient_worker_id = refusal.worker_id
                           AND outcome.session_id = refusal.session_id
                     ))
+               -- A terminal's held-message card lasts while a message still
+               -- waits there, however it then left: delivered, settled from
+               -- the prompt, cancelled or reconciled.
+               AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
+                    OR refusal.subject NOT LIKE 'message-delivery:%'
+                    OR EXISTS (
+                        SELECT 1 FROM task_message_deliveries delivery
+                        WHERE delivery.session_id = refusal.session_id
+                          AND delivery.state IN ('queued','dispatching')
+                          AND delivery.superseded = 0
+                    ))
                AND (refusal.kind NOT IN ('delivery_held_open_prompt', 'delivery_held_unsent_text')
                     OR refusal.subject != 'queen-review'
                     OR EXISTS (SELECT 1 FROM queen_automation WHERE id = 1 AND

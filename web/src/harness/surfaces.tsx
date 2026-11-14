@@ -571,6 +571,8 @@ export const SURFACES: Surface[] = [
     why: "waiting work from the operator screenshot, separate from actionable Needs You requests; not publishable",
     render: () => <QueuesView tasks={[]} workers={[]} blockedWaits={agedBlock} heldBriefings={briefings} heldDeliveries={[
       { kind: "delivery_held_unsent_text", subject: "queen-review", worker_name: null, reason: "The last observed prompt contained unsent text.", first_observed_at: 1_787_402_241, observations: 172 },
+      // A message held at a worker's prompt, one hold per terminal (ADR 0173).
+      { kind: "delivery_held_unsent_text", subject: "message-delivery:fixture-session", worker_name: "Sculpt Studio", reason: "A message is waiting because this terminal's prompt holds unsent text that Swarm cannot match to one of its deliveries — send it or clear it to release it", first_observed_at: 1_787_402_841, observations: 3 },
     ]} onOpenTask={() => undefined} />,
   },
   {

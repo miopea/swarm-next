@@ -2893,7 +2893,7 @@ impl AgentMcp {
             "next": if message.delivered_at.is_some() {
                 "This saved answer already has a delivery record; it was not queued again. Check swarm_read_task_history for the recipient session and whether it is still current."
             } else if message.delivery_state != "queued" {
-                "This is the saved answer, not a new send. Inspect its delivery_state and delivery_claim_id in swarm_read_task_history. Queen reconciles uncertain or rejected deliveries explicitly; no automatic replay."
+                "This is the saved answer, not a new send. Inspect its delivery_state and delivery_claim_id in swarm_read_task_history. Queen reconciles uncertain or rejected deliveries explicitly. Swarm sends an uncertain one again by itself at most once, labelled as a possible repeat, and only when the recipient's prompt shows it is not waiting there."
             } else if reachable {
                 "Queued, NOT delivered — this returns before delivery. Queen sees it when her terminal is next resting; it does not interrupt her. Delivery shows up as a delivered_at on the message in swarm_read_task_history."
             } else {

@@ -58,7 +58,9 @@ function TerminalHeldDeliveryAttentionCard({ held, onOpenWorker, workerIsAwake }
   // Not a question anybody has to answer. The prompt holds text that was typed
   // and never sent, and Swarm will not append to it because a later Enter would
   // submit two unrelated instructions as one. Telling the operator to answer a
-  // prompt sends them looking for something that is not there.
+  // prompt sends them looking for something that is not there. And not "clear
+  // the line" alone: Swarm sends its own stranded writes itself (ADR 0173), so
+  // what is left is somebody's text, which may be meant to go.
   const unsent = oldest.kind === "delivery_held_unsent_text";
   const queenUnsent = queen?.kind === "delivery_held_unsent_text";
 
@@ -69,7 +71,7 @@ function TerminalHeldDeliveryAttentionCard({ held, onOpenWorker, workerIsAwake }
         <h3 id="held-delivery-heading">
           {queen
             ? queenUnsent
-              ? "Queen cannot review until her prompt is cleared"
+              ? "Queen cannot review until her prompt is sent or cleared"
               : "Queen cannot review until a prompt is answered"
             : unstarted.length > 0 && unstarted.length === held.length
               ? held.length === 1
@@ -84,10 +86,10 @@ function TerminalHeldDeliveryAttentionCard({ held, onOpenWorker, workerIsAwake }
         <p>
           {queen
             ? queenUnsent
-              ? "Her prompt holds unsent text, and Swarm will not add to it. Clear the line and the review resumes on its own."
+              ? "Her prompt holds unsent text that Swarm cannot match to one of its deliveries, and Swarm will not add to it. Send it or clear it, and the review resumes on its own."
               : "Nothing gets routed while Queen's terminal has an open question. Answer it and the review resumes on its own."
             : unsent
-              ? "This prompt holds unsent text, and Swarm will not add to it. Clear the line and this delivers itself."
+              ? "This prompt holds unsent text that Swarm cannot match to one of its deliveries, and Swarm will not add to it. Send it or clear it, and this delivers itself."
               : oldest.kind === "wake_uncertain"
               ? "Swarm could not confirm this worker woke and will not try again, because waking it twice briefs it twice. Wake it yourself and it picks up from there."
               : "Swarm will not type into a terminal with an open question. Answer the prompt and it delivers itself."}

@@ -685,7 +685,7 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
     if recovered_task_messages > 0 {
         tracing::warn!(
             recovered_task_messages,
-            "interrupted task messages await Queen reconciliation; not replayed"
+            "interrupted task messages are uncertain: each is settled from its recipient's prompt, or left for Queen to reconcile"
         );
     }
     if recovered_task_outcomes > 0 {
