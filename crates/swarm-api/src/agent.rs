@@ -10849,7 +10849,7 @@ mod tests {
                 "Change it",
                 "Like this",
                 "inbox",
-                &written,
+                &written.images,
             )
             .unwrap();
         let state = Arc::new(crate::AppState::default().with_decision_image_store(root));
@@ -10873,7 +10873,7 @@ mod tests {
             }
         };
         let token = |worker| bearer_from_path(&bridge.ensure_worker_config(worker).unwrap());
-        let image_id = written[0].id.to_string();
+        let image_id = written.images[0].id.to_string();
 
         let listed = call(
             token(worker_id),

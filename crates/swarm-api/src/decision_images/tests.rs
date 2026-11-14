@@ -45,14 +45,14 @@ async fn an_image_is_written_privately_under_its_own_id_and_read_back() {
         .await
         .unwrap();
 
-    assert_eq!(written.len(), 2);
-    assert_eq!(written[1].media_type, "image/jpeg");
+    assert_eq!(written.images.len(), 2);
+    assert_eq!(written.images[1].media_type, "image/jpeg");
     assert_eq!(
         files_in(&root),
         {
             let mut expected = vec![
-                format!("{}.png", written[0].id),
-                format!("{}.jpg", written[1].id),
+                format!("{}.png", written.images[0].id),
+                format!("{}.jpg", written.images[1].id),
             ];
             expected.sort();
             expected
@@ -64,10 +64,13 @@ async fn an_image_is_written_privately_under_its_own_id_and_read_back() {
         use std::os::unix::fs::PermissionsExt;
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&root), 0o700);
-        assert_eq!(mode(&root.join(format!("{}.png", written[0].id))), 0o600);
+        assert_eq!(
+            mode(&root.join(format!("{}.png", written.images[0].id))),
+            0o600
+        );
     }
     let recorded = swarm_persistence::DecisionImage {
-        id: written[0].id,
+        id: written.images[0].id,
         decision_id: swarm_domain::DecisionRequestId::new(),
         clarification_id: None,
         media_type: "image/png".into(),
@@ -127,7 +130,7 @@ async fn a_refused_image_writes_nothing() {
 }
 
 #[tokio::test]
-async fn files_nothing_records_are_removed_once_old_and_recorded_ones_stay() {
+async fn image_files_nothing_records_are_removed_and_everything_else_stays() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().to_path_buf();
     let recorded = uuid::Uuid::now_v7();
@@ -135,22 +138,50 @@ async fn files_nothing_records_are_removed_once_old_and_recorded_ones_stay() {
     for id in [recorded, orphan] {
         std::fs::write(root.join(format!("{id}.png")), PNG).unwrap();
     }
+    // Not a name this store gives a file, so not this store's to remove.
     std::fs::write(root.join("stray.txt"), b"x").unwrap();
+    std::fs::write(root.join(format!("{orphan}.bin")), b"x").unwrap();
     let kept = HashSet::from([recorded]);
 
-    remove_unrecorded(&root, &kept, Duration::from_secs(3600))
-        .await
-        .unwrap();
-    assert_eq!(
-        files_in(&root).len(),
-        3,
-        "too young to be sure nothing is recording it"
-    );
+    remove_unrecorded(&root, &kept).await.unwrap();
 
-    remove_unrecorded(&root, &kept, Duration::ZERO)
+    let mut expected = vec![
+        format!("{recorded}.png"),
+        format!("{orphan}.bin"),
+        "stray.txt".to_owned(),
+    ];
+    expected.sort();
+    assert_eq!(files_in(&root), expected);
+}
+
+#[tokio::test]
+async fn a_write_holds_the_store_until_its_answer_is_recorded_or_removed() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("decision-images");
+    let files = DecisionImageStore::new(root.clone());
+    let store = TaskStore::in_memory().unwrap();
+
+    let first = files
+        .write(&store, &[sent("image/png", PNG)])
         .await
         .unwrap();
-    assert_eq!(files_in(&root), vec![format!("{recorded}.png")]);
+    // Its answer is not recorded yet, so no other write may sweep its file.
+    assert!(files.write_lock.try_lock().is_err());
+
+    // Dropped without being recorded, as after a crash: its file is now a
+    // leftover, and the next write removes it at once, with no wait.
+    let left_behind = first.images[0].id;
+    drop(first);
+    assert!(files.write_lock.try_lock().is_ok());
+    let second = files
+        .write(&store, &[sent("image/png", PNG)])
+        .await
+        .unwrap();
+    assert_ne!(second.images[0].id, left_behind);
+    assert_eq!(
+        files_in(&root),
+        vec![format!("{}.png", second.images[0].id)]
+    );
 }
 
 struct Hive {

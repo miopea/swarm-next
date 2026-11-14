@@ -108,7 +108,7 @@ pub(super) async fn resolve_decision(
     authorize(&state, &headers)?;
     let decision_id = parse_decision_id(&decision_id)?;
     let service = task_service(&state)?;
-    let images =
+    let written =
         crate::decision_images::write_sent(&state, task_store(&state)?, &request.images).await?;
     // Answers and an action are different resolutions of different record
     // shapes, and the store rejects each against the wrong one, so this only
@@ -119,7 +119,7 @@ pub(super) async fn resolve_decision(
             &request.action,
             &request.note,
             &request.surface,
-            &images,
+            &written.images,
         )
     } else {
         service.answer_operator_decision_from_snapshot(
@@ -128,21 +128,25 @@ pub(super) async fn resolve_decision(
             &request.note,
             &request.surface,
             request.questions.as_deref(),
-            &images,
+            &written.images,
         )
     };
     let resolved = match resolved {
         Ok(resolved) => resolved,
         Err(error) => {
-            crate::decision_images::discard(&state, &images).await;
+            crate::decision_images::discard(&state, &written.images).await;
             return Err(application_error(error));
         }
     };
+    let sent_images = written.images.len();
+    // Recorded: the next write may now sweep. Not held across the wake and
+    // delivery below, which can take a while.
+    drop(written);
     tracing::info!(
         decision_id = %decision_id,
         action = %if request.answers.is_empty() { request.action.as_str() } else { "answered" },
         answered_questions = request.answers.len(),
-        images = images.len(),
+        images = sent_images,
         surface = %if request.surface.is_empty() { "unreported" } else { &request.surface },
         "operator resolved a decision"
     );

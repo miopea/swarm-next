@@ -67,17 +67,17 @@ pub(super) async fn ask(
     crate::auth::authorize_operator_credential(&state, &headers)?;
     let decision = parse_decision_id(&decision)?;
     let store = crate::task_store(&state)?;
-    let images = crate::decision_images::write_sent(&state, store, &request.images).await?;
+    let written = crate::decision_images::write_sent(&state, store, &request.images).await?;
     let saved = match task_service(&state)?.ask_operator_clarification(
         request.id,
         decision,
         &request.question,
-        &images,
+        &written.images,
         unix_timestamp(),
     ) {
         Ok(saved) => saved,
         Err(error) => {
-            crate::decision_images::discard(&state, &images).await;
+            crate::decision_images::discard(&state, &written.images).await;
             return Err(application_error(error));
         }
     };
@@ -85,11 +85,15 @@ pub(super) async fn ask(
     // so this one's files are not the question's. Only a read that finds no
     // row removes a file: one that fails leaves it for the sweep, which never
     // removes a file a row names.
-    let unrecorded: Vec<_> = images
-        .into_iter()
+    let unrecorded: Vec<_> = written
+        .images
+        .iter()
         .filter(|image| matches!(store.decision_image(decision, image.id), Ok(None)))
+        .cloned()
         .collect();
     crate::decision_images::discard(&state, &unrecorded).await;
+    // Recorded or removed: the next write may now sweep.
+    drop(written);
     state.control_room_notify.notify_waiters();
     state.coordination_wakeup.notify_one();
     // The existing coordinator owns delivery. Return the durable receipt without

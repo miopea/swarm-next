@@ -6,11 +6,16 @@
 //! once, and one left behind by a crash between the two is removed by the next
 //! write. Nothing here is named by its content, and no byte, path or hash goes
 //! to `SQLite` or a log (ADR 0021).
+//!
+//! Telling the two apart takes no clock. One API process owns this directory
+//! (its service is stopped before it is started again), and a write holds the
+//! store's lock from its first file until its answer is recorded or its files
+//! are removed. So a file no record names, seen while holding that lock, is
+//! not part of an answer still being recorded: a crash left it.
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime},
 };
 
 use axum::{
@@ -23,16 +28,13 @@ use swarm_persistence::{
     DECISION_IMAGE_MEDIA_TYPES, DecisionImage, MAX_DECISION_IMAGE_BYTES, MAX_IMAGES_PER_SUBMISSION,
     NewDecisionImage, TaskStore,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::{ApiError, AppState};
 
 /// The largest request body that can carry a full set of images, base64
 /// encoded, with room for the answer or question beside them.
 pub(crate) const MAX_BODY_WITH_IMAGES: usize = 22 * 1024 * 1024;
-/// A file nothing records is removed once it is this old. Younger ones may
-/// belong to an answer being recorded right now.
-const UNRECORDED_GRACE: Duration = Duration::from_secs(10 * 60);
 
 /// One image as the browser sends it: its declared type and base64 bytes.
 #[derive(Clone, serde::Deserialize)]
@@ -57,6 +59,24 @@ impl std::fmt::Debug for SentImage {
 pub(crate) struct DecisionImageStore {
     root: Arc<PathBuf>,
     write_lock: Arc<Mutex<()>>,
+}
+
+/// Files written for one answer or question, with the store's lock held until
+/// they are recorded or removed. Drop it after either, not before: while it is
+/// held, no other write can take these files for ones a crash left behind.
+#[must_use = "hold it until the answer is recorded or its files are removed"]
+pub(crate) struct WrittenImages {
+    pub(crate) images: Vec<NewDecisionImage>,
+    _held: Option<OwnedMutexGuard<()>>,
+}
+
+impl WrittenImages {
+    fn none() -> Self {
+        Self {
+            images: Vec::new(),
+            _held: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -88,26 +108,27 @@ impl DecisionImageStore {
         &self,
         store: &TaskStore,
         images: &[SentImage],
-    ) -> Result<Vec<NewDecisionImage>, DecisionImageError> {
+    ) -> Result<WrittenImages, DecisionImageError> {
         if images.is_empty() {
-            return Ok(Vec::new());
+            return Ok(WrittenImages::none());
         }
         if images.len() > MAX_IMAGES_PER_SUBMISSION {
             return Err(DecisionImageError::TooMany);
         }
         let decoded = images.iter().map(decode).collect::<Result<Vec<_>, _>>()?;
-        let _guard = self.write_lock.lock().await;
+        let held = Arc::clone(&self.write_lock).lock_owned().await;
         tokio::fs::create_dir_all(self.root.as_ref())
             .await
             .map_err(|_| DecisionImageError::Unavailable)?;
         secure_directory(self.root.as_ref())?;
         // A crash between writing and recording leaves files nothing names.
         // They are bounded by what one request can carry, and this is where
-        // they go.
+        // they go. Read under the lock, so every other write's answer is
+        // already recorded or its files already removed.
         let kept = store
             .kept_decision_image_ids()
             .map_err(|_| DecisionImageError::Unavailable)?;
-        remove_unrecorded(self.root.as_ref(), &kept, UNRECORDED_GRACE).await?;
+        remove_unrecorded(self.root.as_ref(), &kept).await?;
         let mut written = Vec::with_capacity(decoded.len());
         for (media_type, bytes) in decoded {
             let image = NewDecisionImage {
@@ -121,7 +142,10 @@ impl DecisionImageStore {
             }
             written.push(image);
         }
-        Ok(written)
+        Ok(WrittenImages {
+            images: written,
+            _held: Some(held),
+        })
     }
 
     /// Removes files written for an answer that was not recorded.
@@ -197,15 +221,12 @@ fn extension(media_type: &str) -> &'static str {
     }
 }
 
-/// Removes files no record names, once they are older than `grace`.
+/// Removes the image files no record names. Only names this store gives a file
+/// are considered; anything else in the directory is left alone.
 async fn remove_unrecorded(
     root: &Path,
     kept: &HashSet<uuid::Uuid>,
-    grace: Duration,
 ) -> Result<(), DecisionImageError> {
-    let cutoff = SystemTime::now()
-        .checked_sub(grace)
-        .unwrap_or(SystemTime::UNIX_EPOCH);
     let mut entries = tokio::fs::read_dir(root)
         .await
         .map_err(|_| DecisionImageError::Unavailable)?;
@@ -214,26 +235,26 @@ async fn remove_unrecorded(
         .await
         .map_err(|_| DecisionImageError::Unavailable)?
     {
-        let recorded = entry
+        let unrecorded = entry
             .file_name()
             .to_str()
-            .and_then(|name| name.split_once('.'))
-            .and_then(|(id, _)| id.parse::<uuid::Uuid>().ok())
-            .is_some_and(|id| kept.contains(&id));
-        if recorded {
-            continue;
-        }
-        let old = entry
-            .metadata()
-            .await
-            .ok()
-            .and_then(|metadata| metadata.modified().ok())
-            .is_some_and(|modified| modified < cutoff);
-        if old {
+            .and_then(image_file_id)
+            .is_some_and(|id| !kept.contains(&id));
+        if unrecorded {
             let _ = tokio::fs::remove_file(entry.path()).await;
         }
     }
     Ok(())
+}
+
+/// The id in a name this store gives an image file, `<id>.<extension>`.
+fn image_file_id(name: &str) -> Option<uuid::Uuid> {
+    let (id, found) = name.split_once('.')?;
+    DECISION_IMAGE_MEDIA_TYPES
+        .iter()
+        .any(|media_type| extension(media_type) == found)
+        .then(|| id.parse().ok())
+        .flatten()
 }
 
 async fn write_private(path: &Path, bytes: &[u8]) -> Result<(), DecisionImageError> {
@@ -289,13 +310,14 @@ pub(crate) fn decision_image_error(error: DecisionImageError) -> ApiError {
 }
 
 /// Writes the images sent with an answer or question, before it is recorded.
+/// Hold what it returns until the answer is recorded or the files discarded.
 pub(crate) async fn write_sent(
     state: &AppState,
     store: &TaskStore,
     images: &[SentImage],
-) -> Result<Vec<NewDecisionImage>, ApiError> {
+) -> Result<WrittenImages, ApiError> {
     if images.is_empty() {
-        return Ok(Vec::new());
+        return Ok(WrittenImages::none());
     }
     let files = state
         .decision_image_store

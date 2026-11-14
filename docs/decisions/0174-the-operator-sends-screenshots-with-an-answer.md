@@ -50,7 +50,10 @@ returns one as an MCP image block, up to 3,932,160 bytes (5 MiB of base64).
      files. A repeated question records nothing new and removes the files
      written for it.
    - A crash between the two leaves files no row names. The next image
-     written removes any such file more than ten minutes old.
+     written removes them, with no wait: a write holds the store's lock from
+     its first file until its answer is recorded or its files removed, and
+     one API process owns the directory, so a file no row names is never one
+     still being recorded. Only names Swarm gives these files are removed.
    - A request's images are kept while it is open and for 90 days after it
      is answered or withdrawn. Older ones are dropped when the next image is
      attached, and their files go with the next sweep. An open request's
