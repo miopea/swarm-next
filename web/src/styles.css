@@ -2031,6 +2031,14 @@ a.primary-action:focus-visible { outline: 2px solid var(--focus); outline-offset
 .unanswered-email-failure, .jira-resolution-no-reply { margin: 0 0 8px; padding: 8px 11px; border-left: 3px solid var(--danger); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: color-mix(in srgb, var(--danger) 12%, transparent); font-size: .78rem; line-height: 1.45; }
 .unanswered-email-draft small { display: block; margin-top: 6px; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: normal; }
 .unanswered-email-editor { display: block; margin-top: 8px; }
+/* An owed GitHub review the operator submits from Needs you (ADR 0176). */
+.github-review-comment { display: block; margin-top: 8px; }
+.github-review-comment textarea { width: 100%; min-height: 96px; margin-top: 4px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); color: var(--text); background: var(--surface-soft); font-size: .78rem; line-height: 1.5; resize: vertical; }
+.github-review-card p.muted, .github-review-card p[role="status"] { margin-top: 6px; }
+.github-review-card .unanswered-email-failure { margin: 8px 0 0; }
+.github-review-notes { margin-top: 8px; }
+.github-review-notes summary { width: fit-content; color: var(--muted); font-size: .76rem; cursor: pointer; }
+.github-review-card a.text-button { box-sizing: border-box; display: inline-flex; align-items: center; min-height: 38px; padding: 8px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); text-decoration: none; }
 .unanswered-email-editor textarea { width: 100%; min-height: 180px; margin-top: 4px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); color: var(--text); background: var(--surface-soft); font: inherit; font-size: .78rem; line-height: 1.5; resize: vertical; }
 .unanswered-email-editor small { display: block; margin-top: 4px; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
 .unanswered-email-revise { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }

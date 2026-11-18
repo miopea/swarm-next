@@ -6,6 +6,8 @@
   shape to the worker. It offered two: keep the task open, or settle it into
   something the operator sees as theirs until GitHub stops asking.
 - Amends: ADR 0170 (GitHub's asks of the operator arrive as drafts).
+- Amended by: ADR 0176. Points 4 and 5 no longer hold: the operator submits
+  the worker's proposed review from the card, and the press can merge.
 
 ## Context
 

@@ -48,6 +48,7 @@ mod gh_cli;
 mod github_asks;
 mod github_device;
 mod github_feedback;
+mod github_review_submit;
 mod hive_capability;
 mod idle_engine_update;
 mod independent_check;
@@ -157,9 +158,9 @@ use swarm_domain::{
 use swarm_persistence::PushSubscriptionInput;
 use swarm_persistence::{
     BackgroundWorkReading, CoordinatorStatus, DecisionDeliveryFailure,
-    FederationHandoffIntentPhase, FederationJiraClaimPhase, JiraIssueSnapshot,
-    JiraProjectBindingInput, JiraTransitionFailure, QueenAutomationFailure, TaskDispatchFailure,
-    TaskOutcomeFailure, TaskStore, TaskStoreError,
+    FederationHandoffIntentPhase, FederationJiraClaimPhase, GithubReviewSubmissionRefusal,
+    JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure, QueenAutomationFailure,
+    TaskDispatchFailure, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_persistence::{
     REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT, REFUSAL_WAKE_UNCERTAIN,
@@ -478,6 +479,9 @@ pub struct AppState {
     /// When the next read of GitHub's asks of the operator may run, after
     /// failures (ADR 0170).
     github_asks: Arc<github_asks::AskBackoff>,
+    /// GitHub, as the operator's press on an owed review writes to it
+    /// (ADR 0176). The machine's gh login, except in tests.
+    review_github: Arc<dyn github_review_submit::ReviewGithub + Send + Sync>,
     /// The device code of an authorisation somebody is midway through.
     ///
     /// IN MEMORY AND NOT IN THE DATABASE, on purpose. It is a short-lived
@@ -667,6 +671,7 @@ impl AppState {
             github_issue_intake: None,
             github_issue_workspace: String::new(),
             github_asks: Arc::default(),
+            review_github: Arc::new(github_review_submit::GhReviews),
             pending_github_device: std::sync::Arc::new(std::sync::Mutex::new(None)),
             github_client_id: std::env::var("SWARM_GITHUB_APP_CLIENT_ID")
                 .unwrap_or_else(|_| github_device::DEFAULT_CLIENT_ID.to_owned()),
@@ -891,6 +896,16 @@ impl AppState {
         self.github_issue_intake = Some(github_feedback::GithubFeedback::new(repository, token)?);
         "github://issues".clone_into(&mut self.github_issue_workspace);
         Ok(self)
+    }
+
+    /// Writes owed reviews to `github` instead of the machine's gh login.
+    #[cfg(test)]
+    pub(crate) fn with_review_github(
+        mut self,
+        github: Arc<dyn github_review_submit::ReviewGithub + Send + Sync>,
+    ) -> Self {
+        self.review_github = github;
+        self
     }
 
     /// Configures the HTTPS endpoint placed in signed federation invitations.
@@ -1762,6 +1777,43 @@ impl AppState {
             tracing::warn!(%error, "email reply delivery state could not be recorded");
         }
         self.control_room_notify.notify_waiters();
+    }
+
+    /// Marks an owed-review post or merge a restart interrupted as uncertain,
+    /// to be settled by reading GitHub back (ADR 0176).
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn recover_github_review_submissions(&self) -> Result<usize, TaskStoreError> {
+        self.task_store.as_ref().map_or(Ok(0), |store| {
+            store.recover_inflight_github_review_submissions(unix_timestamp())
+        })
+    }
+
+    /// Carries every owed-review press left unfinished: an unknown answer to
+    /// settle, or a merge still to try. Blocking: its caller puts it on a
+    /// blocking thread.
+    pub fn settle_github_review_submissions(&self) {
+        let Some(store) = self.task_store.as_ref() else {
+            return;
+        };
+        match github_review_submit::settle_unfinished(
+            store,
+            self.review_github.as_ref(),
+            unix_timestamp(),
+        ) {
+            Ok(0) => {}
+            Ok(settled) => {
+                tracing::info!(
+                    settled,
+                    "unfinished owed-review submissions were carried on"
+                );
+                self.control_room_notify.notify_waiters();
+            }
+            Err(error) => {
+                tracing::warn!(%error, "owed-review submissions could not be settled");
+            }
+        }
     }
 
     /// Recovers a crash-interrupted Jira write as explicit uncertainty.
@@ -5398,6 +5450,10 @@ fn api_router(state: AppState) -> Router {
             get(github_reviews_owed),
         )
         .route(
+            "/api/v1/integrations/github/reviews-owed/{task_id}/submit",
+            post(submit_github_review),
+        )
+        .route(
             "/api/v1/integrations/jira/resolutions/{task_id}/confirm",
             post(confirm_jira_resolution),
         )
@@ -8669,6 +8725,87 @@ async fn github_reviews_owed(
         .github_reviews_owed()
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(owed)).into_response())
+}
+
+#[derive(Deserialize)]
+struct SubmitGithubReviewRequest {
+    verdict: String,
+    #[serde(default)]
+    comment: String,
+}
+
+/// The operator's press on an owed review (ADR 0176): post it under their
+/// GitHub login, then merge when GitHub allows it. Answers with where the
+/// press ended up and why, in the operator's words.
+async fn submit_github_review(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<SubmitGithubReviewRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let verdict =
+        swarm_persistence::GithubReviewVerdict::parse(&request.verdict).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_review_verdict",
+                "verdict must be approve or request_changes",
+            )
+        })?;
+    let store = task_store(&state)?.clone();
+    let id = match store
+        .queue_github_review_submission(task_id, verdict, &request.comment, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?
+    {
+        Ok(id) => id,
+        Err(refusal) => return Err(github_review_refused(&refusal)),
+    };
+    state.control_room_notify.notify_waiters();
+    // gh is a subprocess, up to five calls of twenty seconds each.
+    let carried = store.clone();
+    let github = Arc::clone(&state.review_github);
+    tokio::task::spawn_blocking(move || {
+        github_review_submit::carry_out(&carried, github.as_ref(), id, unix_timestamp())
+    })
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "github_review_interrupted",
+            "Submitting the review was interrupted; Swarm will check GitHub and finish it",
+        )
+    })?
+    .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    let submission = store
+        .github_review_submission(id)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| github_review_refused(&GithubReviewSubmissionRefusal::NotOwed))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "state": submission.state,
+            "outcome": submission.outcome,
+        })),
+    )
+        .into_response())
+}
+
+fn github_review_refused(refusal: &GithubReviewSubmissionRefusal) -> ApiError {
+    let (status, code) = match refusal {
+        GithubReviewSubmissionRefusal::NotOwed => (StatusCode::CONFLICT, "github_review_not_owed"),
+        GithubReviewSubmissionRefusal::NoProposal => {
+            (StatusCode::CONFLICT, "github_review_not_proposed")
+        }
+        GithubReviewSubmissionRefusal::InFlight => {
+            (StatusCode::CONFLICT, "github_review_in_flight")
+        }
+        GithubReviewSubmissionRefusal::CommentRequired | GithubReviewSubmissionRefusal::TooLong => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "github_review_comment")
+        }
+    };
+    ApiError::new(status, code, refusal.describe())
 }
 
 async fn confirm_jira_resolution(
@@ -21590,6 +21727,206 @@ mod tests {
         assert_eq!(owed[0]["url"], "https://github.com/acme/petal/pull/42");
         assert_eq!(owed[0]["requested_by"], "sorrel");
         assert_eq!(owed[0]["notes"], "Ask why the stem is renamed.");
+    }
+
+    /// A review GitHub asks of the operator, routed to a worker that wrote
+    /// its notes: the task, and the worker.
+    fn review_owed_by_the_operator(store: &TaskStore) -> (TaskId, swarm_domain::WorkerProfile) {
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let ask = swarm_domain::GithubAsk::new(
+            swarm_domain::GithubAskKind::ReviewRequest,
+            "acme/petal",
+            42,
+            "Make the petals bloom",
+            Some("sorrel"),
+            "",
+        )
+        .unwrap();
+        let swarm_persistence::GithubAskArrival::Filed(task) = store
+            .receive_github_ask(&swarm_persistence::GithubAskFiling {
+                ask: &ask,
+                description: "Read it.",
+                workspace: "/workspace/petal",
+                repository_named: true,
+                recommended_worker: Some(worker.id),
+            })
+            .unwrap()
+        else {
+            panic!("the ask must file a draft");
+        };
+        store.transition_task(task, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task, worker.id).unwrap();
+        store.transition_task(task, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(task, TaskState::Review, "Notes.")
+            .unwrap();
+        (task, worker)
+    }
+
+    /// GitHub for the owed-review press test: a draft pull request that takes
+    /// the review, and a record of what was sent.
+    struct DraftPullRequest {
+        sent: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl github_review_submit::ReviewGithub for DraftPullRequest {
+        fn login(&self) -> Result<String, String> {
+            Ok("operator".into())
+        }
+        fn post_review(
+            &self,
+            repository: &str,
+            number: u64,
+            verdict: swarm_persistence::GithubReviewVerdict,
+            body: &str,
+            commit: &str,
+        ) -> Result<i64, gh_cli::GhWriteFailure> {
+            self.sent.lock().unwrap().push(format!(
+                "{repository}#{number} {} {commit} {body}",
+                verdict.as_str()
+            ));
+            Ok(5)
+        }
+        fn reviews(
+            &self,
+            _: &str,
+            _: u64,
+        ) -> Result<Vec<github_review_submit::PostedReview>, String> {
+            Ok(Vec::new())
+        }
+        fn pull(&self, _: &str, _: u64) -> Result<github_review_submit::PullFacts, String> {
+            Ok(github_review_submit::PullFacts {
+                open: true,
+                merged: false,
+                draft: true,
+                head_sha: "c".repeat(40),
+                mergeable: None,
+            })
+        }
+        fn checks(&self, _: &str, _: &str) -> Result<Option<swarm_domain::CiOutcome>, String> {
+            Ok(Some(swarm_domain::CiOutcome::Passed))
+        }
+        fn merge_methods(&self, _: &str) -> Result<github_review_submit::MergeMethods, String> {
+            Ok(github_review_submit::MergeMethods::default())
+        }
+        fn merge(
+            &self,
+            _: &str,
+            _: u64,
+            _: &str,
+            _: github_review_submit::MergeMethod,
+        ) -> Result<(), gh_cli::GhWriteFailure> {
+            panic!("a draft is never merged");
+        }
+    }
+
+    /// THE OPERATOR'S PRESS (ADR 0176): their edited words posted on the
+    /// commit the worker read, the outcome said plainly, and the review gone
+    /// from Needs you.
+    #[tokio::test]
+    async fn the_operator_submits_an_owed_review_from_needs_you() {
+        let store = TaskStore::in_memory().unwrap();
+        let (task, worker) = review_owed_by_the_operator(&store);
+        let github = Arc::new(DraftPullRequest {
+            sent: std::sync::Mutex::new(Vec::new()),
+        });
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone())
+                .with_review_github(github.clone()),
+        );
+        let submit = |token: Option<&str>, body: serde_json::Value| {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/integrations/github/reviews-owed/{task}/submit"
+                ))
+                .header("content-type", "application/json");
+            if let Some(token) = token {
+                request = request.header("authorization", format!("Bearer {token}"));
+            }
+            app.clone()
+                .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        };
+        let approve = |comment: &str| serde_json::json!({"verdict": "approve", "comment": comment});
+
+        let refused = submit(None, approve("Looks right.")).await.unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        let unproposed = submit(Some("secret"), approve("Looks right."))
+            .await
+            .unwrap();
+        assert_eq!(unproposed.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_json(unproposed).await["code"],
+            "github_review_not_proposed"
+        );
+        let unknown = submit(
+            Some("secret"),
+            serde_json::json!({"verdict": "comment", "comment": "x"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unknown.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            github.sent.lock().unwrap().is_empty(),
+            "nothing reached GitHub"
+        );
+
+        let head = "c".repeat(40);
+        store
+            .propose_github_review(
+                worker.id,
+                task,
+                swarm_persistence::GithubReviewVerdict::Approve,
+                "Has a full sync run with the role?",
+                &head,
+                1_000,
+            )
+            .unwrap()
+            .unwrap();
+        let owed = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/github/reviews-owed").await,
+        )
+        .await;
+        assert_eq!(owed[0]["proposal"]["verdict"], "approve");
+        assert_eq!(
+            owed[0]["proposal"]["comment"],
+            "Has a full sync run with the role?"
+        );
+
+        let edited = "Approved. Has a full sync run with the read-only role?";
+        let answered = submit(Some("secret"), approve(edited)).await.unwrap();
+        assert_eq!(answered.status(), StatusCode::OK);
+        let answered = response_json(answered).await;
+        assert_eq!(answered["state"], "done");
+        assert!(
+            answered["outcome"]
+                .as_str()
+                .unwrap()
+                .starts_with("Approved. Not merged: it is still a draft")
+        );
+        assert_eq!(
+            *github.sent.lock().unwrap(),
+            vec![format!("acme/petal#42 approve {head} {edited}")]
+        );
+        let owed = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/github/reviews-owed").await,
+        )
+        .await;
+        assert!(
+            owed.as_array().unwrap().is_empty(),
+            "submitted, so no longer owed"
+        );
     }
 
     #[tokio::test]

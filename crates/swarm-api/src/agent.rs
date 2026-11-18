@@ -878,7 +878,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 42;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 43;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -888,7 +888,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 42;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 42. Update this and the revision together.
+/// The served surface as of revision 43. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -897,7 +897,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 42;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "9ec0d15fdd10a1ece2849b8b281ebfbc92e384c22cc6c5915b40d2edb2195cf2";
+    "031c2d4c97666b104cf71f8aa8f4d5bbac6e08447c86e927768046408a56ae7f";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1169,6 +1169,7 @@ impl ServerHandler for AgentMcp {
             correct_task_record_tool(),
             amend_task_facts_tool(),
             record_task_note_tool(),
+            propose_github_review_tool(),
             retitle_task_tool(),
             record_no_deployment_tool(),
             withdraw_no_deployment_tool(),
@@ -1345,6 +1346,7 @@ impl AgentMcp {
             "swarm_correct_task_record" => self.correct_task_record(arguments),
             "swarm_amend_task_facts" => self.amend_task_facts(arguments),
             "swarm_record_task_note" => self.record_task_note(arguments),
+            "swarm_propose_github_review" => self.propose_github_review(arguments),
             "swarm_retitle_task" => self.retitle_task(arguments),
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_read_jira_attachment" => self.read_jira_attachment(arguments).await,
@@ -4467,6 +4469,35 @@ swarm_read_task_history before acting on it."
         }))
     }
 
+    /// Records the review this worker suggests the operator submit (ADR 0176).
+    /// Posts nothing: only the operator's press on the card does.
+    fn propose_github_review(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<ProposeGithubReviewInput>(arguments)?;
+        let task_id = self.task_evidence_may_reach(&input.task_id)?;
+        let verdict =
+            swarm_persistence::GithubReviewVerdict::parse(&input.verdict).ok_or_else(|| {
+                ApplicationError::Refused("verdict must be approve or request_changes".into())
+            })?;
+        self.tasks
+            .store()
+            .propose_github_review(
+                self.principal.worker_id,
+                task_id,
+                verdict,
+                &input.comment,
+                &input.head_sha,
+                crate::unix_timestamp(),
+            )?
+            .map_err(|refusal| ApplicationError::Refused(refusal.describe().to_owned()))?;
+        structured(json!({
+            "task_id": task_id,
+            "verdict": verdict.as_str(),
+            "recorded": "The operator's Needs you card now shows this verdict and comment, \
+                         editable. Nothing was posted to GitHub: only the operator's press \
+                         posts it. Calling again replaces this proposal.",
+        }))
+    }
+
     /// A task this agent may record evidence against, INCLUDING one that has
     /// just closed underneath it.
     ///
@@ -5191,6 +5222,15 @@ struct AmendTaskFactsInput {
 struct RecordTaskNoteInput {
     task_id: String,
     note: String,
+}
+
+#[derive(Deserialize)]
+struct ProposeGithubReviewInput {
+    task_id: String,
+    verdict: String,
+    #[serde(default)]
+    comment: String,
+    head_sha: String,
 }
 
 #[derive(Deserialize)]
@@ -6430,6 +6470,35 @@ fn record_task_note_tool() -> Tool {
                 }
             },
             "required": ["task_id", "note"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn propose_github_review_tool() -> Tool {
+    tool(
+        "swarm_propose_github_review",
+        "For a task that is a GitHub review request: record the review you suggest the operator submit. The operator sees it on their Needs you card, can edit the comment, and posts it with one press, which approves and merges when GitHub allows it, or requests changes. Nothing is posted to GitHub by this call, and you never post a review yourself. Call it once you have read the pull request, before moving the task to Review; calling again replaces the earlier proposal. Refused for any task that is not a review request assigned to you, or once GitHub no longer asks for the review.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "verdict": {
+                    "type": "string",
+                    "enum": ["approve", "request_changes"],
+                    "description": "approve when nothing you found should stop the merge; request_changes when something must change first."
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "The review comment, written to the pull request's author in the operator's voice: what to change or what to answer, plainly. Required to request changes; may be empty to approve. At most 6000 characters."
+                },
+                "head_sha": {
+                    "type": "string",
+                    "description": "The full 40-character commit you read, from `gh pr view <number> --repo <owner/name> --json headRefOid`. The review is pinned to it, and nothing pushed after it is merged."
+                }
+            },
+            "required": ["task_id", "verdict", "head_sha"],
             "additionalProperties": false
         }),
         false,
@@ -11584,6 +11653,102 @@ mod tests {
 
     /// A worker records a prediction without lying to the board about its state.
     ///
+    /// ADR 0176: the worker that read the pull request records the review it
+    /// suggests, and the operator's card shows it. A task that is not its
+    /// review request is refused, and nothing reaches GitHub either way.
+    #[tokio::test]
+    async fn a_worker_proposes_the_review_the_operator_submits() {
+        let (bridge, store, _queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let ask = swarm_domain::GithubAsk::new(
+            swarm_domain::GithubAskKind::ReviewRequest,
+            "acme/petal",
+            42,
+            "Make the petals bloom",
+            Some("sorrel"),
+            "",
+        )
+        .unwrap();
+        let swarm_persistence::GithubAskArrival::Filed(review) = store
+            .receive_github_ask(&swarm_persistence::GithubAskFiling {
+                ask: &ask,
+                description: "Read it.",
+                workspace: "/workspace/petal",
+                repository_named: true,
+                recommended_worker: Some(worker_id),
+            })
+            .unwrap()
+        else {
+            panic!("the ask must file a draft");
+        };
+        let other = store
+            .create_task("Make the checkout faster", "/workspace/petal")
+            .unwrap()
+            .id;
+        for task in [review, other] {
+            store
+                .transition_task(task, swarm_domain::TaskState::Ready)
+                .unwrap();
+            store
+                .assign_task_to_worker_as(
+                    task,
+                    worker_id,
+                    &swarm_domain::TaskActivityActor::operator(),
+                )
+                .unwrap();
+        }
+        store
+            .transition_task(review, swarm_domain::TaskState::Active)
+            .unwrap();
+        let propose = |task: swarm_domain::TaskId, verdict: &str, head: String| {
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_propose_github_review",
+                        "arguments": {
+                            "task_id": task.to_string(),
+                            "verdict": verdict,
+                            "comment": "Has a full sync run with the read-only role?",
+                            "head_sha": head,
+                        }
+                    }),
+                ),
+            )
+        };
+        let head = "a1".repeat(20);
+
+        let short = response_json(propose(review, "approve", "a1b2c3".into()).await).await;
+        assert_eq!(short["result"]["isError"], true, "{short}");
+        assert!(short.to_string().contains("full 40-character commit"));
+        let not_a_review = response_json(propose(other, "approve", head.clone()).await).await;
+        assert_eq!(not_a_review["result"]["isError"], true, "{not_a_review}");
+        let unknown = response_json(propose(review, "comment", head.clone()).await).await;
+        assert_eq!(unknown["result"]["isError"], true, "{unknown}");
+        assert!(store.github_review_proposal(review).unwrap().is_none());
+
+        let recorded = response_json(propose(review, "approve", head.clone()).await).await;
+        assert!(
+            recorded["result"]["isError"].as_bool() != Some(true),
+            "the assigned worker proposes its own review: {recorded}"
+        );
+        let proposal = store.github_review_proposal(review).unwrap().unwrap();
+        assert_eq!(
+            proposal.verdict,
+            swarm_persistence::GithubReviewVerdict::Approve
+        );
+        assert_eq!(proposal.head_sha, head);
+        assert_eq!(
+            proposal.comment,
+            "Has a full sync run with the read-only role?"
+        );
+    }
+
     /// Before this existed, a worker asked to state a prediction BEFORE writing
     /// the code had two ways to say anything -- finish, or change state -- so
     /// one moved its own task to Blocked, wrote the note, and moved it back.
@@ -11892,6 +12057,9 @@ mod tests {
                 // worker work by definition: the worker is the one whose
                 // prediction is worth timestamping before the outcome exists.
                 "swarm_record_task_note",
+                // ADR 0176: the worker that read the pull request proposes the
+                // review; only the operator's press posts it.
+                "swarm_propose_github_review",
                 "swarm_retitle_task",
                 "swarm_record_no_deployment",
                 // Beside the tool it undoes, and a WORKER tool on purpose: the

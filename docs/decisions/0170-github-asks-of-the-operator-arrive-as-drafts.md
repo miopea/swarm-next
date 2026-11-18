@@ -9,6 +9,8 @@
   what a review request should become, they chose a draft task for Queen.
 - Extends: ADR 0115 (the check gate reads GitHub through the machine's gh
   login) and ADR 0126 (intake records where work came from).
+- Amended by: ADR 0176. Point 4's worker still posts nothing, but it now
+  proposes the review, and the operator submits it from Needs you.
 
 ## Context
 

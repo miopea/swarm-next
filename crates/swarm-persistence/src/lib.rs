@@ -52,9 +52,15 @@ mod reported_conversations;
 mod task_intake;
 pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod github_asks;
+mod github_reviews;
 mod independent_checks;
 mod must_not_touch;
 pub use github_asks::{GithubAskArrival, GithubAskFiling, GithubReviewOwed, StandingGithubAsk};
+pub use github_reviews::{
+    GithubReviewDispatch, GithubReviewProposal, GithubReviewProposalRefusal,
+    GithubReviewSubmissionRefusal, GithubReviewSubmissionState, GithubReviewSubmissionView,
+    GithubReviewVerdict, MAX_GITHUB_REVIEW_COMMENT_CHARS,
+};
 pub use independent_checks::{IndependentCheckRecording, IndependentCheckResult};
 pub use must_not_touch::MustNotTouchChange;
 mod queen_grants;
@@ -494,7 +500,9 @@ const MUST_NOT_TOUCH_SCHEMA_MARKER: i64 = 227;
 const DECISION_IMAGES_SCHEMA_MARKER: i64 = 228;
 /// A Needs you push may name a GitHub review the operator owes (ADR 0175).
 const GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER: i64 = 229;
-const CURRENT_SCHEMA_VERSION: i64 = GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER;
+/// The operator submits an owed review from Needs you (ADR 0176).
+const GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER: i64 = 230;
+const CURRENT_SCHEMA_VERSION: i64 = GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5123,6 +5131,12 @@ fn migrate_queen_release_schema_steps(
         crate::github_asks::migrate_github_review_notifications(
             transaction,
             GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER {
+        crate::github_reviews::migrate_github_review_submissions(
+            transaction,
+            GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -11529,6 +11543,17 @@ mod tests {
             undo_sql: include_str!("fixtures/undo-github-review-notifications.sql"),
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
                 WHERE name = 'notification_deliveries' AND sql LIKE '%''github_review''%'",
+        },
+        // The operator submits an owed review from Needs you (ADR 0176): two
+        // tables, and the round each ask is on.
+        SchemaStep {
+            table: "github_review_submissions",
+            artifact: "github_review_submissions",
+            undo_sql: "DROP TABLE github_review_submissions;
+                DROP TABLE github_review_proposals;
+                ALTER TABLE github_ask_links DROP COLUMN round;",
+            probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
+                AND name IN ('github_review_submissions', 'github_review_proposals')",
         },
     ];
 

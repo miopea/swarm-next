@@ -35,6 +35,7 @@ import {
   beginEmailAuthorization,
   fetchHeldJiraResolutions,
   fetchGithubReviewsOwed,
+  submitGithubReview,
   confirmJiraResolution,
   leaveJiraTicketOpen,
   fetchStartSurface,
@@ -51,6 +52,7 @@ import {
   type UnansweredEmailTask,
   type HeldJiraResolution,
   type GithubReviewOwed,
+  type GithubReviewVerdict,
   type DecisionSurface,
   createWorker,
   fetchHealth,
@@ -134,7 +136,7 @@ import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard, { type OutlookDraftResult } from "./tasks/UnansweredEmailAttentionCard";
 import JiraResolutionAttentionCard from "./tasks/JiraResolutionAttentionCard";
-import GithubReviewAttentionCard from "./tasks/GithubReviewAttentionCard";
+import GithubReviewAttentionCard, { type GithubReviewResult } from "./tasks/GithubReviewAttentionCard";
 import OperatorWaitCard from "./decisions/OperatorWaitCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import WorkerCannotRunCard from "./workers/WorkerCannotRunCard";
@@ -424,6 +426,11 @@ export function App() {
     } catch { /* Keep the last known queue during an unavailable read. */ }
   }, [operatorToken, feedbackRevision]);
   useVisiblePolling(refreshGithubReviewsOwed, Boolean(operatorToken), 30_000);
+  // Where each press on an owed review ended up (ADR 0176). A posted review
+  // leaves the list above at once, so what happened to it is kept here until
+  // the operator dismisses it: "approved and merged", or why it did not merge.
+  const [githubReviewResults, setGithubReviewResults] = useState<GithubReviewResult[]>([]);
+  useEffect(() => { if (!operatorToken) setGithubReviewResults([]); }, [operatorToken]);
   // WHETHER THIS PAGE IS STILL THE PAGE THE HIVE SERVES. Health is read once
   // at mount, which is fine for starting up and useless for a tab left open
   // across an upgrade — and a tab left open across an upgrade is exactly the
@@ -1386,6 +1393,26 @@ export function App() {
       else await leaveJiraTicketOpen(operatorToken, taskId);
       setHeldResolutions(await fetchHeldJiraResolutions(operatorToken));
     }, resolve ? "Resolving it in Jira…" : "Leaving it open…");
+  }
+
+  /**
+   * Posts an owed review under this machine's GitHub login, in the operator's
+   * edited words, then merges when GitHub allows it (ADR 0176).
+   */
+  async function submitOwedReview(item: GithubReviewOwed, verdict: GithubReviewVerdict, comment: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      try {
+        const submitted = await submitGithubReview(operatorToken, item.task_id, { verdict, comment });
+        setGithubReviewResults((current) => [
+          ...current.filter((result) => result.task_id !== item.task_id),
+          { task_id: item.task_id, reference: item.reference, ...submitted },
+        ]);
+      } finally {
+        // Refused or not, the card shows where the review stands now.
+        setGithubReviewsOwed(await fetchGithubReviewsOwed(operatorToken));
+      }
+    }, verdict === "approve" ? "Approving on GitHub…" : "Requesting changes on GitHub…");
   }
 
   /** Retries a reply whose delivery Microsoft never confirmed, on the operator's word. */
@@ -2734,7 +2761,7 @@ export function App() {
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onRetryReply={(replyId) => void retryAwaitingReply(replyId)} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <GithubReviewAttentionCard owed={githubReviewsOwed} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <GithubReviewAttentionCard owed={githubReviewsOwed} results={githubReviewResults} busy={busy} onSubmit={(item, verdict, comment) => void submitOwedReview(item, verdict, comment)} onDismissResult={(taskId) => setGithubReviewResults((current) => current.filter((result) => result.task_id !== taskId))} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
