@@ -34,6 +34,7 @@ import {
   saveEmailReplyAsOutlookDraft,
   beginEmailAuthorization,
   fetchHeldJiraResolutions,
+  fetchGithubReviewsOwed,
   confirmJiraResolution,
   leaveJiraTicketOpen,
   fetchStartSurface,
@@ -49,6 +50,7 @@ import {
   runQueenAutomation,
   type UnansweredEmailTask,
   type HeldJiraResolution,
+  type GithubReviewOwed,
   type DecisionSurface,
   createWorker,
   fetchHealth,
@@ -132,6 +134,7 @@ import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard, { type OutlookDraftResult } from "./tasks/UnansweredEmailAttentionCard";
 import JiraResolutionAttentionCard from "./tasks/JiraResolutionAttentionCard";
+import GithubReviewAttentionCard from "./tasks/GithubReviewAttentionCard";
 import OperatorWaitCard from "./decisions/OperatorWaitCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import WorkerCannotRunCard from "./workers/WorkerCannotRunCard";
@@ -408,6 +411,19 @@ export function App() {
     } catch { /* Keep the last known queue during an unavailable read. */ }
   }, [operatorToken, feedbackRevision]);
   useVisiblePolling(refreshHeldResolutions, Boolean(operatorToken), 30_000);
+  // Reviews GitHub still asks of the operator, whose notes are written
+  // (ADR 0175). Polled for the same reason: the task that wrote the notes is
+  // complete, and the review it was for still waits on them.
+  const [githubReviewsOwed, setGithubReviewsOwed] = useState<GithubReviewOwed[]>([]);
+  useEffect(() => { if (!operatorToken) setGithubReviewsOwed([]); }, [operatorToken]);
+  const refreshGithubReviewsOwed = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    try {
+      const owed = await fetchGithubReviewsOwed(operatorToken, signal);
+      if (!signal.aborted && Array.isArray(owed)) setGithubReviewsOwed(owed);
+    } catch { /* Keep the last known queue during an unavailable read. */ }
+  }, [operatorToken, feedbackRevision]);
+  useVisiblePolling(refreshGithubReviewsOwed, Boolean(operatorToken), 30_000);
   // WHETHER THIS PAGE IS STILL THE PAGE THE HIVE SERVES. Health is read once
   // at mount, which is fine for starting up and useless for a tab left open
   // across an upgrade — and a tab left open across an upgrade is exactly the
@@ -1841,7 +1857,7 @@ export function App() {
     + workerReturnAttentionCount
     + workerEngineAttentionCount
     + workerCannotRunCount
-    + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length;
+    + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length + githubReviewsOwed.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
   // recorded from the surface being open and visible — never from a poll.
@@ -2709,7 +2725,7 @@ export function App() {
               busy={busy || databaseRecoveryRequired}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerEngineAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerEngineAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length + githubReviewsOwed.length}
               attentionCards={<>
                 {databaseRecoveryRequired && <DatabaseRecoveryCard />}
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
@@ -2718,6 +2734,7 @@ export function App() {
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onRetryReply={(replyId) => void retryAwaitingReply(replyId)} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <GithubReviewAttentionCard owed={githubReviewsOwed} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ConversationDriftCard workers={actionableConversationChecks} onOpenWorker={openWorkerProfile} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />

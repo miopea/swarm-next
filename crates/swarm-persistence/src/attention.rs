@@ -17,11 +17,11 @@ const STALE_REFUSAL_SECONDS: i64 = 60 * 60;
 /// would not have helped — there was nothing on this side to widen it FOR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NeedsYouSubject {
-    /// Which of the six sources this came from.
+    /// Which of the seven sources this came from.
     pub(crate) kind: &'static str,
     /// Stable identity for one item, and the deduplication key for a delivery.
     ///
-    /// Replaces `decision_id` in that role. Two of the six sources are
+    /// Replaces `decision_id` in that role. Two of the seven sources are
     /// singletons — held deliveries and Queen automation are one card however
     /// much sits behind them — so the key cannot simply be a row id.
     pub(crate) subject_key: String,
@@ -82,7 +82,35 @@ pub(crate) fn needs_you_subjects(
     subjects.extend(held_deliveries(transaction, now)?);
     subjects.extend(emails_awaiting_a_reply(transaction)?);
     subjects.extend(held_jira_resolutions(transaction)?);
+    subjects.extend(github_reviews_owed(transaction)?);
     Ok(subjects)
+}
+
+/// Reviews GitHub still asks of the operator, whose notes are written
+/// (ADR 0175).
+///
+/// One card each, like the Jira resolutions: each is one pull request, and
+/// reviewing one says nothing about another. The same predicate as the list
+/// the card shows, so the badge and the page agree.
+fn github_reviews_owed(
+    transaction: &Transaction<'_>,
+) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {
+    let mut statement = transaction.prepare(concat!(
+        "SELECT task.id, ",
+        crate::github_asks::github_review_owed_since!(),
+        " FROM github_ask_links link JOIN tasks task ON task.id = link.task_id WHERE ",
+        crate::github_asks::github_review_owed!()
+    ))?;
+    let rows = statement.query_map([], |row| {
+        let id: String = row.get(0)?;
+        Ok(NeedsYouSubject {
+            kind: "github_review",
+            subject_key: format!("github-review:{id}"),
+            created_at: row.get(1)?,
+            urgency: "normal".to_owned(),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 /// Completed tickets whose resolution waits for the operator (ADR 0120).

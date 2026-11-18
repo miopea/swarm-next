@@ -1576,6 +1576,10 @@ input[aria-invalid="true"] { border-color: var(--danger); }
 .decision-actions .decision-dismiss { margin-left: 6px; border-color: var(--line); color: var(--muted); }
 .primary-action { border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
 .primary-action:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); }
+/* A link that leaves Swarm, drawn as the action it is. The button box above is
+   set on the element, so a link needs it given here. */
+a.primary-action { box-sizing: border-box; display: inline-flex; align-items: center; min-height: 38px; padding: 8px 12px; border: 1px solid var(--accent-strong); border-radius: var(--radius-sm); font-weight: 500; text-decoration: none; }
+a.primary-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .decision-resolved { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); color: var(--muted); background: var(--panel-soft); font-size: .78rem; }
 .decision-resolved p { margin: 0; }
 .delivery-state { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: .68rem; font-weight: 700; }

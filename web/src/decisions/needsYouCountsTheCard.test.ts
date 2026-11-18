@@ -20,11 +20,16 @@ import appSource from "../App.tsx?raw";
  * by hand, which guards that source and no other — so the fourth occurrence
  * could land in any of the others while this stayed green. It now compares the
  * whole sets, and gains a source automatically the moment somebody adds one.
+ *
+ * A source counted as a list's `.length` is a source too. Only the
+ * *AttentionCount names were compared, so the email replies, the Jira
+ * resolutions and the owed GitHub reviews could each leave one total while
+ * this stayed green.
  */
 function countsIn(expression: RegExp): Set<string> {
   const matched = appSource.match(expression);
   expect(matched, `${expression} must still be assembled in one expression`).not.toBeNull();
-  return new Set(matched?.[0].match(/\w+AttentionCount/g) ?? []);
+  return new Set(matched?.[0].match(/\w+AttentionCount|\w+\.length/g) ?? []);
 }
 
 test("the app badge and the inbox tab count the same sources", () => {
@@ -87,4 +92,14 @@ test("actionable conversation faults both render and count", () => {
   expect(appSource).toContain("<ConversationDriftCard");
   const badge = countsIn(/const attentionCount = [^;]+;/);
   expect(badge.has("conversationDriftAttentionCount")).toBe(true);
+});
+
+/**
+ * A review the operator owes on GitHub (ADR 0175) renders and counts. Its task
+ * is complete, so this card is the only place on the board it still shows.
+ */
+test("a GitHub review the operator owes both renders and counts", () => {
+  expect(appSource).toContain("<GithubReviewAttentionCard owed={githubReviewsOwed}");
+  const badge = countsIn(/const attentionCount = [^;]+;/);
+  expect(badge.has("githubReviewsOwed.length")).toBe(true);
 });

@@ -8,6 +8,7 @@
 //! went on asking.
 
 use rusqlite::{OptionalExtension as _, params};
+use serde::{Deserialize, Serialize};
 use swarm_domain::{
     AskEnded, EndedAskEffect, GithubAsk, GithubAskKind, GithubAskReading, HiveId,
     TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId, ended_ask_effect,
@@ -19,8 +20,107 @@ use crate::{ControlRoomEventKind, TaskStore, TaskStoreError, insert_draft, parse
 /// The most standing asks one listing returns. Far above what one person is
 /// asked at once; it bounds a read, it is not a quota.
 const MAX_STANDING_ASKS: i64 = 500;
+/// The most owed reviews one listing returns. It bounds a read, like the
+/// standing asks above.
+const MAX_OWED_REVIEWS_LISTED: i64 = 100;
 /// The longest failure kept.
 const MAX_FAILURE_BYTES: usize = 500;
+
+/// Whether a GitHub review is owed on a row of `github_ask_links link` joined
+/// to `tasks task` (ADR 0175): GitHub still asks for the operator's review, and
+/// the notes are written. One predicate for the Needs you list and the Needs
+/// you count, so the two cannot disagree.
+///
+/// A draft, or work still being done, is not yet the operator's to act on. A
+/// task Queen abandoned stays closed (ADR 0170 point 5), so it is not owed.
+macro_rules! github_review_owed {
+    () => {
+        "link.kind = 'review_request' AND link.ended_at IS NULL
+         AND task.removed_at IS NULL
+         AND task.state IN ('review','awaiting_release','completed')"
+    };
+}
+pub(crate) use github_review_owed;
+
+/// When an owed review became the operator's: when the notes last went to
+/// Review, or when GitHub's ask was linked if that came later.
+macro_rules! github_review_owed_since {
+    () => {
+        "MAX(link.created_at, COALESCE(
+             (SELECT MAX(entry.occurred_at) FROM task_activity entry
+              WHERE entry.task_id = task.id AND entry.kind = 'state_changed'
+                AND entry.to_state = 'review'),
+             link.created_at))"
+    };
+}
+pub(crate) use github_review_owed_since;
+
+/// A review GitHub still asks of the operator, on work whose notes are written
+/// (ADR 0175). Each is one Needs you item, and it clears itself when GitHub
+/// stops asking.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GithubReviewOwed {
+    pub task_id: TaskId,
+    /// GitHub's link to the pull request.
+    pub url: String,
+    /// `owner/name#N`.
+    pub reference: String,
+    pub title: String,
+    /// Who asked, as GitHub named them.
+    pub requested_by: Option<String>,
+    /// The worker the task is assigned to, who wrote the notes.
+    pub worker_name: Option<String>,
+    /// The notes: the worker's handoff into Review.
+    pub notes: Option<String>,
+    /// When the review became the operator's.
+    pub owed_since: i64,
+}
+
+/// Lets a Needs you push name an owed GitHub review (ADR 0175, schema 229).
+///
+/// Only the kind's CHECK changes. `SQLite` cannot widen a CHECK in place, so
+/// the table is rebuilt in the shape the last widening left (ADR 0120), with
+/// every row kept.
+pub(crate) fn migrate_github_review_notifications(
+    transaction: &rusqlite::Transaction<'_>,
+    version: i64,
+) -> rusqlite::Result<()> {
+    if !crate::jira::table_sql_mentions(transaction, "notification_deliveries", "'github_review'")?
+    {
+        transaction.execute_batch(
+            "CREATE TABLE notification_deliveries_widened (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+                 subscription_id TEXT NOT NULL
+                     REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+                 decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
+                 subject_key TEXT NOT NULL,
+                 urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+                 kind TEXT NOT NULL CHECK (kind IN (
+                     'decision','assist','queen_automation','held_delivery',
+                     'email_reply','jira_resolution','github_review','test'
+                 )),
+                 state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+                 available_at INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
+                        OR (kind <> 'decision' AND decision_id IS NULL)),
+                 UNIQUE(subject_key, subscription_id)
+             );
+             INSERT INTO notification_deliveries_widened (
+                 id, operator_id, subscription_id, decision_id, subject_key,
+                 urgency, kind, state, attempts, available_at, created_at
+             )
+             SELECT id, operator_id, subscription_id, decision_id, subject_key,
+                    urgency, kind, state, attempts, available_at, created_at
+             FROM notification_deliveries;
+             DROP TABLE notification_deliveries;
+             ALTER TABLE notification_deliveries_widened RENAME TO notification_deliveries;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", version)
+}
 
 pub(crate) fn migrate_github_asks(
     transaction: &rusqlite::Transaction<'_>,
@@ -334,6 +434,48 @@ impl TaskStore {
         Ok(effect)
     }
 
+    /// The reviews GitHub still asks of the operator whose notes are written,
+    /// oldest first (ADR 0175). The same rows the Needs you count reads.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or a row is corrupt.
+    pub fn github_reviews_owed(&self) -> Result<Vec<GithubReviewOwed>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(concat!(
+            "SELECT task.id, link.url, link.repository || '#' || link.number, task.title,
+                    intake.requested_by, worker.name,
+                    (SELECT handoff.note FROM task_activity handoff
+                     WHERE handoff.task_id = task.id AND handoff.kind = 'state_changed'
+                       AND handoff.to_state = 'review' AND handoff.note <> ''
+                     ORDER BY handoff.sequence DESC LIMIT 1),
+                    ",
+            github_review_owed_since!(),
+            " AS owed_since
+             FROM github_ask_links link
+             JOIN tasks task ON task.id = link.task_id
+             LEFT JOIN task_intake intake ON intake.task_id = task.id
+             LEFT JOIN worker_profiles worker ON worker.id = task.assigned_worker_id
+             WHERE ",
+            github_review_owed!(),
+            " ORDER BY owed_since, task.id LIMIT ?1"
+        ))?;
+        statement
+            .query_map([MAX_OWED_REVIEWS_LISTED], |row| {
+                Ok(GithubReviewOwed {
+                    task_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+                    url: row.get(1)?,
+                    reference: row.get(2)?,
+                    title: row.get(3)?,
+                    requested_by: row.get(4)?,
+                    worker_name: row.get(5)?,
+                    notes: row.get(6)?,
+                    owed_since: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Records how a pass's read of GitHub went: `Ok` when it read GitHub
     /// whole, or why it could not.
     ///
@@ -457,14 +599,202 @@ fn clamp(text: &str, most: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use swarm_domain::{
-        AskEnded, EndedAskEffect, GithubAsk, GithubAskKind, ProviderKind, TaskActivityActor,
-        TaskActivityActorKind, TaskActivityKind, TaskId, TaskState, WorkerId,
+        AskEnded, CommitRepositoryState, EndedAskEffect, GithubAsk, GithubAskKind,
+        NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode, ProviderKind,
+        TaskActivityActor, TaskActivityActorKind, TaskActivityKind, TaskId, TaskState, WorkerId,
     };
 
     use super::{GithubAskArrival, GithubAskFiling};
-    use crate::TaskStore;
+    use crate::{PushSubscriptionInput, TaskStore};
 
     const REVIEW_URL: &str = "https://github.com/acme/petal/pull/42";
+    const NOTES: &str = "It renames the stem. Ask why the old name is still exported.";
+
+    /// A worker that can take a review, and a filed review assigned to it.
+    fn routed_review(store: &TaskStore) -> (TaskId, WorkerId) {
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = filed(receive(store, &review(), Some(worker.id)));
+        store.transition_task(task, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task, worker.id).unwrap();
+        (task, worker.id)
+    }
+
+    /// The worker writes its notes and reports that it built nothing, as a
+    /// review always does.
+    fn notes_written(store: &TaskStore, task: TaskId) {
+        if store.get_task(task).unwrap().state == TaskState::Ready {
+            store.transition_task(task, TaskState::Active).unwrap();
+        }
+        store
+            .transition_task_with_note(task, TaskState::Review, NOTES)
+            .unwrap();
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[],
+                1_000,
+            )
+            .unwrap();
+    }
+
+    fn owed_tasks(store: &TaskStore) -> Vec<TaskId> {
+        store
+            .github_reviews_owed()
+            .unwrap()
+            .into_iter()
+            .map(|owed| owed.task_id)
+            .collect()
+    }
+
+    fn needs_you_kinds(store: &TaskStore) -> Vec<(&'static str, String)> {
+        let mut connection = store.connection().unwrap();
+        let transaction = connection.transaction().unwrap();
+        crate::attention::needs_you_subjects(&transaction, 2_000)
+            .unwrap()
+            .into_iter()
+            .map(|subject| (subject.kind, subject.subject_key))
+            .collect()
+    }
+
+    /// THE DEFECT THIS EXISTS FOR. The worker's notes moved to Review with no
+    /// commits, the coordinator settled the task at once, and the review the
+    /// operator still owed vanished from the board with it.
+    #[test]
+    fn a_review_whose_notes_are_written_is_owed_until_github_stops_asking() {
+        let store = TaskStore::in_memory().unwrap();
+        let (task, _) = routed_review(&store);
+        assert!(
+            owed_tasks(&store).is_empty(),
+            "routed work whose notes are not written is the worker's, not the operator's"
+        );
+        store.transition_task(task, TaskState::Active).unwrap();
+        assert!(owed_tasks(&store).is_empty());
+
+        notes_written(&store, task);
+        let owed = store.github_reviews_owed().unwrap();
+        assert_eq!(owed.len(), 1);
+        assert_eq!(owed[0].task_id, task);
+        assert_eq!(owed[0].url, REVIEW_URL);
+        assert_eq!(owed[0].reference, "acme/petal#42");
+        assert_eq!(owed[0].title, "Review acme/petal#42: Make the petals bloom");
+        assert_eq!(owed[0].requested_by.as_deref(), Some("sorrel"));
+        assert_eq!(owed[0].worker_name.as_deref(), Some("Petal"));
+        assert_eq!(owed[0].notes.as_deref(), Some(NOTES));
+
+        // The task settles exactly as before: the notes are the worker's job.
+        let settled = store
+            .settle_reviewed_work_without_deployment_page(1_500, None)
+            .unwrap();
+        assert_eq!(settled.closed, vec![task]);
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+        // And the review is still owed, which is what the board lost.
+        assert_eq!(owed_tasks(&store), vec![task]);
+        assert_eq!(
+            needs_you_kinds(&store),
+            vec![("github_review", format!("github-review:{task}"))]
+        );
+
+        // The operator reviews it. The ending clears it, and leaves the closed
+        // task as it is (ADR 0170 point 7).
+        assert_eq!(
+            store
+                .record_github_ask_ended(REVIEW_URL, AskEnded::ReviewNoLongerRequested)
+                .unwrap(),
+            EndedAskEffect::Nothing
+        );
+        assert!(owed_tasks(&store).is_empty());
+        assert!(needs_you_kinds(&store).is_empty());
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+    }
+
+    #[test]
+    fn a_review_queen_abandoned_or_removed_is_not_owed() {
+        let store = TaskStore::in_memory().unwrap();
+        let (task, _) = routed_review(&store);
+        notes_written(&store, task);
+        store.transition_task(task, TaskState::Abandoned).unwrap();
+        assert!(owed_tasks(&store).is_empty());
+
+        let other = filed(receive(
+            &store,
+            &GithubAsk::new(
+                GithubAskKind::ReviewRequest,
+                "acme/petal",
+                43,
+                "Prune the leaves",
+                Some("sorrel"),
+                "",
+            )
+            .unwrap(),
+            None,
+        ));
+        store.transition_task(other, TaskState::Ready).unwrap();
+        store.transition_task(other, TaskState::Active).unwrap();
+        store.transition_task(other, TaskState::Review).unwrap();
+        store.transition_task(other, TaskState::Completed).unwrap();
+        assert_eq!(owed_tasks(&store), vec![other]);
+        store
+            .remove_task_as(other, &TaskActivityActor::system(), "Not ours.")
+            .unwrap();
+        assert!(owed_tasks(&store).is_empty());
+        assert!(needs_you_kinds(&store).is_empty());
+    }
+
+    #[test]
+    fn an_assigned_issue_is_never_an_owed_review() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = filed(receive(&store, &issue(9), None));
+        store.transition_task(task, TaskState::Ready).unwrap();
+        store.transition_task(task, TaskState::Active).unwrap();
+        store
+            .transition_task_with_note(task, TaskState::Review, NOTES)
+            .unwrap();
+        assert!(owed_tasks(&store).is_empty());
+    }
+
+    /// An owed review reaches the phone like every other Needs you item, which
+    /// needs schema 229: the push table refused any kind it did not name.
+    #[test]
+    fn an_owed_review_can_be_pushed() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .save_notification_subscription(
+                &PushSubscriptionInput {
+                    device_id: PresenceDeviceId::new(),
+                    device_class: PresenceDeviceClass::Mobile,
+                    endpoint: "https://fcm.googleapis.com/fcm/send/review".to_owned(),
+                    p256dh: vec![7; 65],
+                    auth: vec![9; 16],
+                },
+                10,
+            )
+            .unwrap();
+        store
+            .set_notification_policy(NotificationPolicy::AllDecisions, 11)
+            .unwrap();
+        store
+            .set_manual_presence(Some(PresenceMode::Reachable), 12)
+            .unwrap();
+        let (task, _) = routed_review(&store);
+        notes_written(&store, task);
+
+        store.sweep_attention_notifications(1_500).unwrap();
+        let queued = store.claim_notification_deliveries(1_600).unwrap();
+
+        assert_eq!(queued.len(), 1, "the owed review must notify");
+        assert!(queued[0].decision_id.is_none());
+    }
 
     fn review() -> GithubAsk {
         GithubAsk::new(

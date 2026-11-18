@@ -1716,7 +1716,7 @@ fn sync_issue_description(
     Ok(true)
 }
 
-fn table_sql_mentions(
+pub(crate) fn table_sql_mentions(
     transaction: &rusqlite::Transaction<'_>,
     table: &str,
     text: &str,

@@ -54,7 +54,7 @@ pub use task_intake::{IntakeFiling, OpenTaskTitle};
 mod github_asks;
 mod independent_checks;
 mod must_not_touch;
-pub use github_asks::{GithubAskArrival, GithubAskFiling, StandingGithubAsk};
+pub use github_asks::{GithubAskArrival, GithubAskFiling, GithubReviewOwed, StandingGithubAsk};
 pub use independent_checks::{IndependentCheckRecording, IndependentCheckResult};
 pub use must_not_touch::MustNotTouchChange;
 mod queen_grants;
@@ -492,7 +492,9 @@ const INDEPENDENT_CHECKS_SCHEMA_MARKER: i64 = 226;
 const MUST_NOT_TOUCH_SCHEMA_MARKER: i64 = 227;
 /// Images the operator sends with an answer or a question (ADR 0174).
 const DECISION_IMAGES_SCHEMA_MARKER: i64 = 228;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_IMAGES_SCHEMA_MARKER;
+/// A Needs you push may name a GitHub review the operator owes (ADR 0175).
+const GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER: i64 = 229;
+const CURRENT_SCHEMA_VERSION: i64 = GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5115,6 +5117,12 @@ fn migrate_queen_release_schema_steps(
         crate::decision_images::migrate_decision_images(
             transaction,
             DECISION_IMAGES_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER {
+        crate::github_asks::migrate_github_review_notifications(
+            transaction,
+            GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -11512,6 +11520,15 @@ mod tests {
             undo_sql: "DROP TABLE decision_images;",
             probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
                 AND name = 'decision_images'",
+        },
+        // A Needs you push may name an owed GitHub review (ADR 0175): one
+        // widened CHECK, so the undo rebuilds the table.
+        SchemaStep {
+            table: "notification_deliveries",
+            artifact: "github_review",
+            undo_sql: include_str!("fixtures/undo-github-review-notifications.sql"),
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master
+                WHERE name = 'notification_deliveries' AND sql LIKE '%''github_review''%'",
         },
     ];
 
