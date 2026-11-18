@@ -109,8 +109,8 @@ export {
   leaveJiraTicketOpen,
   syncJiraBinding,
 } from "./api/jira";
-export { fetchGithubReviewsOwed } from "./api/github";
-export type { GithubReviewOwed } from "./api/github";
+export { fetchGithubReviewsOwed, submitGithubReview } from "./api/github";
+export type { GithubReviewOwed, GithubReviewSubmitted, GithubReviewVerdict } from "./api/github";
 export {
   beginEmailAuthorization,
   disconnectEmail,

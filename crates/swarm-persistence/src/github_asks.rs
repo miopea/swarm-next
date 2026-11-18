@@ -33,11 +33,20 @@ const MAX_FAILURE_BYTES: usize = 500;
 ///
 /// A draft, or work still being done, is not yet the operator's to act on. A
 /// task Queen abandoned stays closed (ADR 0170 point 5), so it is not owed.
+///
+/// A review the operator submitted from Needs you this round is on GitHub, so
+/// it is not owed either (ADR 0176). The states named are exactly those
+/// `GithubReviewSubmissionState::review_is_posted` names; a test holds the two
+/// together.
 macro_rules! github_review_owed {
     () => {
         "link.kind = 'review_request' AND link.ended_at IS NULL
          AND task.removed_at IS NULL
-         AND task.state IN ('review','awaiting_release','completed')"
+         AND task.state IN ('review','awaiting_release','completed')
+         AND NOT EXISTS (SELECT 1 FROM github_review_submissions submission
+             WHERE submission.url = link.url AND submission.round = link.round
+               AND submission.state IN
+                   ('awaiting_merge','merging','merge_uncertain','merged','done'))"
     };
 }
 pub(crate) use github_review_owed;
@@ -70,10 +79,17 @@ pub struct GithubReviewOwed {
     pub requested_by: Option<String>,
     /// The worker the task is assigned to, who wrote the notes.
     pub worker_name: Option<String>,
-    /// The notes: the worker's handoff into Review.
+    /// The worker's notes: the longer of its handoff into Review and the last
+    /// note it wrote before it. A worker writes its notes in one and points to
+    /// them from the other, and the pointer is the shorter.
     pub notes: Option<String>,
     /// When the review became the operator's.
     pub owed_since: i64,
+    /// The review the worker proposed for the operator to submit (ADR 0176).
+    pub proposal: Option<crate::GithubReviewProposal>,
+    /// The operator's latest press, while it has not reached GitHub: being
+    /// posted, uncertain, or refused.
+    pub submission: Option<crate::GithubReviewSubmissionView>,
 }
 
 /// Lets a Needs you push name an owed GitHub review (ADR 0175, schema 229).
@@ -233,8 +249,11 @@ impl TaskStore {
             Some((task_id, Some(_))) => {
                 let task_id = parse_domain_id::<TaskId>(&task_id)?;
                 if task_is_open(&transaction, task_id)? {
+                    // A NEW ROUND: the review the operator submitted last time
+                    // answered the last request, not this one (ADR 0176).
                     transaction.execute(
-                        "UPDATE github_ask_links SET ended_at = NULL, checked_at = unixepoch()
+                        "UPDATE github_ask_links
+                         SET ended_at = NULL, checked_at = unixepoch(), round = round + 1
                          WHERE url = ?1",
                         [&url],
                     )?;
@@ -252,7 +271,8 @@ impl TaskStore {
                     let task_id = file_draft(&transaction, filing)?;
                     transaction.execute(
                         "UPDATE github_ask_links
-                         SET task_id = ?2, ended_at = NULL, checked_at = unixepoch()
+                         SET task_id = ?2, ended_at = NULL, checked_at = unixepoch(),
+                             round = round + 1
                          WHERE url = ?1",
                         params![url, task_id.to_string()],
                     )?;
@@ -448,6 +468,15 @@ impl TaskStore {
                      WHERE handoff.task_id = task.id AND handoff.kind = 'state_changed'
                        AND handoff.to_state = 'review' AND handoff.note <> ''
                      ORDER BY handoff.sequence DESC LIMIT 1),
+                    (SELECT written.note FROM task_activity written
+                     WHERE written.task_id = task.id AND written.kind = 'noted'
+                       AND written.note <> '' AND written.actor_kind = 'worker'
+                       AND written.actor_id = task.assigned_worker_id
+                       AND written.sequence < (
+                           SELECT MAX(moved.sequence) FROM task_activity moved
+                           WHERE moved.task_id = task.id AND moved.kind = 'state_changed'
+                             AND moved.to_state = 'review')
+                     ORDER BY written.sequence DESC LIMIT 1),
                     ",
             github_review_owed_since!(),
             " AS owed_since
@@ -459,8 +488,17 @@ impl TaskStore {
             github_review_owed!(),
             " ORDER BY owed_since, task.id LIMIT ?1"
         ))?;
-        statement
+        let rows = statement
             .query_map([MAX_OWED_REVIEWS_LISTED], |row| {
+                let handoff: Option<String> = row.get(6)?;
+                let written: Option<String> = row.get(7)?;
+                let notes = match (handoff, written) {
+                    (Some(handoff), Some(written)) if written.len() > handoff.len() => {
+                        Some(written)
+                    }
+                    (Some(handoff), _) => Some(handoff),
+                    (None, written) => written,
+                };
                 Ok(GithubReviewOwed {
                     task_id: parse_domain_id(&row.get::<_, String>(0)?)?,
                     url: row.get(1)?,
@@ -468,12 +506,21 @@ impl TaskStore {
                     title: row.get(3)?,
                     requested_by: row.get(4)?,
                     worker_name: row.get(5)?,
-                    notes: row.get(6)?,
-                    owed_since: row.get(7)?,
+                    notes,
+                    owed_since: row.get(8)?,
+                    proposal: None,
+                    submission: None,
                 })
             })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|mut owed| {
+                owed.proposal = crate::github_reviews::proposal_for(&connection, owed.task_id)?;
+                owed.submission =
+                    crate::github_reviews::latest_unposted_submission(&connection, owed.task_id)?;
+                Ok(owed)
+            })
+            .collect()
     }
 
     /// Records how a pass's read of GitHub went: `Ok` when it read GitHub
@@ -597,7 +644,7 @@ fn clamp(text: &str, most: usize) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use swarm_domain::{
         AskEnded, CommitRepositoryState, EndedAskEffect, GithubAsk, GithubAskKind,
         NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode, ProviderKind,
@@ -607,11 +654,11 @@ mod tests {
     use super::{GithubAskArrival, GithubAskFiling};
     use crate::{PushSubscriptionInput, TaskStore};
 
-    const REVIEW_URL: &str = "https://github.com/acme/petal/pull/42";
+    pub(crate) const REVIEW_URL: &str = "https://github.com/acme/petal/pull/42";
     const NOTES: &str = "It renames the stem. Ask why the old name is still exported.";
 
     /// A worker that can take a review, and a filed review assigned to it.
-    fn routed_review(store: &TaskStore) -> (TaskId, WorkerId) {
+    pub(crate) fn routed_review(store: &TaskStore) -> (TaskId, WorkerId) {
         store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
             .create_worker(
@@ -630,7 +677,7 @@ mod tests {
 
     /// The worker writes its notes and reports that it built nothing, as a
     /// review always does.
-    fn notes_written(store: &TaskStore, task: TaskId) {
+    pub(crate) fn notes_written(store: &TaskStore, task: TaskId) {
         if store.get_task(task).unwrap().state == TaskState::Ready {
             store.transition_task(task, TaskState::Active).unwrap();
         }
@@ -648,7 +695,7 @@ mod tests {
             .unwrap();
     }
 
-    fn owed_tasks(store: &TaskStore) -> Vec<TaskId> {
+    pub(crate) fn owed_tasks(store: &TaskStore) -> Vec<TaskId> {
         store
             .github_reviews_owed()
             .unwrap()
@@ -657,7 +704,7 @@ mod tests {
             .collect()
     }
 
-    fn needs_you_kinds(store: &TaskStore) -> Vec<(&'static str, String)> {
+    pub(crate) fn needs_you_kinds(store: &TaskStore) -> Vec<(&'static str, String)> {
         let mut connection = store.connection().unwrap();
         let transaction = connection.transaction().unwrap();
         crate::attention::needs_you_subjects(&transaction, 2_000)
@@ -796,7 +843,7 @@ mod tests {
         assert!(queued[0].decision_id.is_none());
     }
 
-    fn review() -> GithubAsk {
+    pub(crate) fn review() -> GithubAsk {
         GithubAsk::new(
             GithubAskKind::ReviewRequest,
             "acme/petal",
@@ -820,7 +867,11 @@ mod tests {
         .unwrap()
     }
 
-    fn receive(store: &TaskStore, ask: &GithubAsk, worker: Option<WorkerId>) -> GithubAskArrival {
+    pub(crate) fn receive(
+        store: &TaskStore,
+        ask: &GithubAsk,
+        worker: Option<WorkerId>,
+    ) -> GithubAskArrival {
         store
             .receive_github_ask(&GithubAskFiling {
                 ask,
@@ -832,7 +883,7 @@ mod tests {
             .unwrap()
     }
 
-    fn filed(arrival: GithubAskArrival) -> TaskId {
+    pub(crate) fn filed(arrival: GithubAskArrival) -> TaskId {
         match arrival {
             GithubAskArrival::Filed(task) => task,
             other => panic!("expected a filing, got {other:?}"),
@@ -1097,5 +1148,36 @@ mod tests {
         );
         store.record_github_ask_reading(Ok(())).unwrap();
         assert_eq!(store.github_ask_reading().unwrap().lapsed(), None);
+    }
+
+    /// THE CARD SHOWED A POINTER, NOT THE NOTES. A worker wrote its review
+    /// notes as a note, then moved to Review with a handoff that only said
+    /// where they were: "the notes ... are in the note just above". The card
+    /// showed the handoff. It now shows whichever of the two is the notes.
+    #[test]
+    fn the_card_shows_the_workers_notes_not_the_pointer_to_them() {
+        let store = TaskStore::in_memory().unwrap();
+        let (task, worker) = routed_review(&store);
+        store.transition_task(task, TaskState::Active).unwrap();
+        let written = "REVIEW NOTES. It renames the stem and keeps the old name exported. \
+                       Ask why the old name stays, and whether anything still reads it.";
+        store.record_task_note(task, worker, written).unwrap();
+        store
+            .transition_task_with_note(task, TaskState::Review, "The notes are just above.")
+            .unwrap();
+        let owed = store.github_reviews_owed().unwrap();
+        assert_eq!(owed[0].notes.as_deref(), Some(written));
+
+        // A worker that puts its notes in the handoff keeps them there, even
+        // with a shorter note written earlier.
+        let store = TaskStore::in_memory().unwrap();
+        let (task, worker) = routed_review(&store);
+        store.transition_task(task, TaskState::Active).unwrap();
+        store
+            .record_task_note(task, worker, "Reading the diff.")
+            .unwrap();
+        notes_written(&store, task);
+        let owed = store.github_reviews_owed().unwrap();
+        assert_eq!(owed[0].notes.as_deref(), Some(NOTES));
     }
 }

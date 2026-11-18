@@ -570,7 +570,24 @@ export const SURFACES: Surface[] = [
                 worker_name: "Garden",
                 notes: "It adds a nightly job that waters each bed and records how much it used. What could go wrong: the job reads the schedule once at start, so a change made during a run waits a day. Ask whether a missed run should water twice the next night, since nothing says so.",
                 owed_since: 1_792_700_000,
+                // ADR 0176: what the worker suggests, which the operator edits and posts.
+                proposal: {
+                  verdict: "approve",
+                  comment: "Looks good. One question before it runs every night: if a run is missed, should the next one water twice? Nothing in the change says, and a missed night is likely the first time the host restarts.",
+                  head_sha: "0123456789abcdef0123456789abcdef01234567",
+                  proposed_at: 1_792_700_100,
+                },
+                submission: null,
               }]}
+              results={[{
+                task_id: "fictional-review-done",
+                reference: "example-org/garden-app#41",
+                state: "done",
+                outcome: "Approved. Not merged: it is still a draft. Merge it on GitHub once its author marks it ready.",
+              }]}
+              busy={false}
+              onSubmit={() => undefined}
+              onDismissResult={() => undefined}
               onOpenTask={() => undefined}
             />
           </>}

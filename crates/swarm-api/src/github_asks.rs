@@ -287,6 +287,9 @@ impl AppState {
         let Some(store) = self.task_store.as_ref() else {
             return;
         };
+        // A press on an owed review left unfinished is settled first, so a
+        // review GitHub took is not shown as still owed (ADR 0176).
+        self.settle_github_review_submissions();
         let pass = read_asks(
             store,
             &GhAsks,
@@ -366,6 +369,20 @@ pub(crate) fn read_asks(
     pass
 }
 
+/// The step a review draft's brief ends with (ADR 0176). Added here, not in
+/// `swarm_domain`'s text, so that the worker engine does not change for it.
+fn propose_review_brief(ask: &GithubAsk) -> String {
+    format!(
+        "\n\nThen record the review you suggest with swarm_propose_github_review: \
+         approve or request changes, a comment written to the author, and the full \
+         commit you read (`gh pr view {number} --repo {repository} --json headRefOid`). \
+         The operator sees it in Needs you, can edit the comment, and submits it with one \
+         press. Write your notes as well; they show beside it.",
+        number = ask.number(),
+        repository = ask.repository(),
+    )
+}
+
 fn file_asks(
     store: &TaskStore,
     asks: &[GithubAsk],
@@ -408,7 +425,10 @@ fn file_asks(
                 (github_ask_placeholder_workspace(ask.repository()), None)
             }
         };
-        let description = ask.task_description(&routing);
+        let mut description = ask.task_description(&routing);
+        if ask.kind() == GithubAskKind::ReviewRequest {
+            description.push_str(&propose_review_brief(ask));
+        }
         let filing = GithubAskFiling {
             ask,
             description: &description,
@@ -611,6 +631,11 @@ mod tests {
             task.description
                 .contains("Do not approve, comment or request changes")
         );
+        assert!(task.description.contains(
+            "swarm_propose_github_review: approve or request changes, a comment written to \
+             the author, and the full commit you read \
+             (`gh pr view 42 --repo acme/petal --json headRefOid`)"
+        ));
         let intake = store
             .intake_for_tasks(&[task.id])
             .unwrap()
@@ -694,6 +719,10 @@ mod tests {
         let task = only_task(&store);
         assert_eq!(task.title, "acme/stem#7: Stem snaps");
         assert_eq!(task.workspace, "github://acme/stem");
+        assert!(
+            !task.description.contains("swarm_propose_github_review"),
+            "an issue has no review to propose"
+        );
     }
 
     #[test]

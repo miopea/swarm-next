@@ -2203,6 +2203,56 @@ test("waking a stalled worker from Needs you actually starts it", async () => {
 });
 
 /**
+ * ADR 0176, the operator's ask: "I should just approve it, add the comment
+ * approve and merge". One press sends their edited words; the review leaves
+ * Needs you, and what happened to it stays on screen.
+ */
+test("an owed review is approved and merged from Needs you in the operator's words", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "decisions");
+  const base = bootFetch();
+  let submitted = false;
+  const owed = {
+    task_id: "task-42",
+    url: "https://github.com/acme/petal/pull/42",
+    reference: "acme/petal#42",
+    title: "Review acme/petal#42: Make the petals bloom",
+    requested_by: "sorrel",
+    worker_name: "Petal",
+    notes: "It renames the stem.",
+    owed_since: 1_792_700_000,
+    proposal: { verdict: "approve", comment: "Why is the old name still exported?", head_sha: "a".repeat(40), proposed_at: 1_792_700_100 },
+    submission: null,
+  };
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/integrations/github/reviews-owed/task-42/submit") {
+      submitted = true;
+      return Promise.resolve(ok({ state: "merged", outcome: "Approved and merged." }));
+    }
+    if (url === "/api/v1/integrations/github/reviews-owed") return Promise.resolve(ok(submitted ? [] : [owed]));
+    if (url.includes("/control-room/events")) return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  const comment = await screen.findByRole("textbox", { name: "Comment to sorrel, posted as you" });
+  fireEvent.change(comment, { target: { value: "Approved. Why is the old name still exported?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Approve and merge" }));
+
+  expect(await screen.findByRole("heading", { name: "acme/petal#42 reviewed" })).toBeInTheDocument();
+  expect(screen.getByText("Approved and merged.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Approve and merge" })).not.toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/integrations/github/reviews-owed/task-42/submit",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ verdict: "approve", comment: "Approved. Why is the old name still exported?" }) }),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "acme/petal#42 reviewed" })).not.toBeInTheDocument());
+});
+
+/**
  * Operator, 2026-09-13, asked whether the hamburger was the most obvious icon
  * and then chose the answer: "it should be a up/down chevron".
  *

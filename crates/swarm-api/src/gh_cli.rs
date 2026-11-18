@@ -4,7 +4,8 @@
 //! read GitHub this way, so the ways a call goes wrong are named once here and
 //! each reader says them in its own words.
 
-use std::process::Command;
+use std::io::Write as _;
+use std::process::{Command, Stdio};
 
 /// How long one call may take. `timeout` bounds a hung call; std's Command has
 /// no deadline of its own.
@@ -73,6 +74,102 @@ pub(crate) fn gh_api<T: serde::de::DeserializeOwned>(path: &str, jq: &str) -> Re
         output.status.code(),
         &String::from_utf8_lossy(&output.stderr),
     ))
+}
+
+/// Why a write to GitHub did not clearly succeed.
+///
+/// The split is the whole point. A refused write did not happen, so the
+/// operator may simply try again. An unknown one may have happened, so it is
+/// settled by reading GitHub back, never by sending it again (ADR 0176).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GhWriteFailure {
+    /// It did not happen: gh could not send it, or GitHub answered no. In
+    /// GitHub's own words when it gave them.
+    Refused(String),
+    /// It may have happened: no answer in time, a server error, or no answer
+    /// at all.
+    Unknown(String),
+}
+
+/// Sends one write through `gh api`, with `body` as JSON on stdin so nothing
+/// the operator wrote reaches the process list, and parses what `jq` printed.
+pub(crate) fn gh_api_write<T: serde::de::DeserializeOwned>(
+    method: &str,
+    path: &str,
+    body: &serde_json::Value,
+    jq: &str,
+) -> Result<T, GhWriteFailure> {
+    let mut child = Command::new("timeout")
+        .args([
+            GH_TIMEOUT_SECONDS,
+            "gh",
+            "api",
+            "--method",
+            method,
+            path,
+            "--input",
+            "-",
+            "--jq",
+            jq,
+        ])
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("FORCE_COLOR")
+        .env_remove("GH_FORCE_TTY")
+        .env("NO_COLOR", "1")
+        .env("GH_PROMPT_DISABLED", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| GhWriteFailure::Refused(GhFailure::NoTimeoutCommand.describe()))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // Nothing can have reached GitHub if the body never reached gh.
+        stdin
+            .write_all(body.to_string().as_bytes())
+            .map_err(|_| GhWriteFailure::Refused("the request could not be handed to gh".into()))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| GhWriteFailure::Unknown(format!("gh did not finish: {error}")))?;
+    if output.status.success() {
+        // It happened. A reply in a shape Swarm did not expect is settled by
+        // reading back, like any other unknown.
+        return serde_json::from_slice(&output.stdout)
+            .map_err(|_| GhWriteFailure::Unknown(GhFailure::UnexpectedShape.describe()));
+    }
+    Err(write_failure(
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stderr),
+    ))
+}
+
+/// Whether a failed write happened, from gh's exit code and error output.
+fn write_failure(code: Option<i32>, stderr: &str) -> GhWriteFailure {
+    match failure(code, stderr) {
+        failure @ (GhFailure::NoTimeoutCommand | GhFailure::Missing | GhFailure::SignedOut) => {
+            GhWriteFailure::Refused(failure.describe())
+        }
+        GhFailure::NotFound => GhWriteFailure::Refused(GhFailure::NotFound.describe()),
+        GhFailure::RateLimited(line) => GhWriteFailure::Refused(githubs_words(&line)),
+        failure @ (GhFailure::TimedOut | GhFailure::UnexpectedShape) => {
+            GhWriteFailure::Unknown(failure.describe())
+        }
+        // GitHub answered 4xx: it read the request and said no.
+        GhFailure::Other(line) if line.contains("(HTTP 4") => {
+            GhWriteFailure::Refused(githubs_words(&line))
+        }
+        // A server error, or no HTTP answer at all: it may have landed.
+        GhFailure::Other(line) => GhWriteFailure::Unknown(githubs_words(&line)),
+    }
+}
+
+/// `gh: Pull Request is not mergeable (HTTP 405)` as GitHub said it.
+fn githubs_words(line: &str) -> String {
+    let line = line.strip_prefix("gh: ").unwrap_or(line);
+    match line.rfind(" (HTTP ") {
+        Some(at) if line.ends_with(')') => line[..at].to_owned(),
+        _ => line.to_owned(),
+    }
 }
 
 /// What a failed call's exit code and error output mean.
@@ -145,6 +242,53 @@ mod tests {
         assert_eq!(
             failure(None, ""),
             GhFailure::Other("no reason given".into())
+        );
+    }
+
+    #[test]
+    fn a_write_github_refused_did_not_happen_and_one_unanswered_may_have() {
+        assert_eq!(
+            write_failure(
+                Some(1),
+                "gh: Can not approve your own pull request (HTTP 422)"
+            ),
+            GhWriteFailure::Refused("Can not approve your own pull request".into())
+        );
+        assert_eq!(
+            write_failure(Some(1), "gh: Pull Request is not mergeable (HTTP 405)"),
+            GhWriteFailure::Refused("Pull Request is not mergeable".into())
+        );
+        assert_eq!(
+            write_failure(Some(1), "gh: Head branch was modified. (HTTP 409)"),
+            GhWriteFailure::Refused("Head branch was modified.".into())
+        );
+        assert!(matches!(
+            write_failure(
+                Some(4),
+                "To get started with GitHub CLI, please run:  gh auth login"
+            ),
+            GhWriteFailure::Refused(_)
+        ));
+        assert!(matches!(
+            write_failure(Some(127), ""),
+            GhWriteFailure::Refused(_)
+        ));
+        assert!(matches!(
+            write_failure(Some(1), "gh: Not Found (HTTP 404)"),
+            GhWriteFailure::Refused(_)
+        ));
+        // These may have landed, so they are never simply sent again.
+        assert_eq!(
+            write_failure(Some(124), ""),
+            GhWriteFailure::Unknown("GitHub did not answer within 20 seconds".into())
+        );
+        assert_eq!(
+            write_failure(Some(1), "gh: Server Error (HTTP 502)"),
+            GhWriteFailure::Unknown("Server Error".into())
+        );
+        assert_eq!(
+            write_failure(Some(1), "error connecting to api.github.com"),
+            GhWriteFailure::Unknown("error connecting to api.github.com".into())
         );
     }
 

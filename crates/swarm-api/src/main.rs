@@ -674,6 +674,13 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
             "crash-interrupted task briefings require operator review"
         );
     }
+    let recovered_github_reviews = state.recover_github_review_submissions()?;
+    if recovered_github_reviews > 0 {
+        tracing::warn!(
+            recovered_github_reviews,
+            "owed-review posts or merges a restart interrupted will be settled by reading GitHub back"
+        );
+    }
     let recovered_notifications = state.recover_notification_deliveries()?;
     if recovered_notifications > 0 {
         tracing::warn!(
