@@ -97,6 +97,9 @@ them, two of which asked for the operator's review.
 
 - A review request reaches Queen's drafts within five minutes. When the
   operator reviews it, or the request is withdrawn, the draft closes by itself.
+  Routed work did not: its task completed as soon as the notes were written,
+  and the review still owed left the board. ADR 0175 keeps an owed review in
+  Needs you until GitHub stops asking.
 - On this Hive both pending review requests are on one repository, which two
   workers have checked out. Both drafts arrive naming both workers, and Queen
   picks one.

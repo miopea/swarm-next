@@ -1140,6 +1140,10 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).endsWith("/integrations/jira/resolutions")) {
       return Promise.resolve(ok([]));
     }
+    // Polled app-wide too (ADR 0175), so answered by name for the same reason.
+    if (String(url).endsWith("/integrations/github/reviews-owed")) {
+      return Promise.resolve(ok([]));
+    }
     if (String(url).includes("/api/v1/runtime/development")) {
       return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
     }

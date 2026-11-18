@@ -52,6 +52,7 @@ import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from
 import DecisionInbox from "../decisions/DecisionInbox";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
 import JiraResolutionAttentionCard from "../tasks/JiraResolutionAttentionCard";
+import GithubReviewAttentionCard from "../tasks/GithubReviewAttentionCard";
 import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
 import StaleBundleNotice from "../StaleBundleNotice";
@@ -533,7 +534,7 @@ export const SURFACES: Surface[] = [
   {
     id: "needs-you",
     title: "Needs you",
-    why: "an email draft, a Jira resolution waiting for the operator, and an actionable request; waiting work is on the separate Queues fixture",
+    why: "an email draft, a Jira resolution and a GitHub review waiting for the operator, and an actionable request; waiting work is on the separate Queues fixture",
     render: () => (
       <div className="attention-workspace">
         <DecisionInbox
@@ -541,7 +542,7 @@ export const SURFACES: Surface[] = [
           tasks={[]}
           workers={[]}
           busy={false}
-          additionalPendingCount={2}
+          additionalPendingCount={3}
           attentionCards={<>
             <UnansweredEmailAttentionCard awaiting={[waitingEmail, { ...waitingEmail, task_id: "fictional-uncertain-email", sender_name: "A Member", thread_count: 1, draft_id: null, uncertain_reply_id: "fictional-uncertain-reply" }]} busy={false} onOpenTask={() => undefined} onSendReply={() => undefined} onSaveReply={() => undefined} onRetryReply={() => undefined} onDontSend={() => undefined} onSaveAsDraft={async () => "reconnect"} onReconnectForDrafts={() => undefined} />
             <JiraResolutionAttentionCard
@@ -557,6 +558,19 @@ export const SURFACES: Surface[] = [
               busy={false}
               onConfirm={() => undefined}
               onLeaveOpen={() => undefined}
+              onOpenTask={() => undefined}
+            />
+            <GithubReviewAttentionCard
+              owed={[{
+                task_id: "fictional-review",
+                url: "https://github.com/example-org/garden-app/pull/42",
+                reference: "example-org/garden-app#42",
+                title: "Review example-org/garden-app#42: Water the beds on a schedule",
+                requested_by: "a-teammate",
+                worker_name: "Garden",
+                notes: "It adds a nightly job that waters each bed and records how much it used. What could go wrong: the job reads the schedule once at start, so a change made during a run waits a day. Ask whether a missed run should water twice the next night, since nothing says so.",
+                owed_since: 1_792_700_000,
+              }]}
               onOpenTask={() => undefined}
             />
           </>}

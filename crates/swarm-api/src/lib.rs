@@ -5394,6 +5394,10 @@ fn api_router(state: AppState) -> Router {
             get(held_jira_resolutions),
         )
         .route(
+            "/api/v1/integrations/github/reviews-owed",
+            get(github_reviews_owed),
+        )
+        .route(
             "/api/v1/integrations/jira/resolutions/{task_id}/confirm",
             post(confirm_jira_resolution),
         )
@@ -8652,6 +8656,19 @@ async fn held_jira_resolutions(
         .held_jira_resolutions()
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(held)).into_response())
+}
+
+/// Reviews GitHub still asks of the operator, whose notes are written
+/// (ADR 0175).
+async fn github_reviews_owed(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let owed = task_store(&state)?
+        .github_reviews_owed()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(owed)).into_response())
 }
 
 async fn confirm_jira_resolution(
@@ -21511,6 +21528,68 @@ mod tests {
         let second = app.clone().oneshot(confirm()).await.unwrap();
         assert_eq!(second.status(), StatusCode::CONFLICT);
         assert!(store.held_jira_resolutions().unwrap().is_empty());
+    }
+
+    /// A review GitHub still asks of the operator is listed once its notes are
+    /// written, and only to the operator (ADR 0175).
+    #[tokio::test]
+    async fn an_owed_github_review_is_listed_to_the_operator() {
+        let store = TaskStore::in_memory().unwrap();
+        let ask = swarm_domain::GithubAsk::new(
+            swarm_domain::GithubAskKind::ReviewRequest,
+            "acme/petal",
+            42,
+            "Make the petals bloom",
+            Some("sorrel"),
+            "",
+        )
+        .unwrap();
+        let swarm_persistence::GithubAskArrival::Filed(task) = store
+            .receive_github_ask(&swarm_persistence::GithubAskFiling {
+                ask: &ask,
+                description: "Read it.",
+                workspace: "/workspace/petal",
+                repository_named: true,
+                recommended_worker: None,
+            })
+            .unwrap()
+        else {
+            panic!("the ask must file a draft");
+        };
+        for state in [TaskState::Ready, TaskState::Active] {
+            store.transition_task(task, state).unwrap();
+        }
+        store
+            .transition_task_with_note(task, TaskState::Review, "Ask why the stem is renamed.")
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        let refused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/integrations/github/reviews-owed")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+
+        let owed = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/github/reviews-owed").await,
+        )
+        .await;
+        assert_eq!(owed.as_array().unwrap().len(), 1);
+        assert_eq!(owed[0]["task_id"], task.to_string());
+        assert_eq!(owed[0]["reference"], "acme/petal#42");
+        assert_eq!(owed[0]["url"], "https://github.com/acme/petal/pull/42");
+        assert_eq!(owed[0]["requested_by"], "sorrel");
+        assert_eq!(owed[0]["notes"], "Ask why the stem is renamed.");
     }
 
     #[tokio::test]
