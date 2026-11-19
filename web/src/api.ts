@@ -107,6 +107,9 @@ export {
   fetchHeldJiraResolutions,
   confirmJiraResolution,
   leaveJiraTicketOpen,
+  fetchJiraReplies,
+  postJiraReply,
+  discardJiraReply,
   syncJiraBinding,
 } from "./api/jira";
 export { fetchGithubReviewsOwed, submitGithubReview } from "./api/github";
@@ -157,6 +160,9 @@ export type {
 } from "./api/email";
 export type {
   HeldJiraResolution,
+  JiraReplyAwaiting,
+  JiraReplyPosted,
+  JiraReplyPress,
   JiraComment,
   JiraCommentDispatch,
   JiraConnectionState,

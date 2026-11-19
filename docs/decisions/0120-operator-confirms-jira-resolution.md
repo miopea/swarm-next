@@ -12,6 +12,9 @@
   01a16901-82b8-7631-a720-ac9f78c42d21.
 - Amends: the operator's rulings of 2026-08-22 and 2026-08-23 that a local move
   never waits on Jira. The local move still never waits; one Jira write does.
+- Amended by: ADR 0177. While a worker's drafted reply for the ticket waits,
+  the reply's card stands in for this one and can post the reply and resolve
+  in one press. The resolution is released only once Jira has the reply.
 
 ## Context
 

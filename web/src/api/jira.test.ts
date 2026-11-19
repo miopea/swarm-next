@@ -17,6 +17,9 @@ import {
   retryJiraTaskLink,
   setJiraAssignedSync,
   syncJiraBinding,
+  fetchJiraReplies,
+  postJiraReply,
+  discardJiraReply,
 } from "../api";
 
 const binding = {
@@ -110,4 +113,23 @@ test("serializes Jira authorization, configuration, sync, retry, comment, and re
   expect(fetch).toHaveBeenNthCalledWith(7, "/api/v1/integrations/jira/task-links/task%2Fone/comments", expect.objectContaining({
     body: JSON.stringify({ body: "Ready for proof" }),
   }));
+});
+
+test("posts a drafted Jira reply in the operator's words and reports Jira's answer", async () => {
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(response([{ task_id: "task/1", issue_key: "IS-1", posted: null }]))
+    .mockResolvedValueOnce(response({ state: "conflict", error: "permission_denied", resolution: "held" }))
+    .mockResolvedValueOnce(response(null));
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(fetchJiraReplies("operator")).resolves.toHaveLength(1);
+  await expect(postJiraReply("operator", "task/1", { body: "Edited.", resolve: true }))
+    .resolves.toEqual({ state: "conflict", error: "permission_denied", resolution: "held" });
+  await discardJiraReply("operator", "task/1");
+
+  expect(fetch.mock.calls[0][0]).toBe("/api/v1/integrations/jira/replies");
+  expect(fetch.mock.calls[1][0]).toBe("/api/v1/integrations/jira/replies/task%2F1/post");
+  expect(fetch.mock.calls[1][1]).toMatchObject({ method: "POST", body: JSON.stringify({ body: "Edited.", resolve: true }) });
+  expect(fetch.mock.calls[2][0]).toBe("/api/v1/integrations/jira/replies/task%2F1/discard");
+  expect(fetch.mock.calls[2][1]).toMatchObject({ method: "POST" });
 });

@@ -152,6 +152,7 @@ pub use support_outbox::{
     SupportRefusal,
 };
 mod jira;
+mod jira_replies;
 mod legacy_source;
 mod migration;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
@@ -159,6 +160,7 @@ pub use jira::{
     HeldJiraResolution, JiraCommentDispatch, JiraDescriptionChange, JiraIssueSnapshot,
     JiraProjectBindingInput, JiraTransitionDispatch, JiraTransitionFailure,
 };
+pub use jira_replies::{JiraReplyAwaiting, JiraReplyPosted, PostedJiraReply};
 pub use legacy_source::{
     LegacySourceError, claude_project_directory, claude_project_slugs, read_legacy_migration_bundle,
 };
@@ -502,7 +504,9 @@ const DECISION_IMAGES_SCHEMA_MARKER: i64 = 228;
 const GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER: i64 = 229;
 /// The operator submits an owed review from Needs you (ADR 0176).
 const GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER: i64 = 230;
-const CURRENT_SCHEMA_VERSION: i64 = GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER;
+/// The operator posts a worker's drafted Jira reply from Needs you (ADR 0177).
+const JIRA_REPLY_DRAFTS_SCHEMA_MARKER: i64 = 231;
+const CURRENT_SCHEMA_VERSION: i64 = JIRA_REPLY_DRAFTS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -884,6 +888,12 @@ pub enum TaskStoreError {
     InvalidJiraComment,
     #[error("this Hive already has the maximum number of pending Jira comments")]
     JiraCommentQueueFull,
+    #[error("there is no reply drafted for this task to post, or it is already on its way to Jira")]
+    JiraReplyNotDrafted,
+    #[error(
+        "the operator's reply for this ticket is on its way to Jira; draft again once it has landed"
+    )]
+    JiraReplyPosting,
     #[error("email message metadata or content is invalid")]
     InvalidEmailMessage,
     /// Carries WHICH messages are already attached and to what.
@@ -5137,6 +5147,12 @@ fn migrate_queen_release_schema_steps(
         crate::github_reviews::migrate_github_review_submissions(
             transaction,
             GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < JIRA_REPLY_DRAFTS_SCHEMA_MARKER {
+        crate::jira_replies::migrate_jira_reply_drafts(
+            transaction,
+            JIRA_REPLY_DRAFTS_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -11554,6 +11570,15 @@ mod tests {
                 ALTER TABLE github_ask_links DROP COLUMN round;",
             probe_sql: "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type = 'table'
                 AND name IN ('github_review_submissions', 'github_review_proposals')",
+        },
+        // The operator posts a worker's drafted Jira reply (ADR 0177): one
+        // new table, so the undo drops it.
+        SchemaStep {
+            table: "jira_reply_drafts",
+            artifact: "jira_reply_drafts",
+            undo_sql: "DROP TABLE jira_reply_drafts;",
+            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
+                AND name = 'jira_reply_drafts'",
         },
     ];
 

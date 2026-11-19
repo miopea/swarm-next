@@ -80,6 +80,35 @@ export type HeldJiraResolution = {
   last_reply_at: number | null;
   handoff: string | null;
 };
+/** Where a reply the operator posted stands while Jira has not taken it (ADR 0177). */
+export type JiraReplyPosted = {
+  /** "queued" with an error: Jira could not be reached and Swarm tries again by itself. */
+  state: "queued" | "dispatching" | "conflict" | "uncertain";
+  error: string | null;
+  posted_at: number;
+  resolve: boolean;
+};
+/** A reply a worker drafted for a Jira ticket, waiting on the operator (ADR 0177). */
+export type JiraReplyAwaiting = {
+  task_id: string;
+  issue_key: string;
+  project_name: string;
+  title: string;
+  worker_name: string | null;
+  body: string;
+  drafted_at: number;
+  /** The ticket's resolution waits for the operator too; the card can do both. */
+  resolution_held: boolean;
+  /** The task is complete and its resolution goes to Jira once this reply is posted or dropped. */
+  resolution_waiting: boolean;
+  posted: JiraReplyPosted | null;
+};
+/** What one press did: Jira's answer, and the resolution when one follows the reply. */
+export type JiraReplyPress = {
+  state: "delivered" | "queued" | "dispatching" | "conflict" | "uncertain";
+  error: string | null;
+  resolution: string | null;
+};
 export type JiraComment = { id: string; author_name: string; body: string; created_at: string; updated_at: string };
 export type JiraCommentDispatch = { state: "queued" | "dispatching" | "delivered" | "conflict" | "uncertain" };
 export type JiraTaskAttachment = { id: string; filename: string; media_type: string; byte_size: number; is_image: boolean };
@@ -211,6 +240,25 @@ export async function confirmJiraResolution(operatorToken: string, taskId: strin
 
 export async function leaveJiraTicketOpen(operatorToken: string, taskId: string): Promise<void> {
   await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/resolutions/${encodeURIComponent(taskId)}/leave-open`, { method: "POST" });
+}
+
+export async function fetchJiraReplies(operatorToken: string, signal?: AbortSignal): Promise<JiraReplyAwaiting[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/replies", { signal });
+  return response.json() as Promise<JiraReplyAwaiting[]>;
+}
+
+/** Posts the reply in the operator's words; sent before this answers. */
+export async function postJiraReply(operatorToken: string, taskId: string, reply: { body: string; resolve: boolean }): Promise<JiraReplyPress> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/replies/${encodeURIComponent(taskId)}/post`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(reply),
+  });
+  return response.json() as Promise<JiraReplyPress>;
+}
+
+export async function discardJiraReply(operatorToken: string, taskId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/replies/${encodeURIComponent(taskId)}/discard`, { method: "POST" });
 }
 
 export async function fetchJiraBindingIssues(operatorToken: string, bindingId: string): Promise<JiraIssue[]> {

@@ -143,6 +143,10 @@ pub struct TaskDispatch {
     /// A person waiting on a thread is part of the work, not metadata about it.
     /// A worker that is not told cannot know to answer them.
     pub email_requester: Option<String>,
+    /// The Jira ticket this work came from (ADR 0177). Someone raised it and
+    /// is waiting on the ticket, so the worker is told how its answer reaches
+    /// them: drafted for the operator to post, not asked about and relayed.
+    pub jira_issue_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -680,7 +684,8 @@ fn deliverable_briefings(
                     (SELECT COALESCE(NULLIF(link.sender_name, ''), link.sender_address)
                      FROM email_message_links link
                      WHERE link.task_id = t.id
-                     ORDER BY link.received_at LIMIT 1), td.generation
+                     ORDER BY link.received_at LIMIT 1), td.generation,
+                    (SELECT jira.issue_key FROM jira_issue_links jira WHERE jira.task_id = t.id)
              FROM task_dispatches td
              JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
              JOIN tasks t ON t.id = td.task_id
@@ -793,6 +798,7 @@ fn task_dispatch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskDispa
         // only return one. See resolved_rulings.
         operator_rulings: Vec::new(),
         email_requester: row.get(9)?,
+        jira_issue_key: row.get(11)?,
     })
 }
 

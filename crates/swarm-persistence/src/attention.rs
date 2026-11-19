@@ -82,6 +82,7 @@ pub(crate) fn needs_you_subjects(
     subjects.extend(held_deliveries(transaction, now)?);
     subjects.extend(emails_awaiting_a_reply(transaction)?);
     subjects.extend(held_jira_resolutions(transaction)?);
+    subjects.extend(jira_replies_awaiting(transaction)?);
     subjects.extend(github_reviews_owed(transaction)?);
     Ok(subjects)
 }
@@ -120,18 +121,52 @@ fn github_reviews_owed(
 fn held_jira_resolutions(
     transaction: &Transaction<'_>,
 ) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {
-    let mut statement = transaction.prepare(
+    // A drafted reply's card stands in for this one (ADR 0177), as in the
+    // list the card shows.
+    let mut statement = transaction.prepare(concat!(
         "SELECT delivery.task_id, delivery.updated_at
          FROM jira_transition_deliveries delivery
          JOIN tasks t ON t.id = delivery.task_id
          JOIN jira_issue_links link ON link.task_id = t.id
-         WHERE delivery.state = 'held' AND t.state = 'completed' AND t.removed_at IS NULL",
-    )?;
+         WHERE delivery.state = 'held' AND t.state = 'completed' AND t.removed_at IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM jira_reply_drafts draft WHERE draft.task_id = t.id AND ",
+        crate::jira_replies::jira_reply_owed!(),
+        ")"
+    ))?;
     let rows = statement.query_map([], |row| {
         let id: String = row.get(0)?;
         Ok(NeedsYouSubject {
             kind: "jira_resolution",
             subject_key: format!("jira-resolution:{id}"),
+            created_at: row.get(1)?,
+            urgency: "normal".to_owned(),
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+/// Jira replies a worker drafted that wait on the operator (ADR 0177).
+///
+/// One card each, like the held resolutions it can stand in for. Pushed under
+/// the `jira_resolution` kind: a push's kind changes nothing but its test and
+/// decision handling, and a kind of its own would rebuild the table again.
+fn jira_replies_awaiting(
+    transaction: &Transaction<'_>,
+) -> Result<Vec<NeedsYouSubject>, TaskStoreError> {
+    let mut statement = transaction.prepare(concat!(
+        "SELECT draft.task_id, draft.drafted_at
+         FROM jira_reply_drafts draft
+         JOIN tasks task ON task.id = draft.task_id
+         JOIN jira_issue_links link ON link.task_id = task.id
+         WHERE task.removed_at IS NULL AND ",
+        crate::jira_replies::jira_reply_owed!()
+    ))?;
+    let rows = statement.query_map([], |row| {
+        let id: String = row.get(0)?;
+        Ok(NeedsYouSubject {
+            kind: "jira_resolution",
+            subject_key: format!("jira-reply:{id}"),
             created_at: row.get(1)?,
             urgency: "normal".to_owned(),
         })

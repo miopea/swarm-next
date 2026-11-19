@@ -53,6 +53,7 @@ mod hive_capability;
 mod idle_engine_update;
 mod independent_check;
 mod jira;
+mod jira_reply_routes;
 mod maintenance;
 mod mcp_oauth;
 #[cfg(test)]
@@ -1148,8 +1149,11 @@ impl AppState {
     /// Automatically imports open Jira issues assigned to the operator when enabled,
     /// then refreshes every Jira issue already owned by this Hive.
     pub async fn reconcile_jira(&self) {
-        self.deliver_jira_transitions().await;
+        // Comments first: a reply posted with "and resolve" releases its
+        // resolution when Jira takes it (ADR 0177), and the ticket should not
+        // wait another pass to resolve, nor resolve ahead of the answer.
         self.deliver_jira_comments().await;
+        self.deliver_jira_transitions().await;
         let Some(store) = self.task_store.as_ref() else {
             return;
         };
@@ -5460,6 +5464,18 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/integrations/jira/resolutions/{task_id}/leave-open",
             post(leave_jira_ticket_open),
+        )
+        .route(
+            "/api/v1/integrations/jira/replies",
+            get(jira_reply_routes::jira_replies),
+        )
+        .route(
+            "/api/v1/integrations/jira/replies/{task_id}/post",
+            post(jira_reply_routes::post_jira_reply),
+        )
+        .route(
+            "/api/v1/integrations/jira/replies/{task_id}/discard",
+            post(jira_reply_routes::discard_jira_reply),
         )
         .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/issues",
@@ -11905,6 +11921,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "jira_comment_queue_full",
             error.to_string(),
         ),
+        TaskStoreError::JiraReplyNotDrafted => ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_reply_not_drafted",
+            error.to_string(),
+        ),
+        TaskStoreError::JiraReplyPosting => ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_reply_posting",
+            error.to_string(),
+        ),
         // Its own code, because the remedy is an ordering step rather than a
         // correction to what was sent.
         TaskStoreError::DeploymentEvidenceTooEarly => ApiError::new(
@@ -12558,6 +12584,7 @@ mod tests {
                 answered_in_words: false,
             }],
             email_requester: None,
+            jira_issue_key: None,
         };
 
         let rendered =
@@ -12627,6 +12654,7 @@ mod tests {
                 },
             ],
             email_requester: None,
+            jira_issue_key: None,
         };
 
         let rendered =
@@ -12676,6 +12704,7 @@ mod tests {
                 answered_in_words: true,
             }],
             email_requester: None,
+            jira_issue_key: None,
         };
 
         let rendered =
@@ -12711,6 +12740,7 @@ mod tests {
             operator_instruction: String::new(),
             operator_rulings: Vec::new(),
             email_requester: None,
+            jira_issue_key: None,
         };
 
         let rendered =
@@ -12746,6 +12776,7 @@ mod tests {
             operator_instruction: String::new(),
             operator_rulings: Vec::new(),
             email_requester: Some("Lynn\u{1b}[31m Kuczyra".into()),
+            jira_issue_key: None,
         };
 
         let message = task_dispatch_message(&dispatch).bytes;
@@ -12756,6 +12787,40 @@ mod tests {
         assert!(rendered.contains("swarm_record_deployment"));
         assert!(rendered.contains("swarm_draft_email_reply"));
         // Still one sanitised submission.
+        assert_eq!(message.last(), Some(&b'\r'));
+        assert!(!message[..message.len() - 1].contains(&b'\n'));
+        assert!(!message.contains(&0x1b));
+    }
+
+    /// ADR 0177. A worker that answered a ticket asked the operator to approve
+    /// the reply in a decision and posted it afterwards, and the approved reply
+    /// sat off the ticket for two minutes while that relay ran. The brief
+    /// names the tool that hands the reply to the operator instead.
+    #[test]
+    fn a_jira_task_brief_says_the_reply_is_drafted_for_the_operator_to_post() {
+        let dispatch = TaskDispatch {
+            generation: 0,
+            assignment_id: "assignment-1".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "Photo downloads are slow".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::Normal,
+            workspace: "/workspace/support".into(),
+            operator_instruction: String::new(),
+            operator_rulings: Vec::new(),
+            email_requester: None,
+            jira_issue_key: Some("IS-1\u{1b}[31m0".into()),
+        };
+
+        let message = task_dispatch_message(&dispatch).bytes;
+        let rendered = String::from_utf8_lossy(&message);
+
+        assert!(rendered.contains("Jira ticket IS-1 [31m0"), "{rendered}");
+        assert!(rendered.contains("swarm_draft_jira_reply"));
+        assert!(rendered.contains("not with swarm_request_decision"));
+        assert!(!rendered.contains("swarm_draft_email_reply"));
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
@@ -12776,6 +12841,7 @@ mod tests {
             operator_instruction: String::new(),
             operator_rulings: Vec::new(),
             email_requester: None,
+            jira_issue_key: None,
         };
 
         let rendered =
@@ -12783,6 +12849,7 @@ mod tests {
 
         assert!(!rendered.contains("waiting on a reply"));
         assert!(!rendered.contains("swarm_draft_email_reply"));
+        assert!(!rendered.contains("swarm_draft_jira_reply"));
     }
 
     #[test]
@@ -12802,6 +12869,7 @@ mod tests {
             operator_instruction: "interview\u{1b}[31m me\rfirst".into(),
             operator_rulings: Vec::new(),
             email_requester: None,
+            jira_issue_key: None,
         };
         let message = task_dispatch_message(&dispatch).bytes;
         // The operator's instruction governs how the work is approached, so a
@@ -21665,6 +21733,215 @@ mod tests {
         let second = app.clone().oneshot(confirm()).await.unwrap();
         assert_eq!(second.status(), StatusCode::CONFLICT);
         assert!(store.held_jira_resolutions().unwrap().is_empty());
+    }
+
+    /// ADR 0177 over HTTP. The operator's press sends the reply in the request
+    /// and answers with what Jira did: a refusal is shown, nothing resolves,
+    /// and pressing again after Jira takes it posts and resolves in one go.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_drafted_jira_reply_is_posted_and_resolved_by_one_press() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let accept = Arc::new(AtomicBool::new(false));
+        let comments = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let resolved = Arc::new(AtomicUsize::new(0));
+        let jira = {
+            let (accept, comments, resolved) = (
+                Arc::clone(&accept),
+                Arc::clone(&comments),
+                Arc::clone(&resolved),
+            );
+            axum::Router::new()
+                .route(
+                    "/rest/api/3/issue/HELP-204/comment",
+                    axum::routing::post(move |Json(body): Json<serde_json::Value>| {
+                        let (accept, comments) = (Arc::clone(&accept), Arc::clone(&comments));
+                        async move {
+                            if !accept.load(Ordering::SeqCst) {
+                                return StatusCode::FORBIDDEN;
+                            }
+                            comments.lock().unwrap().push(body.to_string());
+                            StatusCode::CREATED
+                        }
+                    }),
+                )
+                .route(
+                    "/rest/api/3/issue/HELP-204/transitions",
+                    axum::routing::get(|| async {
+                        Json(serde_json::json!({ "transitions": [
+                            { "id": "51", "to": { "id": "5", "name": "Resolved" } }
+                        ] }))
+                    })
+                    .post(move || {
+                        let resolved = Arc::clone(&resolved);
+                        async move {
+                            resolved.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }),
+                )
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, jira).await.unwrap() });
+
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10204",
+                project_key: "HELP",
+                project_name: "Help Desk",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "5".into(),
+                        jira_status_name: "Resolved".into(),
+                        task_state: TaskState::Completed,
+                    },
+                ],
+            )
+            .unwrap();
+        store.set_jira_confirm_resolution(binding.id, true).unwrap();
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "40204",
+                    issue_key: "HELP-204",
+                    summary: "Photo downloads are slow",
+                    description: "",
+                    status_id: "3",
+                    status_name: "In Progress",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-10-22T12:00:00.000+0000",
+                    priority: TaskPriority::Normal,
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+        let worker = store
+            .create_worker(
+                "Ledger",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/ledger",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .draft_jira_reply(worker.id, task.id, "Downloads are fast again.", 1_000)
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone())
+                .with_jira_configuration(&address, "operator@example.test", "token")
+                .unwrap(),
+        );
+
+        let listed =
+            response_json(authorized_get(app.clone(), "/api/v1/integrations/jira/replies").await)
+                .await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["issue_key"], "HELP-204");
+        assert_eq!(listed[0]["resolution_held"], true);
+        assert_eq!(listed[0]["worker_name"], "Ledger");
+        // The reply's card stands in for the resolution's.
+        let held = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/jira/resolutions").await,
+        )
+        .await;
+        assert_eq!(held, serde_json::json!([]));
+
+        let press = |body: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/integrations/jira/replies/{}/post",
+                    task.id
+                ))
+                .header("authorization", "Bearer secret")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "body": body, "resolve": true }).to_string(),
+                ))
+                .unwrap()
+        };
+        let refused = app
+            .clone()
+            .oneshot(press("Downloads are fast again."))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::OK);
+        let refused = response_json(refused).await;
+        assert_eq!(refused["state"], "conflict", "{refused}");
+        assert_eq!(refused["error"], "permission_denied");
+        assert_eq!(refused["resolution"], "waiting");
+        assert_eq!(
+            resolved.load(Ordering::SeqCst),
+            0,
+            "no answer, no resolution"
+        );
+        let listed =
+            response_json(authorized_get(app.clone(), "/api/v1/integrations/jira/replies").await)
+                .await;
+        assert_eq!(listed[0]["posted"]["state"], "conflict");
+
+        accept.store(true, Ordering::SeqCst);
+        let posted = app
+            .clone()
+            .oneshot(press("Downloads are fast again; edited."))
+            .await
+            .unwrap();
+        let posted = response_json(posted).await;
+        assert_eq!(posted["state"], "delivered", "{posted}");
+        assert_eq!(posted["error"], serde_json::Value::Null);
+        assert_eq!(posted["resolution"], "delivered");
+        let comments = comments.lock().unwrap().clone();
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].contains("edited."), "{comments:?}");
+        assert_eq!(resolved.load(Ordering::SeqCst), 1);
+        let listed =
+            response_json(authorized_get(app.clone(), "/api/v1/integrations/jira/replies").await)
+                .await;
+        assert_eq!(listed, serde_json::json!([]));
+
+        // Nothing left to post or drop: refused rather than repeated.
+        let again = app.clone().oneshot(press("Once more.")).await.unwrap();
+        assert_eq!(again.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(again).await["code"], "jira_reply_not_drafted");
+        let discard = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/integrations/jira/replies/{}/discard",
+                        task.id
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(discard.status(), StatusCode::CONFLICT);
     }
 
     /// A review GitHub still asks of the operator is listed once its notes are
