@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.21.0
+
+Two database updates (229 and 230). 229 rebuilds one table to allow a new kind of notification, keeping every row. 230 adds a column and two new tables. Your Hive backs up its database by itself before applying them. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged. A worker or Queen session that was running before the update sees Swarm's new tool once it restarts.
+
+### New features
+- A GitHub review someone asks of you now waits in Needs you until you submit it, with the notes the worker wrote after reading the pull request. It clears by itself once GitHub stops asking: you reviewed it, the request was withdrawn, or the pull request was merged or closed.
+- You can approve and merge from that card with one press. The worker suggests approving or requesting changes, and writes a comment to the author that you can edit first. Approve and merge posts the review under this machine's GitHub login, on the commit the worker read. It then merges only if the pull request is not a draft, nothing was pushed after the worker read it, its checks passed, and GitHub allows it. Otherwise it approves and tells you why it did not merge. Request changes needs a comment and never merges.
+
+### Fixes
+- A GitHub review asked of you no longer shows as done as soon as the worker writes its notes, so it no longer drops off the board while you still owe it.
+
 ## 1.20.0
 
 One database update (228), adding a new table only. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged. A worker or Queen session that was running before the update may only see Swarm's new tool once it restarts.
