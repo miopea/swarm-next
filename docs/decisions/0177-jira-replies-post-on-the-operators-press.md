@@ -36,6 +36,9 @@ Two waits sat between the operator's approval and the ticket.
      decision. `swarm_comment_jira_task` says the same in its description.
 2. **Needs you shows the draft.** One card per ticket shows:
    - the issue, the project and the ticket's title;
+   - who raised the ticket: its Jira reporter, which in a service desk is the
+     customer. Each sync reads it. Until one has, the card says "the person
+     who raised it";
    - the worker that drafted it;
    - the reply, in a box the operator can edit;
    - when the task is complete and its resolution waits on this reply, that
@@ -93,8 +96,8 @@ Two waits sat between the operator's approval and the ticket.
    one, and what that means.
 7. **Nothing posts without the press.** The worker's draft tool records a
    draft and nothing else.
-8. **Schema 231** adds `jira_reply_drafts`. The worker tool surface moves to
-   revision 44.
+8. **Schema 231** adds `jira_reply_drafts`, and `jira_reporter_name` on each
+   linked issue. The worker tool surface moves to revision 44.
 
 ## Consequences
 
@@ -110,4 +113,6 @@ Two waits sat between the operator's approval and the ticket.
 - The task history line "Jira comment queued" still names the operator even
   when a worker queued the comment. This change leaves that alone.
 - Not proven by the tests: a real post to Jira, which the tests replace with a
-  fake. The first real press is that proof.
+  fake. The first real press is that proof. Nor that every service desk
+  project shows its reporter field to this Hive's account: one that hides it
+  leaves the card saying "the person who raised it".

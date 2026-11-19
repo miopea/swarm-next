@@ -95,6 +95,8 @@ export type JiraReplyAwaiting = {
   project_name: string;
   title: string;
   worker_name: string | null;
+  /** Who raised the ticket in Jira; null until a sync has read it. */
+  requester_name: string | null;
   body: string;
   drafted_at: number;
   /** The ticket's resolution waits for the operator too; the card can do both. */

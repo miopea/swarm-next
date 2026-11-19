@@ -104,6 +104,8 @@ pub struct JiraIssueSnapshot<'a> {
     pub status_name: &'a str,
     pub assignee_account_id: Option<&'a str>,
     pub assignee_name: Option<&'a str>,
+    /// The ticket's reporter: in a service desk, the person who raised it.
+    pub reporter_name: Option<&'a str>,
     pub remote_updated_at: &'a str,
     /// Applied on FIRST IMPORT ONLY; see the insert below.
     pub priority: TaskPriority,
@@ -579,8 +581,8 @@ impl TaskStore {
                 "INSERT INTO jira_issue_links (
                      issue_id, issue_key, binding_id, task_id, jira_status_id, jira_status_name,
                      jira_assignee_account_id, jira_assignee_name, remote_updated_at,
-                     jira_description
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                     jira_description, jira_reporter_name
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(issue_id) DO UPDATE SET
                      issue_key = excluded.issue_key,
                      binding_id = excluded.binding_id,
@@ -590,6 +592,7 @@ impl TaskStore {
                      jira_assignee_name = excluded.jira_assignee_name,
                      remote_updated_at = excluded.remote_updated_at,
                      jira_description = excluded.jira_description,
+                     jira_reporter_name = excluded.jira_reporter_name,
                      last_synced_at = unixepoch()",
                 params![
                     issue_id,
@@ -602,6 +605,10 @@ impl TaskStore {
                     issue.assignee_name.map(str::trim),
                     issue.remote_updated_at.trim(),
                     issue.description.trim(),
+                    issue
+                        .reporter_name
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty()),
                 ],
             )?;
             task_ids.push(task_id);
@@ -1929,6 +1936,7 @@ pub(crate) mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-08-13T13:00:00.000+0000",
             priority,
         };
@@ -2009,6 +2017,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2095,6 +2104,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2285,6 +2295,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2322,6 +2333,7 @@ pub(crate) mod tests {
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2360,6 +2372,7 @@ pub(crate) mod tests {
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2411,6 +2424,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2436,6 +2450,7 @@ pub(crate) mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-08-19T12:00:00.000+0000",
             priority: TaskPriority::Normal,
         };
@@ -2536,6 +2551,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2556,6 +2572,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2583,6 +2600,7 @@ pub(crate) mod tests {
                     status_name: "Done",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:05:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2610,6 +2628,7 @@ pub(crate) mod tests {
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:10:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2662,6 +2681,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2706,6 +2726,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:01:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2792,6 +2813,7 @@ pub(crate) mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2837,6 +2859,7 @@ pub(crate) mod tests {
                     status_name: "In Progress",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:02:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2941,6 +2964,7 @@ pub(crate) mod tests {
             status_name,
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: Some("  Dana Reyes "),
             remote_updated_at: "2026-10-22T12:00:00.000+0000",
             priority: TaskPriority::Normal,
         }
@@ -3272,6 +3296,7 @@ pub(crate) mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-10-30T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         }
@@ -3606,6 +3631,7 @@ pub(crate) mod tests {
             status_name,
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at,
             priority: TaskPriority::Normal,
         };

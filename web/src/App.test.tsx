@@ -2271,6 +2271,7 @@ test("a drafted Jira reply is posted and resolved from Needs you in the operator
     project_name: "Help Desk",
     title: "The garden map will not load on a phone",
     worker_name: "Garden",
+    requester_name: "Robin Vale",
     body: "The map loads again on phones.",
     drafted_at: 1_792_700_000,
     resolution_held: true,

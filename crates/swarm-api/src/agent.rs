@@ -4696,6 +4696,7 @@ swarm_read_task_history before acting on it."
                 status_name: &issue.status_name,
                 assignee_account_id: issue.assignee_account_id.as_deref(),
                 assignee_name: issue.assignee_name.as_deref(),
+                reporter_name: issue.reporter_name.as_deref(),
                 remote_updated_at: &issue.updated_at,
                 priority: issue.priority,
             })
@@ -4738,6 +4739,7 @@ swarm_read_task_history before acting on it."
                 status_name: &issue.status_name,
                 assignee_account_id: issue.assignee_account_id.as_deref(),
                 assignee_name: issue.assignee_name.as_deref(),
+                reporter_name: issue.reporter_name.as_deref(),
                 remote_updated_at: &issue.updated_at,
                 priority: issue.priority,
             })
@@ -10890,6 +10892,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-10-30T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         };
@@ -11198,6 +11201,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-11-04T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         };
@@ -16344,6 +16348,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-11-04T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         };

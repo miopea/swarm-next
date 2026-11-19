@@ -50,6 +50,19 @@ pub(crate) fn migrate_jira_reply_drafts(
              resolve INTEGER NOT NULL DEFAULT 0 CHECK (resolve IN (0, 1))
          ) WITHOUT ROWID;",
     )?;
+    // Who raised each linked ticket, so the card can say who the reply is
+    // for. Filled by the next sync; until then the card says "the person who
+    // raised it".
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('jira_issue_links')
+                       WHERE name = 'jira_reporter_name')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !present {
+        transaction
+            .execute_batch("ALTER TABLE jira_issue_links ADD COLUMN jira_reporter_name TEXT;")?;
+    }
     transaction.pragma_update(None, "user_version", version)
 }
 
@@ -61,6 +74,9 @@ pub struct JiraReplyAwaiting {
     pub project_name: String,
     pub title: String,
     pub worker_name: Option<String>,
+    /// Who raised the ticket in Jira, as its reporter: the person the reply
+    /// answers. None until a sync has read it.
+    pub requester_name: Option<String>,
     /// What will be posted: the worker's draft, or the operator's edit of it
     /// once they pressed.
     pub body: String,
@@ -183,7 +199,8 @@ impl TaskStore {
                     comment.state, comment.last_error, draft.posted_at, draft.resolve,
                     EXISTS (SELECT 1 FROM jira_transition_deliveries waiting
                             WHERE waiting.task_id = task.id AND waiting.state = 'queued'
-                              AND waiting.target_task_state = 'completed')
+                              AND waiting.target_task_state = 'completed'),
+                    link.jira_reporter_name
              FROM jira_reply_drafts draft
              JOIN tasks task ON task.id = draft.task_id
              JOIN jira_issue_links link ON link.task_id = task.id
@@ -211,6 +228,7 @@ impl TaskStore {
                     project_name: row.get(2)?,
                     title: row.get(3)?,
                     worker_name: row.get(4)?,
+                    requester_name: row.get(13)?,
                     body: row.get(5)?,
                     drafted_at: row.get(6)?,
                     resolution_held: row.get(7)?,
@@ -710,6 +728,37 @@ mod tests {
             store.claim_jira_transitions(2_000_000_000).unwrap().len(),
             1
         );
+    }
+
+    /// The card says who the reply answers: the ticket's reporter, read on
+    /// sync. A sync that no longer sees one clears it.
+    #[test]
+    fn the_card_names_whoever_raised_the_ticket() {
+        let store = TaskStore::in_memory().unwrap();
+        let (binding, task) = support_ticket_in_review(&store, false);
+        let worker = store
+            .create_worker(
+                "Ledger",
+                ProviderKind::ClaudeCode,
+                "/workspace/ledger",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .draft_jira_reply(worker.id, task.id, DRAFT, 1_500)
+            .unwrap();
+        assert_eq!(
+            awaiting(&store)[0].requester_name.as_deref(),
+            Some("Dana Reyes")
+        );
+
+        let hidden = crate::JiraIssueSnapshot {
+            reporter_name: Some("   "),
+            ..support_snapshot("3", "In Progress")
+        };
+        store.sync_jira_issues(binding.id, &[hidden]).unwrap();
+        assert_eq!(awaiting(&store)[0].requester_name, None);
     }
 
     #[test]

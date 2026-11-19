@@ -114,6 +114,9 @@ pub(crate) struct JiraIssue {
     pub status_name: String,
     pub assignee_account_id: Option<String>,
     pub assignee_name: Option<String>,
+    /// Who raised the issue. In a service desk the reporter is the customer
+    /// a reply answers (ADR 0177).
+    pub reporter_name: Option<String>,
     pub updated_at: String,
     /// What the reporting side considered important, mapped onto our four.
     ///
@@ -251,7 +254,10 @@ struct JiraIssueFields {
     summary: String,
     description: Option<serde_json::Value>,
     status: JiraIssueStatus,
-    assignee: Option<JiraIssueAssignee>,
+    assignee: Option<JiraIssuePerson>,
+    /// Defaulted: a project can hide the reporter field.
+    #[serde(default)]
+    reporter: Option<JiraIssuePerson>,
     updated: String,
     #[serde(default)]
     attachment: Vec<JiraIssueAttachmentResponse>,
@@ -282,7 +288,7 @@ struct JiraIssueStatus {
 }
 
 #[derive(Deserialize)]
-struct JiraIssueAssignee {
+struct JiraIssuePerson {
     #[serde(rename = "accountId")]
     account_id: Option<String>,
     #[serde(rename = "displayName")]
@@ -304,7 +310,7 @@ struct JiraCommentPage {
 #[derive(Deserialize)]
 struct JiraCommentResponse {
     id: String,
-    author: JiraIssueAssignee,
+    author: JiraIssuePerson,
     body: serde_json::Value,
     created: String,
     updated: String,
@@ -710,7 +716,7 @@ impl JiraReadinessProbe {
                 pairs.append_pair("maxResults", &PAGE_SIZE.to_string());
                 pairs.append_pair(
                     "fields",
-                    "summary,description,status,assignee,updated,priority",
+                    "summary,description,status,assignee,reporter,updated,priority",
                 );
                 if let Some(token) = next_page_token.as_deref() {
                     pairs.append_pair("nextPageToken", token);
@@ -876,7 +882,7 @@ impl JiraReadinessProbe {
             .push(issue);
         url.query_pairs_mut().append_pair(
             "fields",
-            "summary,description,attachment,status,assignee,updated,priority",
+            "summary,description,attachment,status,assignee,reporter,updated,priority",
         );
         let response = authorize(access.client.get(url), &access.authorization)
             .header(reqwest::header::ACCEPT, "application/json")
@@ -1339,6 +1345,10 @@ fn jira_issue(issue: JiraIssueResponse) -> Option<JiraIssue> {
             .fields
             .assignee
             .and_then(|assignee| assignee.display_name),
+        reporter_name: issue
+            .fields
+            .reporter
+            .and_then(|reporter| reporter.display_name),
         updated_at: issue.fields.updated,
         priority: task_priority_from_jira(
             issue
@@ -2185,7 +2195,10 @@ mod tests {
             )
             .route(
                 "/rest/api/3/search/jql",
-                get(|| async {
+                get(|Query(query): Query<HashMap<String, String>>| async move {
+                    assert!(query.get("fields").is_some_and(|fields| {
+                        fields.split(',').any(|field| field == "reporter")
+                    }));
                     Json(json!({
                         "isLast": true,
                         "issues": [{
@@ -2207,6 +2220,7 @@ mod tests {
                                 },
                                 "status": { "id": "3", "name": "In Progress" },
                                 "assignee": { "accountId": "account-1", "displayName": "Bea" },
+                                "reporter": { "accountId": "account-7", "displayName": "Cal" },
                                 "updated": "2026-08-13T13:00:00.000+0000",
                                 "priority": { "id": "2", "name": "High" }
                             }
@@ -2239,6 +2253,7 @@ mod tests {
         assert_eq!(issues[0].key, "WEB-42");
         assert_eq!(issues[0].description, "Verify desktop\nand mobile.");
         assert_eq!(issues[0].assignee_name.as_deref(), Some("Bea"));
+        assert_eq!(issues[0].reporter_name.as_deref(), Some("Cal"));
         // ⚠️ OVER THE WIRE, not through the mapping function. The mapping tests
         // above call task_priority_from_jira directly, so every one of them
         // would still pass if the serde field were misnamed and `priority`

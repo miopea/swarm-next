@@ -12,6 +12,7 @@ const drafted: JiraReplyAwaiting = {
   project_name: "Help Desk",
   title: "The garden map will not load on a phone",
   worker_name: "Garden",
+  requester_name: "Robin Vale",
   body: "The map loads again on phones.",
   drafted_at: 1_792_700_000,
   resolution_held: false,
@@ -24,12 +25,20 @@ test("the operator edits the draft and one press posts their words", () => {
   render(<JiraReplyAttentionCard replies={[drafted]} onPost={onPost} onDiscard={vi.fn()} onOpenTask={vi.fn()} />);
 
   expect(screen.getByRole("heading", { name: "Reply on HELP-204" })).toBeInTheDocument();
-  expect(screen.getByText(/Garden drafted this reply/)).toHaveTextContent("Nothing is posted until you press.");
+  expect(screen.getByText(/Garden drafted this reply/)).toHaveTextContent(
+    "Garden drafted this reply to Robin Vale, who raised it. Nothing is posted until you press.",
+  );
   expect(screen.queryByRole("button", { name: "Post reply and resolve" })).not.toBeInTheDocument();
 
   fireEvent.change(screen.getByRole("textbox", { name: "Reply posted on HELP-204" }), { target: { value: "Edited." } });
   fireEvent.click(screen.getByRole("button", { name: "Post reply" }));
   expect(onPost).toHaveBeenCalledWith(drafted, "Edited.", false);
+});
+
+test("a requester Swarm has not read yet is the person who raised it", () => {
+  render(<JiraReplyAttentionCard replies={[{ ...drafted, requester_name: null }]} onPost={vi.fn()} onDiscard={vi.fn()} onOpenTask={vi.fn()} />);
+
+  expect(screen.getByText(/Garden drafted this reply/)).toHaveTextContent("drafted this reply to the person who raised it.");
 });
 
 test("a held resolution makes post-and-resolve the first choice", () => {

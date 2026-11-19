@@ -11572,13 +11572,16 @@ mod tests {
                 AND name IN ('github_review_submissions', 'github_review_proposals')",
         },
         // The operator posts a worker's drafted Jira reply (ADR 0177): one
-        // new table, so the undo drops it.
+        // new table, and who raised each linked ticket.
         SchemaStep {
             table: "jira_reply_drafts",
             artifact: "jira_reply_drafts",
-            undo_sql: "DROP TABLE jira_reply_drafts;",
-            probe_sql: "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table'
-                AND name = 'jira_reply_drafts'",
+            undo_sql: "DROP TABLE jira_reply_drafts;
+                ALTER TABLE jira_issue_links DROP COLUMN jira_reporter_name;",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
+                    AND name = 'jira_reply_drafts')
+                + (SELECT COUNT(*) FROM pragma_table_info('jira_issue_links')
+                    WHERE name = 'jira_reporter_name') = 2",
         },
     ];
 

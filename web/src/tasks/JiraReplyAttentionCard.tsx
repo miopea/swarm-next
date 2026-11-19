@@ -68,6 +68,7 @@ export default function JiraReplyAttentionCard({
         const disabled = busy || inFlight || !onPost;
         const empty = body.trim() === "";
         const author = item.worker_name ?? "The worker";
+        const requester = item.requester_name ? `${item.requester_name}, who raised it` : "the person who raised it";
         const post = (resolve: boolean, primary: boolean) => (
           <button
             key={resolve ? "post-and-resolve" : "post"}
@@ -87,8 +88,7 @@ export default function JiraReplyAttentionCard({
               <p className="eyebrow">{item.project_name ? `${item.project_name} · Jira reply` : "Jira reply"}</p>
               <h3 id={heading}>Reply on {item.issue_key}</h3>
               <p>
-                “{item.title}”. {author} drafted this reply to the person who raised it. Nothing is posted until
-                you press.
+                “{item.title}”. {author} drafted this reply to {requester}. Nothing is posted until you press.
               </p>
               <label className="jira-reply-body">
                 <span className="field-caption">Reply posted on {item.issue_key}</span>
