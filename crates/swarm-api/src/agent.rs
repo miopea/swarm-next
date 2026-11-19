@@ -878,7 +878,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 43;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 44;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -888,7 +888,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 43;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 43. Update this and the revision together.
+/// The served surface as of revision 44. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -897,7 +897,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 43;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "031c2d4c97666b104cf71f8aa8f4d5bbac6e08447c86e927768046408a56ae7f";
+    "9bbcd35804604e3c888cbbf66bcf5c5afa05e0c25851d020e12c9624c27ed7aa";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1162,6 +1162,7 @@ impl ServerHandler for AgentMcp {
             list_jira_comments_tool(),
             read_jira_attachment_tool(),
             comment_jira_task_tool(),
+            draft_jira_reply_tool(),
             record_deployment_tool(),
             record_task_commits_tool(),
             independent_check_input_tool(),
@@ -1351,7 +1352,8 @@ impl AgentMcp {
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_read_jira_attachment" => self.read_jira_attachment(arguments).await,
             "swarm_read_decision_image" => self.read_decision_image(arguments).await,
-            "swarm_comment_jira_task" => self.comment_jira_task(arguments),
+            "swarm_comment_jira_task" => self.comment_jira_task(arguments).await,
+            "swarm_draft_jira_reply" => self.draft_jira_reply(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
             "swarm_record_task_commits" => self.record_task_commits(arguments).await,
             "swarm_independent_check_input" => self.independent_check_input(arguments).await,
@@ -3311,13 +3313,71 @@ impl AgentMcp {
         Ok(self.tasks.visible_task(self.principal, task)?.is_some())
     }
 
-    fn comment_jira_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+    /// Queues the comment and sends it before answering, as the operator's
+    /// own comment does, so the worker is told what Jira did with it rather
+    /// than "queued" and nothing after (ADR 0177).
+    async fn comment_jira_task(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<CommentJiraTaskInput>(arguments)?;
         let task_id = self.visible_task_id(&input.task_id)?;
-        self.tasks
+        let comment = self
+            .tasks
             .store()
             .queue_jira_comment(task_id, &input.body)?;
-        structured(json!({ "task_id": task_id, "state": "queued" }))
+        self.state.deliver_jira_comments().await;
+        let (state, error) = self
+            .tasks
+            .store()
+            .jira_comment_delivery(&comment)?
+            .unwrap_or_else(|| ("queued".to_owned(), None));
+        let meaning = match state.as_str() {
+            "delivered" => "Jira has the comment.",
+            "conflict" => {
+                "Jira refused the comment and it was not posted. The error says why; the operator can retry it from the task."
+            }
+            "uncertain" => {
+                "Swarm stopped while sending it, so it may or may not be on the ticket. Check the ticket before sending it again."
+            }
+            _ => {
+                "Not sent yet: Jira could not be reached or is busy. Swarm keeps trying by itself."
+            }
+        };
+        structured(json!({
+            "task_id": task_id,
+            "state": state,
+            "error": error,
+            "meaning": meaning,
+        }))
+    }
+
+    /// Drafts the reply to whoever raised a Jira ticket, for the operator to
+    /// post from Needs you (ADR 0177). Nothing is posted here.
+    ///
+    /// The worker's own task in any state, including completed: a reply is
+    /// often what is left once the work is done. See
+    /// `task_this_worker_finished`.
+    fn draft_jira_reply(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<DraftJiraReplyInput>(arguments)?;
+        let task_id = TaskId::from_str(&input.task_id)
+            .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
+        let task_id = self
+            .tasks
+            .task_this_worker_finished(self.principal, task_id)?
+            .id;
+        self.tasks.store().draft_jira_reply(
+            self.principal.worker_id,
+            task_id,
+            &input.body,
+            super::unix_timestamp(),
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "state": "drafted",
+            "awaiting": "the operator, who edits it if they want and posts it from Needs you",
+            "next_action": "Nothing is posted until the operator presses. Do not post it yourself with swarm_comment_jira_task, and do not ask them about it in a decision: the draft is the question.",
+        }))
     }
 
     /// Records where and what the worker deployed, as part of finishing.
@@ -4636,6 +4696,7 @@ swarm_read_task_history before acting on it."
                 status_name: &issue.status_name,
                 assignee_account_id: issue.assignee_account_id.as_deref(),
                 assignee_name: issue.assignee_name.as_deref(),
+                reporter_name: issue.reporter_name.as_deref(),
                 remote_updated_at: &issue.updated_at,
                 priority: issue.priority,
             })
@@ -4678,6 +4739,7 @@ swarm_read_task_history before acting on it."
                 status_name: &issue.status_name,
                 assignee_account_id: issue.assignee_account_id.as_deref(),
                 assignee_name: issue.assignee_name.as_deref(),
+                reporter_name: issue.reporter_name.as_deref(),
                 remote_updated_at: &issue.updated_at,
                 priority: issue.priority,
             })
@@ -5054,6 +5116,13 @@ struct ReadDecisionImageInput {
 
 #[derive(Deserialize)]
 struct CommentJiraTaskInput {
+    task_id: String,
+    body: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DraftJiraReplyInput {
     task_id: String,
     body: String,
 }
@@ -6882,12 +6951,29 @@ fn draft_email_reply_tool() -> Tool {
 fn comment_jira_task_tool() -> Tool {
     tool(
         "swarm_comment_jira_task",
-        "Queue a durable progress update, question, evidence note, or handoff in the Jira discussion for a linked task visible to this agent.",
+        "Post a progress update, question, evidence note, or handoff to the Jira discussion for a linked task visible to this agent. It is sent at once, and the answer says whether Jira took it (state 'delivered') or why not. Your answer to the person who raised the ticket is not this: draft it with swarm_draft_jira_reply so the operator posts it.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
                 "body": { "type": "string", "minLength": 1, "maxLength": 4000 }
+            },
+            "required": ["task_id", "body"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn draft_jira_reply_tool() -> Tool {
+    tool(
+        "swarm_draft_jira_reply",
+        "Draft the reply to the person who raised a Jira ticket, for the operator to post. They see it in Needs you with the ticket, can edit it, and one press posts it to Jira straight away; nothing posts without that press. Use this instead of asking the operator to approve a reply with swarm_request_decision and then posting it yourself: that relay is what kept approved replies off the ticket. Write for the requester: what changed and what they can do now, plainly and short. A later draft replaces an earlier one. For a Jira-linked task assigned to you, including one already completed.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "body": { "type": "string", "minLength": 1, "maxLength": 4000, "description": "The reply as the requester will read it on the ticket. Plain language, no internal detail." }
             },
             "required": ["task_id", "body"],
             "additionalProperties": false
@@ -10806,6 +10892,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-10-30T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         };
@@ -11114,6 +11201,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-11-04T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         };
@@ -12035,6 +12123,7 @@ mod tests {
                 // read as much as the comment beside it (ADR 0155).
                 "swarm_read_jira_attachment",
                 "swarm_comment_jira_task",
+                "swarm_draft_jira_reply",
                 // A worker holds every half of its own work: where the fix is
                 // running, the reply to whoever asked, and the follow-up it
                 // found. Sending and routing stay above it.
@@ -16184,6 +16273,209 @@ mod tests {
         assert!(text.contains("20,000"), "{text}");
         assert!(!text.contains("constraint"), "{text}");
         assert!(store.latest_independent_check(task.id).unwrap().is_none());
+    }
+
+    /// A fake Jira that takes comments on WEB-42 and refuses them on WEB-43,
+    /// a Hive whose store and Jira client the agent bridge shares, and a
+    /// worker holding WEB-42 with WEB-43 held by nobody.
+    async fn jira_comment_hive() -> (
+        AgentBridge,
+        Arc<crate::AppState>,
+        TaskStore,
+        String,
+        (TaskId, TaskId),
+        Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    ) {
+        let posted = Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+        let recorded = Arc::clone(&posted);
+        let jira = Router::new().route(
+            "/rest/api/3/issue/{key}/comment",
+            axum::routing::post(
+                move |axum::extract::Path(key): axum::extract::Path<String>,
+                      Json(body): Json<Value>| {
+                    let recorded = Arc::clone(&recorded);
+                    async move {
+                        recorded.lock().unwrap().push((key.clone(), body));
+                        if key == "WEB-43" {
+                            (StatusCode::FORBIDDEN, Json(json!({})))
+                        } else {
+                            (StatusCode::CREATED, Json(json!({ "id": "10000" })))
+                        }
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, jira).await.unwrap() });
+
+        let (bridge, store, _queen_id, worker_id, _directory) = setup();
+        let state = Arc::new(
+            crate::AppState::default()
+                .with_task_store(store.clone())
+                .with_jira_configuration(&address, "operator@example.test", "token")
+                .unwrap(),
+        );
+        let bridge = bridge.with_jira(
+            crate::jira::JiraReadinessProbe::configured(&address, "operator@example.test", "token")
+                .unwrap(),
+        );
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let snapshot = |issue_id, issue_key| JiraIssueSnapshot {
+            issue_id,
+            issue_key,
+            summary: "Checkout shows an error",
+            description: "",
+            status_id: "1",
+            status_name: "To Do",
+            assignee_account_id: None,
+            assignee_name: None,
+            reporter_name: None,
+            remote_updated_at: "2026-11-04T13:00:00.000+0000",
+            priority: TaskPriority::Normal,
+        };
+        let tasks = store
+            .sync_jira_issues(
+                binding.id,
+                &[snapshot("20042", "WEB-42"), snapshot("20043", "WEB-43")],
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        store.assign_task_to_worker(tasks[0].id, worker_id).unwrap();
+        let token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        (
+            bridge,
+            state,
+            store,
+            token,
+            (tasks[0].id, tasks[1].id),
+            posted,
+        )
+    }
+
+    /// ADR 0177. A worker's comment used to answer "queued" and sit until the
+    /// next Jira pass, up to a minute later. It is sent before the tool
+    /// answers, and the answer is what Jira did.
+    #[tokio::test]
+    async fn a_workers_jira_comment_is_sent_before_the_tool_answers() {
+        let (bridge, state, store, token, (own, _), posted) = jira_comment_hive().await;
+
+        let sent = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_comment_jira_task",
+            json!({ "task_id": own, "body": "Found the cause; fixing it now." }),
+        )
+        .await;
+
+        assert_eq!(sent["result"]["isError"], false, "{sent}");
+        let answer = &sent["result"]["structuredContent"];
+        assert_eq!(answer["state"], "delivered", "{answer}");
+        assert_eq!(answer["error"], Value::Null);
+        assert_eq!(answer["meaning"], "Jira has the comment.");
+        let posted = posted.lock().unwrap().clone();
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0].0, "WEB-42");
+        assert!(
+            posted[0]
+                .1
+                .to_string()
+                .contains("Found the cause; fixing it now."),
+            "{:?}",
+            posted[0].1
+        );
+        assert!(store.claim_jira_comments(i64::MAX).unwrap().is_empty());
+    }
+
+    /// Jira refusing the comment is the answer, in words, not "queued".
+    #[tokio::test]
+    async fn a_jira_refusal_reaches_the_worker_as_the_tools_answer() {
+        let (bridge, state, store, _, (_, other), posted) = jira_comment_hive().await;
+        // Queen can comment on any linked task, so WEB-43 is reached through
+        // her; the refusal path is what this is about.
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen.id).unwrap());
+
+        let refused = call_as(
+            &bridge,
+            &state,
+            &queen_token,
+            "swarm_comment_jira_task",
+            json!({ "task_id": other, "body": "A note Jira will not take." }),
+        )
+        .await;
+
+        assert_eq!(refused["result"]["isError"], false, "{refused}");
+        let answer = &refused["result"]["structuredContent"];
+        assert_eq!(answer["state"], "conflict", "{answer}");
+        assert_eq!(answer["error"], "permission_denied");
+        assert!(
+            answer["meaning"].as_str().unwrap().contains("refused"),
+            "{answer}"
+        );
+        assert_eq!(posted.lock().unwrap().len(), 1);
+    }
+
+    /// ADR 0177. The reply to whoever raised the ticket is drafted for the
+    /// operator, and drafting posts nothing.
+    #[tokio::test]
+    async fn a_drafted_jira_reply_waits_for_the_operator_and_posts_nothing() {
+        let (bridge, state, store, token, (own, other), posted) = jira_comment_hive().await;
+
+        let drafted = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_draft_jira_reply",
+            json!({ "task_id": own, "body": "Checkout works again; please try once more." }),
+        )
+        .await;
+
+        assert_eq!(drafted["result"]["isError"], false, "{drafted}");
+        assert_eq!(drafted["result"]["structuredContent"]["state"], "drafted");
+        let waiting = store.jira_replies_awaiting().unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].task_id, own);
+        assert_eq!(waiting[0].issue_key, "WEB-42");
+        assert_eq!(waiting[0].worker_name.as_deref(), Some("Petal"));
+        assert!(posted.lock().unwrap().is_empty(), "a draft posts nothing");
+        assert!(store.claim_jira_comments(i64::MAX).unwrap().is_empty());
+
+        // Not this worker's ticket: refused, and nothing drafted.
+        let theirs = call_as(
+            &bridge,
+            &state,
+            &token,
+            "swarm_draft_jira_reply",
+            json!({ "task_id": other, "body": "Not mine to answer." }),
+        )
+        .await;
+        assert_eq!(theirs["result"]["isError"], true, "{theirs}");
+        assert_eq!(store.jira_replies_awaiting().unwrap().len(), 1);
     }
 
     #[tokio::test]

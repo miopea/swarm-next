@@ -3507,6 +3507,7 @@ mod tests {
                     status_name,
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at,
                     priority: TaskPriority::Normal,
                 }],

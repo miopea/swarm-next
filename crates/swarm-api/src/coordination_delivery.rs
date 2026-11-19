@@ -1897,6 +1897,15 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
             )
         },
     );
+    // Someone raised the ticket and is waiting on it. Their answer goes to the
+    // operator as a draft they post in one press (ADR 0177); a decision asked
+    // and then relayed by the worker is what held approved replies back.
+    let jira = delivery.jira_issue_key.as_deref().map_or_else(String::new, |key| {
+        format!(
+            " This is Jira ticket {}. When you answer whoever raised it, draft the reply with swarm_draft_jira_reply, not with swarm_request_decision: the operator edits and posts it from Needs you.",
+            terminal_safe_text(key)
+        )
+    });
     // THE OPERATOR'S RULING TRAVELS WITH THE WORK.
     //
     // A task whose gate reads "the operator must sign off, not a Queen note or
@@ -1968,8 +1977,8 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> CoordinationMess
         cadence: if delivery.generation == 0 { Cadence::Immediate } else { Cadence::Cooled },
         busy: BusyPolicy::Wait,
         bytes: format!(
-            "[Swarm task {} assigned] {}.{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is on none of the listing's pages, stop; its assignment changed.\r",
-            delivery.task_id, title, instruction, ruling, requester,
+            "[Swarm task {} assigned] {}.{}{}{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is on none of the listing's pages, stop; its assignment changed.\r",
+            delivery.task_id, title, instruction, ruling, requester, jira,
         )
         .into_bytes(),
         marker: delivery_marker(delivery.task_id),
@@ -4690,6 +4699,7 @@ mod tests {
                     operator_instruction: String::new(),
                     operator_rulings: Vec::new(),
                     email_requester: None,
+                    jira_issue_key: None,
                 };
                 let initial_cadence = task_dispatch_message(&dispatch).cadence;
                 for generation in [1, 2, i64::MAX] {
@@ -4820,6 +4830,7 @@ mod tests {
                     operator_instruction: String::new(),
                     operator_rulings: Vec::new(),
                     email_requester: None,
+                    jira_issue_key: None,
                 }),
             ),
             (

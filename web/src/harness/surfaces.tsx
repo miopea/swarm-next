@@ -52,6 +52,7 @@ import { demoBlocked, demoBriefings, demoDecision, demoTasks, demoWorkers } from
 import DecisionInbox from "../decisions/DecisionInbox";
 import UnansweredEmailAttentionCard from "../tasks/UnansweredEmailAttentionCard";
 import JiraResolutionAttentionCard from "../tasks/JiraResolutionAttentionCard";
+import JiraReplyAttentionCard from "../tasks/JiraReplyAttentionCard";
 import GithubReviewAttentionCard from "../tasks/GithubReviewAttentionCard";
 import ConnectionsSettings from "../settings/ConnectionsSettings";
 import MachinePressureBadge from "../runtime/MachinePressureBadge";
@@ -534,7 +535,7 @@ export const SURFACES: Surface[] = [
   {
     id: "needs-you",
     title: "Needs you",
-    why: "an email draft, a Jira resolution and a GitHub review waiting for the operator, and an actionable request; waiting work is on the separate Queues fixture",
+    why: "an email draft, Jira replies, a Jira resolution and a GitHub review waiting for the operator, and an actionable request; waiting work is on the separate Queues fixture",
     render: () => (
       <div className="attention-workspace">
         <DecisionInbox
@@ -545,6 +546,42 @@ export const SURFACES: Surface[] = [
           additionalPendingCount={3}
           attentionCards={<>
             <UnansweredEmailAttentionCard awaiting={[waitingEmail, { ...waitingEmail, task_id: "fictional-uncertain-email", sender_name: "A Member", thread_count: 1, draft_id: null, uncertain_reply_id: "fictional-uncertain-reply" }]} busy={false} onOpenTask={() => undefined} onSendReply={() => undefined} onSaveReply={() => undefined} onRetryReply={() => undefined} onDontSend={() => undefined} onSaveAsDraft={async () => "reconnect"} onReconnectForDrafts={() => undefined} />
+            <JiraReplyAttentionCard
+              replies={[
+                {
+                  task_id: "fictional-help-ticket",
+                  issue_key: "HELP-204",
+                  project_name: "Help Desk",
+                  title: "The garden map will not load on a phone",
+                  worker_name: "Garden",
+                  requester_name: "Robin Vale",
+                  body: "The map loads again on phones. It was waiting for a font that never arrived on slow connections; it now shows without it. Reload the page and it should appear within a couple of seconds.",
+                  drafted_at: 1_792_700_000,
+                  resolution_held: true,
+                  resolution_waiting: false,
+                  posted: null,
+                },
+                {
+                  task_id: "fictional-help-refused",
+                  issue_key: "HELP-205",
+                  project_name: "Help Desk",
+                  title: "Watering report shows last week",
+                  worker_name: "Garden",
+                  requester_name: null,
+                  body: "The report now shows this week. It was reading the cached copy from Sunday.",
+                  drafted_at: 1_792_700_050,
+                  resolution_held: false,
+                  resolution_waiting: true,
+                  posted: { state: "conflict", error: "permission_denied", posted_at: 1_792_700_100, resolve: false },
+                },
+              ]}
+              results={[{ task_id: "fictional-help-done", issue_key: "HELP-201", state: "delivered", error: null, resolution: "delivered" }]}
+              busy={false}
+              onPost={() => undefined}
+              onDiscard={() => undefined}
+              onDismissResult={() => undefined}
+              onOpenTask={() => undefined}
+            />
             <JiraResolutionAttentionCard
               held={[{
                 task_id: "fictional-is-ticket",

@@ -27,7 +27,7 @@ const MAX_TRANSITION_CLAIMS: i64 = 16;
 const MAX_TRANSITION_ATTEMPTS: i64 = 3;
 const MAX_PENDING_TRANSITIONS: i64 = 256;
 const MAX_PENDING_COMMENTS: i64 = 256;
-const MAX_COMMENT_BYTES: usize = 4_000;
+pub(crate) const MAX_COMMENT_BYTES: usize = 4_000;
 /// The most held resolutions one read returns. Each is one completed task, so
 /// a Hive with more than this waiting has a backlog the card already shows.
 const MAX_HELD_RESOLUTIONS_LISTED: i64 = 200;
@@ -104,6 +104,8 @@ pub struct JiraIssueSnapshot<'a> {
     pub status_name: &'a str,
     pub assignee_account_id: Option<&'a str>,
     pub assignee_name: Option<&'a str>,
+    /// The ticket's reporter: in a service desk, the person who raised it.
+    pub reporter_name: Option<&'a str>,
     pub remote_updated_at: &'a str,
     /// Applied on FIRST IMPORT ONLY; see the insert below.
     pub priority: TaskPriority,
@@ -579,8 +581,8 @@ impl TaskStore {
                 "INSERT INTO jira_issue_links (
                      issue_id, issue_key, binding_id, task_id, jira_status_id, jira_status_name,
                      jira_assignee_account_id, jira_assignee_name, remote_updated_at,
-                     jira_description
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                     jira_description, jira_reporter_name
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(issue_id) DO UPDATE SET
                      issue_key = excluded.issue_key,
                      binding_id = excluded.binding_id,
@@ -590,6 +592,7 @@ impl TaskStore {
                      jira_assignee_name = excluded.jira_assignee_name,
                      remote_updated_at = excluded.remote_updated_at,
                      jira_description = excluded.jira_description,
+                     jira_reporter_name = excluded.jira_reporter_name,
                      last_synced_at = unixepoch()",
                 params![
                     issue_id,
@@ -602,6 +605,10 @@ impl TaskStore {
                     issue.assignee_name.map(str::trim),
                     issue.remote_updated_at.trim(),
                     issue.description.trim(),
+                    issue
+                        .reporter_name
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty()),
                 ],
             )?;
             task_ids.push(task_id);
@@ -749,15 +756,23 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let candidates = {
-            let mut statement = transaction.prepare(
+            // A ticket does not resolve ahead of the answer its requester is
+            // waiting for (ADR 0177): while a drafted reply is unposted, the
+            // resolution waits, and goes once the reply lands or is dropped.
+            let mut statement = transaction.prepare(concat!(
                 "SELECT delivery.id, delivery.task_id, link.issue_key,
                         delivery.target_task_state
                  FROM jira_transition_deliveries delivery
                  JOIN jira_issue_links link ON link.task_id = delivery.task_id
                  WHERE delivery.state = 'queued' AND delivery.available_at <= ?1
                    AND delivery.attempts < ?2
-                 ORDER BY delivery.updated_at, delivery.id LIMIT ?3",
-            )?;
+                   AND NOT (delivery.target_task_state = 'completed' AND EXISTS (
+                       SELECT 1 FROM jira_reply_drafts draft
+                       WHERE draft.task_id = delivery.task_id AND ",
+                crate::jira_replies::jira_reply_owed!(),
+                "))
+                 ORDER BY delivery.updated_at, delivery.id LIMIT ?3"
+            ))?;
             statement
                 .query_map(
                     params![now, MAX_TRANSITION_ATTEMPTS, MAX_TRANSITION_CLAIMS],
@@ -990,7 +1005,10 @@ impl TaskStore {
     /// Returns a persistence error.
     pub fn held_jira_resolutions(&self) -> Result<Vec<HeldJiraResolution>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        // A drafted reply's card stands in for this one (ADR 0177): it posts
+        // the reply and resolves in one press, so the ticket is not resolved
+        // ahead of the answer the requester is waiting for.
+        let mut statement = connection.prepare(concat!(
             "SELECT task.id, link.issue_key, COALESCE(binding.project_name, ''), task.title,
                     delivery.updated_at,
                     (SELECT MAX(comment.delivered_at) FROM jira_comment_deliveries comment
@@ -1004,9 +1022,11 @@ impl TaskStore {
              JOIN jira_issue_links link ON link.task_id = task.id
              LEFT JOIN jira_project_bindings binding ON binding.id = link.binding_id
              WHERE delivery.state = 'held' AND task.state = 'completed'
-               AND task.removed_at IS NULL
-             ORDER BY delivery.updated_at, task.id LIMIT ?1",
-        )?;
+               AND task.removed_at IS NULL AND NOT EXISTS (
+                   SELECT 1 FROM jira_reply_drafts draft WHERE draft.task_id = task.id AND ",
+            crate::jira_replies::jira_reply_owed!(),
+            ") ORDER BY delivery.updated_at, task.id LIMIT ?1"
+        ))?;
         statement
             .query_map([MAX_HELD_RESOLUTIONS_LISTED], |row| {
                 Ok(HeldJiraResolution {
@@ -1122,35 +1142,9 @@ impl TaskStore {
         task_id: TaskId,
         body: &str,
     ) -> Result<String, TaskStoreError> {
-        let body = body.trim();
-        if body.is_empty() || body.len() > MAX_COMMENT_BYTES || body.chars().any(|c| c == '\0') {
-            return Err(TaskStoreError::InvalidJiraComment);
-        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let linked = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM jira_issue_links WHERE task_id = ?1)",
-            [task_id.to_string()],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if !linked {
-            return Err(TaskStoreError::NotFound);
-        }
-        let pending = transaction.query_row(
-            "SELECT COUNT(*) FROM jira_comment_deliveries
-             WHERE state IN ('queued','dispatching')",
-            [],
-            |row| row.get::<_, i64>(0),
-        )?;
-        if pending >= MAX_PENDING_COMMENTS {
-            return Err(TaskStoreError::JiraCommentQueueFull);
-        }
-        let id = uuid::Uuid::now_v7().to_string();
-        transaction.execute(
-            "INSERT INTO jira_comment_deliveries (id, task_id, body, state)
-             VALUES (?1, ?2, ?3, 'queued')",
-            params![id, task_id.to_string(), body],
-        )?;
+        let id = queue_comment_in(&transaction, task_id, body)?;
         transaction.execute(
             "INSERT INTO task_activity (task_id, kind, note, actor_kind)
              VALUES (?1, 'details_updated', ?2, 'operator')",
@@ -1159,6 +1153,25 @@ impl TaskStore {
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         Ok(id)
+    }
+
+    /// One comment's delivery state and the last error Jira gave, if it has one.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn jira_comment_delivery(
+        &self,
+        id: &str,
+    ) -> Result<Option<(String, Option<String>)>, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT state, last_error FROM jira_comment_deliveries WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Atomically claims a bounded batch of queued Jira comments.
@@ -1245,6 +1258,7 @@ impl TaskStore {
                  VALUES (?1, 'details_updated', 'Comment delivered to Jira', 'jira')",
                 [task_id],
             )?;
+            crate::jira_replies::release_resolution_after_reply(&transaction, id)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         }
         transaction.commit()?;
@@ -1716,6 +1730,45 @@ fn sync_issue_description(
     Ok(true)
 }
 
+/// Validates one comment and queues it inside the caller's transaction.
+///
+/// The caller records who queued it: the operator's own comment and a reply
+/// they posted from Needs you are different lines in the task's history.
+pub(crate) fn queue_comment_in(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    body: &str,
+) -> Result<String, TaskStoreError> {
+    let body = body.trim();
+    if body.is_empty() || body.len() > MAX_COMMENT_BYTES || body.chars().any(|c| c == '\0') {
+        return Err(TaskStoreError::InvalidJiraComment);
+    }
+    let linked = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM jira_issue_links WHERE task_id = ?1)",
+        [task_id.to_string()],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !linked {
+        return Err(TaskStoreError::NotFound);
+    }
+    let pending = transaction.query_row(
+        "SELECT COUNT(*) FROM jira_comment_deliveries
+         WHERE state IN ('queued','dispatching')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if pending >= MAX_PENDING_COMMENTS {
+        return Err(TaskStoreError::JiraCommentQueueFull);
+    }
+    let id = uuid::Uuid::now_v7().to_string();
+    transaction.execute(
+        "INSERT INTO jira_comment_deliveries (id, task_id, body, state)
+         VALUES (?1, ?2, ?3, 'queued')",
+        params![id, task_id.to_string(), body],
+    )?;
+    Ok(id)
+}
+
 pub(crate) fn table_sql_mentions(
     transaction: &rusqlite::Transaction<'_>,
     table: &str,
@@ -1837,7 +1890,7 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 
     /// ⚠️ A RE-SYNC MUST NOT OVERWRITE A PRIORITY SOMEBODY SET DELIBERATELY.
     ///
@@ -1883,6 +1936,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-08-13T13:00:00.000+0000",
             priority,
         };
@@ -1963,6 +2017,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2049,6 +2104,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2239,6 +2295,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2276,6 +2333,7 @@ mod tests {
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2314,6 +2372,7 @@ mod tests {
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2365,6 +2424,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-18T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2390,6 +2450,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-08-19T12:00:00.000+0000",
             priority: TaskPriority::Normal,
         };
@@ -2490,6 +2551,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2510,6 +2572,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2537,6 +2600,7 @@ mod tests {
                     status_name: "Done",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:05:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2564,6 +2628,7 @@ mod tests {
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
                     assignee_name: Some("Bea"),
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:10:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2616,6 +2681,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2660,6 +2726,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:01:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2746,6 +2813,7 @@ mod tests {
                     status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:00:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2791,6 +2859,7 @@ mod tests {
                     status_name: "In Progress",
                     assignee_account_id: None,
                     assignee_name: None,
+                    reporter_name: None,
                     remote_updated_at: "2026-08-13T12:02:00.000+0000",
                     priority: TaskPriority::Normal,
                 }],
@@ -2830,7 +2899,10 @@ mod tests {
 
     /// A support project whose completed tickets resolve to "Resolved", with
     /// one imported ticket already handed to review.
-    fn support_ticket_in_review(store: &TaskStore, confirm: bool) -> (JiraProjectBinding, Task) {
+    pub(crate) fn support_ticket_in_review(
+        store: &TaskStore,
+        confirm: bool,
+    ) -> (JiraProjectBinding, Task) {
         let binding = store
             .upsert_jira_project_binding(&JiraProjectBindingInput {
                 project_id: "10027",
@@ -2879,7 +2951,10 @@ mod tests {
         (binding, task)
     }
 
-    fn support_snapshot<'a>(status_id: &'a str, status_name: &'a str) -> JiraIssueSnapshot<'a> {
+    pub(crate) fn support_snapshot<'a>(
+        status_id: &'a str,
+        status_name: &'a str,
+    ) -> JiraIssueSnapshot<'a> {
         JiraIssueSnapshot {
             issue_id: "30736",
             issue_key: "IS-10736",
@@ -2889,6 +2964,7 @@ mod tests {
             status_name,
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: Some("  Dana Reyes "),
             remote_updated_at: "2026-10-22T12:00:00.000+0000",
             priority: TaskPriority::Normal,
         }
@@ -2896,7 +2972,7 @@ mod tests {
 
     /// The sweep's own completion, as IS-10736 was closed: an empty commit
     /// report on reviewed work.
-    fn settle_as_the_coordinator(store: &TaskStore, task: &Task) {
+    pub(crate) fn settle_as_the_coordinator(store: &TaskStore, task: &Task) {
         store
             .record_task_commits(
                 task.id,
@@ -3220,6 +3296,7 @@ mod tests {
             status_name: "To Do",
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at: "2026-10-30T13:00:00.000+0000",
             priority: TaskPriority::Normal,
         }
@@ -3554,6 +3631,7 @@ mod tests {
             status_name,
             assignee_account_id: None,
             assignee_name: None,
+            reporter_name: None,
             remote_updated_at,
             priority: TaskPriority::Normal,
         };

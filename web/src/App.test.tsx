@@ -1140,6 +1140,10 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).endsWith("/integrations/jira/resolutions")) {
       return Promise.resolve(ok([]));
     }
+    // Polled app-wide too (ADR 0177).
+    if (String(url).endsWith("/integrations/jira/replies")) {
+      return Promise.resolve(ok([]));
+    }
     // Polled app-wide too (ADR 0175), so answered by name for the same reason.
     if (String(url).endsWith("/integrations/github/reviews-owed")) {
       return Promise.resolve(ok([]));
@@ -2250,6 +2254,57 @@ test("an owed review is approved and merged from Needs you in the operator's wor
 
   fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
   await waitFor(() => expect(screen.queryByRole("heading", { name: "acme/petal#42 reviewed" })).not.toBeInTheDocument());
+});
+
+/**
+ * ADR 0177, the operator's ask: a reply they approve reaches the ticket at
+ * once. One press posts their edited words and resolves the ticket; the card
+ * leaves Needs you and says what Jira did.
+ */
+test("a drafted Jira reply is posted and resolved from Needs you in the operator's words", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "decisions");
+  const base = bootFetch();
+  let posted = false;
+  const reply = {
+    task_id: "task-204",
+    issue_key: "HELP-204",
+    project_name: "Help Desk",
+    title: "The garden map will not load on a phone",
+    worker_name: "Garden",
+    requester_name: "Robin Vale",
+    body: "The map loads again on phones.",
+    drafted_at: 1_792_700_000,
+    resolution_held: true,
+    resolution_waiting: false,
+    posted: null,
+  };
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/integrations/jira/replies/task-204/post") {
+      posted = true;
+      return Promise.resolve(ok({ state: "delivered", error: null, resolution: "delivered" }));
+    }
+    if (url === "/api/v1/integrations/jira/replies") return Promise.resolve(ok(posted ? [] : [reply]));
+    if (url.includes("/control-room/events")) return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    return base(input);
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  const body = await screen.findByRole("textbox", { name: "Reply posted on HELP-204" });
+  fireEvent.change(body, { target: { value: "The map loads again on phones. Reload the page." } });
+  fireEvent.click(screen.getByRole("button", { name: "Post reply and resolve" }));
+
+  expect(await screen.findByRole("heading", { name: "Reply posted on HELP-204" })).toBeInTheDocument();
+  expect(screen.getByText("Jira has the reply. The ticket is resolved.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Post reply and resolve" })).not.toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/integrations/jira/replies/task-204/post",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ body: "The map loads again on phones. Reload the page.", resolve: true }) }),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "Reply posted on HELP-204" })).not.toBeInTheDocument());
 });
 
 /**

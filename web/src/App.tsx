@@ -38,6 +38,9 @@ import {
   submitGithubReview,
   confirmJiraResolution,
   leaveJiraTicketOpen,
+  fetchJiraReplies,
+  postJiraReply,
+  discardJiraReply,
   fetchStartSurface,
   setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
@@ -51,6 +54,7 @@ import {
   runQueenAutomation,
   type UnansweredEmailTask,
   type HeldJiraResolution,
+  type JiraReplyAwaiting,
   type GithubReviewOwed,
   type GithubReviewVerdict,
   type DecisionSurface,
@@ -136,6 +140,7 @@ import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard, { type OutlookDraftResult } from "./tasks/UnansweredEmailAttentionCard";
 import JiraResolutionAttentionCard from "./tasks/JiraResolutionAttentionCard";
+import JiraReplyAttentionCard, { type JiraReplyResult } from "./tasks/JiraReplyAttentionCard";
 import GithubReviewAttentionCard, { type GithubReviewResult } from "./tasks/GithubReviewAttentionCard";
 import OperatorWaitCard from "./decisions/OperatorWaitCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
@@ -413,6 +418,23 @@ export function App() {
     } catch { /* Keep the last known queue during an unavailable read. */ }
   }, [operatorToken, feedbackRevision]);
   useVisiblePolling(refreshHeldResolutions, Boolean(operatorToken), 30_000);
+  // Replies a worker drafted for a Jira ticket, for the operator to post
+  // (ADR 0177). A drafted reply's card stands in for its ticket's held
+  // resolution, and the server leaves that one out of the list above.
+  const [jiraReplies, setJiraReplies] = useState<JiraReplyAwaiting[]>([]);
+  useEffect(() => { if (!operatorToken) setJiraReplies([]); }, [operatorToken]);
+  const refreshJiraReplies = useCallback(async (signal: AbortSignal) => {
+    if (!operatorToken) return;
+    try {
+      const replies = await fetchJiraReplies(operatorToken, signal);
+      if (!signal.aborted && Array.isArray(replies)) setJiraReplies(replies);
+    } catch { /* Keep the last known queue during an unavailable read. */ }
+  }, [operatorToken, feedbackRevision]);
+  useVisiblePolling(refreshJiraReplies, Boolean(operatorToken), 30_000);
+  // Replies Jira took, kept until dismissed: a posted reply leaves the list
+  // above at once, and the operator should see that it landed.
+  const [jiraReplyResults, setJiraReplyResults] = useState<JiraReplyResult[]>([]);
+  useEffect(() => { if (!operatorToken) setJiraReplyResults([]); }, [operatorToken]);
   // Reviews GitHub still asks of the operator, whose notes are written
   // (ADR 0175). Polled for the same reason: the task that wrote the notes is
   // complete, and the review it was for still waits on them.
@@ -1396,6 +1418,45 @@ export function App() {
   }
 
   /**
+   * Posts a drafted Jira reply in the operator's words, sent before the
+   * request answers, and resolves the ticket too when asked (ADR 0177).
+   */
+  async function postDraftedJiraReply(item: JiraReplyAwaiting, body: string, resolve: boolean) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      try {
+        const press = await postJiraReply(operatorToken, item.task_id, { body, resolve });
+        if (press.state === "delivered") {
+          setJiraReplyResults((current) => [
+            ...current.filter((result) => result.task_id !== item.task_id),
+            { task_id: item.task_id, issue_key: item.issue_key, ...press },
+          ]);
+        }
+      } finally {
+        // Delivered or not, the cards show where the reply stands now, and a
+        // reply posted without resolving brings the resolution's card back.
+        await refreshJiraReplyCards(operatorToken);
+      }
+    }, resolve ? "Posting the reply and resolving…" : "Posting the reply to Jira…");
+  }
+
+  /** Reads both lists a reply's press can change, as the polls do. */
+  async function refreshJiraReplyCards(token: string) {
+    const [replies, held] = await Promise.all([fetchJiraReplies(token), fetchHeldJiraResolutions(token)]);
+    if (Array.isArray(replies)) setJiraReplies(replies);
+    if (Array.isArray(held)) setHeldResolutions(held);
+  }
+
+  /** Drops a drafted Jira reply unposted: the operator's answer. */
+  async function discardDraftedJiraReply(taskId: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await discardJiraReply(operatorToken, taskId);
+      await refreshJiraReplyCards(operatorToken);
+    }, "Dropping the reply…");
+  }
+
+  /**
    * Posts an owed review under this machine's GitHub login, in the operator's
    * edited words, then merges when GitHub allows it (ADR 0176).
    */
@@ -1884,7 +1945,7 @@ export function App() {
     + workerReturnAttentionCount
     + workerEngineAttentionCount
     + workerCannotRunCount
-    + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length + githubReviewsOwed.length;
+    + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length + jiraReplies.length + githubReviewsOwed.length;
   // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
   // keeping push quiet now that every Needs-you source is eligible, so it is
   // recorded from the surface being open and visible — never from a poll.
@@ -2752,7 +2813,7 @@ export function App() {
               busy={busy || databaseRecoveryRequired}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerEngineAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length + githubReviewsOwed.length}
+              additionalPendingCount={Number(databaseRecoveryRequired) + pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + operatorWaitAttentionCount + workerReturnAttentionCount + workerEngineAttentionCount + workerCannotRunCount + conversationDriftAttentionCount + awaitingReply.length + heldResolutions.length + jiraReplies.length + githubReviewsOwed.length}
               attentionCards={<>
                 {databaseRecoveryRequired && <DatabaseRecoveryCard />}
                 <WorkerCannotRunCard workers={workers} onOpen={openWorker} />
@@ -2760,6 +2821,7 @@ export function App() {
                 <WorkerEngineAttentionCard attention={engineAttention} onReview={() => { setSettingsQuery(""); openSettings("settings-updates"); }} />
                 <OperatorWaitCard waits={operatorWaits} busy={busy} onDone={(taskId) => void completeOperatorWait(taskId)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onRetryReply={(replyId) => void retryAwaitingReply(replyId)} onDontSend={(taskId) => void dontSendAwaitingReply(taskId)} onSaveAsDraft={saveAwaitingReplyAsDraft} onReconnectForDrafts={() => void reconnectMailboxForDrafts()} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <JiraReplyAttentionCard replies={jiraReplies} results={jiraReplyResults} busy={busy} onPost={(item, body, resolve) => void postDraftedJiraReply(item, body, resolve)} onDiscard={(taskId) => void discardDraftedJiraReply(taskId)} onDismissResult={(taskId) => setJiraReplyResults((current) => current.filter((result) => result.task_id !== taskId))} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <JiraResolutionAttentionCard held={heldResolutions} busy={busy} onConfirm={(taskId) => void answerHeldResolution(taskId, true)} onLeaveOpen={(taskId) => void answerHeldResolution(taskId, false)} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <GithubReviewAttentionCard owed={githubReviewsOwed} results={githubReviewResults} busy={busy} onSubmit={(item, verdict, comment) => void submitOwedReview(item, verdict, comment)} onDismissResult={(taskId) => setGithubReviewResults((current) => current.filter((result) => result.task_id !== taskId))} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
