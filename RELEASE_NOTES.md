@@ -12,6 +12,19 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.23.0
+
+One database update (232): two new tables, and two tables rebuilt, keeping every row, to allow a new kind of attention row and a new message sender. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting. A worker or Queen session that was running before the update sees the new option on Swarm's tool once it restarts.
+
+### New features
+- Queen now hears when work has merged but its release is overdue. That is 30 minutes after the merge when other unfinished work waits on it, or once it has waited longer than 90% of recent releases in its repository (a day, until a repository has 20 measured). She gets one row per repository, naming who releases it, the merge commit and what waits on it. She decides whether you need to know.
+- Whoever releases that work gets one reminder from Swarm. It says it authorises nothing: Queen's go is still what releases it. It is cancelled if the work leaves Awaiting release first.
+- When Queen parks finished work for someone other than its assignee to release, she can name them. They can then tell her on that task what the release is waiting for.
+- On the first check after installing, work that has already been parked for a while may raise a few rows and reminders at once: at most one of each per repository.
+
+### Fixes
+- Swarm's web build and test tools are updated to versions with no known security advisories. Nothing a Hive serves changes.
+
 ## 1.22.2
 
 No database update. Installing it restarts the app and keeps your workers running. The merge check below lives in the worker engine, so it takes effect once the worker engine update is applied. A Hive applies that by itself when its workers rest, or you can apply it from Settings with Apply worker engine update, which restarts loaded workers.
