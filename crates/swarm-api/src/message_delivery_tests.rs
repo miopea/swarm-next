@@ -119,7 +119,7 @@ async fn failed_transport_is_visible_and_only_explicit_reconciliation_retries() 
         store
             .reconcile_task_message(
                 &message.id,
-                &first_claim,
+                Some(&first_claim),
                 true,
                 "Explicit safe retry check",
                 20

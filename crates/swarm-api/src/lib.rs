@@ -11445,6 +11445,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             error.to_string(),
         ),
         TaskStoreError::QueenMessageRecipientNotAssigned
+        | TaskStoreError::QueenMessageTaskClosed { .. }
         | TaskStoreError::ScoutSecondOpinionRequiresManagedScout
         | TaskStoreError::ScoutSecondOpinionScoutSleeping
         | TaskStoreError::ScoutSecondOpinionOperatorEngaged

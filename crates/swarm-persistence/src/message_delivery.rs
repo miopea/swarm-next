@@ -1,12 +1,16 @@
 //! Durable ownership of task-message delivery, separate from message history.
 use crate::{TaskMessageDispatch, TaskStore, TaskStoreError};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::str::FromStr;
 
 use swarm_domain::{TaskId, WorkerId};
 
 pub const TASK_MESSAGE_BATCH_LIMIT: usize = 16;
 pub const TASK_MESSAGE_QUEUE_LIMIT: usize = 4_096;
+
+/// Why Queen's message was not delivered when its task closed first (ADR 0184).
+/// The attention list and the operator's Queues read it to say so.
+pub const QUEEN_MESSAGE_TASK_CLOSED_REASON: &str = "its task closed before it arrived: Queen resends it on an open task if it still matters, then clears it";
 
 #[derive(Clone, Debug)]
 pub struct ClaimedTaskMessage {
@@ -42,6 +46,9 @@ pub struct TaskMessageAttention {
     /// on a Platform that is asleep" need different actions, and the second was
     /// indistinguishable from the first for 141 hours.
     pub recipient_running: bool,
+    /// Why delivery stopped, when it did. A message of Queen's whose task
+    /// closed first carries `QUEEN_MESSAGE_TASK_CLOSED_REASON` (ADR 0184).
+    pub resolution_reason: Option<String>,
     /// The worker it is addressed to, by name; `None` for Queen's office.
     pub recipient_name: Option<String>,
     /// The recipient's other Active task this waits behind (ADR 0067). A held
@@ -126,11 +133,31 @@ pub(super) fn cancel_queued_review(
 /// flight keeps its own outcome. The message itself stays in history. Messages
 /// TO QUEEN are left alone on purpose: a worker's late report on finished work,
 /// such as a regression found after review, is exactly what she must still see.
+///
+/// ⚠️ QUEEN'S OWN MESSAGE IS NOT CANCELLED, IT IS HANDED BACK TO HER (ADR 0184).
+/// Her message's task closed before it arrived in 249 cases from 2026-11-05 to
+/// 2026-11-22, 161 of them closed after she sent it, mostly by Swarm's own
+/// settlement or release sweep. Some were a GO, and one said not to merge until
+/// she sent a new one. She was told nothing. Her message now waits as
+/// 'rejected', which wakes her and lists it on her attention list, until she
+/// resends it on an open task or clears it. The operator's message and Swarm's
+/// reminder are still cancelled.
 fn cancel_undeliverable_worker_messages(
     tx: &rusqlite::Transaction<'_>,
     now: i64,
 ) -> rusqlite::Result<usize> {
-    tx.execute(
+    let handed_back = tx.execute(
+        "UPDATE task_message_deliveries SET state = 'rejected', updated_at = ?1,
+             resolution_reason = ?2
+         WHERE state = 'queued' AND superseded = 0 AND message_id IN (
+             SELECT m.id FROM task_messages m
+             JOIN worker_profiles w ON w.id = m.recipient_worker_id AND w.archived_at IS NULL
+             JOIN tasks t ON t.id = m.task_id AND t.removed_at IS NULL
+             WHERE m.recipient = 'worker' AND m.sender = 'queen' AND m.delivered_at IS NULL
+               AND t.state IN ('completed','abandoned'))",
+        params![now, QUEEN_MESSAGE_TASK_CLOSED_REASON],
+    )?;
+    let cancelled = tx.execute(
         "UPDATE task_message_deliveries SET state = 'cancelled', updated_at = ?1,
              resolution_reason = CASE
                  WHEN EXISTS(SELECT 1 FROM task_messages m
@@ -157,7 +184,8 @@ fn cancel_undeliverable_worker_messages(
                  -- has left Awaiting release (ADR 0180).
                  OR (m.sender = 'swarm' AND t.state <> 'awaiting_release')))",
         [now],
-    )
+    )?;
+    Ok(handed_back + cancelled)
 }
 
 /// A message to the task's worker, about that task, that has not arrived and
@@ -248,7 +276,7 @@ impl TaskStore {
                             (SELECT id FROM worker_profiles WHERE role = 'queen')))),
                 (SELECT name FROM worker_profiles WHERE m.recipient = 'worker'
                     AND id = m.recipient_worker_id),
-                {held_id}, {held_title}
+                {held_id}, {held_title}, d.resolution_reason
              FROM task_message_deliveries d
              JOIN task_messages m ON m.id = d.message_id JOIN tasks t ON t.id = m.task_id
              WHERE {filter} ORDER BY waiting DESC, d.message_id LIMIT 64",
@@ -276,6 +304,7 @@ impl TaskStore {
                         }
                         _ => None,
                     },
+                    resolution_reason: row.get(14)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -509,13 +538,16 @@ impl TaskStore {
 
     /// Explicit reconciliation after Queen inspects durable message content.
     /// `retry` accepts possible duplicate delivery; false closes without claiming receipt.
+    /// A message handed back because its task closed was never claimed, so it
+    /// is named with no claim (ADR 0184).
     ///
     /// # Errors
-    /// Refuses empty/oversized reasons and returns database failures.
+    /// Refuses empty/oversized reasons, a retry on a closed task, and returns
+    /// database failures.
     pub fn reconcile_task_message(
         &self,
         message_id: &str,
-        observed_claim_id: &str,
+        observed_claim_id: Option<&str>,
         retry: bool,
         reason: &str,
         now: i64,
@@ -526,9 +558,24 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
+        if retry {
+            // Queued again on a closed task, it would only be handed back on
+            // the next pass.
+            let closed: Option<String> = tx
+                .query_row(
+                    "SELECT t.state FROM task_messages m JOIN tasks t ON t.id = m.task_id
+                     WHERE m.id = ?1 AND t.state IN ('completed','abandoned')",
+                    [message_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(state) = closed {
+                return Err(TaskStoreError::QueenMessageTaskClosed { state });
+            }
+        }
         let changed = tx.execute(
             "UPDATE task_message_deliveries SET state = ?3, resolution_reason = ?4, updated_at = ?5
-             WHERE message_id = ?1 AND claim_id = ?2 AND state IN ('uncertain','rejected')
+             WHERE message_id = ?1 AND claim_id IS ?2 AND state IN ('uncertain','rejected')
                AND (?3 != 'queued' OR superseded = 0)",
             params![
                 message_id,
@@ -766,6 +813,108 @@ mod tests {
             .id
     }
 
+    /// ⚠️ QUEEN WAS NOT TOLD (ADR 0184). From 2026-11-05 to 2026-11-22, 161 of
+    /// her messages were queued on an open task that closed before they
+    /// arrived, and each was cancelled unread. Some were a GO. Hers is now
+    /// handed back to her to resend or clear; the operator's is cancelled as
+    /// before, and a retry on the closed task is refused.
+    #[test]
+    fn queens_message_whose_task_closed_first_is_handed_back_to_her() {
+        let (store, review, worker) = fixture();
+        let hers = send(&store, review, worker);
+        let operators = store
+            .send_task_message(
+                review,
+                MessageEnd::operator(),
+                MessageEnd::worker(worker),
+                "Thanks",
+                10,
+            )
+            .unwrap()
+            .id;
+        let dropped = store.create_task("Dropped", "/workspace").unwrap();
+        store.transition_task(dropped.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(dropped.id, worker).unwrap();
+        let on_abandoned = send(&store, dropped.id, worker);
+        store.transition_task(review, TaskState::Completed).unwrap();
+        store
+            .transition_task(dropped.id, TaskState::Abandoned)
+            .unwrap();
+
+        assert!(store.claim_task_messages(20).unwrap().is_empty());
+        let delivery = |id: &str| {
+            store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT state, resolution_reason, claim_id FROM task_message_deliveries
+                     WHERE message_id = ?1",
+                    [id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                )
+                .unwrap()
+        };
+        for id in [&hers, &on_abandoned] {
+            assert_eq!(
+                delivery(id),
+                (
+                    "rejected".into(),
+                    Some(QUEEN_MESSAGE_TASK_CLOSED_REASON.into()),
+                    None
+                )
+            );
+        }
+        assert_eq!(
+            delivery(&operators),
+            (
+                "cancelled".into(),
+                Some("its task closed before it arrived".into()),
+                None
+            ),
+            "the operator's message is cancelled as before"
+        );
+
+        let attention = store.task_message_attention(30, i64::MAX).unwrap();
+        assert_eq!(attention.total, 2, "both of hers, not the operator's");
+        let listed = attention
+            .items
+            .iter()
+            .find(|item| item.message_id == hers)
+            .unwrap();
+        assert_eq!(listed.state, "rejected");
+        assert_eq!(listed.claim_id, None);
+        assert_eq!(
+            listed.resolution_reason.as_deref(),
+            Some(QUEEN_MESSAGE_TASK_CLOSED_REASON)
+        );
+
+        assert!(matches!(
+            store.reconcile_task_message(&hers, None, true, "Send it again", 31),
+            Err(TaskStoreError::QueenMessageTaskClosed { ref state }) if state == "completed"
+        ));
+        assert!(
+            !store
+                .reconcile_task_message(&hers, Some("wrong"), false, "Sent on 7cae", 31)
+                .unwrap(),
+            "a claim it never had does not match"
+        );
+        assert!(
+            store
+                .reconcile_task_message(&hers, None, false, "Sent on the open task", 32)
+                .unwrap()
+        );
+        assert_eq!(delivery(&hers).0, "resolved");
+        assert!(store.claim_task_messages(40).unwrap().is_empty());
+        assert_eq!(delivery(&hers).0, "resolved", "a later pass leaves it");
+        assert_eq!(store.task_message_attention(41, i64::MAX).unwrap().total, 1);
+    }
+
     /// Four messages to the removed My RCG worker, on tasks closed in
     /// September, sat queued for six weeks and showed in Queues as live work.
     #[test]
@@ -814,9 +963,10 @@ mod tests {
         assert_eq!(
             delivery(&to_worker),
             (
-                "cancelled".into(),
-                Some("its task closed before it arrived".into())
-            )
+                "rejected".into(),
+                Some(QUEEN_MESSAGE_TASK_CLOSED_REASON.into())
+            ),
+            "Queen's own message is handed back to her, not cancelled (ADR 0184)"
         );
         assert_eq!(
             delivery(&to_leaver),
@@ -839,7 +989,11 @@ mod tests {
             .into_iter()
             .map(|item| item.message_id)
             .collect();
-        assert_eq!(waiting, [to_queen]);
+        assert_eq!(
+            waiting,
+            [to_worker, to_queen],
+            "Queen's handed-back message waits for her too (ADR 0184)"
+        );
     }
 
     /// ⚠️ A HELD MESSAGE SAYS WHAT HOLDS IT, AND ONLY A HELD ONE DOES. Queen's
@@ -1204,14 +1358,14 @@ mod tests {
         assert_eq!(attention.items[0].message_id, id);
         assert!(
             !store
-                .reconcile_task_message(&id, "wrong", true, "Need delivery", 23)
+                .reconcile_task_message(&id, Some("wrong"), true, "Need delivery", 23)
                 .unwrap()
         );
         assert!(
             store
                 .reconcile_task_message(
                     &id,
-                    &claim.claim_id,
+                    Some(&claim.claim_id),
                     true,
                     "Checked; duplicate acceptable",
                     24
@@ -1232,7 +1386,7 @@ mod tests {
             store
                 .reconcile_task_message(
                     &id,
-                    &retry.claim_id,
+                    Some(&retry.claim_id),
                     false,
                     "Retrieved durable content; handled",
                     28
@@ -1322,7 +1476,7 @@ mod tests {
                 !store
                     .reconcile_task_message(
                         &claim.message.message_id,
-                        &claim.claim_id,
+                        Some(&claim.claim_id),
                         true,
                         "Try again",
                         22
@@ -1565,7 +1719,7 @@ mod tests {
         assert!(settle(&store, 14).is_empty());
         assert!(
             store
-                .reconcile_task_message(&go, &claim.claim_id, true, "Retry it", 15)
+                .reconcile_task_message(&go, Some(&claim.claim_id), true, "Retry it", 15)
                 .unwrap()
         );
         let retry = store.claim_task_messages(16).unwrap().remove(0);
@@ -1578,7 +1732,7 @@ mod tests {
         );
         assert!(
             store
-                .reconcile_task_message(&go, &retry.claim_id, false, "Handled directly", 19)
+                .reconcile_task_message(&go, Some(&retry.claim_id), false, "Handled directly", 19)
                 .unwrap()
         );
         assert_eq!(settle(&store, 20), [task]);
@@ -1663,15 +1817,17 @@ mod tests {
     }
 
     /// The hold is the coordinator's alone. Queen or the operator closing the
-    /// task on purpose is not held, and the message is cancelled as before.
+    /// task on purpose is not held. Queen's message is then handed back to her
+    /// rather than delivered (ADR 0184).
     #[test]
     fn an_explicit_completion_is_not_held_by_a_pending_message() {
         let (store, task, worker) = fixture();
         nothing_built(&store, task);
         let go = send(&store, task, worker);
         store.transition_task(task, TaskState::Completed).unwrap();
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
         assert!(store.claim_task_messages(12).unwrap().is_empty());
-        assert_eq!(delivery_state(&store, task, &go), "cancelled");
+        assert_eq!(delivery_state(&store, task, &go), "rejected");
     }
 
     fn give_up_on(store: &TaskStore, claims: &[ClaimedTaskMessage], now: i64) {
