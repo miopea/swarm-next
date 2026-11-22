@@ -1584,6 +1584,12 @@ mod tests {
     #[test]
     fn the_journal_says_once_why_the_update_waits_and_once_when_it_stops() {
         let journal = Journal::default();
+        // ⚠️ tracing-core decides once, for the whole process, whether each
+        // log line is wanted. While only one dispatcher exists, it asks the
+        // default of whichever thread reaches the line first, and a thread
+        // with no subscriber caches "never". A second live dispatcher, made
+        // before this test's own, makes it ask every one.
+        let _every_dispatcher_is_asked = tracing::Dispatch::new(tracing_subscriber::registry());
         let subscriber = tracing_subscriber::fmt()
             .with_writer({
                 let journal = journal.clone();
@@ -1593,6 +1599,17 @@ mod tests {
             .finish();
         let update = IdleEngineUpdate::default();
         tracing::subscriber::with_default(subscriber, || {
+            // Another thread reaches the same log lines first, as the update
+            // pass in a parallel test can, so this test fails every time the
+            // guard above is missing.
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let elsewhere = IdleEngineUpdate::default();
+                    elsewhere.refuse("workers_busy", None, Some(1));
+                    elsewhere.refuse("screen_not_resting", Some("elsewhere".to_owned()), None);
+                    elsewhere.clear();
+                });
+            });
             update.clear();
             update.refuse("workers_busy", None, Some(5));
             update.refuse("workers_busy", None, Some(5));
