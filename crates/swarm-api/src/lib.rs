@@ -5421,6 +5421,10 @@ fn api_router(state: AppState) -> Router {
             post(tasks::change_prerequisite),
         )
         .route(
+            "/api/v1/tasks/{task_id}/read-links",
+            post(tasks::change_read_link),
+        )
+        .route(
             "/api/v1/tasks/{task_id}/completion-exemption",
             post(tasks::approve_completion_exemption),
         )
@@ -11391,6 +11395,19 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
                 StatusCode::CONFLICT
             },
             "task_decision_link_refused",
+            reason.to_string(),
+        ),
+        TaskStoreError::TaskReadLink(reason) => ApiError::new(
+            match reason {
+                swarm_domain::TaskReadLinkError::Unauthorized => StatusCode::FORBIDDEN,
+                swarm_domain::TaskReadLinkError::InvalidReason
+                | swarm_domain::TaskReadLinkError::SelfReference => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                swarm_domain::TaskReadLinkError::Capacity
+                | swarm_domain::TaskReadLinkError::Conflict => StatusCode::CONFLICT,
+            },
+            "task_read_link_refused",
             reason.to_string(),
         ),
         TaskStoreError::TaskPrerequisite(reason) => ApiError::new(
@@ -23809,6 +23826,66 @@ mod tests {
             3,
             "agent history remains complete"
         );
+    }
+
+    #[tokio::test]
+    async fn read_link_route_authenticates_and_returns_the_tasks_links() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Follows the rules", "/workspace")
+            .unwrap();
+        let rules = store.create_task("Holds the rules", "/another").unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        for (target, token, operation, status, links) in [
+            (rules.id, "wrong", "add", StatusCode::UNAUTHORIZED, 0),
+            (rules.id, "secret", "add", StatusCode::OK, 1),
+            (rules.id, "secret", "add", StatusCode::OK, 1),
+            (
+                task.id,
+                "secret",
+                "add",
+                StatusCode::UNPROCESSABLE_ENTITY,
+                0,
+            ),
+            (rules.id, "secret", "remove", StatusCode::OK, 0),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/api/v1/tasks/{}/read-links", task.id))
+                        .header("authorization", format!("Bearer {token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "readable_task_id": target, "operation": operation,
+                                "reason": "Holds the rules this work follows."
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            if status == StatusCode::OK {
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                let body = response_json(response).await;
+                assert_eq!(body["read_links"].as_array().unwrap().len(), links);
+                if links == 1 {
+                    assert_eq!(
+                        body["read_links"][0]["readable_task_id"],
+                        rules.id.to_string()
+                    );
+                }
+            }
+        }
+        assert!(store.read_links_for_tasks(&[task.id]).unwrap().is_empty());
     }
 
     #[tokio::test]

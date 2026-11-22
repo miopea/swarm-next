@@ -68,6 +68,39 @@ pub(super) async fn change_prerequisite(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReadLinkRequest {
+    readable_task_id: TaskId,
+    operation: swarm_domain::ReadLinkOperation,
+    reason: String,
+}
+
+/// The operator lets a task's worker read another task (ADR 0182).
+pub(super) async fn change_read_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<ReadLinkRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let change = swarm_domain::TaskReadLinkChange {
+        task_id: parse_task_id(&task_id)?,
+        readable_task_id: request.readable_task_id,
+        operation: request.operation,
+        reason: request.reason,
+    };
+    let links = task_service(&state)?
+        .change_operator_task_read_link(&change, crate::unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "read_links": links })),
+    )
+        .into_response())
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct TaskActivityQuery {
     limit: Option<usize>,
 }
