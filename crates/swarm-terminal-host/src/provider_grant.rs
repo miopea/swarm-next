@@ -60,7 +60,7 @@ pub(crate) async fn run(config: Option<&str>) {
     }
 }
 
-async fn read_input() -> Result<Vec<u8>, String> {
+pub(crate) async fn read_input() -> Result<Vec<u8>, String> {
     let mut input = Vec::new();
     tokio::io::stdin()
         .take(MAX_INPUT_BYTES + 1)
@@ -70,14 +70,23 @@ async fn read_input() -> Result<Vec<u8>, String> {
     Ok(input)
 }
 
-async fn ask(config: &Path, input: &[u8]) -> Result<bool, String> {
+pub(crate) async fn ask(config: &Path, input: &[u8]) -> Result<bool, String> {
+    spend(config, input, false).await
+}
+
+/// As `ask`, but only a grant the operator pressed counts, never one Queen
+/// granted (ADR 0179).
+pub(crate) async fn ask_operator(config: &Path, input: &[u8]) -> Result<bool, String> {
+    spend(config, input, true).await
+}
+
+async fn spend(config: &Path, input: &[u8], operator_only: bool) -> Result<bool, String> {
     let (command, cwd, _) = command_input(input)?;
-    let answer = post(
-        config,
-        swarm_terminal::COMMAND_GRANT_PATH_SUFFIX,
-        &json!({ "command": command, "cwd": cwd }),
-    )
-    .await?;
+    let mut body = json!({ "command": command, "cwd": cwd });
+    if operator_only {
+        body["operator_only"] = Value::Bool(true);
+    }
+    let answer = post(config, swarm_terminal::COMMAND_GRANT_PATH_SUFFIX, &body).await?;
     Ok(answer.get("granted").and_then(Value::as_bool) == Some(true))
 }
 
@@ -99,7 +108,9 @@ async fn report(config: &Path, input: &[u8]) -> Result<Option<String>, String> {
 }
 
 /// The command, the shell's directory and any refusal reason from the mod.
-fn command_input(input: &[u8]) -> Result<(String, Option<String>, Option<String>), String> {
+pub(crate) fn command_input(
+    input: &[u8],
+) -> Result<(String, Option<String>, Option<String>), String> {
     if input.len() as u64 > MAX_INPUT_BYTES {
         return Err("the command is longer than any grant can carry".into());
     }

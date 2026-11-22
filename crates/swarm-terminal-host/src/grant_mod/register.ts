@@ -4,7 +4,9 @@ import type { Register } from 'claude-code'
 // (ADR 0129). It lets the worker run a command the operator granted in Swarm,
 // exactly as granted and once, in the session that asked for it. When auto
 // mode refuses a command, it tells Swarm, which may ask the operator to grant
-// it, and passes on what Swarm says to the worker (ADR 0130).
+// it, and passes on what Swarm says to the worker (ADR 0130). And it refuses a
+// merge of someone else's pull request in the operator's own public
+// repository unless the operator granted that exact merge (ADR 0179).
 const HOST: string = __SWARM_HOST__
 const CONFIG: string = __SWARM_MCP_CONFIG__
 
@@ -12,6 +14,19 @@ const CONFIG: string = __SWARM_MCP_CONFIG__
 // reaches the worker. A note nobody collects goes with the oldest.
 const MAX_NOTES = 16
 const notes = new Map<string, string>()
+
+// A command that may merge a pull request (ADR 0179). It only picks which
+// commands Swarm reads closely; Swarm decides which of them merge, and this
+// may name more than it needs to, never fewer.
+const MAY_MERGE = /merge|enqueuepullrequest/i
+const RUNS_GITHUB = /\b(gh|curl)\b/
+const mayMerge = (command: unknown): command is string =>
+  typeof command === 'string' && MAY_MERGE.test(command) && RUNS_GITHUB.test(command)
+const MERGE_UNCHECKED =
+  'Swarm could not check this merge, so it is refused (ADR 0179). In the operator\'s own ' +
+  'public repositories a merge of a pull request the account making it did not open needs ' +
+  'the operator\'s grant for that exact command. Try again; if it is still refused, ask the ' +
+  'operator for this exact command with swarm_request_decision. Do not merge it any other way.'
 
 export const register: Register = on => {
   on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
@@ -26,10 +41,31 @@ export const register: Register = on => {
       !verdict.setting &&
       !verdict.plugin
     const command = (e.input as { command?: unknown }).command
-    if (!waiting || typeof command !== 'string') return verdict
+    if (typeof command !== 'string') return verdict
     // Claude drops a leading `cd <dir> &&` when the shell is already in
     // <dir>, so Swarm is told where the shell is to recognise the granted text.
     const cwd = await $.session.cwd().catch(() => undefined)
+    // A merge of someone else's pull request in the operator's own public
+    // repository runs only on the operator's grant for it, whatever allowed
+    // it or would have: a rule, or auto mode taking Queen's word (ADR 0179).
+    // A deny stands, and a person asked decides for themselves.
+    if ((waiting || verdict.decision === 'allow') && mayMerge(command)) {
+      const gate = await $.process.run([HOST, 'provider-merge', CONFIG], {
+        stdin: JSON.stringify({ command, cwd }),
+        timeoutMs: 30_000,
+      })
+      const [word = '', ...why] = gate.exitCode === 0 ? gate.stdout.split('\n') : []
+      if (word.trim() === 'granted') {
+        return {
+          decision: 'allow',
+          reason: 'The operator granted this exact merge in Swarm.',
+        }
+      }
+      if (word.trim() !== 'pass') {
+        return { decision: 'deny', reason: why.join('\n').trim() || MERGE_UNCHECKED }
+      }
+    }
+    if (!waiting) return verdict
     const asked = await $.process.run([HOST, 'provider-grant', CONFIG], {
       stdin: JSON.stringify({ command, cwd }),
       timeoutMs: 10_000,
@@ -37,7 +73,13 @@ export const register: Register = on => {
     return asked.exitCode === 0 && asked.stdout.trim() === 'granted'
       ? { decision: 'allow', reason: 'The operator granted this exact command in Swarm.' }
       : verdict
-  }).catch(($, e, next) => next(e))
+  }).catch(($, e, next) =>
+    // A grant that fails leaves the worker's own checks to decide. A merge
+    // check that fails refuses: its doubt is never a pass.
+    mayMerge((e.input as { command?: unknown }).command)
+      ? { decision: 'deny', reason: MERGE_UNCHECKED }
+      : next(e),
+  )
 
   // Auto mode refused a command: the exact text, as tool.check saw it.
   on('classic.PermissionDenied', async ($, e, next) => {

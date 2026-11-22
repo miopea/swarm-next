@@ -3,7 +3,8 @@
 - Status: Accepted; amended by ADR 0159 (Queen's cards are listed in her
   queue, not the operator's inbox, and a command card must say) and by
   ADR 0165 (Queen also grants guarded content writes and staging test
-  sessions)
+  sessions) and by ADR 0179 (a card Queen grants does not let a merge of
+  someone else's pull request in the operator's own public repository run)
 - Date: 2026-11-05
 - Decided by: the operator, 2026-11-05. They said they had been pressing
   Allow on command cards without reading them, and that the ones they did

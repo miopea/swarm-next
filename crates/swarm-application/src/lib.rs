@@ -4651,8 +4651,41 @@ impl TaskService {
         cwd: Option<&str>,
         current_sha256: impl Fn(&str) -> Option<String>,
     ) -> Result<Option<DecisionRequestId>, ApplicationError> {
+        self.spend_grant(worker_id, command, cwd, current_sha256, false)
+    }
+
+    /// Spends a grant as `use_command_grant` does, but only one the operator
+    /// pressed, never one Queen granted (ADR 0158). The grant mod asks this for
+    /// a merge of someone else's pull request in the operator's own public
+    /// repository, which only the operator decides (ADR 0179).
+    ///
+    /// # Errors
+    /// Returns a store error.
+    pub fn use_operator_command_grant(
+        &self,
+        worker_id: WorkerId,
+        command: &str,
+        cwd: Option<&str>,
+        current_sha256: impl Fn(&str) -> Option<String>,
+    ) -> Result<Option<DecisionRequestId>, ApplicationError> {
+        self.spend_grant(worker_id, command, cwd, current_sha256, true)
+    }
+
+    fn spend_grant(
+        &self,
+        worker_id: WorkerId,
+        command: &str,
+        cwd: Option<&str>,
+        current_sha256: impl Fn(&str) -> Option<String>,
+        operator_only: bool,
+    ) -> Result<Option<DecisionRequestId>, ApplicationError> {
         for form in granted_forms(command, cwd) {
-            let Some(grant) = self.store.live_command_grant(worker_id, &form)? else {
+            let live = if operator_only {
+                self.store.live_operator_command_grant(worker_id, &form)?
+            } else {
+                self.store.live_command_grant(worker_id, &form)?
+            };
+            let Some(grant) = live else {
                 continue;
             };
             if let Some(script) = &grant.script
