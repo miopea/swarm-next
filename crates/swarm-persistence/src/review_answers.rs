@@ -194,7 +194,11 @@ impl TaskStore {
             return Err(not_yours);
         };
         if assigned.as_deref() != Some(worker_id.to_string().as_str()) {
-            if !second_opinion_asked(&tx, task_id, worker_id, reply_to)? {
+            // The worker Queen named to release the task may tell her what its
+            // release waits on (ADR 0180). Swarm's reminder asks exactly that.
+            let releasing = reply_to.is_none()
+                && crate::release_waits::is_named_releaser(&tx, task_id, worker_id)?;
+            if !releasing && !second_opinion_asked(&tx, task_id, worker_id, reply_to)? {
                 return Err(not_yours);
             }
             // An answer to a second opinion is a message and nothing more: it

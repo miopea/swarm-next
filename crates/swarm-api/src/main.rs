@@ -582,7 +582,7 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
         async move {
             // Blocking thread, not the runtime's: this runs a git subprocess
             // per parked task and holds a database connection while it does.
-            let _ = tokio::task::spawn_blocking(move || state.record_released_tasks()).await;
+            let _ = tokio::task::spawn_blocking(move || state.sweep_releases()).await;
         }
     });
     // THE CHECK GATE READS CI WHILE WORK WAITS ON IT (ADR 0115). GitHub cannot

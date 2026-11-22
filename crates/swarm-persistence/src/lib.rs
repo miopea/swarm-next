@@ -65,6 +65,11 @@ pub use independent_checks::{IndependentCheckRecording, IndependentCheckResult};
 pub use must_not_touch::MustNotTouchChange;
 mod queen_grants;
 mod queen_releases;
+mod release_waits;
+pub use release_waits::{
+    MergedWorkWaitingCandidate, MergedWorkWaitingRaise, RELEASE_WAIT_WINDOW_SECONDS,
+    ReleaseWaitCard, ReleaseWaitMerge, ReleaseWaitRead,
+};
 mod settings_restart;
 mod task_reads;
 pub use settings_restart::{LaunchChoices, WorkerBehindSettings};
@@ -506,7 +511,10 @@ const GITHUB_REVIEW_NOTIFICATIONS_SCHEMA_MARKER: i64 = 229;
 const GITHUB_REVIEW_SUBMISSIONS_SCHEMA_MARKER: i64 = 230;
 /// The operator posts a worker's drafted Jira reply from Needs you (ADR 0177).
 const JIRA_REPLY_DRAFTS_SCHEMA_MARKER: i64 = 231;
-const CURRENT_SCHEMA_VERSION: i64 = JIRA_REPLY_DRAFTS_SCHEMA_MARKER;
+/// Merged work that waits for its release is named to Queen, and Swarm may
+/// remind whoever releases it (ADR 0180).
+const RELEASE_WAITS_SCHEMA_MARKER: i64 = 232;
+const CURRENT_SCHEMA_VERSION: i64 = RELEASE_WAITS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -1033,6 +1041,15 @@ pub enum TaskStoreError {
         "you can message Queen only on a task assigned to you, or as Scout on a task Queen asked you about, and this task is neither"
     )]
     WorkerMessageNotOnOwnTask,
+    /// Queen named someone to release a task who cannot: not a worker on
+    /// this board, archived, or Queen herself (ADR 0180).
+    #[error(
+        "the worker named to release this task must be a current worker on this board, not Queen"
+    )]
+    ReleaserNotAWorker,
+    /// A releaser named on a move that does not park the task.
+    #[error("a releasing worker can be named only when the task moves to Awaiting release")]
+    ReleaserOnlyWhenParking,
     #[error("a second opinion may be requested only from this Hive's managed Scout")]
     ScoutSecondOpinionRequiresManagedScout,
     #[error("Scout has no open session; do not wake Scout solely for a second opinion")]
@@ -3362,11 +3379,24 @@ impl TaskStore {
         self.transition_task_guarded(id, target, note, reporting_session_id, actor, false)
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::too_many_arguments,
-        reason = "Lifecycle guards and event write share one transaction"
-    )]
+    /// Queen's transition, naming who releases the task when it parks it in
+    /// Awaiting Release (ADR 0180). The name is written in the transition's
+    /// own transaction, so a task is never parked with half of it recorded.
+    ///
+    /// # Errors
+    /// Refuses a releaser on any other move, and one who is not a current
+    /// worker, plus every refusal an ordinary transition has.
+    pub fn transition_task_naming_releaser(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        releaser: Option<WorkerId>,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
+        self.transition_task_releasing(id, target, note, None, actor, false, releaser)
+    }
+
     fn transition_task_guarded(
         &self,
         id: TaskId,
@@ -3376,8 +3406,37 @@ impl TaskStore {
         actor: &TaskActivityActor,
         automatic_settlement: bool,
     ) -> Result<Task, TaskStoreError> {
+        self.transition_task_releasing(
+            id,
+            target,
+            note,
+            reporting_session_id,
+            actor,
+            automatic_settlement,
+            None,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        clippy::too_many_arguments,
+        reason = "Lifecycle guards and event write share one transaction"
+    )]
+    fn transition_task_releasing(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        reporting_session_id: Option<WorkerSessionId>,
+        actor: &TaskActivityActor,
+        automatic_settlement: bool,
+        releaser: Option<WorkerId>,
+    ) -> Result<Task, TaskStoreError> {
         if note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
             return Err(TaskStoreError::InvalidTaskActivityNote);
+        }
+        if releaser.is_some() && target != TaskState::AwaitingRelease {
+            return Err(TaskStoreError::ReleaserOnlyWhenParking);
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -3464,6 +3523,11 @@ impl TaskStore {
         )?;
         if matches!(target, TaskState::Completed | TaskState::Abandoned) {
             decisions::withdraw_command_requests_of_closed_task(&transaction, id)?;
+        }
+        // A releaser is named for one stay: entering Awaiting Release sets or
+        // clears it, and leaving clears it.
+        if current == TaskState::AwaitingRelease || target == TaskState::AwaitingRelease {
+            release_waits::name_releaser(&transaction, id, releaser, now)?;
         }
         // Work sent back to a worker owes it a briefing again. Queen's only
         // non-completing exit from Review used to be Active, and that
@@ -5154,6 +5218,9 @@ fn migrate_queen_release_schema_steps(
             transaction,
             JIRA_REPLY_DRAFTS_SCHEMA_MARKER,
         )?;
+    }
+    if schema_version < RELEASE_WAITS_SCHEMA_MARKER {
+        crate::release_waits::migrate_release_waits(transaction, RELEASE_WAITS_SCHEMA_MARKER)?;
     }
     Ok(())
 }
@@ -11583,6 +11650,76 @@ mod tests {
                 + (SELECT COUNT(*) FROM pragma_table_info('jira_issue_links')
                     WHERE name = 'jira_reporter_name') = 2",
         },
+        // Merged work waiting for its release (ADR 0180): two widened CHECKs
+        // and two tables. The undo rebuilds both tables at 231's shape, which
+        // drops any row only 232 can hold.
+        SchemaStep {
+            table: "release_waits",
+            artifact: "release_waits",
+            // foreign_keys OFF, as the worker_profiles rebuild above needs: with
+            // it on, SQLite rewrites the children's keys on a rename even under
+            // legacy_alter_table, and task_message_deliveries and
+            // task_returned_reviews would be left naming the dropped copy.
+            undo_sql: "PRAGMA foreign_keys = OFF;
+                DROP TABLE release_waits;
+                DROP TABLE task_releasers;
+                PRAGMA legacy_alter_table = ON;
+                ALTER TABLE coordinator_actions RENAME TO coordinator_actions_undo;
+                CREATE TABLE coordinator_actions (
+                    id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention','worker_cannot_start_attention')),
+                    worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                    task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+                    session_id TEXT,
+                    evidence_revision INTEGER,
+                    observed_age_seconds INTEGER,
+                    state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                    reason TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                    attempted_at INTEGER,
+                    finished_at INTEGER,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    CHECK (task_id IS NOT NULL OR kind = 'worker_cannot_start_attention')
+                );
+                INSERT INTO coordinator_actions SELECT * FROM coordinator_actions_undo
+                    WHERE kind <> 'merged_work_waiting_attention';
+                DROP TABLE coordinator_actions_undo;
+                CREATE INDEX coordinator_actions_queue
+                    ON coordinator_actions(state, created_at, id);
+                CREATE INDEX coordinator_actions_by_task
+                    ON coordinator_actions(task_id, kind);
+                DELETE FROM task_message_deliveries WHERE message_id IN
+                    (SELECT id FROM task_messages WHERE sender = 'swarm');
+                ALTER TABLE task_messages RENAME TO task_messages_undo;
+                CREATE TABLE task_messages (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    sender TEXT NOT NULL CHECK (sender IN ('queen','worker','operator')),
+                    recipient TEXT NOT NULL CHECK (recipient IN ('queen','worker')),
+                    sender_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+                    recipient_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+                    body TEXT NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    delivered_at INTEGER, delivered_session_id TEXT,
+                    CHECK (NOT (sender = 'worker' AND recipient = 'worker'))
+                );
+                INSERT INTO task_messages SELECT * FROM task_messages_undo WHERE sender <> 'swarm';
+                DROP TABLE task_messages_undo;
+                CREATE INDEX task_messages_by_task ON task_messages(task_id, created_at);
+                CREATE INDEX task_messages_undelivered
+                    ON task_messages(recipient_worker_id) WHERE delivered_at IS NULL;
+                PRAGMA legacy_alter_table = OFF;
+                PRAGMA foreign_keys = ON",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
+                    AND name IN ('release_waits', 'task_releasers'))
+                + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
+                    AND name = 'coordinator_actions'
+                    AND sql LIKE '%merged_work_waiting_attention%')
+                + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
+                    AND name = 'task_messages' AND sql LIKE '%''swarm''%') = 4",
+        },
     ];
 
     /// The step that introduced a named artifact, rather than whichever is newest.
@@ -11727,6 +11864,29 @@ mod tests {
         ));
     }
 
+    /// Foreign keys whose parent table does not exist, as `child -> parent`.
+    ///
+    /// `foreign_key_check` cannot see these on an empty child: it reports rows,
+    /// and a key naming a dropped table has none to report until a row arrives.
+    /// A table rename with foreign keys on leaves exactly this behind.
+    fn keys_naming_no_table(connection: &rusqlite::Connection) -> Vec<String> {
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT child.name || ' -> ' || fk.\"table\"
+                 FROM sqlite_master child, pragma_foreign_key_list(child.name) fk
+                 WHERE child.type = 'table'
+                   AND NOT EXISTS(SELECT 1 FROM sqlite_master parent
+                                  WHERE parent.type = 'table' AND parent.name = fk.\"table\")
+                 ORDER BY 1",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
     #[test]
     fn migrates_the_previous_schema_when_the_database_carries_related_rows() {
         let directory = tempfile::tempdir().unwrap();
@@ -11765,12 +11925,22 @@ mod tests {
                     CURRENT_SCHEMA_VERSION - 1
                 ))
                 .unwrap();
+            assert_eq!(
+                keys_naming_no_table(&store.connection().unwrap()),
+                Vec::<String>::new(),
+                "the undo models a database that could exist"
+            );
         }
 
         let migrated = TaskStore::open(&path).expect("a populated database migrates");
         migrated
             .verify_integrity()
             .expect("the migration leaves the database verifiable");
+        assert_eq!(
+            keys_naming_no_table(&migrated.connection().unwrap()),
+            Vec::<String>::new(),
+            "every foreign key still names a table after the migration"
+        );
         assert_eq!(
             migrated.get_worker_profile(worker_id).unwrap().name,
             "Petal",

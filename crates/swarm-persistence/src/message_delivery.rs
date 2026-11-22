@@ -138,6 +138,12 @@ fn cancel_undeliverable_worker_messages(
                      WHERE m.id = task_message_deliveries.message_id
                        AND (w.id IS NULL OR w.archived_at IS NOT NULL))
                  THEN 'its recipient was removed'
+                 WHEN EXISTS(SELECT 1 FROM task_messages m
+                     JOIN tasks t ON t.id = m.task_id
+                     WHERE m.id = task_message_deliveries.message_id AND m.sender = 'swarm'
+                       AND t.removed_at IS NULL
+                       AND t.state NOT IN ('awaiting_release','completed','abandoned'))
+                 THEN 'its task left Awaiting release before the reminder arrived'
                  ELSE 'its task closed before it arrived' END
          WHERE state = 'queued' AND message_id IN (
              SELECT m.id FROM task_messages m
@@ -146,7 +152,10 @@ fn cancel_undeliverable_worker_messages(
              WHERE m.recipient = 'worker' AND m.delivered_at IS NULL
                AND (w.id IS NULL OR w.archived_at IS NOT NULL
                  OR t.id IS NULL OR t.removed_at IS NOT NULL
-                 OR t.state IN ('completed','abandoned')))",
+                 OR t.state IN ('completed','abandoned')
+                 -- Swarm's release reminder has nothing to say once the task
+                 -- has left Awaiting release (ADR 0180).
+                 OR (m.sender = 'swarm' AND t.state <> 'awaiting_release')))",
         [now],
     )
 }
@@ -166,6 +175,7 @@ macro_rules! message_owed_to_assignee {
         "EXISTS(SELECT 1 FROM task_messages owed
              JOIN task_message_deliveries owed_delivery ON owed_delivery.message_id = owed.id
              WHERE owed.task_id = task.id AND owed.recipient = 'worker'
+               AND owed.sender <> 'swarm'
                AND owed.recipient_worker_id = task.assigned_worker_id
                AND owed_delivery.state IN ('queued','dispatching','uncertain','rejected'))"
     };

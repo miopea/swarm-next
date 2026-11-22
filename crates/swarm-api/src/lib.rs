@@ -56,6 +56,7 @@ mod jira;
 mod jira_reply_routes;
 mod maintenance;
 mod mcp_oauth;
+mod merge_reads;
 #[cfg(test)]
 mod message_delivery_tests;
 mod microsoft_oauth;
@@ -2396,6 +2397,7 @@ impl AppState {
         self.observe_reviewed_work_without_evidence(store);
         self.observe_evidenced_work_not_closed(store);
         self.observe_unattended_blocks(store);
+        self.observe_merged_work_waiting(store);
         self.observe_workers_that_cannot_start(store);
         self.observe_workers_owed_a_delivery(store);
         self.observe_stale_owned_work(store).await;
@@ -2965,6 +2967,49 @@ impl AppState {
                 Ok(false) => {}
                 Err(error) => {
                     tracing::warn!(message = %error, "blocked-work attention could not be recorded");
+                }
+            }
+        }
+    }
+
+    /// Names merged work that has waited too long for its release to Queen,
+    /// and reminds whoever releases it, once per stay (ADR 0180).
+    ///
+    /// Reads only what the release sweep recorded: the git work happens there,
+    /// on a blocking thread, and this pass decides from stored facts. It
+    /// releases nothing, moves nothing, and never tells the operator.
+    fn observe_merged_work_waiting(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store.merged_work_waiting_candidates(now) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect merged work waiting for release");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_merged_work_waiting_attention(&candidate, now) {
+                Ok(raise) => {
+                    if raise.raised || raise.reminded {
+                        tracing::info!(
+                            task_id = %candidate.task_id,
+                            releaser = %candidate.releaser,
+                            waited_seconds = candidate.waited_seconds,
+                            trigger = candidate.trigger.as_str(),
+                            reminded = raise.reminded,
+                            "merged work has waited for its release"
+                        );
+                        self.control_room_notify.notify_waiters();
+                    }
+                    if raise.reminder_deferred {
+                        tracing::warn!(
+                            task_id = %candidate.task_id,
+                            "the release reminder waits: the message queue is full"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(message = %error, "merged-work attention could not be recorded");
                 }
             }
         }
@@ -11409,6 +11454,13 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "worker_message_not_on_own_task",
             error.to_string(),
         ),
+        TaskStoreError::ReleaserNotAWorker | TaskStoreError::ReleaserOnlyWhenParking => {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_releaser",
+                error.to_string(),
+            )
+        }
         TaskStoreError::InvalidDecisionSummary => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_decision_summary",

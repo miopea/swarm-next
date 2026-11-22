@@ -4511,6 +4511,39 @@ impl TaskService {
         self.transition_task_naming_blocker(principal, task_id, target, note, None, now)
     }
 
+    /// Queen parks a task in Awaiting Release and names who releases it
+    /// (ADR 0180), when that is not its assignee.
+    ///
+    /// The name decides who Swarm reminds if the merged work waits too long,
+    /// lets that worker tell Queen what the release waits on, and keeps her
+    /// messages about it from waiting behind their own Active work. It
+    /// authorises nothing else.
+    ///
+    /// # Errors
+    /// Refuses anyone but Queen, any move but Awaiting Release, a releaser who
+    /// is not a current worker, and every ordinary transition refusal.
+    pub fn transition_task_naming_releaser(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        target: TaskState,
+        note: &str,
+        releaser: WorkerId,
+    ) -> Result<Task, ApplicationError> {
+        if principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        self.store
+            .transition_task_naming_releaser(
+                task_id,
+                target,
+                note,
+                Some(releaser),
+                &TaskActivityActor::worker(principal.worker_id),
+            )
+            .map_err(Into::into)
+    }
+
     /// A transition that may NAME what it waits on, in the same call that blocks.
     ///
     /// One call on purpose. A block and its reason recorded separately can drift

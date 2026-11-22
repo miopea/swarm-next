@@ -27,6 +27,14 @@ pub enum MessageParty {
     /// The operator, who may reach anyone and is never a recipient here — they
     /// read the board rather than an inbox.
     Operator,
+    /// Swarm itself: a reminder its coordinator wrote, never a person
+    /// (ADR 0180).
+    ///
+    /// ⚠️ NOT QUEEN, ON PURPOSE. A worker takes Queen's message as her release
+    /// instruction (ADR 0131), so a reminder written in her name would be a
+    /// timer authorising a release. A Swarm message authorises nothing, goes
+    /// only to a worker, and no reader that asks for Queen's messages finds it.
+    Swarm,
 }
 
 impl MessageParty {
@@ -35,6 +43,7 @@ impl MessageParty {
             Self::Queen => "queen",
             Self::Worker => "worker",
             Self::Operator => "operator",
+            Self::Swarm => "swarm",
         }
     }
 }
@@ -63,6 +72,15 @@ impl MessageEnd {
     pub const fn operator() -> Self {
         Self {
             party: MessageParty::Operator,
+            worker_id: None,
+        }
+    }
+
+    /// Swarm's own reminder, which may go only to a worker.
+    #[must_use]
+    pub const fn swarm() -> Self {
+        Self {
+            party: MessageParty::Swarm,
             worker_id: None,
         }
     }
@@ -192,11 +210,20 @@ const LIVE_RECIPIENT_SESSION_JOIN: &str = "JOIN worker_sessions session
 /// a tool result its auto mode rightly does not take as Queen's word, and asked
 /// the operator instead. It still waits for a resting prompt and for the
 /// operator's engagement to end, as every message does.
+///
+/// The worker Queen named to release a task in Awaiting Release is treated as
+/// its owner here for the same reason (ADR 0180). The release is theirs, and a
+/// reminder or go about it would otherwise wait behind their own Active work
+/// for as long as that work took.
 macro_rules! handed_off_by_recipient {
     () => {
-        "EXISTS(SELECT 1 FROM tasks own
+        "(EXISTS(SELECT 1 FROM tasks own
              WHERE own.id = m.task_id AND own.assigned_worker_id = m.recipient_worker_id
-               AND own.state IN ('review', 'awaiting_release') AND own.removed_at IS NULL)"
+               AND own.state IN ('review', 'awaiting_release') AND own.removed_at IS NULL)
+          OR EXISTS(SELECT 1 FROM task_releasers releasing
+             JOIN tasks parked ON parked.id = releasing.task_id
+             WHERE releasing.task_id = m.task_id AND releasing.worker_id = m.recipient_worker_id
+               AND parked.state = 'awaiting_release' AND parked.removed_at IS NULL))"
     };
 }
 pub(crate) use handed_off_by_recipient;
@@ -399,6 +426,15 @@ impl TaskStore {
         // this.
         if sender == MessageParty::Worker && recipient == MessageParty::Worker {
             return Err(TaskStoreError::WorkerToWorkerMessageRefused);
+        }
+        // Swarm only reminds a worker (ADR 0180). It has nothing to tell Queen
+        // that her attention rows do not already say, and it reads no inbox.
+        if recipient == MessageParty::Swarm
+            || (sender == MessageParty::Swarm && recipient != MessageParty::Worker)
+        {
+            return Err(TaskStoreError::InvalidTaskMessage {
+                max: MAX_TASK_MESSAGE_BYTES,
+            });
         }
         // A message to "a worker" that names none has no inbox to arrive in,
         // and silence is the one failure this channel must not have.
@@ -623,7 +659,8 @@ impl TaskStore {
         // query and the broadcast one cannot drift apart on it again.
         let sql = format!(
             "SELECT m.id, m.task_id, task.title, session.session_id, m.sender,
-                    COALESCE(sender.name, 'Queen'), m.body, recipient.id,
+                    CASE WHEN m.sender = 'swarm' THEN 'Swarm' ELSE COALESCE(sender.name, 'Queen') END,
+                    m.body, recipient.id,
                     CASE WHEN delivery.resolution_reason = '{redelivered}'
                          THEN delivery.claim_id END
              FROM task_messages m
@@ -662,11 +699,7 @@ impl TaskStore {
                     task_title: row.get(2)?,
                     session_id: swarm_domain::WorkerSessionId::from_str(&session_id)
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    sender: match sender.as_str() {
-                        "queen" => MessageParty::Queen,
-                        "operator" => MessageParty::Operator,
-                        _ => MessageParty::Worker,
-                    },
+                    sender: party_from_column(&sender),
                     sender_name: row.get(5)?,
                     body: row.get(6)?,
                     recipient_worker_id: WorkerId::from_str(&row.get::<_, String>(7)?)
@@ -719,16 +752,22 @@ impl TaskStore {
     }
 }
 
+/// The party a stored `sender` or `recipient` names.
+fn party_from_column(value: &str) -> MessageParty {
+    match value {
+        "queen" => MessageParty::Queen,
+        "operator" => MessageParty::Operator,
+        "swarm" => MessageParty::Swarm,
+        _ => MessageParty::Worker,
+    }
+}
+
 pub(super) fn message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMessage> {
     use std::str::FromStr;
     let task_id: String = row.get(1)?;
     let sender: String = row.get(2)?;
     let recipient: String = row.get(3)?;
-    let party = |value: &str| match value {
-        "queen" => MessageParty::Queen,
-        "operator" => MessageParty::Operator,
-        _ => MessageParty::Worker,
-    };
+    let party = party_from_column;
     Ok(TaskMessage {
         id: row.get(0)?,
         task_id: TaskId::from_str(&task_id).map_err(|_| rusqlite::Error::InvalidQuery)?,
