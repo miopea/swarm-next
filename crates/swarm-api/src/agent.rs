@@ -892,7 +892,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 44;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 45;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -902,7 +902,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 44;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 44. Update this and the revision together.
+/// The served surface as of revision 45. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -911,7 +911,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 44;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "9bbcd35804604e3c888cbbf66bcf5c5afa05e0c25851d020e12c9624c27ed7aa";
+    "ae49190479777798fdba175c70d3f0f77c66801fb5f43b574e2b0c865fa00ee2";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1016,6 +1016,10 @@ pub(super) const QUEEN_BLOCK_RECOVERY_GUIDANCE: &str = "BLOCK RECOVERY. Read blo
 /// What Queen is told about a task that waits on her answer (ADR 0166).
 pub(super) const QUEEN_WAIT_GUIDANCE: &str = "WAITS ON YOU. A worker that needs your answer or GO blocks with \"Waiting on: Queen\" (ADR 0166). That task is yours: it is in your queue and wakes you until you answer its worker on it with swarm_message_worker, and your message brings it back to them. Answer what its Needs line asks. If what it needs is the operator's, such as a migration, a release step they run or a ruling, ask them with one task-linked Needs You decision rather than leaving the worker waiting on you for them. A wait on you that nobody answers is escalated to the operator after twelve hours, as other unattended blocked work is.";
 
+/// Who releases parked work, and what Swarm does when merged work waits
+/// (ADR 0180).
+pub(super) const QUEEN_RELEASE_WAIT_GUIDANCE: &str = "MERGED WORK WAITING FOR ITS RELEASE. When you park a task in awaiting_release and someone other than its assignee will release it, name them with release_worker_id on swarm_transition_task. If merged work then waits too long, coordination attention shows one row for its repository: 30 minutes after the merge when unfinished work waits on it, or once it has waited longer than 90% of that repository's recent release waits. Swarm reminds whoever releases it once, as Swarm and not as you; that reminder authorises nothing, so your go is still what releases it. The row never tells the operator. Whether they need to know is yours to decide, and age alone is not a reason.";
+
 pub(super) const QUEEN_EVIDENCE_GUIDANCE: &str = "EVIDENCE BEFORE ESCALATION. Missing facts are not automatically missing operator authority. Obtain task-scoped evidence through the owning worker when existing access and authority permit it; use guarded task messages or a properly assigned investigation task, not an approval for routine investigation. Keep the real scope choice open until the evidence returns. If access, permission, scope or judgment is genuinely missing, ask the operator for that exact boundary and explain why it prevents investigation. Never infer new authority from a read-only label or bypass a permission refusal. Each decision button must have one unambiguous outcome, not combine operator execution with authorization for a worker to execute.";
 
 /// Queen's own condition for moving her onto a new conversation each week (ADR
@@ -1081,6 +1085,7 @@ fn standing_brief(role: WorkerRole, choices: HiveChoices) -> String {
              {QUEEN_WAKE_GUIDANCE}\n\n\
              {QUEEN_BLOCK_RECOVERY_GUIDANCE}\n\n\
              {QUEEN_WAIT_GUIDANCE}\n\n\
+             {QUEEN_RELEASE_WAIT_GUIDANCE}\n\n\
              {QUEEN_REVIEW_COVERAGE_GUIDANCE}\n\n\
              {QUEEN_ACTIVE_RECOVERY_GUIDANCE}\n\n{QUEEN_RESTING_EXECUTION_GUIDANCE}\n\n\
              {QUEEN_OPERATOR_ACTION_GUIDANCE}\n\n\
@@ -3013,7 +3018,7 @@ impl AgentMcp {
             "must_not_touch_report": must_not_touch_for_queen(self.tasks.must_not_touch_report(task_id)),
             "messages": messages,
             "review_request": review_request,
-            "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
+            "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149), nor one to the worker you named to release a task in awaiting_release (ADR 0180); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
             "evidence_note": "Evidence does not appear in `events` and never has: \
         a claim, its approval and a deployment write their own records, not activity rows. \
         An empty `evidence` here means none was recorded, NOT that the log is silent about it.",
@@ -3037,6 +3042,32 @@ impl AgentMcp {
             Err(TaskStoreError::NotFound) => ApplicationError::Store(TaskStoreError::NotFound),
             _ => ApplicationError::NotAuthorized,
         }
+    }
+
+    /// Queen's park that names who releases the task (ADR 0180).
+    fn park_naming_releaser(
+        &self,
+        task_id: TaskId,
+        input: &TransitionTaskInput,
+        releaser: &str,
+        names_a_blocker: bool,
+    ) -> Result<swarm_domain::Task, ApplicationError> {
+        if names_a_blocker {
+            return Err(ApplicationError::TransitionNotPermitted(
+                "release_worker_id names who releases a task parked in Awaiting release; \
+                 a block names what it waits on instead. Use one or the other."
+                    .into(),
+            ));
+        }
+        let releaser = WorkerId::from_str(releaser)
+            .map_err(|_| ApplicationError::MalformedIdentifier("release worker id"))?;
+        self.tasks.transition_task_naming_releaser(
+            self.principal,
+            task_id,
+            input.state,
+            &input.note,
+            releaser,
+        )
     }
 
     async fn transition_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -3089,14 +3120,18 @@ impl AgentMcp {
             )),
             (None, None) => None,
         };
-        let task = self.tasks.transition_task_naming_blocker(
-            self.principal,
-            task_id,
-            input.state,
-            &input.note,
-            blocker,
-            crate::unix_timestamp(),
-        )?;
+        let task = if let Some(releaser) = &input.release_worker_id {
+            self.park_naming_releaser(task_id, &input, releaser, blocker.is_some())?
+        } else {
+            self.tasks.transition_task_naming_blocker(
+                self.principal,
+                task_id,
+                input.state,
+                &input.note,
+                blocker,
+                crate::unix_timestamp(),
+            )?
+        };
         crate::deliver_jira_transition_batch(store, &self.jira, self.changed.as_ref()).await;
         let next_step =
             review_evidence_next_step(input.state, &store.completion_evidence(task_id)?);
@@ -5287,6 +5322,10 @@ struct TransitionTaskInput {
     /// The operator decision this one waits on, named the same way.
     #[serde(default)]
     decision_id: Option<String>,
+    /// Queen only, when parking in Awaiting release: the worker who releases
+    /// it, when that is not its assignee (ADR 0180).
+    #[serde(default)]
+    release_worker_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -5875,7 +5914,7 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the current task, session, and next-move owner before acting. A queued briefing held for operator engagement or existing Active work is working as intended; do not interrupt it. blocked_by names earlier work holding up a queue, not permission to bypass it. Age alone is not a reason to escalate. Also lists FINISHED WORK NOTHING HAS SETTLED. The coordinator settles supported routine evidence without another Queen approval; you own remaining exceptions and judgments. Read task history, completion evidence, and messages before deciding. If a no-deployment claim needs judgment, use swarm_approve_no_deployment only after checking its basis. If evidence or an answer is missing, use swarm_return_reviewed_work with a specific request: the task stays in Review and the next move becomes the assigned worker's. Do not move reviewed work to Ready or Active to get attention. Work finished but waiting only to ship belongs in awaiting_release; you may create and assign a task to the owning worker to ship it, but this tool grants no deployment authority. Use swarm_message_worker for task-scoped questions to a running worker; delivery waits for a safe prompt. Try safe scoped recovery first and request operator judgment only when you cannot move the work within existing authority.",
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the current task, session, and next-move owner before acting. A queued briefing held for operator engagement or existing Active work is working as intended; do not interrupt it. blocked_by names earlier work holding up a queue, not permission to bypass it. Age alone is not a reason to escalate. Also lists FINISHED WORK NOTHING HAS SETTLED. The coordinator settles supported routine evidence without another Queen approval; you own remaining exceptions and judgments. Read task history, completion evidence, and messages before deciding. If a no-deployment claim needs judgment, use swarm_approve_no_deployment only after checking its basis. If evidence or an answer is missing, use swarm_return_reviewed_work with a specific request: the task stays in Review and the next move becomes the assigned worker's. Do not move reviewed work to Ready or Active to get attention. Work finished but waiting only to ship belongs in awaiting_release; you may create and assign a task to the owning worker to ship it, but this tool grants no deployment authority. Also lists MERGED WORK WAITING FOR ITS RELEASE (ADR 0180), one row per repository, naming who releases it, the merge commit, why it was raised and what waits on it; Swarm has already reminded that worker once, and the row clears itself when the task leaves awaiting_release. Use swarm_message_worker for task-scoped questions to a running worker; delivery waits for a safe prompt. Try safe scoped recovery first and request operator judgment only when you cannot move the work within existing authority.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -6394,6 +6433,7 @@ fn transition_task_tool() -> Tool {
                 "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "awaiting_release", "completed", "abandoned"] },
                 "prerequisite_id": { "type": "string", "format": "uuid", "description": "WHEN BLOCKING: the task this one waits on. Blocked has to name what it waits for as a link rather than a sentence, and this is how you name it in the same call that blocks — the board can compute what unblocks when a link resolves and can do nothing with prose. Use this or decision_id, whichever the blocker actually is. If you have neither, the work is under-specified rather than waiting on something: send it to Review and say so instead of parking it." },
                 "decision_id": { "type": "string", "format": "uuid", "description": "WHEN BLOCKING: the operator decision this one waits on, as an alternative to prerequisite_id. Name the decision you are actually waiting on; a link the board cannot resolve is prose with extra steps." },
+                "release_worker_id": { "type": "string", "format": "uuid", "description": "QUEEN ONLY, WHEN PARKING IN awaiting_release: the worker who will release this task, when that is not its assignee. Swarm reminds that worker once if the merged work waits too long, lets them tell you on this task what the release waits on, and does not hold your messages about it behind their own Active work. It authorises nothing; your go still does. Leave it out when the assignee releases. It lasts this stay only." },
                 "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed. THIS GOES TO THE RECORD, NOT TO A WORKER: it lands in the task history and is never part of the brief a worker is handed, so an instruction written here reaches nobody unless they call swarm_read_task_history. To steer the worker that picks this up, correct the task with swarm_amend_task_facts — an amendment travels beside the task and is delivered by swarm_list_tasks. If the work itself needs to change rather than a fact about it, say so in a new task or ask the operator; nothing an agent can write redirects work that is already described." }
             },
             "required": ["task_id", "state"],
@@ -8712,6 +8752,107 @@ mod tests {
         // the description now says so instead of leaving it to be discovered.
         assert!(!TaskState::AwaitingRelease.can_transition_to(TaskState::Blocked));
         assert!(!TaskState::AwaitingRelease.can_transition_to(TaskState::Review));
+    }
+
+    /// Queen names who releases parked work on the move that parks it (ADR
+    /// 0180), and the name does what it says: that worker may then tell her on
+    /// the task what the release waits on, which a bystander may not.
+    #[tokio::test]
+    async fn queen_names_the_releasing_worker_when_she_parks_the_task() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let releaser = store
+            .create_worker(
+                "Lark",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                2,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(releaser.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store.create_task("Merged fix", "/workspace/petal").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let queen = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let assignee = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let lark = bearer_from_path(&bridge.ensure_worker_config(releaser.id).unwrap());
+        let tell_queen = || {
+            call_review_test_tool(
+                bridge.clone(),
+                &lark,
+                "swarm_message_queen",
+                json!({"task_id": task.id, "body": "It waits on the next batch."}),
+            )
+        };
+        let park = |token: String, arguments: Value| {
+            let bridge = bridge.clone();
+            async move {
+                call_review_test_tool(bridge, &token, "swarm_transition_task", arguments).await
+            }
+        };
+
+        let bystander = tell_queen().await;
+        assert_eq!(bystander["result"]["isError"], true, "{bystander}");
+
+        for (token, arguments, why) in [
+            (
+                assignee.clone(),
+                json!({"task_id": task.id, "state": "awaiting_release", "release_worker_id": releaser.id}),
+                "a worker does not park work",
+            ),
+            (
+                queen.clone(),
+                json!({"task_id": task.id, "state": "active", "release_worker_id": releaser.id}),
+                "a releaser belongs to the move that parks",
+            ),
+            (
+                queen.clone(),
+                json!({"task_id": task.id, "state": "awaiting_release", "release_worker_id": queen_id}),
+                "Queen is not a releaser",
+            ),
+            (
+                queen.clone(),
+                json!({"task_id": task.id, "state": "awaiting_release", "release_worker_id": "not-an-id"}),
+                "a malformed id",
+            ),
+            (
+                queen.clone(),
+                json!({
+                    "task_id": task.id,
+                    "state": "awaiting_release",
+                    "release_worker_id": releaser.id,
+                    "prerequisite_id": task.id,
+                }),
+                "a releaser and a blocker together",
+            ),
+        ] {
+            let refused = park(token, arguments).await;
+            assert_eq!(refused["result"]["isError"], true, "{why}: {refused}");
+            assert_eq!(
+                store.get_task(task.id).unwrap().state,
+                TaskState::Review,
+                "{why}: nothing moved"
+            );
+        }
+
+        let parked = park(
+            queen.clone(),
+            json!({"task_id": task.id, "state": "awaiting_release", "release_worker_id": releaser.id}),
+        )
+        .await;
+        assert_ne!(parked["result"]["isError"], true, "{parked}");
+        assert_eq!(
+            store.get_task(task.id).unwrap().state,
+            TaskState::AwaitingRelease
+        );
+        let named = tell_queen().await;
+        assert_ne!(named["result"]["isError"], true, "{named}");
     }
 
     /// Tools Queen holds and a worker must never see. Recording work is not on

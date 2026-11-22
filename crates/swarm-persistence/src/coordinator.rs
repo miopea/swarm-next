@@ -213,7 +213,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = concat!("FROM coordinator_actions
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention','blocked_work_unattended_attention','evidenced_work_not_closed_attention','merged_work_waiting_attention')
                AND action.state = 'completed'
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
@@ -334,6 +334,12 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = concat!("FROM coordinator_actions
                        AND task.state = 'blocked'
                        -- Nor once its wait names who must act (ADR 0119).
                        AND NOT ", crate::task_waits::typed_wait_holds!("task", "unixepoch()"), ")
+                   -- Merged work waiting for its release (ADR 0180). The
+                   -- release clears it, by moving the task on; so does any
+                   -- change to the task, which the revision check above sees,
+                   -- and the next pass raises it again if it still waits.
+                   OR (action.kind = 'merged_work_waiting_attention'
+                       AND task.state = 'awaiting_release' AND task.removed_at IS NULL)
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL

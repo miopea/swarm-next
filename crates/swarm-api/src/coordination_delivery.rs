@@ -5016,6 +5016,29 @@ mod tests {
         }
     }
 
+    /// A Swarm reminder must never read as Queen's instruction: a worker's
+    /// auto mode takes a message headed with Queen's name as her release go
+    /// (ADR 0131, ADR 0180).
+    #[test]
+    fn a_swarm_reminder_is_headed_swarm_and_carries_no_queen_reply_contract() {
+        let message = task_message_message(&[TaskMessageDispatch {
+            message_id: "reminder".to_owned(),
+            task_id: TaskId::new(),
+            task_title: "Merged work".to_owned(),
+            session_id: WorkerSessionId::new(),
+            sender: swarm_persistence::MessageParty::Swarm,
+            sender_name: "Swarm".to_owned(),
+            body: "Swarm reminder, not an instruction.".to_owned(),
+            recipient_worker_id: WorkerId::new(),
+            repeats_write: None,
+        }]);
+        let text = std::str::from_utf8(&message.bytes).unwrap();
+        assert!(text.contains("\n[Swarm — task "), "{text}");
+        assert!(!text.contains("[Queen — task"), "{text}");
+        assert!(!text.contains("reply_to_message_id=\"reminder\""), "{text}");
+        assert_eq!(message.bytes.last(), Some(&b'\r'));
+    }
+
     #[test]
     fn batched_review_messages_keep_individual_reply_identities() {
         let messages = (0..2)
