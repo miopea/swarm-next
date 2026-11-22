@@ -12,6 +12,13 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.24.0
+
+One database update (233): one new table. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting. Queen sees the new tool once her session restarts.
+
+### New features
+- Queen can let a worker read another task, often in another repository, so the worker reads the rules or findings recorded there instead of her summary of them. Only Queen, or you through Swarm's API, can set such a link; a worker cannot. The worker sees that task's description, notes and messages, and cannot change, move or message it. Each link and its reason go on the task's history.
+
 ## 1.23.1
 
 No database update. Installing it restarts the app and keeps your workers running. It brings a new worker engine build, which applies by itself the next time every worker is resting, or from Settings with Apply worker engine update.
