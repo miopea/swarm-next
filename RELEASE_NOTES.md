@@ -12,6 +12,20 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.22.1
+
+No database update. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged.
+
+Whether to retry or reload 1.22.0 on any Hive before 1.22.1 is the operator's call. 1.22.1 carries everything 1.22.0 does.
+
+### Fixes
+- Installing an update no longer fails because your Claude workers are slow to restart. When a newer Claude release was on disk, the new app asked each worker to restart onto it before it started answering. An install could then give up after 30 seconds and roll back a working update. The app now answers first and asks the workers afterwards.
+- An install now waits as long as the new app is still starting, up to four minutes, instead of 30 seconds. One whose app stops or restarts is still rolled back as quickly as before.
+- A rolled-back install no longer throws away what your Hive wrote during it. When the release it goes back to can read the database as it stands, the database is kept. Otherwise it is restored from the copy taken before the update, as before, and the database it replaces is now kept in the backups folder (the newest three) instead of being lost.
+- A rollback onto 1.22.0 or older, or onto a development build from before this release such as 45a9243a, always takes the second path: it restores the pre-update copy and keeps the replaced database. Those releases cannot say which database they read, so keeping the live database starts with rollbacks onto 1.22.1 or later.
+- Keeping the live database has run only in the installer's test script, against a stand-in for Swarm's own command. It has not yet run on a real database or in a real rollback.
+- `swarm-package rollback` again refuses to go back to a release that cannot read your database. Since September that check had silently stopped working.
+
 ## 1.22.0
 
 One database update (231): a new table and one new column. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged. A worker or Queen session that was running before the update sees Swarm's new tool once it restarts.

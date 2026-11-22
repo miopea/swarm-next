@@ -116,8 +116,9 @@ stops, because it saves the new build's writes too and needs no extra downtime.
 
 ## Not proven
 
-- The fix has not been observed on a real reload. The Keeper has not been
-  reloaded since; that is the operator's step.
+- The fix has not been observed on a real reload. The Keeper's next reload
+  was onto 1.22.0, without this fix, and succeeded; reloading it onto this
+  release is the operator's step.
 - The health wait's reading of MainPID is tested against a systemctl stub, not
   a real user manager.
 - `schema-version` and the installer's reading of it were run against a real
