@@ -29,6 +29,59 @@ use uuid::Uuid;
 use crate::messages::MessageEnd;
 use crate::{TaskStore, TaskStoreError};
 
+/// Whether every pending card linked to the task aliased `$task` waits on the
+/// operator: one is pending and none of them is Queen's to grant (ADR 0181).
+/// One definition, read by the pass that raises a stall row and by the rule
+/// that keeps one live, so filing a card clears a row already raised.
+macro_rules! operator_holds_release {
+    ($task:literal) => {
+        concat!(
+            "(EXISTS(SELECT 1 FROM decision_requests held_card
+                     WHERE held_card.id IN (SELECT decision_id FROM task_decision_membership
+                                            WHERE task_id = ",
+            $task,
+            ".id)
+                       AND held_card.state = 'pending')
+              AND NOT EXISTS(SELECT 1 FROM decision_requests d
+                     WHERE d.id IN (SELECT decision_id FROM task_decision_membership
+                                    WHERE task_id = ",
+            $task,
+            ".id)
+                       AND d.state = 'pending' AND ",
+            crate::queen_grants::queen_card!("d"),
+            "))"
+        )
+    };
+}
+pub(crate) use operator_holds_release;
+
+/// When the operator last answered a card linked to the stay aliased `$wait`,
+/// during that stay. Queen's grant is not the operator's answer, so it does
+/// not start the wait again; a withdrawn card does, since it no longer holds
+/// the release.
+macro_rules! card_answered_during_stay {
+    ($wait:literal) => {
+        concat!(
+            "(SELECT MAX(COALESCE(answered.resolved_at, answered.withdrawn_at))
+              FROM decision_requests answered
+              WHERE answered.id IN (SELECT decision_id FROM task_decision_membership
+                                    WHERE task_id = ",
+            $wait,
+            ".task_id)
+                AND ((answered.state = 'resolved' AND answered.granted_by_queen IS NULL)
+                     OR answered.state = 'withdrawn')
+                AND COALESCE(answered.resolved_at, answered.withdrawn_at) >= ",
+            $wait,
+            ".parked_at
+                AND (",
+            $wait,
+            ".left_at IS NULL OR COALESCE(answered.resolved_at, answered.withdrawn_at) <= ",
+            $wait,
+            ".left_at))"
+        )
+    };
+}
+
 /// How far back measured waits set a repository's slow tail, in seconds.
 pub const RELEASE_WAIT_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 
@@ -107,16 +160,20 @@ pub struct MergedWorkWaitingCandidate {
     pub slow_tail_measured: bool,
     /// The other merged tasks in this workspace that also wait.
     pub also_waiting: Vec<TaskId>,
+    /// The merged tasks in this workspace whose pending card waits on the
+    /// operator. They raise nothing themselves (ADR 0181), but a release here
+    /// carries them.
+    pub held_for_operator: Vec<TaskId>,
     pub reminded: bool,
     pub card: ReleaseWaitCard,
 }
 
-/// Whether a pending card is linked to the task, and whose it is.
+/// Whether a pending card linked to the task is Queen's to grant. A task whose
+/// pending card waits on the operator is never a candidate (ADR 0181).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReleaseWaitCard {
     None,
     Queen,
-    Operator,
 }
 
 /// What raising one candidate did.
@@ -499,8 +556,21 @@ impl TaskStore {
         let rows = waiting_rows(&connection)?;
         let mut by_workspace: HashMap<String, Vec<(WaitingRow, ReleaseWaitTrigger, i64)>> =
             HashMap::new();
+        let mut held_for_operator: HashMap<String, Vec<TaskId>> = HashMap::new();
         for row in rows {
-            let waited = now - release_wait_started_at(row.merged_at, row.parked_at);
+            // The operator already has its card in Needs you: neither Queen
+            // nor the releaser is told while it is pending (ADR 0181).
+            if row.card == "operator" {
+                if let Ok(task) = TaskId::from_str(&row.task_id) {
+                    held_for_operator
+                        .entry(row.workspace.clone())
+                        .or_default()
+                        .push(task);
+                }
+                continue;
+            }
+            let waited =
+                now - release_wait_started_at(row.merged_at, row.parked_at, row.card_answered_at);
             let (tail, _) = tails
                 .get(&row.workspace)
                 .copied()
@@ -547,6 +617,7 @@ impl TaskStore {
                 .get(&workspace)
                 .copied()
                 .unwrap_or((UNMEASURED_TAIL_SECONDS, false));
+            let held_for_operator = held_for_operator.remove(&workspace).unwrap_or_default();
             candidates.push(MergedWorkWaitingCandidate {
                 task_id: TaskId::from_str(&row.task_id).map_err(|_| invalid("task id"))?,
                 task_title: row.task_title,
@@ -564,11 +635,12 @@ impl TaskStore {
                 slow_tail_seconds,
                 slow_tail_measured,
                 also_waiting,
+                held_for_operator,
                 reminded: row.reminded,
-                card: match row.card.as_str() {
-                    "queen" => ReleaseWaitCard::Queen,
-                    "operator" => ReleaseWaitCard::Operator,
-                    _ => ReleaseWaitCard::None,
+                card: if row.card == "queen" {
+                    ReleaseWaitCard::Queen
+                } else {
+                    ReleaseWaitCard::None
                 },
             });
         }
@@ -682,6 +754,7 @@ struct WaitingRow {
     reminded: bool,
     workspace_held_by: Option<String>,
     card: String,
+    card_answered_at: Option<i64>,
 }
 
 /// Each workspace's slow-tail threshold and whether it was measured there.
@@ -689,15 +762,22 @@ fn slow_tails(
     connection: &rusqlite::Connection,
     now: i64,
 ) -> Result<HashMap<String, (i64, bool)>, TaskStoreError> {
-    // A stay that ended before its merge did not wait on a release.
-    let mut statement = connection.prepare(
-        "SELECT workspace, left_at - MAX(merged_at, parked_at) FROM release_waits
-         WHERE merged_at IS NOT NULL AND left_at IS NOT NULL AND merged_at <= left_at
-           AND left_at >= ?1",
-    )?;
+    // A stay that ended before its merge did not wait on a release. The wait
+    // is measured on the clock the live row uses, so time spent on the
+    // operator's card does not lengthen the repository's threshold.
+    let mut statement = connection.prepare(concat!(
+        "SELECT wait.workspace, wait.left_at, wait.merged_at, wait.parked_at, ",
+        card_answered_during_stay!("wait"),
+        " FROM release_waits wait
+         WHERE wait.merged_at IS NOT NULL AND wait.left_at IS NOT NULL
+           AND wait.merged_at <= wait.left_at AND wait.left_at >= ?1"
+    ))?;
     let mut waits: HashMap<String, Vec<i64>> = HashMap::new();
     for row in statement.query_map([now - RELEASE_WAIT_WINDOW_SECONDS], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)? - release_wait_started_at(row.get(2)?, row.get(3)?, row.get(4)?),
+        ))
     })? {
         let (workspace, wait) = row?;
         waits.entry(workspace).or_default().push(wait);
@@ -765,19 +845,25 @@ fn waiting_rows(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Waiti
                    AND action.evidence_revision = held.updated_at
                    AND held_wait.workspace = wait.workspace
                    AND held_wait.left_at IS NULL
+                   -- A row the operator's card hides holds nothing (ADR 0181).
+                   AND NOT ",
+        operator_holds_release!("held"),
+        "
                  ORDER BY action.id LIMIT 1),
                 CASE
+                    WHEN ",
+        operator_holds_release!("task"),
+        " THEN 'operator'
                     WHEN EXISTS(SELECT 1 FROM decision_requests d
                          WHERE d.id IN (SELECT decision_id FROM task_decision_membership
                                         WHERE task_id = task.id)
                            AND d.state = 'pending' AND ",
         crate::queen_grants::queen_card!("d"),
         ") THEN 'queen'
-                    WHEN EXISTS(SELECT 1 FROM decision_requests d
-                         WHERE d.id IN (SELECT decision_id FROM task_decision_membership
-                                        WHERE task_id = task.id)
-                           AND d.state = 'pending') THEN 'operator'
-                    ELSE 'none' END
+                    ELSE 'none' END,
+                ",
+        card_answered_during_stay!("wait"),
+        "
          FROM release_waits wait
          JOIN tasks task ON task.id = wait.task_id
          LEFT JOIN task_releasers named ON named.task_id = task.id
@@ -811,6 +897,7 @@ fn waiting_rows(connection: &rusqlite::Connection) -> rusqlite::Result<Vec<Waiti
                 reminded: row.get(13)?,
                 workspace_held_by: row.get(14)?,
                 card: row.get(15)?,
+                card_answered_at: row.get(16)?,
             })
         })?
         .collect()
@@ -892,10 +979,29 @@ fn attention_reason(
             "Also merged and waiting in this repository: {named}{more}. "
         );
     }
+    if !candidate.held_for_operator.is_empty() {
+        let named = candidate
+            .held_for_operator
+            .iter()
+            .take(MAX_NAMED_TASKS)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if candidate.held_for_operator.len() > MAX_NAMED_TASKS {
+            " and more"
+        } else {
+            ""
+        };
+        let _ = write!(
+            reason,
+            "Also merged in this repository and waiting on the operator's pending card: {named}{more}. A release here carries them too. "
+        );
+    }
     reason.push_str(match candidate.card {
-        ReleaseWaitCard::None => "No pending card is linked to it. ",
+        ReleaseWaitCard::None => {
+            "No pending card is linked to it, so nothing about it is in the operator's Needs you. If its release needs the operator, it waits until a card is filed. "
+        }
         ReleaseWaitCard::Queen => "A pending card linked to it is yours to grant. ",
-        ReleaseWaitCard::Operator => "A pending card linked to it waits on the operator. ",
     });
     reason.push_str("Swarm has not told the operator; whether to is yours.");
     reason
@@ -920,12 +1026,13 @@ fn reminder_text(candidate: &MergedWorkWaitingCandidate) -> String {
 #[cfg(test)]
 mod tests {
     use swarm_domain::{
-        CommitRepositoryState, CommitVerdict, ProviderKind, TaskActivityActor, TaskCommit,
-        TaskState, WorkerRole,
+        CommitRepositoryState, CommitVerdict, DecisionRequestId, DecisionRequestKind,
+        DecisionUrgency, ProviderKind, TaskActivityActor, TaskCommit, TaskState, WorkerRole,
     };
 
     use super::*;
     use crate::MessageParty;
+    use crate::decisions::NewDecisionRequest;
 
     const WORKSPACE: &str = "/workspace/petal";
     /// A fixed clock, so a wait is exactly what the test says it is.
@@ -1081,6 +1188,69 @@ mod tests {
                     .unwrap()
             })
             .collect()
+    }
+
+    /// A card on the task for the operator: an ordinary decision, which no
+    /// Queen grant can answer.
+    fn operator_card(hive: &Hive, task: TaskId, title: &str) -> DecisionRequestId {
+        let actions = vec!["release".to_owned(), "hold".to_owned()];
+        hive.store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: hive.worker,
+                task_id: Some(task),
+                kind: DecisionRequestKind::Approval,
+                urgency: DecisionUrgency::Normal,
+                title,
+                summary: "The production step needs your yes.",
+                reason: "It migrates production.",
+                risk: "A migration is hard to undo.",
+                evidence: "Staging ran it.",
+                suggested_action: "release",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap()
+            .id
+    }
+
+    /// Filing a card moves the task's revision, which clears its row on its
+    /// own. Putting the revision back shows what the card alone does, as for
+    /// a card that becomes the operator's when Queen hands it on.
+    fn put_back_row_revision(hive: &Hive, task: TaskId) {
+        let connection = hive.store.connection().unwrap();
+        let revision: i64 = connection
+            .query_row(
+                "SELECT evidence_revision FROM coordinator_actions
+                 WHERE kind = 'merged_work_waiting_attention' AND task_id = ?1",
+                [task.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE tasks SET updated_at = ?2 WHERE id = ?1",
+                params![task.to_string(), revision],
+            )
+            .unwrap();
+    }
+
+    /// The operator answers the card, at a fixed time.
+    fn answer(hive: &Hive, card: DecisionRequestId, answered_at: i64) {
+        hive.store
+            .resolve_decision_request(card, "release", "", "inbox_action")
+            .unwrap();
+        hive.store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET resolved_at = ?2 WHERE id = ?1",
+                params![card.to_string(), answered_at],
+            )
+            .unwrap();
     }
 
     fn waiting_rows(hive: &Hive, now: i64) -> Vec<crate::CoordinatorAttention> {
@@ -1277,6 +1447,258 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].trigger, ReleaseWaitTrigger::SlowTail);
         assert!(!candidates[0].slow_tail_measured);
+    }
+
+    #[test]
+    fn a_pending_operator_card_holds_the_row_and_the_reminder() {
+        let hive = hive();
+        let task = park(&hive, "Migrate production", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, task);
+        record_merge(&hive, task, MERGED, MERGED + 60);
+        operator_card(&hive, task, "Run the production migration?");
+
+        let now = MERGED + 2 * 86_400;
+        assert!(
+            hive.store
+                .merged_work_waiting_candidates(now)
+                .unwrap()
+                .is_empty(),
+            "the operator already has it in Needs you"
+        );
+        assert!(raise_all(&hive, now).is_empty());
+        assert!(waiting_rows(&hive, now).is_empty());
+        assert!(
+            swarm_messages(&hive, task).is_empty(),
+            "the releaser cannot release before the operator answers"
+        );
+    }
+
+    #[test]
+    fn a_row_raised_before_the_operator_card_is_filed_clears_when_it_is() {
+        let hive = hive();
+        let task = park(&hive, "Migrate production", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, task);
+        record_merge(&hive, task, MERGED, MERGED + 60);
+        let now = MERGED + 31 * 60;
+        raise_all(&hive, now);
+        assert_eq!(waiting_rows(&hive, now).len(), 1);
+        assert!(
+            waiting_rows(&hive, now)[0]
+                .reason
+                .contains("nothing about it is in the operator's Needs you"),
+            "{}",
+            waiting_rows(&hive, now)[0].reason
+        );
+
+        let card = operator_card(&hive, task, "Run the production migration?");
+        put_back_row_revision(&hive, task);
+        assert!(
+            waiting_rows(&hive, now).is_empty(),
+            "the row clears once the operator has the card"
+        );
+
+        answer(&hive, card, now + 60);
+        assert_eq!(
+            waiting_rows(&hive, now + 120).len(),
+            1,
+            "an answered card no longer holds the row it held"
+        );
+    }
+
+    #[test]
+    fn a_row_the_operators_card_hides_does_not_hold_its_repository() {
+        let hive = hive();
+        let held = park(&hive, "Migrate production", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, held);
+        record_merge(&hive, held, MERGED, MERGED + 60);
+        let now = MERGED + 31 * 60;
+        raise_all(&hive, now);
+        assert_eq!(waiting_rows(&hive, now).len(), 1);
+
+        let other = park(&hive, "Fix the button", PARKED);
+        let waiting_other = hive
+            .store
+            .create_task("Needs the button", WORKSPACE)
+            .unwrap();
+        waits_on(&hive, waiting_other.id, other);
+        record_merge(&hive, other, MERGED, now);
+        operator_card(&hive, held, "Run the production migration?");
+        put_back_row_revision(&hive, held);
+
+        raise_all(&hive, now + 60);
+        let rows = waiting_rows(&hive, now + 60);
+        assert_eq!(
+            rows.len(),
+            1,
+            "the hidden row must not keep the repository's row from other merged work"
+        );
+        assert_eq!(rows[0].task_id, Some(other));
+    }
+
+    #[test]
+    fn a_withdrawn_card_starts_the_wait_again() {
+        let hive = hive();
+        let task = park(&hive, "Migrate production", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, task);
+        record_merge(&hive, task, MERGED, MERGED + 60);
+        let card = operator_card(&hive, task, "Run the production migration?");
+        let withdrawn = MERGED + 2 * 3_600;
+        hive.store
+            .withdraw_decision_request(card, hive.worker, "Not needed after all.")
+            .unwrap();
+        hive.store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET withdrawn_at = ?2 WHERE id = ?1",
+                params![card.to_string(), withdrawn],
+            )
+            .unwrap();
+
+        assert!(
+            hive.store
+                .merged_work_waiting_candidates(withdrawn + 29 * 60)
+                .unwrap()
+                .is_empty(),
+            "the card held the release until it was withdrawn"
+        );
+        let candidates = hive
+            .store
+            .merged_work_waiting_candidates(withdrawn + 31 * 60)
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].waited_seconds, 31 * 60);
+    }
+
+    #[test]
+    fn the_wait_starts_again_when_the_operator_answers_the_card() {
+        let hive = hive();
+        let task = park(&hive, "Migrate production", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, task);
+        record_merge(&hive, task, MERGED, MERGED + 60);
+        let card = operator_card(&hive, task, "Run the production migration?");
+        let answered = MERGED + 2 * 3_600;
+        answer(&hive, card, answered);
+
+        assert!(
+            hive.store
+                .merged_work_waiting_candidates(answered + 29 * 60)
+                .unwrap()
+                .is_empty(),
+            "the release has been back with its releaser for 29 minutes, not two and a half hours"
+        );
+        let candidates = hive
+            .store
+            .merged_work_waiting_candidates(answered + 31 * 60)
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].trigger, ReleaseWaitTrigger::HoldingOthers);
+        assert_eq!(candidates[0].waited_seconds, 31 * 60);
+    }
+
+    #[test]
+    fn queens_grant_does_not_start_the_wait_again() {
+        let hive = hive();
+        let task = park(&hive, "Migrate production", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, task);
+        record_merge(&hive, task, MERGED, MERGED + 60);
+        let card = operator_card(&hive, task, "Run the production migration?");
+        answer(&hive, card, MERGED + 2 * 3_600);
+        hive.store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET granted_by_queen = ?2 WHERE id = ?1",
+                params![card.to_string(), hive.worker.to_string()],
+            )
+            .unwrap();
+
+        let candidates = hive
+            .store
+            .merged_work_waiting_candidates(MERGED + 2 * 3_600 + 60)
+            .unwrap();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "Queen granting her own card is Queen's turn, not the operator's"
+        );
+        assert_eq!(candidates[0].waited_seconds, 2 * 3_600 + 60);
+    }
+
+    #[test]
+    fn merged_work_on_the_operators_card_is_named_on_its_repository_row() {
+        let hive = hive();
+        let held = park(&hive, "Migrate production", PARKED);
+        record_merge(&hive, held, MERGED, MERGED + 60);
+        operator_card(&hive, held, "Run the production migration?");
+        let ready = park(&hive, "Fix the button", PARKED);
+        let waiting = hive.store.create_task("Builds on it", WORKSPACE).unwrap();
+        waits_on(&hive, waiting.id, ready);
+        record_merge(&hive, ready, MERGED, MERGED + 60);
+
+        let now = MERGED + 31 * 60;
+        let candidates = hive.store.merged_work_waiting_candidates(now).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].task_id, ready);
+        assert_eq!(candidates[0].held_for_operator, vec![held]);
+        raise_all(&hive, now);
+        let rows = waiting_rows(&hive, now);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].reason.contains(&format!(
+                "waiting on the operator's pending card: {held}. A release here carries them too."
+            )),
+            "{}",
+            rows[0].reason
+        );
+    }
+
+    #[test]
+    fn a_measured_wait_counts_from_the_operators_answer() {
+        let hive = hive();
+        // Twenty ended stays, each merged ten hours before it was released
+        // but held on the operator's card until 1..=20 minutes before that.
+        let earlier = (1..=20_i64)
+            .map(|minutes| {
+                let task = hive.store.create_task("Earlier", WORKSPACE).unwrap();
+                let card = operator_card(&hive, task.id, &format!("Earlier {minutes}"));
+                (minutes, task, card)
+            })
+            .collect::<Vec<_>>();
+        let merged = PARKED - 86_400;
+        let left = merged + 10 * 3_600;
+        for (minutes, task, card) in earlier {
+            answer(&hive, card, left - minutes * 60);
+            hive.store
+                .connection()
+                .unwrap()
+                .execute(
+                    "INSERT INTO release_waits (task_id, parked_sequence, parked_at, workspace,
+                         merged_at, merge_commit, left_at, read_at)
+                     VALUES (?1, ?2, ?3, ?4, ?3, 'abcdef1234', ?5, ?5)",
+                    params![task.id.to_string(), minutes, merged, WORKSPACE, left],
+                )
+                .unwrap();
+        }
+        let task = park(&hive, "Ship the fix", PARKED);
+        record_merge(&hive, task, MERGED, MERGED + 60);
+        let candidates = hive
+            .store
+            .merged_work_waiting_candidates(MERGED + 18 * 60 + 1)
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].slow_tail_measured);
+        assert_eq!(
+            candidates[0].slow_tail_seconds,
+            18 * 60,
+            "the hours on the operator's card are not the releaser's wait"
+        );
     }
 
     #[test]
