@@ -2710,6 +2710,8 @@ impl AgentMcp {
             "kind": decision.kind.to_string(),
             "title": decision.title,
             "summary": decision.summary,
+            "card": decision_card(&decision),
+            "card_note": DECISION_CARD_NOTE,
             "resolution_action": decision.resolution_action,
             "resolution_note": decision.resolution_note,
             // THE SUBSTANCE OF AN INTERVIEW ANSWER LIVES HERE, and omitting it
@@ -5609,7 +5611,7 @@ fn operator_submissions_tool() -> Tool {
 fn list_decisions_tool() -> Tool {
     tool(
         "swarm_list_decisions",
-        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. Every pending decision is listed; settled ones come 20 a page, the one last settled first, and settled_page reads older ones. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. The listing is an INDEX — reason, risk, evidence, questions and the operator's answers are omitted, because the full records run to tens of thousands of characters and a reply that overflows your output limit reads exactly like no decisions at all. Pass decision_id to read one in full. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
+        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox; a worker sees the requests it raised AND any operator ruling attached to a task assigned to it, so a sign-off governing its own work is discoverable without being relayed. Every pending decision is listed; settled ones come 20 a page, the one last settled first, and settled_page reads older ones. The reply says which scope it searched, so an empty list is never mistaken for a decision that does not exist. The listing is an INDEX — reason, risk, evidence, questions and the operator's answers are omitted, because the full records run to tens of thousands of characters and a reply that overflows your output limit reads exactly like no decisions at all. Pass decision_id to read one in full. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it, with the whole card they answered under `card`. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
         &json!({
             "type": "object",
             "properties": {
@@ -5824,6 +5826,29 @@ fn approve_no_deployment_tool() -> Tool {
         }),
         false,
     )
+}
+
+/// Everything the operator saw on a decision card (ADR 0183).
+///
+/// An answer is a choice among what the card offered, and it may refer to the
+/// card's own text: "Yes, with the same three conditions" chose an option whose
+/// conditions were written in the card's reason. Reading the answer without
+/// that text is reading half of it, so the text goes wherever the answer goes.
+fn decision_card(decision: &swarm_domain::DecisionRequest) -> Value {
+    json!({
+        "urgency": decision.urgency,
+        "summary": decision.summary,
+        "reason": decision.reason,
+        "risk": decision.risk,
+        "evidence": decision.evidence,
+        "suggested_action": decision.suggested_action,
+        "allowed_actions": decision.allowed_actions,
+        "questions": decision.questions,
+        "deadline": decision.deadline,
+        "requested_command": decision.requested_command,
+        "requested_script": decision.requested_script,
+        "queen_handoff_reason": decision.queen_handoff_reason,
+    })
 }
 
 fn read_task_history_tool() -> Tool {
@@ -6673,9 +6698,11 @@ fn independent_check_hint(check: &IndependentCheckState) -> Option<String> {
     }
 }
 
-/// What a worker's listing says beside its task's must-not-touch patterns.
+const DECISION_CARD_NOTE: &str = "The whole card as the operator sees it (ADR 0183). An answer that refers to something, such as \"Yes, with the same three conditions\", means what this card says: read reason, evidence and the options' descriptions before acting on it.";
+
 const READ_LINKS_NOTE: &str = "Tasks Queen or the operator linked for this task's worker to read (ADR 0182), often in another repository. Read each in full with swarm_read_task_history: its description, amendments, history, evidence and messages. Read only: you cannot change, move or message it, and what it asks of its own worker is not asked of you.";
 
+/// What a worker's listing says beside its task's must-not-touch patterns.
 const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relative to its repository, set by whoever filed it or by Queen (ADR 0172). Only Queen changes them; a worker whose work needs one asks her with swarm_message_queen before touching it. At Review, Queen sees which recorded commits touched one; nothing is refused for that, and she decides whether it was needed.";
 
 /// The step a worker's Review response adds when its commits crossed.
@@ -15379,6 +15406,115 @@ mod tests {
                 .iter()
                 .any(|decision| decision["id"] == elsewhere.id.to_string()),
             "listing must not reach another worker's task: {listed}"
+        );
+    }
+
+    /// An answer that refers to its card ("Yes, with the same three
+    /// conditions") reads with the card's text, so a worker on other work can
+    /// act on the ruling itself and not a summary of it (ADR 0183).
+    #[tokio::test]
+    async fn reading_one_decision_returns_the_whole_card_it_answered() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let question = swarm_domain::DecisionQuestion {
+            header: "Hook".into(),
+            question: "Add the same author check to the merge hook?".into(),
+            options: vec!["Yes, with the same three conditions".into(), "No".into()],
+            option_descriptions: std::collections::BTreeMap::from([(
+                "No".to_owned(),
+                "Accept the gap.".to_owned(),
+            )]),
+            multi_select: false,
+        };
+        let card = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Also add the author check to the merge hook?",
+                summary: "The repository rule is in; the hook is not.",
+                reason: "Three conditions: 1. public repositories only; 2. your own PRs pass; 3. the merge names the head.",
+                risk: "A stranger's PR merges unseen.",
+                evidence: "The rule's tests.",
+                suggested_action: "Yes, with the same three conditions",
+                allowed_actions: &["Yes, with the same three conditions".to_owned(), "No".to_owned()],
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(card.id, "Yes, with the same three conditions", "", "inbox")
+            .unwrap();
+        let interview = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Which hook?",
+                summary: "Two hooks could carry it.",
+                reason: "Either would do.",
+                risk: "",
+                evidence: "",
+                suggested_action: "",
+                allowed_actions: &[],
+                operator_actions: &[],
+                questions: std::slice::from_ref(&question),
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap();
+        let read_one = |id: swarm_domain::DecisionRequestId| {
+            let (bridge, token) = (bridge.clone(), worker_token.clone());
+            async move {
+                response_json(
+                    handle(
+                        bridge,
+                        plain_state(),
+                        mcp_request(
+                            Some(&token),
+                            "tools/call",
+                            &json!({
+                                "name": "swarm_list_decisions",
+                                "arguments": { "decision_id": id.to_string() }
+                            }),
+                        ),
+                    )
+                    .await,
+                )
+                .await["result"]["structuredContent"]
+                    .clone()
+            }
+        };
+        let read = &read_one(card.id).await;
+
+        assert_eq!(read["verified"], true, "{read}");
+        assert_eq!(
+            read["resolution_action"],
+            "Yes, with the same three conditions"
+        );
+        assert!(
+            read["card"]["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("3. the merge names the head")),
+            "the conditions the answer refers to are in the read: {read}"
+        );
+        assert_eq!(read["card"]["risk"], "A stranger's PR merges unseen.");
+        assert_eq!(read["card"]["evidence"], "The rule's tests.");
+        assert_eq!(read["card"]["allowed_actions"][1], "No");
+        assert_eq!(read["card_note"], DECISION_CARD_NOTE);
+
+        // An interview's options carry their descriptions, pending or not.
+        let asked = &read_one(interview.id).await;
+        assert_eq!(asked["verified"], false, "{asked}");
+        assert_eq!(
+            asked["card"]["questions"][0]["option_descriptions"]["No"],
+            "Accept the gap."
         );
     }
 
