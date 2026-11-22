@@ -15,6 +15,12 @@
 //! The clock starts at the later of the merge and the park. More than half of
 //! the stays measured were parked before their merge; counting from the park
 //! alarms on work that has not merged yet.
+//!
+//! A pending card that waits on the operator holds the wait (ADR 0181): the
+//! operator already has it in Needs you, so neither Queen nor the releaser is
+//! told. When the operator answers a card linked to the task during the stay,
+//! the clock starts again from that answer, because only then is the release
+//! back in the hands of Queen and the releaser.
 
 /// How long merged work may wait while another task is recorded as waiting on
 /// it, in seconds.
@@ -59,13 +65,22 @@ impl ReleaseWaitTrigger {
     }
 }
 
-/// When a stay's wait starts: the later of its merge and its park.
+/// When a stay's wait starts: the latest of its merge, its park, and the
+/// operator's latest answer to a card linked to the task during the stay.
 #[must_use]
-pub const fn release_wait_started_at(merged_at: i64, parked_at: i64) -> i64 {
-    if merged_at > parked_at {
+pub const fn release_wait_started_at(
+    merged_at: i64,
+    parked_at: i64,
+    card_answered_at: Option<i64>,
+) -> i64 {
+    let started = if merged_at > parked_at {
         merged_at
     } else {
         parked_at
+    };
+    match card_answered_at {
+        Some(answered) if answered > started => answered,
+        _ => started,
     }
 }
 
@@ -121,8 +136,15 @@ mod tests {
 
     #[test]
     fn the_wait_starts_at_the_merge_when_the_task_was_parked_before_it() {
-        assert_eq!(release_wait_started_at(500, 100), 500);
-        assert_eq!(release_wait_started_at(100, 500), 500);
+        assert_eq!(release_wait_started_at(500, 100, None), 500);
+        assert_eq!(release_wait_started_at(100, 500, None), 500);
+    }
+
+    #[test]
+    fn the_wait_starts_again_when_the_operator_answers_a_card_during_the_stay() {
+        assert_eq!(release_wait_started_at(500, 100, Some(900)), 900);
+        // An answer before the merge changes nothing: the merge is later.
+        assert_eq!(release_wait_started_at(500, 100, Some(300)), 500);
     }
 
     #[test]

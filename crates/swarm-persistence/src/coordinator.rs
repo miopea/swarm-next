@@ -338,8 +338,11 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = concat!("FROM coordinator_actions
                    -- release clears it, by moving the task on; so does any
                    -- change to the task, which the revision check above sees,
                    -- and the next pass raises it again if it still waits.
+                   -- So does a card filed for the operator, who then has it
+                   -- in Needs you (ADR 0181).
                    OR (action.kind = 'merged_work_waiting_attention'
-                       AND task.state = 'awaiting_release' AND task.removed_at IS NULL)
+                       AND task.state = 'awaiting_release' AND task.removed_at IS NULL
+                       AND NOT ", crate::release_waits::operator_holds_release!("task"), ")
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL
