@@ -892,7 +892,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 46;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 47;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -902,7 +902,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 46;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 46. Update this and the revision together.
+/// The served surface as of revision 47. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -911,7 +911,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 46;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "51f97d37a0e9578b246afdb6d70220b404513ed400abb5f1df34037329787e6c";
+    "5d88f53c3a96ac0ea5049a8b504070d598b8f1fbf2b76a098dbd5103373751b0";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -2951,7 +2951,7 @@ impl AgentMcp {
         let changed = self.tasks.reconcile_task_message(
             self.principal,
             &input.message_id,
-            &input.claim_id,
+            input.claim_id.as_deref(),
             input.retry_may_duplicate,
             &input.reason,
             now_seconds(),
@@ -5309,7 +5309,9 @@ struct MessageQueenInput {
 #[serde(deny_unknown_fields)]
 struct ReconcileTaskMessageInput {
     message_id: String,
-    claim_id: String,
+    /// Absent for a message handed back because its task closed, which no
+    /// delivery pass ever claimed (ADR 0184).
+    claim_id: Option<String>,
     retry_may_duplicate: bool,
     reason: String,
 }
@@ -5935,13 +5937,13 @@ fn list_coordination_attention_tool() -> Tool {
 fn reconcile_task_message_tool() -> Tool {
     tool(
         "swarm_reconcile_task_message",
-        "Queen only: reconcile an uncertain or rejected task-message delivery from swarm_list_coordination_attention. First retrieve the exact message with swarm_read_task_history and establish whether further action is needed. Set retry_may_duplicate=false to resolve without claiming terminal receipt, or true only when a new submission is necessary and a possible duplicate is acceptable. Give the observed claim_id and a reason. Superseded review requests cannot be retried. This does not answer a review or complete work. Safe recovery is yours; ask the operator only if you cannot proceed within existing authority, never merely because a timer elapsed.",
+        "Queen only: reconcile an uncertain or rejected task-message delivery from swarm_list_coordination_attention. First retrieve the exact message with swarm_read_task_history and establish whether further action is needed. Set retry_may_duplicate=false to resolve without claiming terminal receipt, or true only when a new submission is necessary and a possible duplicate is acceptable. Give the observed claim_id and a reason. Superseded review requests cannot be retried. A message of yours whose task closed before it arrived is listed as rejected, with that reason and no claim_id (ADR 0184): if it still matters, send it again with swarm_message_worker on an open task of that worker, then clear this one with retry_may_duplicate=false and no claim_id. A message on a closed task cannot be retried. This does not answer a review or complete work. Safe recovery is yours; ask the operator only if you cannot proceed within existing authority, never merely because a timer elapsed.",
         &json!({ "type": "object", "properties": {
             "message_id": { "type": "string", "format": "uuid" },
             "claim_id": { "type": "string", "format": "uuid" },
             "retry_may_duplicate": { "type": "boolean" },
             "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
-        }, "required": ["message_id", "claim_id", "retry_may_duplicate", "reason"], "additionalProperties": false }),
+        }, "required": ["message_id", "retry_may_duplicate", "reason"], "additionalProperties": false }),
         false,
     )
 }
@@ -13628,6 +13630,84 @@ mod tests {
         let current = store.get_task(task.id).unwrap();
         assert_eq!(current.state, TaskState::Review);
         assert_eq!(current.next_move_owner, swarm_domain::NextMoveOwner::Worker);
+    }
+
+    /// Queen's send on a closed task is refused with the reason, and her message
+    /// whose task closed first is listed for her and cleared without a claim
+    /// (ADR 0184).
+    #[tokio::test]
+    async fn queen_is_told_when_her_message_cannot_reach_a_closed_task() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let closed = store.create_task("Released", "/workspace/petal").unwrap();
+        store.transition_task(closed.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(closed.id, worker_id).unwrap();
+        let send = |task_id: TaskId, body: &'static str| {
+            call_review_test_tool(
+                bridge.clone(),
+                &queen_token,
+                "swarm_message_worker",
+                json!({ "task_id": task_id, "worker_id": worker_id, "body": body }),
+            )
+        };
+        let queued = send(closed.id, "Do not merge until I send a new GO.").await;
+        assert_eq!(queued["result"]["isError"], false, "{queued}");
+        let message_id = queued["result"]["structuredContent"]["message_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        store.transition_task(closed.id, TaskState::Active).unwrap();
+        store.transition_task(closed.id, TaskState::Review).unwrap();
+        store
+            .transition_task(closed.id, TaskState::Completed)
+            .unwrap();
+
+        let refused = send(closed.id, "GO to merge.").await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let text = refused["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("completed"), "{text}");
+        assert!(text.contains("swarm_message_worker"), "{text}");
+        assert_eq!(store.task_messages(closed.id).unwrap().len(), 1);
+
+        assert!(store.claim_task_messages(20).unwrap().is_empty());
+        let attention = call_review_test_tool(
+            bridge.clone(),
+            &queen_token,
+            "swarm_list_coordination_attention",
+            json!({}),
+        )
+        .await;
+        let listed = &attention["result"]["structuredContent"]["task_message_deliveries"];
+        assert_eq!(listed["total"], 1, "{listed}");
+        assert_eq!(listed["items"][0]["message_id"], message_id.as_str());
+        assert_eq!(listed["items"][0]["state"], "rejected");
+        assert_eq!(
+            listed["items"][0]["resolution_reason"],
+            swarm_persistence::QUEEN_MESSAGE_TASK_CLOSED_REASON
+        );
+
+        let cleared = call_review_test_tool(
+            bridge,
+            &queen_token,
+            "swarm_reconcile_task_message",
+            json!({ "message_id": message_id, "retry_may_duplicate": false,
+                    "reason": "Sent on the worker's open task instead" }),
+        )
+        .await;
+        assert_eq!(
+            cleared["result"]["structuredContent"]["changed"], true,
+            "{cleared}"
+        );
+        assert_eq!(
+            store
+                .task_message_attention(crate::unix_timestamp(), i64::MAX)
+                .unwrap()
+                .total,
+            0
+        );
     }
 
     #[tokio::test]

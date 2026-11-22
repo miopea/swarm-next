@@ -186,9 +186,10 @@ mod operator_statements;
 mod operator_submissions;
 mod review_answers;
 pub use message_delivery::{
-    ClaimedTaskMessage, REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE, TASK_MESSAGE_BATCH_LIMIT,
-    TASK_MESSAGE_QUEUE_LIMIT, TaskMessageAttention, TaskMessageAttentionPage, TaskMessageResult,
-    UnconfirmedTaskMessageWrite, UnconfirmedWriteSettlement,
+    ClaimedTaskMessage, QUEEN_MESSAGE_TASK_CLOSED_REASON, REDELIVERED_AFTER_AN_UNCONFIRMED_WRITE,
+    TASK_MESSAGE_BATCH_LIMIT, TASK_MESSAGE_QUEUE_LIMIT, TaskMessageAttention,
+    TaskMessageAttentionPage, TaskMessageResult, UnconfirmedTaskMessageWrite,
+    UnconfirmedWriteSettlement,
 };
 pub use native_operator_interviews::{NativeInterviewStoreError, StoredNativeInterview};
 pub use operator_statements::{OperatorStatementError, VerifiedOperatorStatement};
@@ -1040,6 +1041,11 @@ pub enum TaskStoreError {
         "a task-scoped worker question must go to that task's current assignee; assign the work first, or explicitly request a managed Scout second opinion"
     )]
     QueenMessageRecipientNotAssigned,
+    /// Queen messaged a worker on a closed task (ADR 0184).
+    #[error(
+        "that task is {state}, and a message on a closed task is dropped before its worker can read it, so nothing was sent. Send it with swarm_message_worker on an open task of that worker, or tell the operator if none is open"
+    )]
+    QueenMessageTaskClosed { state: String },
     /// The other leg of the rule above: a worker messages Queen on its own
     /// assignment, and the managed Scout also on a task Queen asked it about.
     #[error(

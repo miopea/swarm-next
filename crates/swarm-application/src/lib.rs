@@ -4083,7 +4083,7 @@ impl TaskService {
         &self,
         principal: AgentPrincipal,
         message_id: &str,
-        claim_id: &str,
+        claim_id: Option<&str>,
         retry_may_duplicate: bool,
         reason: &str,
         now: i64,

@@ -1103,7 +1103,8 @@ fn actionable_fingerprint(
             .collect::<Result<Vec<_>, _>>()?,
     );
     let mut messages = connection.prepare(
-        "SELECT message_id, claim_id, state, superseded FROM task_message_deliveries
+        // A message handed back because its task closed has no claim (ADR 0184).
+        "SELECT message_id, COALESCE(claim_id, ''), state, superseded FROM task_message_deliveries
          WHERE state IN ('uncertain','rejected') ORDER BY updated_at, message_id LIMIT ?1",
     )?;
     rows.extend(
@@ -1848,6 +1849,54 @@ mod tests {
         );
     }
 
+    /// A message handed back to Queen because its task closed wakes her, and
+    /// its missing claim does not break the reading that decides to (ADR 0184).
+    #[test]
+    fn a_message_handed_back_on_a_closed_task_wakes_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let task = store.create_task("Released work", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.set_queen_automation_enabled(true, 100).unwrap();
+        let message = store
+            .send_task_message(
+                task.id,
+                crate::MessageEnd::queen(),
+                crate::MessageEnd::worker(worker.id),
+                "Report here once it is released.",
+                100,
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+        let before = store.queen_automation_status(100).unwrap().actionable_count;
+
+        assert!(store.claim_task_messages(101).unwrap().is_empty());
+        assert_eq!(
+            store.queen_automation_status(101).unwrap().actionable_count,
+            before + 1
+        );
+        assert!(store.observe_queen_automation(101).unwrap());
+
+        store
+            .reconcile_task_message(&message.id, None, false, "Sent on the open task", 102)
+            .unwrap();
+        assert_eq!(
+            store.queen_automation_status(102).unwrap().actionable_count,
+            before
+        );
+    }
+
     #[test]
     fn delivery_exception_alone_requests_queen_review_and_resolution_goes_quiet() {
         let store = TaskStore::in_memory().unwrap();
@@ -1898,7 +1947,13 @@ mod tests {
             .complete_queen_automation_delivery(&delivery.run_id, 100)
             .unwrap();
         store
-            .reconcile_task_message(&message.id, &claim.claim_id, false, "Read and handled", 100)
+            .reconcile_task_message(
+                &message.id,
+                Some(&claim.claim_id),
+                false,
+                "Read and handled",
+                100,
+            )
             .unwrap();
         store
             .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::Completed, 100)
@@ -1941,7 +1996,13 @@ mod tests {
         let first = actionable_fingerprint(&store.connection().unwrap(), 0).unwrap();
         assert!(!first.0.contains("private message content"));
         store
-            .reconcile_task_message(&message.id, &claim.claim_id, true, "Retry explicitly", 100)
+            .reconcile_task_message(
+                &message.id,
+                Some(&claim.claim_id),
+                true,
+                "Retry explicitly",
+                100,
+            )
             .unwrap();
         let retry = store.claim_task_messages(100).unwrap().remove(0);
         store

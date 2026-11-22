@@ -371,6 +371,25 @@ fn held_message(message: swarm_persistence::TaskMessageAttention) -> HeldDeliver
             observations: 1,
         };
     }
+    if message.resolution_reason.as_deref()
+        == Some(swarm_persistence::QUEEN_MESSAGE_TASK_CLOSED_REASON)
+    {
+        let worker = message.recipient_name.as_deref().unwrap_or("its worker");
+        return HeldDeliveryResponse {
+            kind: "task_message_reconciliation".into(),
+            subject: message.message_id,
+            worker_name: Some("Queen".into()),
+            reason: format!(
+                "Queen's message to {worker} on \"{}\" was not delivered: that task closed before \
+                 it arrived. Queen sends it again on an open task if it still matters, then clears \
+                 it (ADR 0184).",
+                message.task_title
+            ),
+            first_observed_at: message.updated_at,
+            last_observed_at: message.updated_at,
+            observations: 1,
+        };
+    }
     HeldDeliveryResponse {
         kind: "task_message_reconciliation".into(),
         subject: message.message_id.clone(),
@@ -610,7 +629,13 @@ mod tests {
     }
 
     fn waiting(held_behind: Option<swarm_persistence::HeldBehindTask>) -> HeldDeliveryResponse {
-        held_message(swarm_persistence::TaskMessageAttention {
+        held_message(attention(held_behind))
+    }
+
+    fn attention(
+        held_behind: Option<swarm_persistence::HeldBehindTask>,
+    ) -> swarm_persistence::TaskMessageAttention {
+        swarm_persistence::TaskMessageAttention {
             message_id: "message".into(),
             task_id: "task".into(),
             task_title: "Phase E".into(),
@@ -624,7 +649,29 @@ mod tests {
             recipient_running: true,
             recipient_name: Some("RCG Networks".into()),
             held_behind,
-        })
+            resolution_reason: None,
+        }
+    }
+
+    /// Queues says Queen's message was not delivered because its task closed,
+    /// and what she does about it (ADR 0184).
+    #[test]
+    fn a_message_whose_task_closed_says_so_in_queues() {
+        let held = held_message(swarm_persistence::TaskMessageAttention {
+            state: "rejected".into(),
+            resolution_reason: Some(swarm_persistence::QUEEN_MESSAGE_TASK_CLOSED_REASON.into()),
+            ..attention(None)
+        });
+        assert_eq!(held.kind, "task_message_reconciliation");
+        assert_eq!(held.worker_name.as_deref(), Some("Queen"));
+        assert!(held.reason.contains("RCG Networks"), "{}", held.reason);
+        assert!(held.reason.contains("\"Phase E\""), "{}", held.reason);
+        assert!(
+            held.reason.contains("closed before it arrived"),
+            "{}",
+            held.reason
+        );
+        assert!(!held.reason.contains("retrying"), "{}", held.reason);
     }
 
     /// ⚠️ THE OPERATOR'S CARD NAMES THE TASK A HELD MESSAGE WAITS FOR, and does

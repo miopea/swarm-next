@@ -305,16 +305,23 @@ impl TaskStore {
     ) -> Result<TaskMessage, TaskStoreError> {
         let mut connection = self.connection()?;
         let tx = connection.transaction()?;
-        let assigned_worker: Option<Option<String>> = tx
+        let task: Option<(Option<String>, String)> = tx
             .query_row(
-                "SELECT assigned_worker_id FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                "SELECT assigned_worker_id, state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
                 [task_id.to_string()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let Some(assigned_worker) = assigned_worker else {
+        let Some((assigned_worker, state)) = task else {
             return Err(TaskStoreError::NotFound);
         };
+        // A message to a worker on a closed task is cancelled unread before it
+        // can arrive, so accepting it as queued told Queen something false
+        // (ADR 0184). Refused here, nothing is recorded, and she sends it on
+        // an open task instead.
+        if matches!(state.as_str(), "completed" | "abandoned") {
+            return Err(TaskStoreError::QueenMessageTaskClosed { state });
+        }
         let worker_id_text = worker_id.to_string();
         match purpose {
             WorkerMessagePurpose::AssignedTask => {
@@ -1016,6 +1023,51 @@ mod tests {
             store.task_messages(task).unwrap().is_empty(),
             "and nothing is recorded, so a refusal cannot be read later as an exchange"
         );
+    }
+
+    /// A message on a closed task is dropped before it can arrive, so Queen's
+    /// send there is refused and records nothing (ADR 0184). 88 of her messages
+    /// from 2026-11-05 to 2026-11-22 were sent to a task already closed.
+    #[test]
+    fn queen_cannot_message_a_worker_on_a_closed_task() {
+        let (store, task, worker) = hive();
+        store.assign_task_to_worker(task, worker).unwrap();
+        store.transition_task(task, TaskState::Active).unwrap();
+        store.transition_task(task, TaskState::Review).unwrap();
+        store.transition_task(task, TaskState::Completed).unwrap();
+
+        let refused = store.send_queen_worker_message(
+            task,
+            worker,
+            WorkerMessagePurpose::AssignedTask,
+            "GO to merge.",
+            1_000,
+        );
+
+        assert!(matches!(
+            refused,
+            Err(TaskStoreError::QueenMessageTaskClosed { ref state }) if state == "completed"
+        ));
+        assert!(store.task_messages(task).unwrap().is_empty());
+        let text = TaskStoreError::QueenMessageTaskClosed {
+            state: "completed".into(),
+        }
+        .to_string();
+        assert!(text.contains("completed"), "{text}");
+        assert!(text.contains("open task"), "{text}");
+
+        let open = store.create_task("Next work", "/workspace").unwrap();
+        store.transition_task(open.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(open.id, worker).unwrap();
+        store
+            .send_queen_worker_message(
+                open.id,
+                worker,
+                WorkerMessagePurpose::AssignedTask,
+                "GO to merge.",
+                1_001,
+            )
+            .unwrap();
     }
 
     #[test]
