@@ -104,10 +104,14 @@ grant mod.
   - the operator's own Claude sessions outside Swarm;
   - Codex workers;
   - any other agent or tool with the operator's GitHub credential.
-- **The fleet's PreToolUse hook is unchanged.** It still checks a pull
-  request's checks, never its author, and reads only `gh pr merge`. A
-  fleet-wide author check would belong to the repository that owns that hook.
-  Whether it is wanted is the operator's decision. Until it exists, a session
+- **The fleet's PreToolUse hook: fixed in its repository, not yet
+  installed.** The repository that owns that hook added the same rule at
+  commit `ad7f4b35`. It refuses a merge only when all three hold: the
+  repository is public, the `gh` account owns it, and another account opened
+  the pull request. It also reads `gh api` PUT to the merge endpoint, and it
+  refuses a GraphQL merge it cannot check. Sessions still run the older copy,
+  which checks a pull request's checks but never its author. Installing the
+  new copy is the operator's decision. Until it is installed, a session
   outside Swarm can merge a stranger's pull request as before.
 - **What the text does not show:**
   - a script file;
