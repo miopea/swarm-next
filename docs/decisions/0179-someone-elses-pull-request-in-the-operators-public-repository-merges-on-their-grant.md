@@ -97,22 +97,23 @@ merge. It never checks the author, and it reads only `gh pr merge`.
 
 ## What this does not cover
 
-The rule is not airtight. It covers only merges that pass through Swarm's
-grant mod.
+The rule is not airtight. This decision covers only merges that pass
+through Swarm's grant mod. The fleet's own hook now covers Claude Code
+sessions on the operator's machine, as the next point says.
 
-- **Sessions without the mod:**
-  - the operator's own Claude sessions outside Swarm;
-  - Codex workers;
-  - any other agent or tool with the operator's GitHub credential.
-- **The fleet's PreToolUse hook: fixed in its repository, not yet
-  installed.** The repository that owns that hook added the same rule at
+- **The fleet's PreToolUse hook now checks the author, on the operator's
+  machine.** The repository that owns that hook added the same rule at
   commit `ad7f4b35`. It refuses a merge only when all three hold: the
   repository is public, the `gh` account owns it, and another account opened
   the pull request. It also reads `gh api` PUT to the merge endpoint, and it
-  refuses a GraphQL merge it cannot check. Sessions still run the older copy,
-  which checks a pull request's checks but never its author. Installing the
-  new copy is the operator's decision. Until it is installed, a session
-  outside Swarm can merge a stranger's pull request as before.
+  refuses a GraphQL merge it cannot check. It was installed on the
+  operator's machine on 2026-11-22, by the operator's decision.
+- **What neither check reaches.** Each of these can still merge a stranger's
+  pull request:
+  - a Claude Code session on another machine;
+  - a Codex worker;
+  - any other agent or tool, outside Claude Code's hooks, that holds the
+    operator's GitHub credential.
 - **What the text does not show:**
   - a script file;
   - a shell alias or function;
