@@ -892,7 +892,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 45;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 46;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -902,7 +902,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 45;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 45. Update this and the revision together.
+/// The served surface as of revision 46. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -911,7 +911,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 45;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "ae49190479777798fdba175c70d3f0f77c66801fb5f43b574e2b0c865fa00ee2";
+    "51f97d37a0e9578b246afdb6d70220b404513ed400abb5f1df34037329787e6c";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1219,6 +1219,7 @@ impl ServerHandler for AgentMcp {
                 reconcile_task_message_tool(),
                 assign_task_tool(),
                 task_prerequisite_tool(),
+                task_read_link_tool(),
                 set_task_must_not_touch_tool(),
                 task_decision_link_tool(),
                 reassess_task_block_tool(),
@@ -1297,6 +1298,7 @@ impl AgentMcp {
                 "swarm_create_task"
                 | "swarm_assign_task"
                 | "swarm_set_task_prerequisite"
+                | "swarm_set_task_read_link"
                 | "swarm_set_task_must_not_touch"
                 | "swarm_set_task_decision_link"
                 | "swarm_reassess_task_block"
@@ -1654,6 +1656,9 @@ impl AgentMcp {
             "swarm_set_task_prerequisite" => parse::<swarm_domain::TaskPrerequisiteChange>(arguments)
                 .and_then(|input| self.tasks.change_task_prerequisite(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
+            "swarm_set_task_read_link" => parse::<swarm_domain::TaskReadLinkChange>(arguments)
+                .and_then(|input| self.tasks.change_task_read_link(self.principal, &input, crate::unix_timestamp()))
+                .and_then(|links| structured(json!({ "read_links": links }))),
             "swarm_set_task_decision_link" => parse::<swarm_domain::TaskDecisionLinkChange>(arguments)
                 .and_then(|input| self.tasks.change_task_decision_link(self.principal, &input, crate::unix_timestamp()))
                 .and_then(structured),
@@ -3814,10 +3819,17 @@ impl AgentMcp {
         }
         let resolved = self.tasks.store().records_starting_with(&fragments)?;
         let mut limits = self.tasks.store().must_not_touch_for_tasks(&ids)?;
+        let mut read_links = self.tasks.store().read_links_for_tasks(&ids)?;
         let values = tasks
             .iter()
             .map(|task| {
                 let mut value = json!(task);
+                if let Some(links) = read_links.remove(&task.id)
+                    && let Some(object) = value.as_object_mut()
+                {
+                    object.insert("read_links".into(), json!(links));
+                    object.insert("read_links_note".into(), json!(READ_LINKS_NOTE));
+                }
                 if let Some(limits) = must_not_touch_fields(limits.remove(&task.id))
                     && let Some(object) = value.as_object_mut()
                 {
@@ -5817,7 +5829,7 @@ fn approve_no_deployment_tool() -> Tool {
 fn read_task_history_tool() -> Tool {
     tool(
         "swarm_read_task_history",
-        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists your own Active and Ready work, so a closed or resting task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\".",
+        "Read one task's activity log, its completion evidence, AND the Queen-worker exchange on it. `task` is the task itself with its amendments, as swarm_list_tasks lists your own Active and Ready work, so a closed or resting task's brief is read here. `events` is every state change and the complete note written with it, including a worker's handoff — outcome notifications carry only an excerpt, so this is where the whole report is. `evidence` is separate and is NOT in the log: a no-deployment claim, its approval, and any recorded deployment each write their own record and no activity row, so a task whose `events` show no evidence may still be fully evidenced. `messages` is the exchange, also separate from the log, and a message with no delivered_at has been recorded but has not yet reached its recipient. Read all three before accepting or rejecting finished work, and treat an empty `evidence` as \"none recorded\" rather than \"the log did not mention it\". A worker reads its own tasks, and any task listed in `read_links` on one of them.",
         &json!({
             "type": "object",
             "properties": {
@@ -6150,6 +6162,20 @@ fn task_prerequisite_tool() -> Tool {
             "operation":{"type":"string","enum":["add","remove"]},
             "reason":{"type":"string","minLength":1,"maxLength":2048}
         }, "required":["task_id","prerequisite_id","operation","reason"],"additionalProperties":false}),
+        false,
+    )
+}
+
+fn task_read_link_tool() -> Tool {
+    tool(
+        "swarm_set_task_read_link",
+        "Queen only: let the worker on task_id read another task, readable_task_id, with swarm_read_task_history: its description, amendments, history, evidence and messages (ADR 0182). Use it when the work depends on rules or findings recorded on another task, often in another repository, so the worker reads them and not your summary of them. It grants that read and nothing else: no write, transition, message or board place. The reason goes on task_id's history, and the worker's own task lists its read links. Only you or the operator set one, at most 32 per task. Remove it when the work no longer needs it.",
+        &json!({"type":"object", "properties": {
+            "task_id":{"type":"string","format":"uuid"},
+            "readable_task_id":{"type":"string","format":"uuid"},
+            "operation":{"type":"string","enum":["add","remove"]},
+            "reason":{"type":"string","minLength":1,"maxLength":2048}
+        }, "required":["task_id","readable_task_id","operation","reason"],"additionalProperties":false}),
         false,
     )
 }
@@ -6648,6 +6674,8 @@ fn independent_check_hint(check: &IndependentCheckState) -> Option<String> {
 }
 
 /// What a worker's listing says beside its task's must-not-touch patterns.
+const READ_LINKS_NOTE: &str = "Tasks Queen or the operator linked for this task's worker to read (ADR 0182), often in another repository. Read each in full with swarm_read_task_history: its description, amendments, history, evidence and messages. Read only: you cannot change, move or message it, and what it asks of its own worker is not asked of you.";
+
 const MUST_NOT_TOUCH_NOTE: &str = "Paths this task's work must not touch, relative to its repository, set by whoever filed it or by Queen (ADR 0172). Only Queen changes them; a worker whose work needs one asks her with swarm_message_queen before touching it. At Review, Queen sees which recorded commits touched one; nothing is refused for that, and she decides whether it was needed.";
 
 /// The step a worker's Review response adds when its commits crossed.
@@ -8883,6 +8911,8 @@ mod tests {
         "swarm_assign_task",
         "swarm_list_jira_projects",
         "swarm_set_task_prerequisite",
+        // A worker cannot open another task to itself (ADR 0182).
+        "swarm_set_task_read_link",
         // A worker cannot loosen the paths its own work must not touch, so it
         // is never handed the tool that changes them (ADR 0172).
         "swarm_set_task_must_not_touch",
@@ -10114,6 +10144,87 @@ mod tests {
                 requested_script: None,
             })
             .unwrap()
+    }
+
+    /// A read link (ADR 0182): Queen opens a task in another repository to
+    /// the worker, its own task lists it, and the worker reads it in full.
+    #[tokio::test]
+    async fn queen_links_a_task_for_a_worker_to_read_and_the_worker_cannot() {
+        let (bridge, store, queen_id, worker_id, _directory) = setup();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let mine = store
+            .create_task("Follows the rules", "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(mine.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task_to_worker(mine.id, worker_id).unwrap();
+        let rules = store
+            .create_task("Holds the operator's rules", "/workspace/another")
+            .unwrap();
+        let call = |caller: WorkerId, name: &'static str, arguments: Value| {
+            let bridge = bridge.clone();
+            async move {
+                let token = bearer_from_path(&bridge.ensure_worker_config(caller).unwrap());
+                response_json(
+                    handle(
+                        bridge,
+                        plain_state(),
+                        mcp_request(
+                            Some(&token),
+                            "tools/call",
+                            &json!({ "name": name, "arguments": arguments }),
+                        ),
+                    )
+                    .await,
+                )
+                .await
+            }
+        };
+        let link = json!({
+            "task_id": mine.id, "readable_task_id": rules.id, "operation": "add",
+            "reason": "Holds the rules this work follows."
+        });
+        let history = json!({ "task_id": rules.id });
+
+        let refused = call(worker_id, "swarm_set_task_read_link", link.clone()).await;
+        assert!(
+            store.read_links_for_tasks(&[mine.id]).unwrap().is_empty(),
+            "a worker must not open another task to itself: {refused}"
+        );
+        let read = call(worker_id, "swarm_read_task_history", history.clone()).await;
+        assert_ne!(read["result"]["isError"], false, "{read}");
+
+        let set = call(queen_id, "swarm_set_task_read_link", link).await;
+        assert_eq!(set["result"]["isError"], false, "{set}");
+        assert_eq!(
+            set["result"]["structuredContent"]["read_links"][0]["readable_task_id"],
+            rules.id.to_string()
+        );
+
+        let listed = call(worker_id, "swarm_list_tasks", json!({})).await;
+        let entry = listed["result"]["structuredContent"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"] == mine.id.to_string())
+            .cloned()
+            .unwrap_or_else(|| panic!("the worker's task is listed: {listed}"));
+        assert_eq!(
+            entry["read_links"][0]["readable_task_id"],
+            rules.id.to_string()
+        );
+        assert_eq!(entry["read_links"][0]["workspace"], "/workspace/another");
+        assert_eq!(entry["read_links_note"], READ_LINKS_NOTE);
+
+        let read = call(worker_id, "swarm_read_task_history", history).await;
+        assert_eq!(read["result"]["isError"], false, "{read}");
+        assert_eq!(
+            read["result"]["structuredContent"]["task"]["title"],
+            "Holds the operator's rules"
+        );
     }
 
     #[tokio::test]

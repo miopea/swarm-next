@@ -3304,6 +3304,39 @@ impl TaskService {
         self.block_active_work_on_its_new_prerequisite(change, &actor)
     }
 
+    /// Queen adds or removes a read link: another task this task's worker
+    /// may read (ADR 0182). Returns the task's read links after the change.
+    ///
+    /// # Errors
+    /// Refuses anyone but Queen, and propagates the store's refusals.
+    pub fn change_task_read_link(
+        &self,
+        principal: AgentPrincipal,
+        change: &swarm_domain::TaskReadLinkChange,
+        now: i64,
+    ) -> Result<Vec<swarm_domain::TaskReadLink>, ApplicationError> {
+        require_queen(principal)?;
+        Ok(self.store.change_task_read_link(
+            change,
+            &TaskActivityActor::worker(principal.worker_id),
+            now,
+        )?)
+    }
+
+    /// The operator adds or removes a read link (ADR 0182).
+    ///
+    /// # Errors
+    /// Propagates the store's refusals.
+    pub fn change_operator_task_read_link(
+        &self,
+        change: &swarm_domain::TaskReadLinkChange,
+        now: i64,
+    ) -> Result<Vec<swarm_domain::TaskReadLink>, ApplicationError> {
+        Ok(self
+            .store
+            .change_task_read_link(change, &TaskActivityActor::operator(), now)?)
+    }
+
     /// Apply an authenticated operator's explicit prerequisite change.
     ///
     /// # Errors
@@ -3865,6 +3898,16 @@ impl TaskService {
         if self
             .store
             .worker_waits_on_task(principal.worker_id, task_id)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        // A task Queen or the operator linked to this worker's own task for it
+        // to read (ADR 0182). Only they set a link, so the worker cannot open
+        // a task by naming it in text it can edit.
+        if self
+            .store
+            .worker_reads_linked_task(principal.worker_id, task_id)
             .unwrap_or(false)
         {
             return Ok(());
@@ -7312,6 +7355,88 @@ mod tests {
         service
             .may_read_task(worker_principal, waits_on.id)
             .expect("the task the board says you are waiting on must be readable");
+    }
+
+    /// A read link (ADR 0182): Queen opens another repository's task to this
+    /// worker, through every read `swarm_read_task_history` makes. The worker
+    /// cannot open one itself.
+    #[test]
+    fn a_worker_reads_a_task_queen_linked_for_it_and_cannot_link_one_itself() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let rules = service
+            .create_task(
+                queen_principal,
+                "Holds the operator's rules",
+                "",
+                TaskPriority::Normal,
+                "/another/repository",
+            )
+            .unwrap();
+        let mine = service
+            .create_task(
+                queen_principal,
+                "Follows them",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
+        service
+            .assign_task(queen_principal, mine.id, worker.id)
+            .unwrap();
+        let worker_principal = AgentPrincipal {
+            worker_id: worker.id,
+            role: WorkerRole::Worker,
+            active_session_id: Some(session),
+        };
+        let link = swarm_domain::TaskReadLinkChange {
+            task_id: mine.id,
+            readable_task_id: rules.id,
+            operation: swarm_domain::ReadLinkOperation::Add,
+            reason: "Holds the rules this work follows.".into(),
+        };
+        assert!(service.may_read_task(worker_principal, rules.id).is_err());
+        assert!(
+            service
+                .change_task_read_link(worker_principal, &link, 1)
+                .is_err(),
+            "a worker must not open another task to itself"
+        );
+        assert!(service.may_read_task(worker_principal, rules.id).is_err());
+
+        let links = service
+            .change_task_read_link(queen_principal, &link, 1)
+            .unwrap();
+        assert_eq!(links[0].readable_task_id, rules.id);
+        service
+            .read_task_history(worker_principal, rules.id, 10)
+            .expect("the linked task's history is readable");
+        service
+            .read_task_evidence(worker_principal, rules.id)
+            .expect("so is its evidence");
+        service
+            .read_task_messages(worker_principal, rules.id)
+            .expect("and its messages");
+
+        service
+            .change_operator_task_read_link(
+                &swarm_domain::TaskReadLinkChange {
+                    operation: swarm_domain::ReadLinkOperation::Remove,
+                    ..link
+                },
+                2,
+            )
+            .unwrap();
+        assert!(
+            service.may_read_task(worker_principal, rules.id).is_err(),
+            "removing the link closes the read"
+        );
     }
 
     /// ⚠️ AND IT MUST NOT WIDEN INTO A GENERAL BOARD READ. The link is what

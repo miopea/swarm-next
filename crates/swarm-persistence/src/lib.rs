@@ -92,6 +92,7 @@ pub use worker_engine_returns::WorkerEngineReturnSession;
 mod task_block;
 mod task_decision_links;
 mod task_prerequisites;
+mod task_read_links;
 mod task_waits;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, BackgroundWorkReading,
@@ -514,7 +515,9 @@ const JIRA_REPLY_DRAFTS_SCHEMA_MARKER: i64 = 231;
 /// Merged work that waits for its release is named to Queen, and Swarm may
 /// remind whoever releases it (ADR 0180).
 const RELEASE_WAITS_SCHEMA_MARKER: i64 = 232;
-const CURRENT_SCHEMA_VERSION: i64 = RELEASE_WAITS_SCHEMA_MARKER;
+/// Queen or the operator lets a task's worker read another task (ADR 0182).
+const TASK_READ_LINKS_SCHEMA_MARKER: i64 = 233;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_READ_LINKS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -797,6 +800,8 @@ pub enum TaskStoreError {
     TaskPrerequisite(#[from] swarm_domain::TaskPrerequisiteError),
     #[error(transparent)]
     TaskDecisionLink(#[from] swarm_domain::TaskDecisionLinkError),
+    #[error(transparent)]
+    TaskReadLink(#[from] swarm_domain::TaskReadLinkError),
     #[error(transparent)]
     DecisionClarification(#[from] swarm_domain::DecisionClarificationError),
     // ⚠️ SUPERSESSION IS FOR ANSWERED CARDS. A pending one is withdrawn, which
@@ -5221,6 +5226,12 @@ fn migrate_queen_release_schema_steps(
     }
     if schema_version < RELEASE_WAITS_SCHEMA_MARKER {
         crate::release_waits::migrate_release_waits(transaction, RELEASE_WAITS_SCHEMA_MARKER)?;
+    }
+    if schema_version < TASK_READ_LINKS_SCHEMA_MARKER {
+        crate::task_read_links::migrate_task_read_links(
+            transaction,
+            TASK_READ_LINKS_SCHEMA_MARKER,
+        )?;
     }
     Ok(())
 }
@@ -11719,6 +11730,14 @@ mod tests {
                     AND sql LIKE '%merged_work_waiting_attention%')
                 + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
                     AND name = 'task_messages' AND sql LIKE '%''swarm''%') = 4",
+        },
+        // Read links (ADR 0182): one new table, so the undo removes it.
+        SchemaStep {
+            table: "task_read_links",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS task_read_links",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'task_read_links')",
         },
     ];
 
