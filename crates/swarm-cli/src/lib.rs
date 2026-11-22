@@ -28,6 +28,7 @@ pub enum LifecycleCommand {
     VerifyDatabase {
         path: std::path::PathBuf,
     },
+    SchemaVersion,
     InspectLegacy {
         path: std::path::PathBuf,
     },
@@ -40,7 +41,7 @@ pub enum LifecycleCommand {
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(
-        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|inspect-legacy PATH|export-legacy SOURCE OUTPUT>"
+        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|schema-version|inspect-legacy PATH|export-legacy SOURCE OUTPUT>"
     )]
     Usage,
     #[error("wait timeout must be an integer from 1 through 86400 seconds")]
@@ -125,6 +126,12 @@ pub fn parse_command(
             }
             Ok(LifecycleCommand::VerifyDatabase { path })
         }
+        "schema-version" => {
+            if arguments.next().is_some() {
+                return Err(CliError::Usage);
+            }
+            Ok(LifecycleCommand::SchemaVersion)
+        }
         "inspect-legacy" => {
             let path = arguments.next().map(PathBuf::from).ok_or(CliError::Usage)?;
             if arguments.next().is_some() || !path.is_absolute() {
@@ -182,6 +189,7 @@ pub async fn execute(
             }
         }
         LifecycleCommand::VerifyDatabase { .. }
+        | LifecycleCommand::SchemaVersion
         | LifecycleCommand::InspectLegacy { .. }
         | LifecycleCommand::ExportLegacyTasks { .. } => Err(CliError::Usage),
     }
@@ -324,6 +332,22 @@ fn inspect_table(
     })
 }
 
+/// The newest database schema this build migrates to, asked of the build.
+///
+/// swarm-package reads it to prove a rollback's database is one the release
+/// it returns to can read (ADR 0178). It used to probe by having
+/// `verify-database` create a fresh file, and `verify-database` has refused a
+/// file that does not exist since it began rejecting empty recovery
+/// candidates, so that probe answered nothing. This touches no file at all.
+///
+/// # Errors
+/// Returns an error when an in-memory database cannot be migrated.
+pub fn schema_version() -> Result<i64, CliError> {
+    swarm_persistence::TaskStore::in_memory()
+        .and_then(|store| store.schema_version())
+        .map_err(|error| CliError::Database(error.to_string()))
+}
+
 /// Opens an exported Hive database and verifies its schema and `SQLite` integrity.
 ///
 /// # Errors
@@ -403,6 +427,20 @@ mod tests {
 
     use super::*;
 
+    /// What swarm-package compares against a database's header: it has to be
+    /// the version this build actually writes, not a constant beside it.
+    #[test]
+    fn schema_version_is_the_version_this_build_writes_to_a_database() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("hive.sqlite3");
+        let written = swarm_persistence::TaskStore::open(&path)
+            .unwrap()
+            .schema_version()
+            .unwrap();
+        assert!(written > 0);
+        assert_eq!(schema_version().unwrap(), written);
+    }
+
     #[test]
     fn parses_only_the_bounded_lifecycle_surface() {
         assert_eq!(
@@ -436,6 +474,14 @@ mod tests {
                 OsString::from("/tmp/legacy.sqlite3")
             ]),
             Ok(LifecycleCommand::InspectLegacy { .. })
+        ));
+        assert_eq!(
+            parse_command([OsString::from("schema-version")]).unwrap(),
+            LifecycleCommand::SchemaVersion
+        );
+        assert!(matches!(
+            parse_command([OsString::from("schema-version"), OsString::from("extra")]),
+            Err(CliError::Usage)
         ));
         let session_id = WorkerSessionId::new();
         assert_eq!(

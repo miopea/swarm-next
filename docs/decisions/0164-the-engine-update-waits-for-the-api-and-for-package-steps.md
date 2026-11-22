@@ -9,6 +9,8 @@
   listens.
 - Amends: ADR 0156 (a waiting engine update applies itself while every worker
   rests) and ADR 0163 (Swarm stops the workers it vouches for).
+- Amended by: ADR 0178. No worker pass is awaited before the bind any more;
+  the first runs at once beside the listener.
 
 ## Context
 
