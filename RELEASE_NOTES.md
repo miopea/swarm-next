@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.22.0
+
+One database update (231): a new table and one new column. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged. A worker or Queen session that was running before the update sees Swarm's new tool once it restarts.
+
+### New features
+- When a worker answers someone who raised a Jira ticket, its reply now waits in Needs you as a draft, naming who raised the ticket. You can edit it, and one press posts it to the ticket straight away. The card then shows whether Jira took it, or why not. Only replies a worker drafts wait for your press: a worker can still post a comment on a ticket directly, as before.
+- A ticket does not resolve in Jira while its drafted reply is waiting for you. It resolves once the reply is posted, or once you choose not to post it.
+
+### Fixes
+- A comment a worker posts on a Jira ticket now goes at once, instead of waiting up to a minute for the next Jira pass.
+
 ## 1.21.0
 
 Two database updates (229 and 230). 229 rebuilds one table to allow a new kind of notification, keeping every row. 230 adds a column and two new tables. Your Hive backs up its database by itself before applying them. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged. A worker or Queen session that was running before the update sees Swarm's new tool once it restarts.
