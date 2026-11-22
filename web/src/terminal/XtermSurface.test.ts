@@ -49,7 +49,14 @@ const xterm = vi.hoisted(() => ({
   fit: vi.fn(),
   propose: vi.fn<() => { rows: number; cols: number } | undefined>(),
   resizeListener: undefined as ((size: { rows: number; cols: number }) => void) | undefined,
-  terminal: undefined as { rows: number; cols: number; unicode: { activeVersion: string } } | undefined,
+  terminal: undefined as
+    | {
+        rows: number;
+        cols: number;
+        unicode: { activeVersion: string };
+        resize(columns: number, rows: number): void;
+      }
+    | undefined,
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
   keyHandler: undefined as ((event: KeyboardEvent) => boolean) | undefined,
@@ -1268,7 +1275,7 @@ test("stops resizing when the new size would undo the last one", async () => {
   ];
   let applied = 0;
   xterm.propose.mockReset().mockImplementation(() => sizes[Math.min(applied, sizes.length - 1)]);
-  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+  const resize = vi.spyOn(xterm.terminal!, "resize");
 
   for (const _ of sizes) {
     notify?.();
@@ -1299,7 +1306,7 @@ test("software keyboard geometry hold blocks observer mutation until release", a
   let held = true;
   surface.observeGeometrySuspension(() => held);
   xterm.propose.mockReset().mockReturnValue({ rows: 12, cols: 40 });
-  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+  const resize = vi.spyOn(xterm.terminal!, "resize");
 
   notify?.();
   await vi.advanceTimersByTimeAsync(200);
@@ -1353,7 +1360,7 @@ test("stops a cycle longer than two sizes", async () => {
   ];
   let step = 0;
   xterm.propose.mockReset().mockImplementation(() => cycle[step % cycle.length]);
-  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+  const resize = vi.spyOn(xterm.terminal!, "resize");
 
   for (let round = 0; round < 8; round += 1) {
     notify?.();
@@ -1399,7 +1406,7 @@ test("fit refuses to apply a size it just left", async () => {
   ];
   let step = 0;
   xterm.propose.mockReset().mockImplementation(() => sizes[Math.min(step, sizes.length - 1)]);
-  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+  const resize = vi.spyOn(xterm.terminal!, "resize");
 
   for (const _ of sizes) {
     const fitting = surface.fit();

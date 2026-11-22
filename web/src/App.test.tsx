@@ -2370,7 +2370,8 @@ test("the phone navigation chevron points the way the navigation will move", asy
 test("a touch device does not get keyboard focus that would cover the terminal", () => {
   // Focusing an input on a phone summons the on-screen keyboard over half the
   // view the operator just asked to look at.
-  const media = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+  // jsdom has no matchMedia, so it is stubbed rather than spied on.
+  vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(pointer: coarse)",
     media: query,
     onchange: null,
@@ -2382,11 +2383,12 @@ test("a touch device does not get keyboard focus that would cover the terminal",
   }) as MediaQueryList);
 
   expect(shouldFocusTerminalInput()).toBe(false);
-  media.mockRestore();
+  vi.unstubAllGlobals();
 });
 
 test("a pointer device still gets focus, so the terminal is typeable at once", () => {
-  const media = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
+  // jsdom has no matchMedia, so it is stubbed rather than spied on.
+  vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
     media: query,
     onchange: null,
@@ -2398,7 +2400,7 @@ test("a pointer device still gets focus, so the terminal is typeable at once", (
   }) as MediaQueryList);
 
   expect(shouldFocusTerminalInput()).toBe(true);
-  media.mockRestore();
+  vi.unstubAllGlobals();
 });
 
 test("a browser without matchMedia is treated as a pointer device, not a touch one", () => {
