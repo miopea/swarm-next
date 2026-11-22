@@ -12,6 +12,15 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.23.1
+
+No database update. Installing it restarts the app and keeps your workers running. It brings a new worker engine build, which applies by itself the next time every worker is resting, or from Settings with Apply worker engine update.
+
+### New features
+- Merged work whose release waits on your answer to a pending card no longer raises Queen's overdue-release row or a reminder to whoever releases it. You already have that card in Needs you, and nobody can release the work until you answer. A row already raised for it clears when the card is filed. Its wait starts again when you answer or the card is withdrawn.
+- That work is still named on its repository's row, so Queen knows a release there carries it too.
+- When overdue merged work has no card at all, its row now says plainly that nothing about it is in your Needs you.
+
 ## 1.23.0
 
 One database update (232): two new tables, and two tables rebuilt, keeping every row, to allow a new kind of attention row and a new message sender. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting. A worker or Queen session that was running before the update sees the new option on Swarm's tool once it restarts.
