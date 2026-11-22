@@ -9,6 +9,9 @@
   now"). Task 01a18576.
 - Amends: ADR 0129, an approved command runs once in the session that asked,
   for release instructions only.
+- Amended by: ADR 0179. Queen's instruction does not cover merging a pull
+  request that the merging account did not open, in that account's own public
+  repository; that merge needs the operator's own grant.
 
 ## Context
 

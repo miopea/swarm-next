@@ -1323,6 +1323,30 @@ impl TaskStore {
         worker_id: WorkerId,
         command: &str,
     ) -> Result<Option<LiveCommandGrant>, TaskStoreError> {
+        self.live_grant(worker_id, command, false)
+    }
+
+    /// A live grant for exactly `command` that the operator pressed, never one
+    /// Queen granted (ADR 0158): a merge of someone else's pull request in the
+    /// operator's own public repository runs only on the operator's own
+    /// decision, whatever Queen says (ADR 0179).
+    ///
+    /// # Errors
+    /// Returns an error when the query fails.
+    pub fn live_operator_command_grant(
+        &self,
+        worker_id: WorkerId,
+        command: &str,
+    ) -> Result<Option<LiveCommandGrant>, TaskStoreError> {
+        self.live_grant(worker_id, command, true)
+    }
+
+    fn live_grant(
+        &self,
+        worker_id: WorkerId,
+        command: &str,
+        operator_only: bool,
+    ) -> Result<Option<LiveCommandGrant>, TaskStoreError> {
         let connection = self.connection()?;
         let grant = connection
             .query_row(
@@ -1330,10 +1354,13 @@ impl TaskStore {
                     "SELECT g.decision_id, g.script_path, g.script_sha256
                      FROM decision_command_grants g
                      WHERE g.worker_id = ?1 AND g.command = ?2 AND {LIVE_GRANT}
+                       AND (?3 = 0 OR NOT EXISTS (
+                           SELECT 1 FROM decision_requests d
+                           WHERE d.id = g.decision_id AND d.granted_by_queen IS NOT NULL))
                      ORDER BY g.created_at, g.decision_id
                      LIMIT 1"
                 ),
-                params![worker_id.to_string(), command],
+                params![worker_id.to_string(), command, operator_only],
                 |row| {
                     let decision_id = parse_id(&row.get::<_, String>(0)?)?;
                     let script = row

@@ -755,6 +755,55 @@ mod tests {
         );
     }
 
+    /// A merge of someone else's pull request in the operator's own public
+    /// repository needs the operator's own grant (ADR 0179): one Queen pressed
+    /// is not found there, while the operator's is, and either is found by
+    /// every other grant check as before.
+    #[test]
+    fn a_grant_queen_pressed_is_not_the_operators_own() {
+        let hive = hive();
+        hive.store.set_queen_grants(true, 10).unwrap();
+        let by_queen = hive
+            .store
+            .create_command_request(&card(hive.worker, hive.task), &[])
+            .unwrap();
+        hive.store
+            .grant_command_as_queen(hive.queen, by_queen.id, "I reviewed it.")
+            .unwrap();
+        assert_eq!(
+            hive.store
+                .live_operator_command_grant(hive.worker, RELEASE)
+                .unwrap(),
+            None,
+            "Queen's grant is not the operator's decision"
+        );
+        assert_eq!(
+            hive.store
+                .live_command_grant(hive.worker, RELEASE)
+                .unwrap()
+                .map(|grant| grant.decision_id),
+            Some(by_queen.id),
+            "and still runs where Queen's grant is enough"
+        );
+        assert!(use_grant(&hive.store, hive.worker));
+
+        let by_operator = hive
+            .store
+            .create_command_request(&card(hive.worker, hive.task), &[])
+            .unwrap();
+        hive.store
+            .resolve_decision_request(by_operator.id, GRANT_COMMAND_ACTION, "Allowed.", "inbox")
+            .unwrap();
+        assert_eq!(
+            hive.store
+                .live_operator_command_grant(hive.worker, RELEASE)
+                .unwrap()
+                .map(|grant| grant.decision_id),
+            Some(by_operator.id),
+            "the operator's own press is"
+        );
+    }
+
     /// Queen's grant is the operator's grant in every way but whose it is:
     /// exact, once, and recorded as hers rather than as an operator ruling.
     #[test]
