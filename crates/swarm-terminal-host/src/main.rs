@@ -12,6 +12,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod mcp_proxy;
+mod merge_gate;
 mod provider_grant;
 mod provider_session_start;
 
@@ -33,6 +34,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if env::args().nth(1).as_deref() == Some("provider-grant") {
         provider_grant::run(env::args().nth(2).as_deref()).await;
+        return Ok(());
+    }
+    if env::args().nth(1).as_deref() == Some("provider-merge") {
+        merge_gate::run(env::args().nth(2).as_deref()).await;
         return Ok(());
     }
     if env::args().nth(1).as_deref() == Some("provider-refused") {

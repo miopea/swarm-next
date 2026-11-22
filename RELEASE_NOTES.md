@@ -12,6 +12,17 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.22.2
+
+No database update. Installing it restarts the app and keeps your workers running. The merge check below lives in the worker engine, so it takes effect once the worker engine update is applied. A Hive applies that by itself when its workers rest, or you can apply it from Settings with Apply worker engine update, which restarts loaded workers.
+
+### New features
+- In a public repository your GitHub account owns, a worker no longer merges a pull request that another account opened unless you have said yes to that exact merge yourself. Queen's review is not enough for it, and neither is a command card Queen grants. The merge must name the pull request's current head, so your yes covers what you saw and nothing pushed after it. Private repositories, repositories other accounts own, and your own pull requests merge as before. (after the worker engine update)
+- Queen's instructions now say that this merge is always yours, so she hands its card on to you instead of granting it.
+
+### Fixes
+- Swarm's own build passes its security audit again: it now uses url 2.5.9, which fixes RUSTSEC-2026-0592 (a stack overflow on nested `blob:` URLs).
+
 ## 1.22.1
 
 No database update. Installing it keeps your workers running: the app restarts and drives the engine you have, and the worker engine is unchanged.
