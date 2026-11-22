@@ -9521,6 +9521,13 @@ mod tests {
             json!({ "command": "./swap", "cwd": "/srv/app", "reason": "[Production Deploy]" })
                 .to_string();
         let log = CapturedLog::default();
+        // ⚠️ tracing-core decides once, for the whole process, whether each
+        // log line is wanted. While only one dispatcher exists, it asks the
+        // default of whichever thread reaches the line first. A parallel test
+        // on a thread with no subscriber then caches "never", and this test's
+        // line is dropped: main's CI failed that way. A second live
+        // dispatcher, made before this test's own, makes it ask every one.
+        let _every_dispatcher_is_asked = tracing::Dispatch::new(tracing_subscriber::registry());
         let subscriber = tracing_subscriber::fmt()
             .with_writer({
                 let log = log.clone();
@@ -9530,6 +9537,11 @@ mod tests {
             .finish();
 
         let response = tracing::subscriber::with_default(subscriber, || {
+            // Another thread reaches the log line first, as a parallel test
+            // can, so this test fails every time the guard above is missing.
+            std::thread::scope(|scope| {
+                scope.spawn(|| bridge.report_refused_command(&headers, body.as_bytes()));
+            });
             bridge.report_refused_command(&headers, body.as_bytes())
         });
 
