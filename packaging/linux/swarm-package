@@ -36,6 +36,10 @@ health_url=${SWARM_HEALTH_URL:-http://127.0.0.1:8766/health}
 # The page a person opens, as opposed to the endpoint the installer polls.
 app_url=${health_url%/health}
 health_attempts=${SWARM_HEALTH_ATTEMPTS:-30}
+# How long the health wait goes on while the API it started is still the same
+# running process (ADR 0178). An explicit SWARM_HEALTH_ATTEMPTS is a budget the
+# caller chose, so it is this ceiling too unless this is set as well.
+health_alive_attempts=${SWARM_HEALTH_ALIVE_ATTEMPTS:-${SWARM_HEALTH_ATTEMPTS:-240}}
 workspace_root=${SWARM_WORKSPACE_ROOT:-}
 [ -n "$workspace_root" ] || workspace_root=$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_root/swarm.env" 2>/dev/null || true)
 [ -n "$workspace_root" ] || workspace_root="$home_dir/swarm-workspaces"
@@ -53,6 +57,10 @@ daily_auth=
 daily_status=
 update_rollback=
 update_schema_before=
+update_schema_release=
+update_schema_restored=
+update_schema_attempted=
+discarded_database=
 update_auth=
 return_auth=
 auto_auth=
@@ -430,12 +438,23 @@ database_schema_version() {
 
 # The newest schema a release understands, asked of the release itself.
 #
-# Measured rather than assumed: the binary is handed a path that does not
-# exist, opens it, migrates the empty database to its own current schema, and
-# the answer is read back out of the file. No table is touched and no existing
-# database is opened, so this is safe to run against a live Hive.
+# `swarmctl schema-version` answers it directly (ADR 0178). A release older
+# than that command is asked the old way: handed a path that does not exist,
+# it opens it, migrates the empty database to its own current schema, and the
+# answer is read back out of the file. No table is touched and no existing
+# database is opened, so both are safe to run against a live Hive.
+#
+# ⚠️ THE OLD WAY HAS ANSWERED NOTHING SINCE 2026-09-04, when verify-database
+# began refusing a file that does not exist. Every release from then until
+# schema-version fails here, and every caller reads that as "cannot tell". It
+# is kept only for releases older than that.
 release_schema_version() {
   [ -x "$1/bin/swarmctl" ] || return 1
+  asked=$("$1/bin/swarmctl" schema-version 2>/dev/null || true)
+  case "$asked" in
+    ""|*[!0-9]*) :;;
+    *) printf '%s\n' "$asked"; return 0;;
+  esac
   schema_probe="$state_root/.schema-probe-$$.sqlite3"
   rm -f "$schema_probe" "$schema_probe-wal" "$schema_probe-shm"
   if ! "$1/bin/swarmctl" verify-database "$schema_probe" >/dev/null 2>&1; then
@@ -624,6 +643,12 @@ create_update_backup() {
   # difference between "the database is untouched" and "the database moved on
   # and the release we are rolling back to cannot read it".
   update_schema_before=$(database_schema_version "$database" || printf '')
+  # Asked now, while the old API still serves, so a rollback that needs them
+  # spends no extra time with the Hive down (ADR 0178).
+  update_schema_release=$current_release
+  update_schema_restored=$(release_schema_version "$current_release" || printf '')
+  update_schema_attempted=
+  [ -z "$fallback_verifier" ] || update_schema_attempted=$(release_schema_version "$fallback_verifier" || printf '')
   mkdir -p "$state_root/backups"
   chmod 0700 "$state_root/backups"
   update_incoming="$state_root/.update-backup-$$.sqlite3"
@@ -755,16 +780,101 @@ restore_update_database() {
   fi
   [ -f "$update_rollback" ] || { printf 'Pre-update rollback backup is missing; database was not replaced.\n' >&2; return 1; }
   stop_restore_api || return 1
+  # THE COPY COMES BACK ONLY WHEN THE RELEASE BEING RESTORED CANNOT READ WHAT IS
+  # THERE (ADR 0178). Everything the Hive wrote after the copy was taken, by the
+  # old API while it stopped and by the new one while it started, is in the
+  # live database and nowhere else. On 2026-11-21 a rollback with the schema
+  # unchanged restored the copy anyway and those writes were lost. Same schema
+  # is the rule `rollback` already relies on to run an older release over the
+  # live database.
+  #
+  # PROVEN, NOT ASSUMED. Four readings must agree: the database before the
+  # update, the database now, and the migration version each build carries,
+  # asked of the builds themselves. Any one that cannot be read, or differs, is
+  # doubt, and doubt restores the copy with the replaced database kept.
+  schema_now=$(database_schema_version "$database" || printf '')
+  schema_restored=
+  [ "$rollback_release" != "$update_schema_release" ] || schema_restored=$update_schema_restored
+  schema_attempted=$update_schema_attempted
+  if [ -n "$schema_now" ] && [ "$schema_now" = "$update_schema_before" ] \
+    && [ "$schema_now" = "$schema_restored" ] && [ "$schema_now" = "$schema_attempted" ]; then
+    if live_database_verifies "$database"; then
+      printf 'swarm-package: kept the live database: it is still at schema %s, and %s and %s both carry %s, so what the Hive wrote after the pre-update copy stays. The copy is %s\n' \
+        "$schema_now" "$(basename "$rollback_release")" "$(basename "${new_release:-the attempted release}")" "$schema_now" "$update_rollback" >&2
+      update_rollback=
+      return 0
+    fi
+    printf 'swarm-package: the live database did not verify with %s; restoring the pre-update copy\n' \
+      "$(basename "$rollback_release")" >&2
+  else
+    printf 'swarm-package: could not show the schema stayed put (before %s, now %s, %s carries %s, the attempted release carries %s); restoring the pre-update copy\n' \
+      "${update_schema_before:-unknown}" "${schema_now:-unknown}" "$(basename "$rollback_release")" \
+      "${schema_restored:-unknown}" "${schema_attempted:-unknown}" >&2
+  fi
   # Verify a private staging copy using the release being restored. Never copy
   # over the live database in place, and never migrate the retained backup.
   update_restore_incoming="$state_root/.package-rollback.sqlite3"
   cp "$update_rollback" "$update_restore_incoming" || return 1
   chmod 0600 "$update_restore_incoming" || return 1
   "$rollback_release/bin/swarmctl" verify-database "$update_restore_incoming" >/dev/null || return 1
-  mv -f "$update_restore_incoming" "$database" || return 1
+  keep_discarded_database "$database" || return 1
+  if ! mv -f "$update_restore_incoming" "$database"; then
+    # The kept copy shares the live database's file until this move replaces
+    # it. Left in place it would change with the live database and stop being
+    # a record of anything.
+    rm -f "$discarded_database" "$discarded_database-wal" "$discarded_database-shm"
+    return 1
+  fi
   rm -f "$database-wal" "$database-shm" || return 1
   printf 'swarm-package: restored the pre-update database from %s\n' "$update_rollback" >&2
+  [ -z "$discarded_database" ] \
+    || printf 'swarm-package: kept the database this rollback replaced at %s\n' "$discarded_database" >&2
   update_rollback=
+}
+
+# Whether the release being restored can open the live database, verified on a
+# private copy with its -wal and -shm so the live file is never opened by it.
+live_database_verifies() {
+  live_check="$state_root/.package-rollback-live.sqlite3"
+  rm -f "$live_check" "$live_check-wal" "$live_check-shm"
+  for live_part in "" -wal -shm; do
+    [ -f "$1$live_part" ] || continue
+    cp "$1$live_part" "$live_check$live_part" || { rm -f "$live_check" "$live_check-wal" "$live_check-shm"; return 1; }
+  done
+  live_verified=0
+  "$rollback_release/bin/swarmctl" verify-database "$live_check" >/dev/null 2>&1 || live_verified=1
+  rm -f "$live_check" "$live_check-wal" "$live_check-shm"
+  return "$live_verified"
+}
+
+# Keeps the database a restore is about to replace, beside the pre-update
+# copies (ADR 0178). It holds whatever the Hive wrote after the copy was taken,
+# and nothing else does. A hard link costs no space and no time; a filesystem
+# that refuses one gets a copy.
+#
+# BOUNDED AT THREE, newest kept. Each holds writes nothing else has, so they
+# are never pruned with the pre-update copies, only among themselves.
+keep_discarded_database() {
+  discarded_database=
+  [ -f "$1" ] || return 0
+  mkdir -p "$state_root/backups" || return 1
+  chmod 0700 "$state_root/backups" || return 1
+  discarded_database="$state_root/backups/discarded-$version-$(date -u +%Y%m%dT%H%M%SZ)-$$.sqlite3"
+  for discarded_part in "" -wal -shm; do
+    [ -f "$1$discarded_part" ] || continue
+    ln "$1$discarded_part" "$discarded_database$discarded_part" 2>/dev/null \
+      || cp -p "$1$discarded_part" "$discarded_database$discarded_part" || return 1
+    chmod 0600 "$discarded_database$discarded_part" || return 1
+  done
+  discarded_count=0
+  for candidate in $(find "$state_root/backups" -maxdepth 1 -type f -name 'discarded-*.sqlite3' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //'); do
+    discarded_count=$((discarded_count + 1))
+    [ "$discarded_count" -le 3 ] && continue
+    case "$candidate" in
+      "$state_root"/backups/discarded-*.sqlite3) rm -f -- "$candidate" "$candidate-wal" "$candidate-shm";;
+      *) return 1;;
+    esac
+  done
 }
 
 clear_managed_directory() {
@@ -997,6 +1107,9 @@ validate_roots() {
   case "$workspace_root" in *[!A-Za-z0-9_./-]*) die "workspace root contains unsupported characters";; esac
   case "$health_attempts" in *[!0-9]*|"") die "health attempts must be an integer";; esac
   [ "$health_attempts" -ge 1 ] && [ "$health_attempts" -le 300 ] || die "health attempts must be from 1 through 300"
+  case "$health_alive_attempts" in *[!0-9]*|"") die "health attempts while the API runs must be an integer";; esac
+  [ "$health_alive_attempts" -ge 1 ] && [ "$health_alive_attempts" -le 300 ] \
+    || die "health attempts while the API runs must be from 1 through 300"
 }
 
 validate_bundle() {
@@ -1602,13 +1715,39 @@ apply_changed() {
   fi
 }
 
+# WHAT THIS WAITS FOR IS A PROCESS, NOT A NUMBER OF SECONDS (ADR 0178).
+#
+# A fixed 30 probes cannot tell an API that is still starting from one that is
+# broken. On 2026-11-21 a correct build spent longer than that before it
+# listened, the install was declared failed, and the rollback restored the
+# database over everything the Hive had written since its copy. So while the
+# API process this wait first saw is still running, it waits up to
+# health_alive_attempts. Once that process has exited or been restarted, or when
+# systemd cannot say, the ordinary window applies, counted from the start: a
+# crash is never given longer than it was before.
+api_main_pid() {
+  run_systemctl show swarm-api.service --property=MainPID --value 2>/dev/null
+}
+
 wait_for_health() {
   attempts=0
-  while [ "$attempts" -lt "$health_attempts" ]; do
+  health_pid=
+  health_ceiling=$health_attempts
+  [ "$health_alive_attempts" -ge "$health_attempts" ] || health_alive_attempts=$health_attempts
+  while [ "$attempts" -lt "$health_ceiling" ]; do
     if "$curl_bin" --fail --silent --show-error --max-time 2 "$health_url" >/dev/null; then
       return 0
     fi
     attempts=$((attempts + 1))
+    # No process, or an answer that is not one, is systemd unable to vouch.
+    health_pid_now=$(api_main_pid || true)
+    case "$health_pid_now" in ""|0|*[!0-9]*) health_pid_now=;; esac
+    [ -n "$health_pid" ] || health_pid=$health_pid_now
+    if [ -n "$health_pid_now" ] && [ "$health_pid_now" = "$health_pid" ]; then
+      health_ceiling=$health_alive_attempts
+    else
+      health_ceiling=$health_attempts
+    fi
     sleep 1
   done
   return 1

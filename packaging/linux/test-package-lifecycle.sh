@@ -70,6 +70,18 @@ case "$stub_verb" in
     fi;;
   show)
     [ ! -f "$HOME/restore-state-unreadable" ] || exit 1
+    # The API's process, as a test names it: one line per question, the last
+    # line held. With no file this answers nothing, which the health wait reads
+    # as systemd unable to say.
+    case "$*" in
+      *--property=MainPID*)
+        [ -f "$HOME/api-main-pids" ] || exit 1
+        head -n 1 "$HOME/api-main-pids"
+        if [ "$(wc -l < "$HOME/api-main-pids")" -gt 1 ]; then
+          sed -i 1d "$HOME/api-main-pids"
+        fi
+        exit 0;;
+    esac
     if [ -f "$HOME/unit-state/swarm-api.service" ]; then printf 'active\n'; else printf 'inactive\n'; fi
     exit 0;;
   start|restart) stub_mark;;
@@ -118,6 +130,19 @@ if [ -n "$output" ]; then
   exit 0
 fi
 version=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
+# An API that is still starting: it refuses this many probes, then answers.
+if [ -f "$HOME/health-refusals" ] && [ "$(cat "$HOME/health-refusals")" -gt 0 ]; then
+  printf '%s\n' "$(($(cat "$HOME/health-refusals") - 1))" > "$HOME/health-refusals"
+  exit 7
+fi
+# A release that never answers, and what it wrote to the database before the
+# installer gave up on it.
+if [ -f "$HOME/unhealthy-version" ] && [ "$version" = "$(cat "$HOME/unhealthy-version")" ]; then
+  printf 'refused\n' >> "$HOME/unhealthy-probes"
+  [ ! -f "$HOME/new-build-database" ] || cp "$HOME/new-build-database" "$SWARM_STATE_ROOT/swarm.sqlite3"
+  [ ! -f "$HOME/new-build-database-wal" ] || cp "$HOME/new-build-database-wal" "$SWARM_STATE_ROOT/swarm.sqlite3-wal"
+  exit 7
+fi
 if [ -f "$HOME/restore-health-fails" ]; then
   rm "$HOME/restore-health-fails"
   [ ! -f "$HOME/restore-block-rollback" ] || touch "$HOME/restore-stop-refused"
@@ -258,6 +283,24 @@ if [ "$(basename "$0")" = "swarmctl" ]; then
       esac
     fi
     case "$2" in */.restore-candidate-*) [ ! -f "$HOME/restore-rollback-invalid" ] || exit 1;; esac
+    # AS THE REAL ONE DOES SINCE 2026-09-04: a file that does not exist is
+    # refused, not created. A stub that accepted it is how a schema probe that
+    # answers nothing on any real release went unnoticed.
+    [ -e "$2" ] || exit 1
+    case "$2" in
+      */.package-rollback-live.sqlite3)
+        cat "$(dirname "$0")/../VERSION" >> "$HOME/live-verify.log"
+        [ ! -f "$2-wal" ] || printf 'with-wal\n' >> "$HOME/live-verify.log"
+        [ ! -f "$HOME/live-verify-fails" ] || exit 1;;
+    esac
+  fi
+  # The migration version this build carries, when a test names one. A build
+  # with no file is a release older than the command, which refuses it.
+  if [ "$command" = "schema-version" ]; then
+    build_schema_file="$HOME/release-schema-$(cat "$(dirname "$0")/../VERSION")"
+    [ -f "$build_schema_file" ] || exit 2
+    cat "$build_schema_file"
+    exit 0
   fi
   if [ "$command" = "status" ]; then
     running=0
@@ -1713,4 +1756,180 @@ fi
     || app_first_fail "a v1.17.10 Hive did not report the install: $(cat "$SWARM_STATE_ROOT/release-apply.status")"
 )
 printf 'app-first protocol upgrade passed\n'
+
+# --- A ROLLBACK KEEPS THE HIVE'S WRITES, AND A SLOW API IS NOT A BROKEN ONE ---
+#
+# On 2026-11-21 a reload onto a correct build was rolled back because its new
+# API had not listened after 30 probes, and the rollback restored the
+# pre-update copy over everything the Hive had written since. The schema had
+# not moved, so the release it returned to could have read the live database as
+# it stood. Nothing kept what the restore replaced (ADR 0178).
+(
+  keep_fail() { printf 'rollback keeps writes: %s\n' "$1" >&2; exit 1; }
+  export HOME="$test_root/rollback-keeps"
+  export SWARM_INSTALL_ROOT="$HOME/.local/lib/swarm"
+  export SWARM_CONFIG_ROOT="$HOME/.config/swarm"
+  export SWARM_STATE_ROOT="$HOME/.local/state/swarm"
+  export SWARM_SYSTEMD_USER_ROOT="$HOME/.config/systemd/user"
+  export SWARM_BIN_ROOT="$HOME/.local/bin"
+  export SWARM_WORKSPACE_ROOT="$HOME/workspaces"
+  mkdir -p "$HOME"
+  # A database as swarm-package reads one: the SQLite magic, then the schema in
+  # the header's user_version at offset 60. The marker after it says whose it is.
+  fake_database() {
+    {
+      printf 'SQLite format 3\000'
+      head -c 44 /dev/zero
+      printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $(($1 >> 24 & 255)) $(($1 >> 16 & 255)) $(($1 >> 8 & 255)) $(($1 & 255)))"
+      printf '%s\n' "$2"
+    } > "$3"
+  }
+  live="$SWARM_STATE_ROOT/swarm.sqlite3"
+  make_bundle 30.0.0
+  make_bundle 31.0.0
+  make_bundle 32.0.0
+  make_bundle 33.0.0
+  "$package" install "$test_root/bundle-30.0.0" >/dev/null
+  printf '31.0.0\n' > "$HOME/unhealthy-version"
+  printf '230\n' > "$HOME/release-schema-30.0.0"
+  printf '230\n' > "$HOME/release-schema-31.0.0"
+
+  # THE SCHEMA DID NOT MOVE: the live database stays, -wal and all, after the
+  # release being returned to has verified a copy of it.
+  fake_database 230 'before-the-copy' "$live"
+  fake_database 230 'written-by-the-new-build' "$HOME/new-build-database"
+  printf 'new-build-wal\n' > "$HOME/new-build-database-wal"
+  if report=$("$package" update "$test_root/bundle-31.0.0" 2>&1); then
+    keep_fail "a release that never answered was installed"
+  fi
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "30.0.0" ] || keep_fail "the release was not rolled back"
+  grep -aq 'written-by-the-new-build' "$live" \
+    || keep_fail "the rollback discarded writes the release it returned to can read: $report"
+  [ "$(cat "$live-wal")" = "new-build-wal" ] || keep_fail "the rollback dropped the live database's -wal"
+  grep -aq 'before-the-copy' "$SWARM_STATE_ROOT/backups/pre-update-31.0.0.sqlite3" \
+    || keep_fail "the pre-update copy was not retained"
+  [ "$(cat "$HOME/live-verify.log" 2>/dev/null | tr '\n' ' ')" = "30.0.0 with-wal " ] \
+    || keep_fail "the release returned to did not verify a copy of the live database with its -wal"
+  case "$report" in *"kept the live database"*) :;; *) keep_fail "the rollback did not say it kept the database: $report";; esac
+  case "$report" in *"restored the pre-update database"*) keep_fail "a rollback with no schema change restored the copy: $report";; esac
+  ! ls "$SWARM_STATE_ROOT/backups"/discarded-* >/dev/null 2>&1 || keep_fail "nothing was discarded, so nothing should be kept aside"
+
+  # THE SCHEMA MOVED: the copy has to come back, and what it replaces is kept.
+  : > "$HOME/live-verify.log"
+  printf '231\n' > "$HOME/release-schema-31.0.0"
+  fake_database 230 'before-the-migration' "$live"
+  rm -f "$live-wal"
+  fake_database 231 'migrated-by-the-new-build' "$HOME/new-build-database"
+  printf 'migrated-wal\n' > "$HOME/new-build-database-wal"
+  if report=$("$package" update "$test_root/bundle-31.0.0" 2>&1); then
+    keep_fail "a release that never answered was installed"
+  fi
+  grep -aq 'before-the-migration' "$live" || keep_fail "a migrated database was not restored: $report"
+  [ ! -e "$live-wal" ] || keep_fail "the discarded database's -wal was left beside the restored one"
+  set -- "$SWARM_STATE_ROOT/backups"/discarded-31.0.0-*.sqlite3
+  [ "$#" -eq 1 ] && [ -f "$1" ] || keep_fail "the database the restore replaced was not kept: $report"
+  discarded=$1
+  grep -aq 'migrated-by-the-new-build' "$discarded" || keep_fail "the kept copy is not the database that was replaced"
+  [ "$(cat "$discarded-wal")" = "migrated-wal" ] || keep_fail "the kept copy lost its -wal"
+  [ "$(stat -c %a "$discarded")" = "600" ] || keep_fail "the kept copy is readable beyond the operator"
+  case "$report" in *"$discarded"*) :;; *) keep_fail "the rollback did not say where it kept the replaced database: $report";; esac
+  [ ! -s "$HOME/live-verify.log" ] || keep_fail "a database the old release cannot read was offered to it anyway"
+
+  # THE SCHEMA DID NOT MOVE AND THE LIVE DATABASE DOES NOT VERIFY: restored, and kept.
+  printf '230\n' > "$HOME/release-schema-31.0.0"
+  fake_database 230 'before-a-bad-write' "$live"
+  fake_database 230 'damaged-by-the-new-build' "$HOME/new-build-database"
+  rm -f "$HOME/new-build-database-wal"
+  : > "$HOME/live-verify-fails"
+  if report=$("$package" update "$test_root/bundle-31.0.0" 2>&1); then
+    keep_fail "a release that never answered was installed"
+  fi
+  rm "$HOME/live-verify-fails"
+  grep -aq 'before-a-bad-write' "$live" || keep_fail "a live database that failed verification was kept: $report"
+  grep -alq 'damaged-by-the-new-build' "$SWARM_STATE_ROOT/backups"/discarded-31.0.0-*.sqlite3 \
+    || keep_fail "the database that failed verification was not kept aside"
+
+  # DOUBT RESTORES. The database looks unchanged, but the attempted build's
+  # migration version cannot be read, and then disagrees: neither proves the
+  # schema stayed put, so the copy comes back and the replaced database is kept.
+  for doubt in unreadable disagrees; do
+    case "$doubt" in
+      unreadable) rm -f "$HOME/release-schema-31.0.0";;
+      disagrees) printf '231\n' > "$HOME/release-schema-31.0.0";;
+    esac
+    : > "$HOME/live-verify.log"
+    fake_database 230 "before-the-doubt-$doubt" "$live"
+    fake_database 230 "written-in-doubt-$doubt" "$HOME/new-build-database"
+    if report=$("$package" update "$test_root/bundle-31.0.0" 2>&1); then
+      keep_fail "a release that never answered was installed"
+    fi
+    grep -aq "before-the-doubt-$doubt" "$live" || keep_fail "doubt ($doubt) kept the live database: $report"
+    grep -alq "written-in-doubt-$doubt" "$SWARM_STATE_ROOT/backups"/discarded-31.0.0-*.sqlite3 \
+      || keep_fail "doubt ($doubt) did not keep the replaced database"
+    case "$report" in *"could not show the schema stayed put"*) :;; *) keep_fail "doubt ($doubt) was not named: $report";; esac
+    [ ! -s "$HOME/live-verify.log" ] || keep_fail "doubt ($doubt) still offered the live database to the old release"
+    sleep 1
+  done
+  printf '230\n' > "$HOME/release-schema-31.0.0"
+
+  # AT MOST THREE KEPT COPIES, NEWEST FIRST. Each one holds writes nothing else
+  # has, so the bound is deliberate rather than a cleanup.
+  for round in 1 2; do
+    fake_database 230 "before-round-$round" "$live"
+    fake_database 231 "discarded-round-$round" "$HOME/new-build-database"
+    "$package" update "$test_root/bundle-31.0.0" >/dev/null 2>&1 && keep_fail "a release that never answered was installed"
+    sleep 1
+  done
+  set -- "$SWARM_STATE_ROOT/backups"/discarded-*.sqlite3
+  [ "$#" -eq 3 ] || keep_fail "kept copies are not bounded at three: $*"
+  grep -alq 'discarded-round-2' "$@" || keep_fail "the newest kept copy was pruned"
+  ! grep -alq 'migrated-by-the-new-build' "$@" || keep_fail "the oldest kept copy survived the bound"
+
+  # A SLOW API IS NOT A BROKEN ONE. While the process it started stays up, the
+  # health wait runs to its longer ceiling instead of the ordinary window.
+  rm -f "$HOME/unhealthy-version" "$HOME/new-build-database" "$HOME/new-build-database-wal"
+  printf '4242\n' > "$HOME/api-main-pids"
+  printf '3\n' > "$HOME/health-refusals"
+  SWARM_HEALTH_ALIVE_ATTEMPTS=5 "$package" update "$test_root/bundle-32.0.0" >/dev/null 2>&1 \
+    || keep_fail "an API that stayed up and answered on its fourth probe was rolled back"
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "32.0.0" ] || keep_fail "the slow release is not the one installed"
+  [ "$(cat "$HOME/health-refusals")" = "0" ] || keep_fail "the slow API was never probed past its refusals"
+
+  # A HANG STILL ENDS IN A ROLLBACK. The process stays up and never answers:
+  # the wait runs to the longer ceiling, exactly, and gives up there.
+  printf '33.0.0\n' > "$HOME/unhealthy-version"
+  printf '4242\n' > "$HOME/api-main-pids"
+  rm -f "$HOME/unhealthy-probes"
+  if SWARM_HEALTH_ALIVE_ATTEMPTS=4 "$package" update "$test_root/bundle-33.0.0" >/dev/null 2>&1; then
+    keep_fail "a release that never answered was installed"
+  fi
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "32.0.0" ] || keep_fail "a hung release was not rolled back"
+  [ "$(wc -l < "$HOME/unhealthy-probes")" -eq 4 ] \
+    || keep_fail "a hung release was probed $(wc -l < "$HOME/unhealthy-probes") times, not up to the longer ceiling of 4"
+  rm -f "$HOME/unhealthy-version"
+
+  # AN API THAT EXITS GETS ONLY THE ORDINARY WINDOW. The longer ceiling is for
+  # a process that is still working, not for one systemd had to restart: here
+  # it was restarted between two probes, so the second sees another process.
+  printf '4242\n4243\n' > "$HOME/api-main-pids"
+  printf '3\n' > "$HOME/health-refusals"
+  if SWARM_HEALTH_ALIVE_ATTEMPTS=5 "$package" update "$test_root/bundle-33.0.0" >/dev/null 2>&1; then
+    keep_fail "an API that exited during its health wait was still given the longer ceiling"
+  fi
+  [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "32.0.0" ] || keep_fail "the release whose API exited was not rolled back"
+  rm -f "$HOME/api-main-pids" "$HOME/health-refusals"
+
+  # AND `rollback` REFUSES A DATABASE AHEAD OF ITS TARGET AGAIN. Its guard asks
+  # the same question, and answered nothing on any release from 2026-09-04,
+  # so it never refused anything.
+  previous_release=$(basename "$(readlink -f "$SWARM_INSTALL_ROOT/previous")")
+  printf '230\n' > "$HOME/release-schema-$previous_release"
+  fake_database 231 'ahead-of-the-target' "$live"
+  if report=$("$package" rollback 2>&1); then
+    keep_fail "rollback ran an older release over a database it cannot read"
+  fi
+  case "$report" in *"rolling back now would leave a Hive that cannot start"*) :;; *) keep_fail "rollback did not say why it refused: $report";; esac
+  grep -aq 'ahead-of-the-target' "$live" || keep_fail "a refused rollback changed the database"
+)
+printf 'rollback keeps writes passed\n'
 printf 'package lifecycle smoke passed\n'

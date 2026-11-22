@@ -2,7 +2,7 @@ use std::{env, process::ExitCode};
 
 use swarm_cli::{
     CliError, LifecycleCommand, execute, export_legacy_tasks, format_status,
-    inspect_legacy_database, parse_command, verify_database,
+    inspect_legacy_database, parse_command, schema_version, verify_database,
 };
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 
@@ -22,6 +22,10 @@ async fn run() -> Result<(), CliError> {
     if let LifecycleCommand::VerifyDatabase { ref path } = command {
         verify_database(path)?;
         println!("database integrity verified");
+        return Ok(());
+    }
+    if command == LifecycleCommand::SchemaVersion {
+        println!("{}", schema_version()?);
         return Ok(());
     }
     if let LifecycleCommand::InspectLegacy { ref path } = command {

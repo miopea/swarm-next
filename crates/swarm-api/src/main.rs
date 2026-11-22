@@ -325,7 +325,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = recover_interrupted_deliveries(&state) {
         state = state.with_degraded_subsystem("Queued delivery recovery", error.to_string());
     }
-    state.supervise_workers().await;
     serve_control_room(state, address).await
 }
 
@@ -333,9 +332,16 @@ async fn serve_control_room(
     state: AppState,
     address: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // ⚠️ NOTHING THAT WAITS ON WORKERS RUNS BEFORE THIS BIND (ADR 0178).
+    //
+    // A worker pass used to be awaited here first. On 2026-11-21 it typed
+    // `/restart` into Claude workers behind a newly installed CLI, about ten
+    // seconds each, and the API had not listened 30 seconds later. The
+    // installer probes for that long, so it rolled a correct build back and
+    // restored the database over everything written since its copy. The first
+    // pass is the supervisor's, at once, from the background services below.
     let listener = tokio::net::TcpListener::bind(address).await?;
-    // Only now may the engine update run (ADR 0164). The pass awaited above,
-    // before this bind, would otherwise hold an install's health check up.
+    // Only now may the engine update run (ADR 0164).
     state.note_api_listening();
     let background = start_background_services(&state);
     let stop_background = background.stop_signal();
@@ -539,10 +545,13 @@ fn start_background_services(state: &AppState) -> BackgroundServices {
             swarm_api::poll_for_release(state, startup).await;
         }
     });
+    // IMMEDIATE ON START: this is the startup pass, run beside the listener
+    // rather than in front of it (ADR 0178). It reconciles worker bindings,
+    // starts autostart workers and asks Claude workers onto a new release.
     let supervisor = state.clone();
     services.periodic_with_wakeup(
         std::time::Duration::from_secs(30),
-        false,
+        true,
         Some(state.coordination_wakeup()),
         Some(state.coordination_deadline()),
         move || {
@@ -1315,5 +1324,80 @@ mod tests {
         let token = String::from("present");
         let state = super::note_missing_operator_token(AppState::default(), Some(&token));
         assert!(state.degraded_subsystems().is_empty());
+    }
+
+    /// THE API LISTENS BEFORE ITS FIRST WORKER PASS, NOT AFTER IT.
+    ///
+    /// On 2026-11-21 a reload's new API spent its first half minute typing
+    /// `/restart` into Claude workers, about ten seconds each, before it bound
+    /// its port. The installer probes for 30 seconds, so it rolled a correct
+    /// build back and restored the database over everything the Hive had
+    /// written since its copy. Here the pass waits on a terminal host that never
+    /// answers, which is longer than any window an installer could choose.
+    ///
+    /// Health is asked only once the pass is known to be running, or a pass
+    /// that never started would pass this for the wrong reason.
+    #[tokio::test]
+    async fn health_answers_while_the_first_worker_pass_is_still_running() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("host.sock");
+        let host = tokio::net::UnixListener::bind(&socket).unwrap();
+        let (asked, mut host_asked) = watch::channel(0_usize);
+        // Accepts and never answers, and holds every connection open, so a
+        // pass that asks this host anything waits for as long as the test runs.
+        let silent_host = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = host.accept().await {
+                held.push(stream);
+                asked.send_replace(held.len());
+            }
+        });
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "test-token");
+        let probe = async {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                host_asked.wait_for(|asked| *asked > 0),
+            )
+            .await
+            .expect("the first worker pass never reached the terminal host")
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
+                    stream
+                        .write_all(
+                            b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                        )
+                        .await
+                        .unwrap();
+                    let mut response = Vec::new();
+                    tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+                        .await
+                        .expect("the API accepted the probe and never answered it")
+                        .unwrap();
+                    return String::from_utf8_lossy(&response).into_owned();
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the API was not listening while its first worker pass ran"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        };
+        let response = tokio::select! {
+            served = serve_control_room(state, address) => {
+                panic!("the API stopped serving: {served:?}")
+            }
+            response = probe => response,
+        };
+        // The host never answers, so the pass that asked it is still waiting.
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        silent_host.abort();
     }
 }
