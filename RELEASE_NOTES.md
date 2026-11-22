@@ -12,6 +12,14 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.24.1
+
+No database update. Installing it keeps your workers running: the app restarts and drives the engine you have. Queen's session sees the changed tool once it restarts. Engine protocol 19, unchanged: install with `swarm-package update`.
+
+### Fixes
+- A message Queen sends to a worker is no longer lost when its task closes first. Before, Swarm dropped it unread and nobody was told, and some of those were her go-aheads. Now a message she sends to a finished task is refused on the spot, saying why. One she sent earlier, whose task finished before it arrived, comes back to her to resend on open work or let go. Your own messages and Swarm's reminders behave as before.
+- When a worker reads one of your decisions, it now sees the whole card you answered: the reason, risk, evidence and options, not just the title and your answer. An answer like "Yes, with the same three conditions" now arrives with the conditions it refers to.
+
 ## 1.24.0
 
 One database update (233): one new table. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting. Queen sees the new tool once her session restarts.
