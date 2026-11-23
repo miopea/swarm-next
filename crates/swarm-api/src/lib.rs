@@ -7,6 +7,7 @@ mod auth;
 mod backups;
 pub mod bundled_feedback;
 mod control_room;
+mod coordination_attention_compact;
 mod coordination_attention_evidence;
 mod coordination_deadline;
 mod coordination_delivery;

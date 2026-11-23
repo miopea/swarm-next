@@ -892,7 +892,7 @@ struct AgentMcp {
 /// what one of them accepts. So the pin would not have fired, and this bump is
 /// by judgement rather than by the test catching it. Worth knowing before
 /// trusting the pin as complete.
-pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 47;
+pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 48;
 
 /// The tool-surface revision has to move with the surface itself.
 ///
@@ -902,7 +902,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 47;
 /// as current, which is how "the code is live" and "you can call it" silently
 /// became the same claim.
 #[cfg(test)]
-/// The served surface as of revision 47. Update this and the revision together.
+/// The served surface as of revision 48. Update this and the revision together.
 ///
 /// ⚠️ IT MOVED AT REVISION 25 AND NOT AGAIN UNTIL 36, and the gap is not
 /// neglect. This covers tool NAMES and ARGUMENT SCHEMAS; descriptions are
@@ -911,7 +911,7 @@ pub(crate) const AGENT_TOOL_SURFACE_REVISION: u32 = 47;
 /// through all of them. A revision bump with no fingerprint change means the
 /// wording moved; a fingerprint change always means the callable surface did.
 const TOOL_SURFACE_FINGERPRINT: &str =
-    "5d88f53c3a96ac0ea5049a8b504070d598b8f1fbf2b76a098dbd5103373751b0";
+    "8ea311d6fc724b9cd458c5fa65c8aa94fb82ad2ec4bc2a1636895db502e8ab16";
 
 /// A fingerprint of what the build actually SERVES, taken from the served list.
 ///
@@ -1414,6 +1414,9 @@ impl AgentMcp {
                 }),
             "swarm_list_coordination_attention" => {
                 if self.principal.role == WorkerRole::Queen {
+                    match parse::<crate::coordination_attention_compact::AttentionQuery>(arguments) {
+                    Err(error) => Err(error),
+                    Ok(query) => {
                     let initial = self.tasks.store().current_coordinator_attention(crate::unix_timestamp());
                     let terminal_evidence = match &initial {
                         Ok(items) => crate::coordination_attention_evidence::observe(&self.state, self.tasks.store(), items).await,
@@ -1435,7 +1438,7 @@ impl AgentMcp {
                                 .store().tasks_ready_after_prerequisites(crate::unix_timestamp())?;
                             let (blocked_reassessment, blocked_reassessment_truncated) = self.tasks
                                 .store().blocked_tasks_for_reassessment(crate::unix_timestamp())?;
-                            structured(json!({
+                            Ok(json!({
                                 "unfinished_delivered_review": self.tasks.store().unfinished_queen_review()?.map(|(run_id, session_id)| json!({
                                     "run_id": run_id,
                                     "delivery_session_id": session_id,
@@ -1608,6 +1611,9 @@ impl AgentMcp {
                                     .work_assigned_to_a_worker_that_is_not_running()?,
                             }))
                         })
+                        .and_then(|full| self.shape_coordination_attention(full, &query))
+                    }
+                    }
                 } else {
                     Err(ApplicationError::NotAuthorized)
                 }
@@ -2946,6 +2952,49 @@ impl AgentMcp {
                 "Recorded, and NOTHING CAN DELIVER IT: no Queen session is open, so it is excluded from delivery rather than queued behind a busy terminal. It waits until one starts."
             },
         }))
+    }
+
+    /// Queen's attention, compact by default or in full by section (ADR 0185).
+    fn shape_coordination_attention(
+        &self,
+        full: Value,
+        query: &crate::coordination_attention_compact::AttentionQuery,
+    ) -> Result<CallToolResult, ApplicationError> {
+        use crate::coordination_attention_compact as attention;
+        attention::check_sections(&query.sections).map_err(ApplicationError::Refused)?;
+        if query.detail == attention::Detail::Full {
+            return structured(attention::narrow_full(full, &query.sections));
+        }
+        let wanted = attention::task_ids(&full);
+        let mut tasks = std::collections::HashMap::new();
+        for task in self.tasks.store().list_board_tasks()? {
+            let id = task.id.to_string();
+            if wanted.contains(&id) {
+                tasks.insert(id, attention::TaskFacts::from(&task));
+            }
+        }
+        // Work that left the board, such as a message on a closed task.
+        for id in &wanted {
+            if tasks.contains_key(id) {
+                continue;
+            }
+            let Ok(task_id) = TaskId::from_str(id) else {
+                continue;
+            };
+            match self.tasks.store().get_task(task_id) {
+                Ok(task) => {
+                    tasks.insert(id.clone(), attention::TaskFacts::from(&task));
+                }
+                Err(swarm_persistence::TaskStoreError::NotFound) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        structured(attention::compact(
+            &full,
+            &tasks,
+            query,
+            crate::unix_timestamp(),
+        ))
     }
 
     fn reconcile_task_message(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -5953,8 +6002,16 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the current task, session, and next-move owner before acting. A queued briefing held for operator engagement or existing Active work is working as intended; do not interrupt it. blocked_by names earlier work holding up a queue, not permission to bypass it. Age alone is not a reason to escalate. Also lists FINISHED WORK NOTHING HAS SETTLED. The coordinator settles supported routine evidence without another Queen approval; you own remaining exceptions and judgments. Read task history, completion evidence, and messages before deciding. If a no-deployment claim needs judgment, use swarm_approve_no_deployment only after checking its basis. If evidence or an answer is missing, use swarm_return_reviewed_work with a specific request: the task stays in Review and the next move becomes the assigned worker's. Do not move reviewed work to Ready or Active to get attention. Work finished but waiting only to ship belongs in awaiting_release; you may create and assign a task to the owning worker to ship it, but this tool grants no deployment authority. Also lists MERGED WORK WAITING FOR ITS RELEASE (ADR 0180), one row per repository, naming who releases it, the merge commit, why it was raised and what waits on it; Swarm has already reminded that worker once, and the row clears itself when the task leaves awaiting_release. Use swarm_message_worker for task-scoped questions to a running worker; delivery waits for a safe prompt. Try safe scoped recovery first and request operator judgment only when you cannot move the work within existing authority.",
-        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the current task, session, and next-move owner before acting. A queued briefing held for operator engagement or existing Active work is working as intended; do not interrupt it. blocked_by names earlier work holding up a queue, not permission to bypass it. Age alone is not a reason to escalate. Also lists FINISHED WORK NOTHING HAS SETTLED. The coordinator settles supported routine evidence without another Queen approval; you own remaining exceptions and judgments. Read task history, completion evidence, and messages before deciding. If a no-deployment claim needs judgment, use swarm_approve_no_deployment only after checking its basis. If evidence or an answer is missing, use swarm_return_reviewed_work with a specific request: the task stays in Review and the next move becomes the assigned worker's. Do not move reviewed work to Ready or Active to get attention. Work finished but waiting only to ship belongs in awaiting_release; you may create and assign a task to the owning worker to ship it, but this tool grants no deployment authority. Also lists MERGED WORK WAITING FOR ITS RELEASE (ADR 0180), one row per repository, naming who releases it, the merge commit, why it was raised and what waits on it; Swarm has already reminded that worker once, and the row clears itself when the task leaves awaiting_release. Use swarm_message_worker for task-scoped questions to a running worker; delivery waits for a safe prompt. Try safe scoped recovery first and request operator judgment only when you cannot move the work within existing authority. COMPACT BY DEFAULT (ADR 0185): one short row per item across every section (section, task_id, ref, title, state, owner, age_seconds, why), the board counts, and per section what was shown, what the filters left out and what limit_per_section left out. Filter with state, owner, workspace (exact path) and min_age_seconds; a row with no task is left out by a task filter, and counted. Read a section in full with detail \"full\" and sections [name] before acting on its rows: its guidance and every field are there. sections also narrows the compact answer.",
+        &json!({ "type": "object", "properties": {
+            "detail": { "type": "string", "enum": ["compact", "full"] },
+            "sections": { "type": "array", "maxItems": 16, "items": { "type": "string", "enum": crate::coordination_attention_compact::section_keys() } },
+            "state": { "type": "array", "maxItems": 8, "items": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "awaiting_release", "completed", "abandoned"] } },
+            "owner": { "type": "array", "maxItems": 7, "items": { "type": "string", "enum": ["worker", "queen", "blocked", "operator", "release", "nobody"] } },
+            "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "min_age_seconds": { "type": "integer", "minimum": 0 },
+            "limit_per_section": { "type": "integer", "minimum": 1, "maximum": crate::coordination_attention_compact::MAX_LIMIT_PER_SECTION }
+        }, "additionalProperties": false }),
         true,
     )
 }
@@ -10755,7 +10812,7 @@ mod tests {
             bridge.clone(),
             &token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         assert_eq!(attention["result"]["isError"], false, "{attention}");
@@ -13091,6 +13148,86 @@ mod tests {
         );
     }
 
+    /// ⚠️ QUEEN SAVED THE ANSWER TO A FILE AND RAN jq OVER IT. The default is
+    /// now one short row per item, and every section of the full answer has
+    /// rows, so the short answer cannot silently skip one (ADR 0185).
+    #[tokio::test]
+    async fn coordination_attention_is_compact_by_default_and_covers_every_section() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let here = store
+            .create_task("Queen must triage this", "/workspace")
+            .unwrap();
+        let elsewhere = store
+            .create_task("Triage this elsewhere", "/workspace/other")
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let call = |arguments: Value| {
+            call_review_test_tool(
+                bridge.clone(),
+                &queen_token,
+                "swarm_list_coordination_attention",
+                arguments,
+            )
+        };
+
+        let full = call(json!({"detail": "full"})).await["result"]["structuredContent"].clone();
+        let keys: std::collections::BTreeSet<&str> = full
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            crate::coordination_attention_compact::section_keys()
+                .into_iter()
+                .collect(),
+            "every section of the full answer has compact rows"
+        );
+
+        let compact = call(json!({})).await["result"]["structuredContent"].clone();
+        assert_eq!(compact["detail"], "compact");
+        let row = |answer: &Value, task: TaskId| {
+            answer["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["task_id"] == task.to_string())
+                .cloned()
+        };
+        let draft = row(&compact, here.id).expect("the draft is a row");
+        assert_eq!(draft["section"], "queue_snapshot");
+        assert_eq!(draft["state"], "draft");
+        assert_eq!(draft["owner"], "queen");
+        assert!(draft["why"].as_str().unwrap().contains("Yours to move"));
+        assert!(compact.to_string().len() < full.to_string().len());
+
+        let filtered =
+            call(json!({"workspace": "/workspace/other"})).await["result"]["structuredContent"]
+                .clone();
+        assert!(row(&filtered, elsewhere.id).is_some());
+        assert!(row(&filtered, here.id).is_none());
+        let queen_tasks = filtered["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|summary| summary["section"] == "queue_snapshot")
+            .unwrap();
+        assert_eq!(queen_tasks["left_out_by_filters"], 1, "{filtered}");
+
+        let narrowed = call(json!({"detail": "full", "sections": ["queue_snapshot"]})).await
+            ["result"]["structuredContent"]
+            .clone();
+        assert_eq!(
+            narrowed.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["queue_snapshot"]
+        );
+        let refused = call(json!({"sections": ["queue_snapshots"]})).await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let refused = call(json!({"owner": ["someone"]})).await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+    }
+
     #[tokio::test]
     #[allow(
         clippy::too_many_lines,
@@ -13145,7 +13282,7 @@ mod tests {
             mcp_request(
                 Some(token),
                 "tools/call",
-                &json!({ "name": "swarm_list_coordination_attention", "arguments": {} }),
+                &json!({ "name": "swarm_list_coordination_attention", "arguments": {"detail": "full"} }),
             )
         };
 
@@ -13284,7 +13421,7 @@ mod tests {
             bridge.clone(),
             &token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         let assignments = before["result"]["structuredContent"]["unreachable_assignments"]
@@ -13299,7 +13436,7 @@ mod tests {
             bridge,
             &token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         assert_eq!(
@@ -13325,7 +13462,7 @@ mod tests {
             bridge.clone(),
             &token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         let context = &response["result"]["structuredContent"]["unfinished_delivered_review"];
@@ -13355,7 +13492,7 @@ mod tests {
             bridge,
             &token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         assert!(finished["result"]["structuredContent"]["unfinished_delivered_review"].is_null());
@@ -13704,7 +13841,7 @@ mod tests {
             bridge.clone(),
             &queen_token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         let listed = &attention["result"]["structuredContent"]["task_message_deliveries"];
@@ -13765,7 +13902,7 @@ mod tests {
             bridge.clone(),
             &queen_token,
             "swarm_list_coordination_attention",
-            json!({}),
+            json!({"detail": "full"}),
         )
         .await;
         assert_eq!(
