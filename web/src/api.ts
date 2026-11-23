@@ -2570,6 +2570,33 @@ export async function answerDecision(
   return response.json() as Promise<DecisionRequest>;
 }
 
+/**
+ * The script a command card runs, as Swarm kept it when the card was filed
+ * (ADR 0187): exactly one of `text` and `withheld` is present.
+ */
+export interface CommandCardScript {
+  path: string;
+  sha256: string;
+  /** The script as it was hashed: the bytes an Allow lets run. */
+  text?: string;
+  /** Why no copy was kept, such as a line that looks like a secret. */
+  withheld?: string;
+}
+
+/** The script a command card runs, read when the operator opens it. */
+export async function fetchDecisionScript(
+  operatorToken: string,
+  decisionId: string,
+  signal?: AbortSignal,
+): Promise<CommandCardScript | null> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(decisionId)}/script`,
+    { signal },
+  );
+  return ((await response.json()) as { script: CommandCardScript | null }).script;
+}
+
 /** One image sent with an answer or question, read back to show it. */
 export async function fetchDecisionImage(
   operatorToken: string,

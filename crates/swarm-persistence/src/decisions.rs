@@ -387,8 +387,9 @@ pub struct NewDecisionRequest<'a> {
     /// invisible grant.
     pub requested_command: Option<&'a str>,
     /// The local script the command runs, hashed when the request is filed.
-    /// A grant binds to the hash and is refused once the file changes.
-    pub requested_script: Option<&'a swarm_domain::RequestedScript>,
+    /// A grant binds to the hash and is refused once the file changes. Its
+    /// text, read with the hash, is kept for whoever answers (ADR 0187).
+    pub requested_script: Option<&'a crate::FiledScript>,
 }
 
 /// The one action that turns an approval into a runnable grant.
@@ -1824,13 +1825,15 @@ fn insert_decision_request(
     if pending >= MAX_PENDING_DECISIONS {
         return Err(TaskStoreError::DecisionInboxFull);
     }
+    let script = request.requested_script.map(|filed| &filed.script);
+    let snapshot = request.requested_script.map(|filed| &filed.snapshot);
     let inserted = transaction.execute(
         "INSERT INTO decision_requests (
             id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
             risk, evidence, suggested_action, allowed_actions, deadline, questions,
             summary, requested_command, operator_action_labels,
             requested_script_path, requested_script_sha256, requested_session_id,
-            operator_reasons
+            operator_reasons, requested_script_text, requested_script_withheld
          )
          SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
                 ?17, ?18,
@@ -1838,7 +1841,7 @@ fn insert_decision_request(
                     SELECT s.session_id FROM worker_sessions s
                     WHERE s.worker_id = w.id AND s.ended_at IS NULL
                 ) END,
-                CASE WHEN ?15 IS NOT NULL THEN ?19 END
+                CASE WHEN ?15 IS NOT NULL THEN ?19 END, ?20, ?21
          FROM worker_profiles w
          JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
          WHERE w.id = ?2
@@ -1862,11 +1865,11 @@ fn insert_decision_request(
             request.summary,
             request.requested_command,
             operator_actions,
-            request.requested_script.map(|script| script.path.as_str()),
-            request
-                .requested_script
-                .map(|script| script.sha256.as_str()),
+            script.map(|script| script.path.as_str()),
+            script.map(|script| script.sha256.as_str()),
             operator_reasons,
+            snapshot.and_then(|kept| kept.text.as_deref()),
+            snapshot.and_then(|kept| kept.withheld.as_deref()),
         ],
     )?;
     if inserted == 0 {
@@ -1995,8 +1998,10 @@ fn validate_command_request(
     let readable = !command.trim().is_empty()
         && command.len() <= MAX_COMMAND_BYTES
         && !command.chars().any(hides_command_text)
-        && request.requested_script.is_none_or(|script| {
-            script.path.starts_with('/')
+        && request.requested_script.is_none_or(|filed| {
+            let script = &filed.script;
+            filed.snapshot.is_valid()
+                && script.path.starts_with('/')
                 && script.path.len() <= MAX_SCRIPT_PATH_BYTES
                 && !script
                     .path
@@ -2023,7 +2028,8 @@ fn validate_command_request(
 /// Characters that would make the command the operator reads differ from the
 /// one that runs: terminal controls, and the zero-width and bidirectional
 /// marks that hide or reorder text. Newlines and tabs are shown as they are.
-fn hides_command_text(character: char) -> bool {
+#[must_use]
+pub fn hides_command_text(character: char) -> bool {
     (character.is_control() && !matches!(character, '\n' | '\t'))
         || matches!(
             character,
@@ -3820,6 +3826,14 @@ mod tests {
             path: "/srv/app/release.sh".into(),
             sha256: "ab".repeat(32),
         };
+        let kept = crate::ScriptSnapshot {
+            text: Some("#!/bin/sh\nexec ./deploy --slot \"$1\"\n".into()),
+            withheld: None,
+        };
+        let filed = |script: &swarm_domain::RequestedScript| crate::FiledScript {
+            script: script.clone(),
+            snapshot: kept.clone(),
+        };
         let base = command_request(queen.id, task.id, "/srv/app/release.sh --slot staging");
         for refused in [
             swarm_domain::RequestedScript {
@@ -3842,7 +3856,7 @@ mod tests {
             assert!(
                 matches!(
                     store.create_decision_request(&NewDecisionRequest {
-                        requested_script: Some(&refused),
+                        requested_script: Some(&filed(&refused)),
                         ..base.clone()
                     }),
                     Err(TaskStoreError::InvalidCommandDecision)
@@ -3854,7 +3868,7 @@ mod tests {
         assert!(
             matches!(
                 store.create_decision_request(&NewDecisionRequest {
-                    requested_script: Some(&script),
+                    requested_script: Some(&filed(&script)),
                     ..request(queen.id, &actions)
                 }),
                 Err(TaskStoreError::InvalidCommandDecision)
@@ -3864,7 +3878,7 @@ mod tests {
 
         let decision = store
             .create_decision_request(&NewDecisionRequest {
-                requested_script: Some(&script),
+                requested_script: Some(&filed(&script)),
                 ..base.clone()
             })
             .unwrap();
@@ -3890,6 +3904,83 @@ mod tests {
                 script: Some(script),
             })
         );
+    }
+
+    /// A card keeps the text of the script it hashed, or says why it kept
+    /// none: never both or neither, and never more text than the cap, so
+    /// whoever answers reads what the hash pins (ADR 0187).
+    #[test]
+    fn a_card_keeps_its_scripts_text_or_says_why_it_kept_none() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task("Run one script", "/workspace/d365")
+            .unwrap();
+        let filed = |snapshot: crate::ScriptSnapshot| crate::FiledScript {
+            script: swarm_domain::RequestedScript {
+                path: "/srv/app/release.sh".into(),
+                sha256: "ab".repeat(32),
+            },
+            snapshot,
+        };
+        let base = command_request(queen.id, task.id, "/srv/app/release.sh --slot staging");
+        for snapshot in [
+            crate::ScriptSnapshot::default(),
+            crate::ScriptSnapshot {
+                text: Some("echo".into()),
+                withheld: Some("why".into()),
+            },
+            crate::ScriptSnapshot {
+                text: Some("#".repeat(crate::MAX_SCRIPT_TEXT_BYTES + 1)),
+                withheld: None,
+            },
+            crate::ScriptSnapshot {
+                text: None,
+                withheld: Some("  ".into()),
+            },
+        ] {
+            assert!(
+                matches!(
+                    store.create_decision_request(&NewDecisionRequest {
+                        requested_script: Some(&filed(snapshot.clone())),
+                        ..base.clone()
+                    }),
+                    Err(TaskStoreError::InvalidCommandDecision)
+                ),
+                "refused: {snapshot:?}"
+            );
+        }
+        for kept in [
+            crate::ScriptSnapshot {
+                text: Some("#!/bin/sh\nexec ./deploy --slot \"$1\"\n".into()),
+                withheld: None,
+            },
+            crate::ScriptSnapshot {
+                text: None,
+                withheld: Some("Line 3 looks like a GitHub token.".into()),
+            },
+        ] {
+            let card = store
+                .create_decision_request(&NewDecisionRequest {
+                    requested_script: Some(&filed(kept.clone())),
+                    ..base.clone()
+                })
+                .unwrap();
+            assert_eq!(
+                store.decision_script(card.id).unwrap(),
+                Some(filed(kept)),
+                "what was kept is read back for whoever answers"
+            );
+        }
+        let no_script = store.create_decision_request(&base).unwrap();
+        assert_eq!(store.decision_script(no_script.id).unwrap(), None);
+        assert!(matches!(
+            store.decision_script(DecisionRequestId::new()),
+            Err(TaskStoreError::DecisionNotFound)
+        ));
     }
 
     /// The worker is told from the grant table, not the button label, whether

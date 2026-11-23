@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 swarm-domain = { path = "../swarm-domain" }
 swarm-persistence = { path = "../swarm-persistence" }
+nix.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true

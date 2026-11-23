@@ -899,6 +899,52 @@ test("a command that runs a script shows the script and the hash it was approved
   expect(screen.getByText(/expires when the task leaves the board or the script changes/)).toBeInTheDocument();
 });
 
+test("the operator opens a command card's script and reads the text the card pins", async () => {
+  // ADR 0187: the card read only a path and a hash. The text is read when
+  // the card is opened, and a script Swarm kept no copy of says why.
+  const granting: DecisionRequest = {
+    ...pending,
+    id: "decision-script",
+    kind: "approval",
+    questions: [],
+    requested_command: "/srv/app/release.sh --slot staging",
+    requested_script: { path: "/srv/app/release.sh", sha256: "7c88abc2f5b12572370a09eb9619bed4e7581fdfbe721fbecb68de19eea7cf73" },
+    allowed_actions: ["Allow the command shown in this request"],
+  };
+  const withheld: DecisionRequest = { ...granting, id: "decision-withheld" };
+  const fetchScript = vi.fn(async (decisionId: string) => decisionId === "decision-script"
+    ? { path: "/srv/app/release.sh", sha256: "7c88", text: "#!/bin/sh\nexec ./deploy --slot \"$1\"\n" }
+    : { path: "/srv/app/release.sh", sha256: "7c88", withheld: "Line 2 looks like a GitHub token, so no copy was kept and the value is not shown." });
+  render(<DecisionInbox decisions={[granting, withheld]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} onFetchScript={fetchScript} />);
+
+  expect(fetchScript).not.toHaveBeenCalled();
+  const [first, second] = screen.getAllByText("Read the script");
+  fireEvent.click(first);
+  expect(await screen.findByText(/exec \.\/deploy --slot "\$1"/)).toBeInTheDocument();
+  expect(screen.getByText(/2 lines, as Swarm read them when this was filed/)).toBeInTheDocument();
+  expect(fetchScript).toHaveBeenCalledWith("decision-script", expect.any(AbortSignal));
+  fireEvent.click(second);
+  expect(await screen.findByText(/Line 2 looks like a GitHub token/)).toBeInTheDocument();
+  expect(screen.getAllByText(/Allow is refused if it already has/)).toHaveLength(2);
+});
+
+test("a command card's script that cannot be loaded says so and keeps the path", async () => {
+  const granting: DecisionRequest = {
+    ...pending,
+    id: "decision-script",
+    kind: "approval",
+    questions: [],
+    requested_command: "/srv/app/release.sh --slot staging",
+    requested_script: { path: "/srv/app/release.sh", sha256: "7c88abc2f5b12572370a09eb9619bed4e7581fdfbe721fbecb68de19eea7cf73" },
+    allowed_actions: ["Allow the command shown in this request"],
+  };
+  const fetchScript = vi.fn(async () => { throw new Error("offline"); });
+  render(<DecisionInbox decisions={[granting]} tasks={[]} workers={[]} busy={false} onResolve={vi.fn()} onFetchScript={fetchScript} />);
+  fireEvent.click(screen.getByText("Read the script"));
+  expect(await screen.findByText("The script could not be loaded here. Read it at its path.")).toBeInTheDocument();
+  expect(screen.getByText("/srv/app/release.sh")).toBeInTheDocument();
+});
+
 test("a command Swarm filed after a refusal says Swarm asked, not the worker", () => {
   // ADR 0130: only Swarm sets command_refusal, so this line is the one a
   // worker's own request, however it is worded, cannot show.

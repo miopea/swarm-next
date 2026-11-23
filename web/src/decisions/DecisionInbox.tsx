@@ -4,6 +4,7 @@ import { refusedNativeAnswerNotice } from "./refusedNativeAnswer";
 import type { DecisionClarification, DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import DecisionClarificationPanel from "./DecisionClarificationPanel";
 import AnswerImages, { SentImages, type FetchDecisionImage } from "./AnswerImages";
+import CommandScript, { type FetchDecisionScript } from "./CommandScript";
 import { MAX_ANSWER_IMAGES, toSentImages, type DraftImage, type SentImage } from "./answerImages";
 import type { ReconcileClarification } from "./ClarificationRecovery";
 import { useDecisionClarifications, type ReadClarifications } from "./useDecisionClarifications";
@@ -58,9 +59,11 @@ type Props = {
   onAskClarification?: (decision: DecisionRequest, id: string, question: string, images?: SentImage[]) => Promise<DecisionClarification>;
   /** Reads back a sent screenshot to show it. Without it, sent ones are counted. */
   onFetchImage?: FetchDecisionImage;
+  /** Reads a command card's script when the operator opens it (ADR 0187). */
+  onFetchScript?: FetchDecisionScript;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification, onFetchImage }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, coordinatorUnavailable = false, trailingCards, onOpenTask, onFetchActivity, onResolve, onAnswer, onFetchClarifications, onAskClarification, onReconcileClarification, onFetchImage, onFetchScript }: Props) {
   const [view, setView] = useState<"attention" | "activity" | "parked">("attention");
   const clarifications = useDecisionClarifications(decisions, view === "attention" ? onFetchClarifications : undefined);
   const tabId = useId();
@@ -454,11 +457,12 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             <div><dt>sha256 when asked</dt><dd><code>{decision.requested_script.sha256}</code></dd></div>
                           </dl>
                         ) : null}
+                        {decision.requested_script ? <CommandScript decisionId={decision.id} onFetchScript={onFetchScript} /> : null}
                         <small>
                           Grants permission for this exact command, once, for this worker only, in
                           the session that asked. The worker still needs to run it. Permission
                           expires when the task leaves the board
-                          {decision.requested_script ? " or the script changes" : ""}. Any other
+                          {decision.requested_script ? " or the script changes; Allow is refused if it already has" : ""}. Any other
                           command still goes through the worker's normal permission checks.
                         </small>
                       </div>

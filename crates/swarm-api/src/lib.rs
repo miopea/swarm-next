@@ -5396,6 +5396,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/decisions/{decision_id}/images/{image_id}",
             get(decisions::decision_image),
         )
+        .route(
+            "/api/v1/decisions/{decision_id}/script",
+            get(decisions::decision_script),
+        )
         .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
         .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
         .route("/api/v1/tasks/removed", get(tasks::list_removed_tasks))

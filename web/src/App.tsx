@@ -25,6 +25,7 @@ import {
   answerDecision,
   askDecisionClarification,
   fetchDecisionImage,
+  fetchDecisionScript,
   reconcileDecisionClarification,
   fetchDecisionClarifications,
   resolveDecision,
@@ -637,6 +638,10 @@ export function App() {
   const readDecisionImage = useCallback((decisionId: string, imageId: string, signal: AbortSignal) => {
     if (!operatorToken) return Promise.reject(new Error("Operator session is unavailable"));
     return fetchDecisionImage(operatorToken, decisionId, imageId, signal);
+  }, [operatorToken]);
+  const readDecisionScript = useCallback((decisionId: string, signal: AbortSignal) => {
+    if (!operatorToken) return Promise.reject(new Error("Operator session is unavailable"));
+    return fetchDecisionScript(operatorToken, decisionId, signal);
   }, [operatorToken]);
   const readRecentActivity = useCallback((signal: AbortSignal) => {
     if (!operatorToken) return Promise.reject(new Error("Operator session is unavailable"));
@@ -2862,6 +2867,7 @@ export function App() {
               onFetchClarifications={(decisionId, signal) => fetchDecisionClarifications(operatorToken, decisionId, signal)}
               onAskClarification={(decision, id, question, images) => askDecisionClarification(operatorToken, decision.id, id, question, images)}
               onFetchImage={readDecisionImage}
+              onFetchScript={readDecisionScript}
               onReconcileClarification={request => reconcileDecisionClarification(operatorToken, request)}
             />
           </div>

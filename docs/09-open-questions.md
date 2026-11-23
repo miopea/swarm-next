@@ -1,5 +1,16 @@
 # Open product questions
 
+## A command card whose script holds a secret — November 22, 2026
+
+ADR 0187 keeps the text of a command card's script for whoever answers it,
+and keeps none when a line looks like a secret, saying which line and what
+kind. The card is still filed, and Allow still works.
+
+Open: should Swarm refuse to file such a card instead, telling the worker to
+read the secret from 1Password when the script runs? Not chosen silently,
+because it changes how every worker files a card, and the scan's patterns
+will sometimes flag a script that holds no secret.
+
 ## A Hive that does not want GitHub's asks — November 11, 2026
 
 ADR 0170 brings in GitHub review requests and issues assigned to the operator
