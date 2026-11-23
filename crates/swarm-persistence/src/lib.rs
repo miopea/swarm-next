@@ -1015,9 +1015,18 @@ pub enum TaskStoreError {
     //
     // The id was one column away in the query that produced this error, so the
     // fix is to say what is already in hand rather than to look anything up.
+    //
+    // ⚠️ "OR LEAVE ADDITIONAL ASSIGNED WORK READY" READ AS PERMISSION TO WORK IT
+    // FROM READY. A worker did: it worked a task from Ready for a day while
+    // another stayed Active for 63 hours, so the board showed the wrong work and
+    // 17 of Queen's messages about the task it was really doing waited behind
+    // the Active one. It now says which task to move out of Active first.
     #[error(
-        "this worker already has work in progress: {holding_task} ({holding_title}); \
-         finish or move that one, or leave additional assigned work Ready"
+        "this worker already has work in progress: {holding_task} ({holding_title}). \
+         If you are working on this task now, first move {holding_task} out of Active, \
+         to Review, Blocked or Ready, whichever is true of it, then make this one \
+         Active, so the board shows what you are doing and messages about this task \
+         reach you. Leave this one Ready only if you are not working on it yet"
     )]
     WorkerAlreadyHasActiveTask {
         holding_task: String,
@@ -8037,11 +8046,27 @@ mod tests {
         store
             .transition_worker_task(first.id, TaskState::Active, "Starting", session_id)
             .unwrap();
+        let refused = store
+            .transition_worker_task(next.id, TaskState::Active, "Starting", session_id)
+            .unwrap_err();
         assert!(matches!(
-            store.transition_worker_task(next.id, TaskState::Active, "Starting", session_id),
-            Err(TaskStoreError::WorkerAlreadyHasActiveTask { .. })
+            refused,
+            TaskStoreError::WorkerAlreadyHasActiveTask { .. }
         ));
         assert_eq!(store.get_task(next.id).unwrap().state, TaskState::Ready);
+        // It says which task to move out of Active, rather than offering to
+        // leave this one Ready while it is worked (8b90).
+        let text = refused.to_string();
+        assert!(
+            text.contains(&format!("first move {} out of Active", first.id)),
+            "{text}"
+        );
+        assert!(text.contains("(Current work)"), "{text}");
+        assert!(text.contains("then make this one Active"), "{text}");
+        assert!(
+            text.contains("only if you are not working on it yet"),
+            "{text}"
+        );
     }
 
     #[test]

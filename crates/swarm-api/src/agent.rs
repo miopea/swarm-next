@@ -3025,7 +3025,7 @@ impl AgentMcp {
             "must_not_touch_report": must_not_touch_for_queen(self.tasks.must_not_touch_report(task_id)),
             "messages": messages,
             "review_request": review_request,
-            "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery; uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149), nor one to the worker you named to release a task in awaiting_release (ADR 0180); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
+            "messages_note": "The Queen-worker exchange on this task, oldest first. A message is not a state change. Read delivery_state, delivered_at and delivered_session_id together. A queued message waits for guarded delivery: queued or held means it has not been typed into the recipient's terminal yet. Uncertain, rejected, cancelled and resolved are different outcomes, not ordinary pending work. held_behind names the recipient's other Active task a queued message waits for: a worker gets messages about its other tasks only between tasks, so it arrives once that task leaves Active. That is a hold, not a failure, and resending does not speed it up. A message about its own task in review or awaiting_release is never held this way (ADR 0149), nor one to the worker you named to release a task in awaiting_release (ADR 0180); it arrives at the worker's next resting prompt. reached_the_current_session only says whether the recorded delivery session remains open. False on a delivered message does NOT prove it was unread: a resumed provider conversation may retain it and work may already have happened. Never resend solely because the session ended, and never treat delivered as proof of comprehension, progress or an answered question. Verify the latest worker answer, task evidence and current terminal observation before deciding what continuation is needed. A null delivery session on older records is missing historical evidence, not permission to replay.",
             "evidence_note": "Evidence does not appear in `events` and never has: \
         a claim, its approval and a deployment write their own records, not activity rows. \
         An empty `evidence` here means none was recorded, NOT that the log is silent about it.",
@@ -5962,7 +5962,7 @@ fn list_coordination_attention_tool() -> Tool {
 fn reconcile_task_message_tool() -> Tool {
     tool(
         "swarm_reconcile_task_message",
-        "Queen only: reconcile an uncertain or rejected task-message delivery from swarm_list_coordination_attention. First retrieve the exact message with swarm_read_task_history and establish whether further action is needed. Set retry_may_duplicate=false to resolve without claiming terminal receipt, or true only when a new submission is necessary and a possible duplicate is acceptable. Give the observed claim_id and a reason. Superseded review requests cannot be retried. A message of yours whose task closed before it arrived is listed as rejected, with that reason and no claim_id (ADR 0184): if it still matters, send it again with swarm_message_worker on an open task of that worker, then clear this one with retry_may_duplicate=false and no claim_id. A message on a closed task cannot be retried. This does not answer a review or complete work. Safe recovery is yours; ask the operator only if you cannot proceed within existing authority, never merely because a timer elapsed.",
+        "Queen only: reconcile an uncertain or rejected task-message delivery from swarm_list_coordination_attention. First retrieve the exact message with swarm_read_task_history and establish whether further action is needed. Set retry_may_duplicate=false to resolve without claiming terminal receipt, or true only when a new submission is necessary and a possible duplicate is acceptable. Give the observed claim_id and a reason. Superseded review requests cannot be retried. A message of yours whose task closed before it arrived is listed as rejected, with that reason and no claim_id (ADR 0184): if it still matters, send it again with swarm_message_worker on an open task of that worker, then clear this one with retry_may_duplicate=false and no claim_id. A message on a closed task cannot be retried. To withdraw your own message while it is still queued, unclaimed and never typed in, such as one held behind the worker's Active task that no longer applies, give its message_id, retry_may_duplicate=false and a reason; one already being written is not withdrawn. This does not answer a review or complete work. Safe recovery is yours; ask the operator only if you cannot proceed within existing authority, never merely because a timer elapsed.",
         &json!({ "type": "object", "properties": {
             "message_id": { "type": "string", "format": "uuid" },
             "claim_id": { "type": "string", "format": "uuid" },
@@ -13735,6 +13735,50 @@ mod tests {
                 .total,
             0
         );
+    }
+
+    /// Queen withdraws her own message while it still waits, with no claim, and
+    /// a worker cannot (8b90).
+    #[tokio::test]
+    async fn queen_withdraws_a_waiting_message_through_the_tool() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let task = store
+            .create_task("Held behind other work", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        let message = store
+            .send_task_message(
+                task.id,
+                swarm_persistence::MessageEnd::queen(),
+                swarm_persistence::MessageEnd::worker(worker_id),
+                "Plan the replay first.",
+                10,
+            )
+            .unwrap();
+        let args = json!({"message_id": message.id, "retry_may_duplicate": false,
+            "reason": "The replay was planned on the Active task instead"});
+
+        let refused = call_review_test_tool(
+            bridge.clone(),
+            &worker_token,
+            "swarm_reconcile_task_message",
+            args.clone(),
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let withdrawn =
+            call_review_test_tool(bridge, &queen_token, "swarm_reconcile_task_message", args).await;
+        assert_eq!(
+            withdrawn["result"]["structuredContent"]["changed"], true,
+            "{withdrawn}"
+        );
+        let stored = store.task_messages(task.id).unwrap();
+        assert_eq!(stored[0].delivery_state, "resolved");
+        assert!(stored[0].delivered_at.is_none(), "it was never typed in");
+        assert!(store.claim_task_messages(20).unwrap().is_empty());
     }
 
     #[tokio::test]
