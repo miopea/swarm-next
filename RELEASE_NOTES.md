@@ -12,6 +12,20 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.25.0
+
+One database update (234): two new columns, nothing rewritten. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have, and there is no new worker engine. Queen sees her changed tools once her session restarts. Engine protocol 19, unchanged: install with `swarm-package update`.
+
+### New features
+- A command card that runs a script now lets you read the script. Open "Read the script" on the card in Needs you to see the text Swarm read when the card was filed, the same bytes its hash pins. Queen sees it in her list of cards. Swarm keeps no copy of a script over 64 KiB, one that is not text, or one with a line that looks like a password, token or key. The card then says why, naming the line and the kind of secret but never the value, and you read the script at its path instead. Cards filed before this release say they kept no copy. The secret check matches common shapes, so it can miss a secret written some other way, or hold back a script that has none.
+- If a card's script has changed since it was filed, Allow is now refused when you press it, and nothing is allowed. The same goes for Queen's grant. Before, the change was caught only when the worker ran the command. Deny the card, and the worker files a new one for the script as it is now.
+- Queen reads her coordination attention as short rows, one per item, saying whose move it is, how long it has waited and why. She can filter them and read any section in full.
+- Queen can take back a message she sent a worker while it is still waiting to be delivered. She can withdraw only her own message, and only while nothing has picked it up: one already being written to the worker, and your messages, are not hers to withdraw.
+
+### Fixes
+- A worker refused for starting a second task while another is Active is now told what to do. It names the Active task and says to move it to Review, Blocked or Ready first, so the board shows what the worker is doing and messages about the new task reach it. Before, workers often left the new task Ready while working it, and Queen's messages about it waited.
+- A task's history now says plainly that a queued message has not yet been typed into the worker's terminal.
+
 ## 1.24.1
 
 No database update. Installing it keeps your workers running: the app restarts and drives the engine you have. Queen's session sees the changed tool once it restarts. Engine protocol 19, unchanged: install with `swarm-package update`.
