@@ -541,6 +541,13 @@ impl TaskStore {
     /// A message handed back because its task closed was never claimed, so it
     /// is named with no claim (ADR 0184).
     ///
+    /// ⚠️ QUEEN COULD NOT TAKE BACK A MESSAGE THAT WAS STILL WAITING. Seventeen of
+    /// hers waited a day behind a worker's Active task, and nothing could
+    /// withdraw them: this read only uncertain and rejected deliveries. Her own
+    /// queued message, not yet claimed by a delivery pass, is now withdrawn by
+    /// resolving it, whatever claim is named, and it is never typed in. One
+    /// already being written is not, and the operator's is not hers to withdraw.
+    ///
     /// # Errors
     /// Refuses empty/oversized reasons, a retry on a closed task, and returns
     /// database failures.
@@ -574,9 +581,15 @@ impl TaskStore {
             }
         }
         let changed = tx.execute(
-            "UPDATE task_message_deliveries SET state = ?3, resolution_reason = ?4, updated_at = ?5
-             WHERE message_id = ?1 AND claim_id IS ?2 AND state IN ('uncertain','rejected')
-               AND (?3 != 'queued' OR superseded = 0)",
+            "UPDATE task_message_deliveries SET state = ?3, updated_at = ?5,
+                 resolution_reason = CASE WHEN state = 'queued'
+                     THEN 'withdrawn by Queen before delivery: ' || ?4 ELSE ?4 END
+             WHERE message_id = ?1
+               AND ((claim_id IS ?2 AND state IN ('uncertain','rejected')
+                     AND (?3 != 'queued' OR superseded = 0))
+                 OR (?3 = 'resolved' AND state = 'queued'
+                     AND EXISTS(SELECT 1 FROM task_messages m
+                         WHERE m.id = ?1 AND m.sender = 'queen' AND m.recipient = 'worker')))",
             params![
                 message_id,
                 observed_claim_id,
@@ -1703,6 +1716,78 @@ mod tests {
         assert_eq!(settle(&store, 16), [task]);
         assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
         assert_eq!(delivery_state(&store, task, &go), "delivered");
+    }
+
+    /// Queen withdraws her own message while it still waits: it is never typed
+    /// in, and the settlement it held goes ahead. One already being written,
+    /// and the operator's, are not hers to withdraw (8b90).
+    #[test]
+    fn queen_withdraws_her_own_message_while_it_waits() {
+        let (store, task, worker) = fixture();
+        nothing_built(&store, task);
+        let go = send(&store, task, worker);
+        let operators = store
+            .send_task_message(
+                task,
+                MessageEnd::operator(),
+                MessageEnd::worker(worker),
+                "Thanks",
+                10,
+            )
+            .unwrap()
+            .id;
+        assert!(settle(&store, 12).is_empty(), "her message holds it");
+        assert!(
+            !store
+                .reconcile_task_message(&operators, None, false, "Not mine", 13)
+                .unwrap(),
+            "the operator's message is not hers to withdraw"
+        );
+        assert!(
+            !store
+                .reconcile_task_message(&go, None, true, "Send it now", 13)
+                .unwrap(),
+            "a waiting message is not retried, it is already queued"
+        );
+        assert!(
+            store
+                .reconcile_task_message(&go, None, false, "Superseded by my GO on 7cae", 14)
+                .unwrap()
+        );
+        let reason: String = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT resolution_reason FROM task_message_deliveries WHERE message_id = ?1",
+                [&go],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            reason,
+            "withdrawn by Queen before delivery: Superseded by my GO on 7cae"
+        );
+        assert_eq!(delivery_state(&store, task, &go), "resolved");
+        let claimed = store.claim_task_messages(15).unwrap();
+        assert_eq!(claimed.len(), 1, "only the operator's is still sent");
+        assert_eq!(claimed[0].message.message_id, operators);
+        store
+            .finish_task_message(&claimed[0], TaskMessageResult::Delivered, 16)
+            .unwrap();
+        let late = send(&store, task, worker);
+        let writing = store.claim_task_messages(17).unwrap().remove(0);
+        assert_eq!(writing.message.message_id, late);
+        assert!(
+            !store
+                .reconcile_task_message(&late, None, false, "Too late", 18)
+                .unwrap(),
+            "her own message already being written is not withdrawn"
+        );
+        assert_eq!(delivery_state(&store, task, &late), "dispatching");
+        store
+            .finish_task_message(&writing, TaskMessageResult::Delivered, 19)
+            .unwrap();
+        assert_eq!(settle(&store, 20), [task]);
     }
 
     /// A write that may or may not have landed holds the task until Queen
