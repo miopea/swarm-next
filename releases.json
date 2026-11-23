@@ -1,36 +1,36 @@
 {
   "payload": {
     "schema_version": 1,
-    "issued_at": 1795392039,
+    "issued_at": 1795400683,
     "releases": [
       {
-        "version": "1.24.1",
+        "version": "1.25.0",
         "protocol": "19",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.24.1/swarm-1.24.1-linux-x86_64.tar.gz",
-        "artifact_sha256": "16c32a361ddfe187b8e3798990cc43d53e621bb29c5d0991a0af614bfd0daf87",
-        "artifact_bytes": 24201865,
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.25.0/swarm-1.25.0-linux-x86_64.tar.gz",
+        "artifact_sha256": "a3db6b4e83cc2f00aefb05d86fb3343ed7ff6fce303fa21dbf814be232b3185a",
+        "artifact_bytes": 24217577,
         "worker_engine_build_id": "68d1d43c271352d82b8e75e418011d6890095041ec64856946285f8d5169831d",
         "notes_url": null
       },
       {
-        "version": "1.24.1",
+        "version": "1.25.0",
         "protocol": "18",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.24.1/swarm-1.24.1-linux-x86_64.tar.gz",
-        "artifact_sha256": "16c32a361ddfe187b8e3798990cc43d53e621bb29c5d0991a0af614bfd0daf87",
-        "artifact_bytes": 24201865,
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.25.0/swarm-1.25.0-linux-x86_64.tar.gz",
+        "artifact_sha256": "a3db6b4e83cc2f00aefb05d86fb3343ed7ff6fce303fa21dbf814be232b3185a",
+        "artifact_bytes": 24217577,
         "worker_engine_build_id": "68d1d43c271352d82b8e75e418011d6890095041ec64856946285f8d5169831d",
         "notes_url": null
       },
       {
-        "version": "1.24.1",
+        "version": "1.25.0",
         "protocol": "17",
-        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.24.1/swarm-1.24.1-linux-x86_64.tar.gz",
-        "artifact_sha256": "16c32a361ddfe187b8e3798990cc43d53e621bb29c5d0991a0af614bfd0daf87",
-        "artifact_bytes": 24201865,
+        "artifact_url": "https://github.com/miopea/swarm-next/releases/download/v1.25.0/swarm-1.25.0-linux-x86_64.tar.gz",
+        "artifact_sha256": "a3db6b4e83cc2f00aefb05d86fb3343ed7ff6fce303fa21dbf814be232b3185a",
+        "artifact_bytes": 24217577,
         "worker_engine_build_id": "68d1d43c271352d82b8e75e418011d6890095041ec64856946285f8d5169831d",
         "notes_url": null
       }
     ]
   },
-  "signature": "o1GR0EOHGz_7swIJ600Ftft-UIE4gPYZbQ5b_mRB-u2DIMIwMXse-YR94L1rtMUFvAEzO0V1ygDGWw0vVv-JBQ"
+  "signature": "LAJwQ5ChYaobbhnYfJ2gysxhUcsjiFr34N7cErdBC-mFEBpwfdOpiSSbF8-52JKcI0z8Pv6uiEoIxyd312veAw"
 }
