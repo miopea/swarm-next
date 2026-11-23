@@ -249,6 +249,22 @@ export type Surface = { id: string; title: string; why: string; render: () => Re
 /** Filed times for the unsettled fixture, spread the way the real rows are. */
 const FILED = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
 
+/** An invented release script for the command card fixture (ADR 0187). */
+const demoReleaseScript = [
+  "#!/bin/sh",
+  "# Deploys one Orchard service to a slot and waits for it to answer.",
+  "set -eu",
+  "service=\"$2\"",
+  "slot=\"$4\"",
+  "wait_seconds=\"${6:-300}\"",
+  "token=\"$(op read 'op://Orchard/release-bot/credential')\"",
+  "./bin/orchard-deploy --service \"$service\" --slot \"$slot\" --token-stdin <<EOF",
+  "$token",
+  "EOF",
+  "./bin/orchard-wait --service \"$service\" --slot \"$slot\" --timeout \"$wait_seconds\"",
+  "",
+].join("\n");
+
 export const SURFACES: Surface[] = [
   { id: "apiary-watch", title: "Watching a Hive", why: "Fictional live window; no stream and no Hive. The frame, the tools, and how much room the terminal gets.", render: () => <ApiaryWatchFixture /> },
   {
@@ -792,7 +808,12 @@ export const SURFACES: Surface[] = [
       allowed_actions: ["Allow the command shown in this request"],
       requested_command: "cd /srv/orchard && ./scripts/release.sh --service export --slot staging --wait 300 && echo released",
       requested_script: { path: "/srv/orchard/scripts/release.sh", sha256: "4f1c9a7be2d03865c1f0e9a4b7d26c58e13a90f4d2b6c7e8a5f3019d4c2b7e61" },
-    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined} />,
+    }]} tasks={demoTasks} workers={demoWorkers} busy={false} onResolve={async () => undefined}
+      onFetchScript={async () => ({
+        path: "/srv/orchard/scripts/release.sh",
+        sha256: "4f1c9a7be2d03865c1f0e9a4b7d26c58e13a90f4d2b6c7e8a5f3019d4c2b7e61",
+        text: demoReleaseScript,
+      })} />,
   },
   {
     id: "needs-you-queen-card",

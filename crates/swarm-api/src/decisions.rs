@@ -83,6 +83,39 @@ struct WithImages<'a, T> {
     images: Vec<swarm_persistence::DecisionImage>,
 }
 
+/// The script a command card runs and what Swarm kept of it, for the
+/// operator reading the card (ADR 0187). Fetched when they open it, so the
+/// list of cards does not carry every script's text.
+pub(super) async fn decision_script(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(decision_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let decision_id = parse_decision_id(&decision_id)?;
+    let script = task_service(&state)?
+        .command_card_script(decision_id)
+        .map_err(application_error)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "script": script.as_ref().map(script_json) })),
+    )
+        .into_response())
+}
+
+/// A card's script as the operator's page and Queen's list both read it:
+/// its path, the sha256 the card pins, and its text or why none was kept.
+pub(super) fn script_json(script: &swarm_application::CommandCardScript) -> serde_json::Value {
+    let mut value = serde_json::json!({ "path": script.path, "sha256": script.sha256 });
+    if let Some(text) = &script.text {
+        value["text"] = text.as_str().into();
+    }
+    if let Some(withheld) = &script.withheld {
+        value["withheld"] = withheld.as_str().into();
+    }
+    value
+}
+
 /// One image the operator sent with an answer or question on this request.
 pub(super) async fn decision_image(
     State(state): State<Arc<AppState>>,
@@ -189,4 +222,152 @@ pub(super) async fn resolve_decision(
         images,
     })
     .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use serde_json::{Value, json};
+    use swarm_persistence::{GRANT_COMMAND_ACTION, NewDecisionRequest, TaskStore};
+    use swarm_terminal::HostClient;
+    use tower::ServiceExt as _;
+
+    use crate::AppState;
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+        auth: bool,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder().method(method).uri(uri);
+        if auth {
+            request = request.header("authorization", "Bearer secret");
+        }
+        let body = match body {
+            Some(body) => {
+                request = request.header("content-type", "application/json");
+                Body::from(serde_json::to_vec(&body).unwrap())
+            }
+            None => Body::empty(),
+        };
+        let response = app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// ADR 0187 over the operator's routes: the card's script is read when
+    /// the card is opened, with the text kept when it was filed, and an Allow
+    /// of a script that changed since is refused with nothing granted.
+    #[tokio::test]
+    async fn the_operator_reads_a_cards_script_and_an_allow_of_a_changed_one_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("release.sh");
+        let body = "#!/bin/sh\nexec ./deploy --slot staging\n";
+        std::fs::write(&path, body).unwrap();
+        let path = path.to_str().unwrap().to_owned();
+
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/fictional/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let task = store.create_task("Release it", "/fictional/app").unwrap();
+        let filed = swarm_application::read_script(&path).unwrap();
+        let card = |script: Option<&swarm_persistence::FiledScript>| {
+            store
+                .create_decision_request(&NewDecisionRequest {
+                    requesting_worker_id: queen.id,
+                    task_id: Some(task.id),
+                    kind: swarm_domain::DecisionRequestKind::Approval,
+                    urgency: swarm_domain::DecisionUrgency::Normal,
+                    title: "Run the release script",
+                    summary: "The classifier denied it.",
+                    reason: "Needed for the release.",
+                    risk: "Staging only.",
+                    evidence: "Fixture only.",
+                    suggested_action: "",
+                    allowed_actions: &[],
+                    operator_actions: &[],
+                    questions: &[],
+                    deadline: None,
+                    requested_command: Some(&path),
+                    requested_script: script,
+                })
+                .unwrap()
+                .id
+        };
+        let with_script = card(Some(&filed));
+        let without_script = card(None);
+        let app = crate::router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let uri = |id: swarm_domain::DecisionRequestId| format!("/api/v1/decisions/{id}/script");
+
+        let (status, read) = send(&app, "GET", &uri(with_script), None, true).await;
+        assert_eq!(status, StatusCode::OK, "{read}");
+        assert_eq!(
+            read,
+            json!({"script": {"path": path, "sha256": filed.script.sha256, "text": body}})
+        );
+        let (status, _) = send(&app, "GET", &uri(with_script), None, false).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, read) = send(&app, "GET", &uri(without_script), None, true).await;
+        assert_eq!((status, read), (StatusCode::OK, json!({"script": null})));
+        let (status, _) = send(
+            &app,
+            "GET",
+            &uri(swarm_domain::DecisionRequestId::new()),
+            None,
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        std::fs::write(&path, "#!/bin/sh\nexec ./deploy --slot production\n").unwrap();
+        let (status, refused) = send(
+            &app,
+            "PATCH",
+            &format!("/api/v1/decisions/{with_script}/resolution"),
+            Some(json!({"action": GRANT_COMMAND_ACTION, "surface": "inbox"})),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("has changed since it was filed"),
+            "the operator is told why: {refused}"
+        );
+        assert!(
+            store
+                .get_decision_request(with_script)
+                .unwrap()
+                .resolved_at
+                .is_none()
+        );
+        let (_, read) = send(&app, "GET", &uri(with_script), None, true).await;
+        assert_eq!(
+            read["script"]["text"], body,
+            "the card still shows what was filed"
+        );
+    }
 }

@@ -536,14 +536,14 @@ impl AgentBridge {
                 principal.worker_id,
                 &request.command,
                 request.cwd.as_deref(),
-                script_sha256,
+                swarm_application::script_sha256,
             )
         } else {
             self.tasks.use_command_grant(
                 principal.worker_id,
                 &request.command,
                 request.cwd.as_deref(),
-                script_sha256,
+                swarm_application::script_sha256,
             )
         };
         match spent {
@@ -1899,12 +1899,13 @@ impl AgentMcp {
                         .transpose()
                         .map_err(|_| ApplicationError::MalformedIdentifier("task id"))?;
                     // Hashed now, so the operator approves these bytes and a
-                    // file changed afterwards is never granted (ADR 0129).
+                    // file changed afterwards is never granted (ADR 0129). The
+                    // text is kept from the same read, for whoever answers
+                    // (ADR 0187).
                     let requested_script = input
                         .script
                         .map(|path| {
-                            script_sha256(&path)
-                                .map(|sha256| swarm_domain::RequestedScript { path: path.clone(), sha256 })
+                            swarm_application::read_script(&path)
                                 .ok_or_else(|| {
                                     ApplicationError::Refused(format!(
                                         "Swarm could not read the script at {path:?} to hash it. Name the local file the command runs by its absolute path, as a readable file of at most 64 MiB, or leave script out when the command runs no local file."
@@ -3610,6 +3611,18 @@ impl AgentMcp {
     /// The command cards waiting for Queen, each in full (ADR 0158).
     fn list_command_cards(&self) -> Result<CallToolResult, ApplicationError> {
         let cards = self.tasks.queen_command_cards(self.principal)?;
+        // Each card carries its script's text, so Queen reads what she grants
+        // from the copy the card pins rather than the file (ADR 0187).
+        let cards = cards
+            .iter()
+            .map(|card| {
+                let mut listed = json!(card);
+                if let Some(script) = self.tasks.command_card_script(card.id)? {
+                    listed["requested_script"] = crate::decisions::script_json(&script);
+                }
+                Ok(listed)
+            })
+            .collect::<Result<Vec<_>, ApplicationError>>()?;
         let enabled = self
             .tasks
             .store()
@@ -7040,7 +7053,7 @@ fn withdraw_decision_tool() -> Tool {
 fn list_command_cards_tool() -> Tool {
     tool(
         "swarm_list_command_cards",
-        "The command cards that are yours to grant or hand to the operator, oldest first, each in full: the exact command, the script and its hash, the task, the asking worker, and its reason, risk and evidence. A card is here only while the operator's \"Queen grants command cards\" setting is on and its worker said none of the operator's reasons applies (credentials, permissions, spend over $25, an irreversible delete). Every other card is the operator's, and you cannot grant it.",
+        "The command cards that are yours to grant or hand to the operator, oldest first, each in full: the exact command, the script it runs with its hash and the text Swarm kept when the card was filed (or why none was kept, such as a line that looks like a secret), the task, the asking worker, and its reason, risk and evidence. A card is here only while the operator's \"Queen grants command cards\" setting is on and its worker said none of the operator's reasons applies (credentials, permissions, spend over $25, an irreversible delete). Every other card is the operator's, and you cannot grant it.",
         &json!({"type":"object","properties":{},"additionalProperties":false}),
         true,
     )
@@ -7049,7 +7062,7 @@ fn list_command_cards_tool() -> Tool {
 fn grant_command_tool() -> Tool {
     tool(
         "swarm_grant_command",
-        "Grant one command card from swarm_list_command_cards: the asking worker may then run that exact command once, in the session that asked, while its task is on the board. The same grant the operator's Allow mints, recorded as yours and never as theirs. Grant only when you have read the command and its script, it carries out work you have reviewed on that task, and none of the operator's reasons applies whatever the worker said: it creates, changes or exposes a credential; changes access, roles, protection or a security setting; may cost more than $25; or deletes something that cannot be restored. If any applies, or you are unsure, use swarm_hand_command_to_operator instead. The worker's own claim is not your review.",
+        "Grant one command card from swarm_list_command_cards: the asking worker may then run that exact command once, in the session that asked, while its task is on the board. The same grant the operator's Allow mints, recorded as yours and never as theirs. Grant only when you have read the command and its script (the card list carries the text that the card's hash pins), it carries out work you have reviewed on that task, and none of the operator's reasons applies whatever the worker said: it creates, changes or exposes a credential; changes access, roles, protection or a security setting; may cost more than $25; or deletes something that cannot be restored. If any applies, or you are unsure, use swarm_hand_command_to_operator instead. The worker's own claim is not your review.",
         &json!({"type":"object","properties":{
             "decision_id":{"type":"string","format":"uuid","description":"The card's full id. A prefix is refused."},
             "note":{"type":"string","minLength":1,"maxLength":2000,"description":"What you checked: the reviewed work this command carries out, and why none of the operator's reasons applies. The worker reads it, and it stays on the record."}},
@@ -7158,43 +7171,6 @@ fn tool(name: &'static str, description: &'static str, schema: &Value, read_only
             .destructive(false)
             .open_world(false),
     )
-}
-
-/// The largest script Swarm hashes for a command grant.
-const MAX_GRANTED_SCRIPT_BYTES: u64 = 64 * 1024 * 1024;
-
-/// Lowercase hex sha256 of a script a command grant names, or `None` when it
-/// is not an absolute path to a file that can be read whole (ADR 0129).
-///
-/// Opened without blocking: a worker names this path, and opening a FIFO to
-/// read waits for a writer, which would hold an API thread indefinitely.
-fn script_sha256(path: &str) -> Option<String> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    if !Path::new(path).is_absolute() {
-        return None;
-    }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
-    let mut hasher = Sha256::new();
-    let read = std::io::copy(
-        &mut std::io::Read::take(file, MAX_GRANTED_SCRIPT_BYTES + 1),
-        &mut hasher,
-    )
-    .ok()?;
-    if read > MAX_GRANTED_SCRIPT_BYTES {
-        return None;
-    }
-    let mut hex = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        write!(&mut hex, "{byte:02x}").expect("writing to an in-memory String cannot fail");
-    }
-    Some(hex)
 }
 
 fn token_digest(token: &str) -> [u8; 32] {
@@ -9826,7 +9802,7 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         let paths = [script, fifo].map(|path| path.to_str().unwrap().to_owned());
         std::thread::spawn(move || {
-            let hashes = paths.map(|path| script_sha256(&path));
+            let hashes = paths.map(|path| swarm_application::script_sha256(&path));
             let _ = sender.send(hashes);
         });
         let [script, fifo] = receiver
@@ -9837,7 +9813,7 @@ mod tests {
             Some("4da189d90e07cff2e187998d545d201d8cb7fe95efac557c72f1b545b7b2c9b9")
         );
         assert_eq!(fifo, None);
-        assert_eq!(script_sha256("relative/release"), None);
+        assert_eq!(swarm_application::script_sha256("relative/release"), None);
     }
 
     /// ADR 0129: a grant is never written as a settings rule, which Claude
@@ -9933,6 +9909,110 @@ mod tests {
             missing.to_string().contains("could not read the script"),
             "{missing}"
         );
+    }
+
+    /// ADR 0187 over the real tools: Queen's card list carries the text of the
+    /// script each card runs, withholds a line that looks like a secret
+    /// without showing it, and her grant is refused once the script changes.
+    #[tokio::test]
+    async fn queen_reads_a_cards_script_in_the_list_and_cannot_grant_a_changed_one() {
+        let (bridge, store, queen_id, worker_id, directory) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task("Release reviewed work", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.set_queen_grants(true, 10).unwrap();
+        let queen = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let body = "#!/bin/sh\ncargo test --workspace\n";
+        let checked = directory.path().join("check.sh");
+        std::fs::write(&checked, body).unwrap();
+        let token = format!("ghp_{}", "aB3d".repeat(9));
+        let leaky = directory.path().join("leaky.sh");
+        std::fs::write(&leaky, format!("#!/bin/sh\nexport GH_TOKEN={token}\n")).unwrap();
+        let ask = |script: &std::path::Path| {
+            call_review_test_tool(
+                bridge.clone(),
+                &worker,
+                "swarm_request_decision",
+                json!({
+                    "task_id": task.id.to_string(),
+                    "keep_working": true,
+                    "kind": "approval",
+                    "title": "Run one reviewed script",
+                    "summary": "The classifier denied it.",
+                    "reason": "Queen reviewed the work it carries out.",
+                    "suggested_action": "",
+                    "command": script.to_str().unwrap(),
+                    "script": script.to_str().unwrap(),
+                    "operator_only": [],
+                }),
+            )
+        };
+        let filed = ask(&checked).await;
+        let id = filed["result"]["structuredContent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let withheld = ask(&leaky).await;
+        assert_eq!(withheld["result"]["isError"], false, "{withheld}");
+
+        let listed = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_list_command_cards",
+            json!({}),
+        )
+        .await;
+        let cards = &listed["result"]["structuredContent"]["cards"];
+        assert_eq!(cards.as_array().unwrap().len(), 2, "{listed}");
+        assert_eq!(cards[0]["id"], id.as_str(), "{listed}");
+        assert_eq!(cards[0]["requested_script"]["text"], body, "{listed}");
+        assert_eq!(
+            cards[0]["requested_script"]["path"],
+            checked.to_str().unwrap()
+        );
+        assert!(cards[1]["requested_script"]["text"].is_null(), "{listed}");
+        assert!(
+            cards[1]["requested_script"]["withheld"]
+                .as_str()
+                .unwrap()
+                .starts_with("Line 2 looks like a GitHub token"),
+            "{listed}"
+        );
+        assert!(
+            !listed.to_string().contains(&token),
+            "the token is never listed"
+        );
+
+        std::fs::write(&checked, "#!/bin/sh\ngit push --force\n").unwrap();
+        let refused = call_review_test_tool(
+            bridge.clone(),
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": id, "note": "Reviewed the release."}),
+        )
+        .await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert!(
+            refused
+                .to_string()
+                .contains("has changed since it was filed"),
+            "{refused}"
+        );
+        std::fs::write(&checked, body).unwrap();
+        let granted = call_review_test_tool(
+            bridge,
+            &queen,
+            "swarm_grant_command",
+            json!({"decision_id": id, "note": "Reviewed the release."}),
+        )
+        .await;
+        assert_eq!(granted["result"]["isError"], false, "{granted}");
     }
 
     /// ADR 0158 over the real tools. A worker that says none of the

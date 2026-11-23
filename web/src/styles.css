@@ -3416,6 +3416,29 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .decision-command-script dd {
   margin: 0;
 }
+/* The script's text (ADR 0187). Bounded in height so a long script does not
+   push the Allow button off the card, and scrollable by keyboard. */
+.decision-command-script-text summary {
+  cursor: pointer;
+  font-size: .78rem;
+  color: var(--ink);
+}
+.decision-command-script-text p {
+  margin: 6px 0;
+  font-size: .72rem;
+  line-height: 1.45;
+}
+.decision-command-script-text pre {
+  max-height: 22rem;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.decision-command-script-withheld {
+  color: var(--ink);
+}
 
 /* Briefings queued and waiting their turn.
    Quiet on purpose: this is status, not a fault. It sits below the attention

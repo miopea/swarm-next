@@ -45,8 +45,10 @@ use swarm_persistence::{
 };
 use thiserror::Error;
 
+mod command_scripts;
 mod conversation_rotation;
 mod must_not_touch;
+pub use command_scripts::{MAX_GRANTED_SCRIPT_BYTES, read_script, script_sha256};
 pub use conversation_rotation::{QUEEN_CONVERSATION_SECONDS, conversation_due_for_rotation};
 pub use must_not_touch::MAX_MUST_NOT_TOUCH_REASON_CHARS;
 mod decision_clarification;
@@ -4950,9 +4952,52 @@ impl TaskService {
         note: &str,
     ) -> Result<DecisionRequest, ApplicationError> {
         require_queen(principal)?;
+        self.refuse_a_changed_script(id)?;
         Ok(self
             .store
             .grant_command_as_queen(principal.worker_id, id, note)?)
+    }
+
+    /// The script a card names and what Swarm kept of it, for whoever answers
+    /// the card (ADR 0187). `None` when it names no script.
+    ///
+    /// # Errors
+    /// `DecisionNotFound` for an unknown card, or a store error.
+    pub fn command_card_script(
+        &self,
+        id: DecisionRequestId,
+    ) -> Result<Option<CommandCardScript>, ApplicationError> {
+        Ok(self.store.decision_script(id)?.map(CommandCardScript::from))
+    }
+
+    /// Refuses an Allow, the operator's or Queen's, of a card whose script is
+    /// no longer the one it was filed with (ADR 0187).
+    ///
+    /// ⚠️ THE FILE COULD CHANGE AFTER THE CARD WAS READ. The grant was always
+    /// refused when the command ran, but only then: the operator pressed Allow
+    /// on text they had read, and the worker learned at run time that the
+    /// approval was spent on nothing. Checking at the press says so to the one
+    /// who pressed it, while they can still Deny and have the worker file the
+    /// script as it is now. The check at run time stays.
+    fn refuse_a_changed_script(&self, id: DecisionRequestId) -> Result<(), ApplicationError> {
+        let decision = self.store.get_decision_request(id)?;
+        if decision.resolved_at.is_some() {
+            return Ok(());
+        }
+        let Some(script) = decision.requested_script else {
+            return Ok(());
+        };
+        match script_sha256(&script.path) {
+            Some(now) if now == script.sha256 => Ok(()),
+            Some(now) => Err(ApplicationError::Refused(format!(
+                "The script this card runs has changed since it was filed: {} had sha256 {} and has {} now, so nothing was allowed. Deny this card; the worker files a new one for the script as it is now.",
+                script.path, script.sha256, now
+            ))),
+            None => Err(ApplicationError::Refused(format!(
+                "Swarm cannot read the script this card runs any more ({}), so it cannot confirm it is the one filed, and nothing was allowed. Deny this card; the worker files a new one.",
+                script.path
+            ))),
+        }
     }
 
     /// Queen hands a command card she will not grant to the operator.
@@ -5047,6 +5092,9 @@ impl TaskService {
         surface: &str,
         images: &[swarm_persistence::NewDecisionImage],
     ) -> Result<DecisionRequest, ApplicationError> {
+        if action == swarm_persistence::GRANT_COMMAND_ACTION {
+            self.refuse_a_changed_script(id)?;
+        }
         let resolved = self
             .store
             .resolve_decision_request_with_images(id, action, note, surface, images)?;
@@ -5370,6 +5418,36 @@ fn changes_into_an_absolute_folder(command: &str) -> bool {
         })
 }
 
+/// The script a command card runs, as whoever answers the card reads it
+/// (ADR 0187): its path, the sha256 the card pins, and the text Swarm kept
+/// from the read that took that hash, or why it kept none.
+/// Exactly one of `text` and `withheld` is present.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandCardScript {
+    pub path: String,
+    pub sha256: String,
+    pub text: Option<String>,
+    pub withheld: Option<String>,
+}
+
+impl From<swarm_persistence::FiledScript> for CommandCardScript {
+    fn from(filed: swarm_persistence::FiledScript) -> Self {
+        let swarm_persistence::FiledScript { script, snapshot } = filed;
+        let withheld = snapshot.withheld.or_else(|| {
+            snapshot.text.is_none().then(|| {
+                "This card was filed before Swarm kept a copy of the script it runs. Read it at its path."
+                    .to_owned()
+            })
+        });
+        Self {
+            path: script.path,
+            sha256: script.sha256,
+            text: snapshot.text,
+            withheld,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionRequestInput {
     pub task_id: Option<TaskId>,
@@ -5402,8 +5480,9 @@ pub struct DecisionRequestInput {
     /// checking a string it chose.
     pub requested_command: Option<String>,
     /// The local script the command runs, hashed by the caller when the
-    /// request is filed (ADR 0129).
-    pub requested_script: Option<swarm_domain::RequestedScript>,
+    /// request is filed (ADR 0129), with the copy of its text read with the
+    /// hash (ADR 0187). `read_script` makes one.
+    pub requested_script: Option<swarm_persistence::FiledScript>,
     /// Which of the operator's reasons the asker says apply to its command
     /// (ADR 0158). `Some(empty)` says none does, which makes the card Queen's
     /// while the operator lets her grant; `None` says nothing, and the card
@@ -8041,6 +8120,51 @@ mod tests {
         assert_eq!(granted.granted_by_queen, Some(queen.worker_id));
     }
 
+    /// ADR 0187: Queen's grant is an Allow too, and is refused the same way
+    /// when the script changed since the card was filed.
+    #[test]
+    fn queens_grant_is_refused_when_the_script_changed() {
+        let (service, queen, worker) = setup();
+        let (task, principal) = worker_active_on(&service, &queen, &worker, "Release it");
+        service.store.set_queen_grants(true, 10).unwrap();
+        let folder = ScriptFolder::new();
+        let body = "#!/bin/sh\ncargo test --workspace\n";
+        let path = folder.write("check.sh", body);
+        let mut input = decision_input(Some(task), DecisionRequestKind::Approval, "Run it", &[""]);
+        input.allowed_actions = Vec::new();
+        input.requested_command = Some(path.clone());
+        input.requested_script = read_script(&path);
+        input.operator_reasons = Some(Vec::new());
+        input.keep_working = true;
+        let card = service.create_decision(principal, &input).unwrap();
+        assert!(card.awaiting_queen);
+
+        let queen = AgentPrincipal::from(&queen);
+        std::fs::write(&path, "#!/bin/sh\ngit push --force\n").unwrap();
+        let Err(ApplicationError::Refused(refusal)) =
+            service.grant_command_as_queen(queen, card.id, "Reviewed it.")
+        else {
+            panic!("Queen's grant of a changed script was not refused");
+        };
+        assert!(
+            refusal.contains("has changed since it was filed"),
+            "{refusal}"
+        );
+        assert_eq!(
+            service
+                .store
+                .get_decision_request(card.id)
+                .unwrap()
+                .granted_by_queen,
+            None
+        );
+        std::fs::write(&path, body).unwrap();
+        let granted = service
+            .grant_command_as_queen(queen, card.id, "Reviewed it.")
+            .unwrap();
+        assert_eq!(granted.granted_by_queen, Some(queen.worker_id));
+    }
+
     /// ADR 0159: while Queen grants command cards, a worker's command card
     /// says which of the operator's reasons apply, so silence never decides
     /// whose it is. With the setting off, and for Queen's own card, it need
@@ -8543,7 +8667,9 @@ mod tests {
             .store
             .create_task("Run one script", "/workspace/petal")
             .unwrap();
-        let approved = "ab".repeat(32);
+        let folder = ScriptFolder::new();
+        let script = folder.write("release.sh", "#!/bin/sh\nexec ./deploy --slot \"$1\"\n");
+        let approved = script_sha256(&script).unwrap();
         let mut input = decision_input(
             Some(task.id),
             DecisionRequestKind::Approval,
@@ -8553,10 +8679,7 @@ mod tests {
         input.suggested_action = String::new();
         input.allowed_actions = Vec::new();
         input.requested_command = Some("/srv/app/release.sh --slot staging".into());
-        input.requested_script = Some(swarm_domain::RequestedScript {
-            path: "/srv/app/release.sh".into(),
-            sha256: approved.clone(),
-        });
+        input.requested_script = read_script(&script);
         let decision = service.create_decision(principal, &input).unwrap();
         service
             .resolve_operator_decision(decision.id, &decision.allowed_actions[0], "", "test")
@@ -8589,13 +8712,135 @@ mod tests {
             Some(decision.id),
             "a refused check left the grant live"
         );
-        assert_eq!(asked.into_inner().as_deref(), Some("/srv/app/release.sh"));
+        assert_eq!(asked.into_inner().as_deref(), Some(script.as_str()));
         assert_eq!(
             service
                 .use_command_grant(queen.id, command, None, |_| Some(approved.clone()))
                 .unwrap(),
             None,
             "and it runs once"
+        );
+    }
+
+    /// A folder of real scripts for a test, removed when the test ends.
+    struct ScriptFolder(std::path::PathBuf);
+
+    impl ScriptFolder {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("swarm-app-script-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, name: &str, body: &str) -> String {
+            let path = self.0.join(name);
+            std::fs::write(&path, body).unwrap();
+            path.to_str().unwrap().to_owned()
+        }
+    }
+
+    impl Drop for ScriptFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// ADR 0187: an Allow, the operator's or Queen's, is refused when the
+    /// script changed or vanished since the card was filed, and nothing is
+    /// granted; the unchanged script is allowed. The card keeps the text read
+    /// with the hash.
+    #[test]
+    fn an_allow_is_refused_when_the_script_changed_since_the_card_was_filed() {
+        let (service, queen, _worker) = setup();
+        service
+            .store
+            .bind_worker_session(queen.id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let principal = AgentPrincipal::from(&queen);
+        let task = service
+            .store
+            .create_task("Run one script", "/workspace/petal")
+            .unwrap();
+        let folder = ScriptFolder::new();
+        let body = "#!/bin/sh\nexec ./deploy\n";
+        let card = |name: &str| {
+            let path = folder.write(name, body);
+            let mut input = decision_input(
+                Some(task.id),
+                DecisionRequestKind::Approval,
+                "Run the release script",
+                &["unused"],
+            );
+            input.suggested_action = String::new();
+            input.allowed_actions = Vec::new();
+            input.requested_command = Some(format!("{path} --slot staging"));
+            input.requested_script = read_script(&path);
+            (path, service.create_decision(principal, &input).unwrap())
+        };
+
+        let (changed_path, changed) = card("changed.sh");
+        assert_eq!(
+            service
+                .command_card_script(changed.id)
+                .unwrap()
+                .unwrap()
+                .text
+                .as_deref(),
+            Some(body),
+            "the card keeps the text read with the hash"
+        );
+        std::fs::write(&changed_path, "#!/bin/sh\nrm -rf ./deploy\n").unwrap();
+        let Err(ApplicationError::Refused(refusal)) = service.resolve_operator_decision(
+            changed.id,
+            swarm_persistence::GRANT_COMMAND_ACTION,
+            "",
+            "test",
+        ) else {
+            panic!("an Allow of a changed script was not refused");
+        };
+        assert!(
+            refusal.contains("has changed since it was filed"),
+            "{refusal}"
+        );
+        assert!(
+            refusal.contains(&changed.requested_script.clone().unwrap().sha256),
+            "{refusal}"
+        );
+        assert!(
+            service
+                .store
+                .get_decision_request(changed.id)
+                .unwrap()
+                .resolved_at
+                .is_none(),
+            "nothing was answered, so the operator can still Deny"
+        );
+
+        let (gone_path, gone) = card("gone.sh");
+        std::fs::remove_file(&gone_path).unwrap();
+        let Err(ApplicationError::Refused(refusal)) = service.resolve_operator_decision(
+            gone.id,
+            swarm_persistence::GRANT_COMMAND_ACTION,
+            "",
+            "test",
+        ) else {
+            panic!("an Allow of a vanished script was not refused");
+        };
+        assert!(refusal.contains("cannot read the script"), "{refusal}");
+
+        let (_, kept) = card("kept.sh");
+        service
+            .resolve_operator_decision(kept.id, swarm_persistence::GRANT_COMMAND_ACTION, "", "test")
+            .unwrap();
+        assert!(
+            service
+                .store
+                .get_decision_request(kept.id)
+                .unwrap()
+                .resolved_at
+                .is_some(),
+            "the unchanged script is allowed"
         );
     }
 

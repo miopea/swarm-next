@@ -89,6 +89,7 @@ mod worker_engine_returns;
 mod worker_engine_updates;
 mod worker_recovery;
 pub use worker_engine_returns::WorkerEngineReturnSession;
+mod command_scripts;
 mod task_block;
 mod task_decision_links;
 mod task_prerequisites;
@@ -245,6 +246,10 @@ mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
 pub use apiary_policy::PolicyConvergence;
+pub use command_scripts::{
+    FiledScript, MAX_SCRIPT_TEXT_BYTES, MAX_SCRIPT_WITHHELD_BYTES, ScriptSnapshot,
+};
+pub use decisions::{GRANT_COMMAND_ACTION, hides_command_text};
 pub use decisions::{
     HeldForAnswer, INTERVIEW_ANSWERED_ACTION, MAX_DECISION_RESULTS, MAX_RESOLUTION_NOTE_BYTES,
     OPERATOR_ANSWER_HEADER,
@@ -518,7 +523,10 @@ const JIRA_REPLY_DRAFTS_SCHEMA_MARKER: i64 = 231;
 const RELEASE_WAITS_SCHEMA_MARKER: i64 = 232;
 /// Queen or the operator lets a task's worker read another task (ADR 0182).
 const TASK_READ_LINKS_SCHEMA_MARKER: i64 = 233;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_READ_LINKS_SCHEMA_MARKER;
+/// A command card keeps the text of the script it names, or why it kept none
+/// (ADR 0187).
+const COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER: i64 = 234;
+const CURRENT_SCHEMA_VERSION: i64 = COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5246,6 +5254,12 @@ fn migrate_queen_release_schema_steps(
         crate::task_read_links::migrate_task_read_links(
             transaction,
             TASK_READ_LINKS_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER {
+        crate::command_scripts::migrate_command_script_snapshots(
+            transaction,
+            COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -11769,6 +11783,15 @@ mod tests {
             undo_sql: "DROP TABLE IF EXISTS task_read_links",
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'task_read_links')",
+        },
+        // A command card's script text (ADR 0187): two columns.
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "the script text a command card keeps",
+            undo_sql: "ALTER TABLE decision_requests DROP COLUMN requested_script_text;
+                       ALTER TABLE decision_requests DROP COLUMN requested_script_withheld;",
+            probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('decision_requests')
+                 WHERE name IN ('requested_script_text','requested_script_withheld')) = 2",
         },
     ];
 
