@@ -285,11 +285,25 @@ fn could_not_check(error: &str) -> String {
 #[derive(Debug, PartialEq, Eq)]
 enum Token {
     Word(String),
+    /// A word part of which bash computes as it runs the command
+    /// (`Lexer::computed`), with the rest of the word as `word`. It `splits`
+    /// when a part may be any number of words. It is `as_text` when every
+    /// such part is the value of a text flag (`holds_text`).
+    Printed {
+        word: String,
+        splits: bool,
+        as_text: bool,
+    },
+    /// A process substitution: commands that read or write through a file
+    /// the gate does not follow.
+    Opaque,
     /// Anything that ends one pipeline: `;`, `&`, `||`, a newline, a
     /// parenthesis, or the edge of a command substitution.
     Break,
     /// `|`: the next command reads this one's output.
     Pipe,
+    /// Standard input from a file, a here-string or another descriptor.
+    Input,
     /// A heredoc's body: what the command it belongs to reads on standard
     /// input (ADR 0188). It `expands` when no part of its delimiter was
     /// quoted, so its `$(...)` and backquotes run as the shell reads it.
@@ -299,11 +313,28 @@ enum Token {
     },
 }
 
+impl Token {
+    /// A word of a command: for a word bash computes part of, whether that
+    /// is only text, one word that is the value of a text flag.
+    fn said(&self) -> Option<(&str, Option<bool>)> {
+        match self {
+            Token::Word(word) => Some((word, None)),
+            Token::Printed {
+                word,
+                splits,
+                as_text,
+            } => Some((word, Some(!splits && *as_text))),
+            _ => None,
+        }
+    }
+}
+
 type Chars<'a> = std::iter::Peekable<std::str::Chars<'a>>;
 
 /// Splits shell text into words and command boundaries, as far as deciding
-/// what runs needs: quotes, escapes, comments, redirections, heredocs, and
-/// command substitution, whose inside is read as commands of its own.
+/// what runs needs: quotes, escapes, comments, redirections, heredocs, the
+/// parts of a word bash computes, and command substitution, whose inside is
+/// read as commands of its own.
 ///
 /// `None` when a quote, a substitution or a heredoc is never closed.
 fn tokens(text: &str) -> Option<Vec<Token>> {
@@ -315,7 +346,10 @@ fn tokens(text: &str) -> Option<Vec<Token>> {
 /// substitution from the same text, rather than cutting it out first, keeps
 /// a parenthesis inside its quotes or heredocs from closing it.
 fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
-    let mut lexer = Lexer::default();
+    let mut lexer = Lexer {
+        in_substitution: substitution,
+        ..Lexer::default()
+    };
     let mut depth = 0_usize;
     while let Some(character) = chars.next() {
         match character {
@@ -353,35 +387,55 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                 lexer.pipe();
             }
             ';' | '&' => lexer.boundary(),
-            // `(( ... ))` is arithmetic, where `<<` is a shift.
-            '(' if chars.next_if_eq(&'(').is_some() => {
+            // With extglob on, `!(`, `@(`, `+(`, `*(` and `?(` start a
+            // pattern, which this does not read.
+            '(' if lexer.word.ends_with(['!', '@', '+', '*', '?']) => return None,
+            // `(( ... ))` is arithmetic, where `<<` is a shift. When bash
+            // reads it otherwise, it is two subshells.
+            '(' if chars.peek() == Some(&'(') => {
                 lexer.boundary();
-                skip_arithmetic(chars)?;
+                match arithmetic(chars)? {
+                    Parenthesis::Arithmetic { length, names } => {
+                        chars.nth(length - 1);
+                        lexer.evaluates(names);
+                    }
+                    Parenthesis::Commands => depth += 1,
+                }
             }
             '(' => {
                 depth += 1;
                 lexer.boundary();
             }
             ')' if substitution && depth == 0 => {
-                lexer.finish();
+                lexer.end();
                 return lexer.heredocs.is_empty().then_some(lexer.tokens);
             }
             ')' => {
                 depth = depth.saturating_sub(1);
                 lexer.boundary();
             }
-            '`' => {
-                lexer.substitution(tokens(&take_backquoted(chars)?)?)?;
-                lexer.started = true;
-            }
-            '$' if opens_arithmetic(chars) => {
-                chars.nth(1);
-                skip_arithmetic(chars)?;
-                lexer.started = true;
-            }
+            '`' => lexer.substitution(tokens(&take_backquoted(chars)?)?, false)?,
             '$' if chars.next_if_eq(&'(').is_some() => {
-                lexer.substitution(lex(chars, true)?)?;
                 lexer.started = true;
+                match dollar_parenthesis(chars)? {
+                    Dollar::Substitution(inner) => lexer.substitution(inner, false)?,
+                    Dollar::Arithmetic { names } => lexer.evaluates(names),
+                }
+            }
+            '$' if evaluates_a_value(chars) => {
+                lexer.evaluates(true);
+                lexer.started = true;
+                lexer.word.push('$');
+            }
+            '$' if chars.next_if_eq(&'\'').is_some() => lexer.ansi_c_quoted(chars)?,
+            // `$"..."` is the quoted text as translated.
+            '$' if chars.peek() == Some(&'"') => {
+                lexer.computed(true);
+                lexer.word.push('$');
+            }
+            '$' if chars.peek().copied().is_some_and(parameter) => {
+                lexer.computed(false);
+                lexer.word.push('$');
             }
             '<' | '>' => lexer.redirection(character, chars)?,
             '#' if !lexer.started => {
@@ -389,16 +443,22 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                     chars.next();
                 }
             }
-            other => {
-                lexer.started = true;
-                lexer.word.push(other);
-            }
+            other => lexer.unquoted(other, chars.peek().copied()),
         }
     }
     // A substitution the text never closes, or a heredoc whose body never
     // came: what the shell would run cannot be told.
-    lexer.finish();
+    lexer.end();
     (!substitution && lexer.heredocs.is_empty()).then_some(lexer.tokens)
+}
+
+/// What bash computes in a word.
+#[derive(Clone, Copy)]
+struct Printing {
+    /// A part of it may be any number of words, so the word splits.
+    splits: bool,
+    /// Every part of it is the value of a text flag.
+    as_text: bool,
 }
 
 #[derive(Default)]
@@ -407,11 +467,24 @@ struct Lexer {
     word: String,
     /// A word has begun, even an empty quoted one.
     started: bool,
+    /// Bash computes part of the word.
+    printed: Option<Printing>,
+    /// The `{` outside quotes in the word that no `}` has closed: a `,` or
+    /// `..` in one makes a list bash expands.
+    braces: usize,
+    /// How many `[` outside quotes the word holds: a `]` after one makes a
+    /// glob.
+    brackets: usize,
     /// The next word is a redirection's file, not part of the command.
     redirect_target: bool,
     /// Heredocs on the current line, in order: their bodies start after the
     /// next newline.
     heredocs: Vec<Heredoc>,
+    /// The commands of this command's substitutions, which follow it once
+    /// it ends, so that its own words stay together.
+    substituted: Vec<Token>,
+    /// Reading the inside of a `$(`, where bash ends a heredoc early.
+    in_substitution: bool,
 }
 
 struct Heredoc {
@@ -442,20 +515,76 @@ impl Lexer {
                     }
                 }
                 // The rest of the quote is still one word.
-                '`' => {
-                    self.substitution(tokens(&take_backquoted(chars)?)?)?;
-                    self.started = true;
+                '`' => self.substitution(tokens(&take_backquoted(chars)?)?, true)?,
+                '$' if chars.next_if_eq(&'(').is_some() => match dollar_parenthesis(chars)? {
+                    Dollar::Substitution(inner) => self.substitution(inner, true)?,
+                    Dollar::Arithmetic { names } => self.evaluates(names),
+                },
+                '$' if evaluates_a_value(chars) => {
+                    self.evaluates(true);
+                    self.word.push('$');
                 }
-                '$' if opens_arithmetic(chars) => {
-                    chars.nth(1);
-                    skip_arithmetic(chars)?;
-                }
-                '$' if chars.next_if_eq(&'(').is_some() => {
-                    self.substitution(lex(chars, true)?)?;
-                    self.started = true;
+                '$' if chars.peek().copied().is_some_and(parameter) => {
+                    self.computed(true);
+                    self.word.push('$');
                 }
                 other => self.word.push(other),
             }
+        }
+    }
+
+    /// The rest of a `$'...'` string, whose opening has been read. Bash
+    /// reads its escapes, so a backslash keeps a quote from ending it.
+    fn ansi_c_quoted(&mut self, chars: &mut Chars<'_>) -> Option<()> {
+        self.computed(true);
+        self.word.push('$');
+        loop {
+            match chars.next()? {
+                '\'' => return Some(()),
+                '\\' => {
+                    self.word.push('\\');
+                    self.word.push(chars.next()?);
+                }
+                other => self.word.push(other),
+            }
+        }
+    }
+
+    /// A character of the word outside quotes, before `next`. A glob, a
+    /// brace list or a leading `~` is part of the word bash computes.
+    fn unquoted(&mut self, character: char, next: Option<char>) {
+        let computed = match character {
+            '*' | '?' => Some(false),
+            '[' => {
+                self.brackets += 1;
+                None
+            }
+            ']' if self.brackets > 0 => Some(false),
+            '{' => {
+                self.braces += 1;
+                None
+            }
+            '}' => {
+                self.braces = self.braces.saturating_sub(1);
+                None
+            }
+            ',' if self.braces > 0 => Some(false),
+            '.' if self.braces > 0 && next == Some('.') => Some(false),
+            '~' if !self.started => Some(true),
+            _ => None,
+        };
+        if let Some(whole) = computed {
+            self.computed(whole);
+        }
+        self.started = true;
+        self.word.push(character);
+    }
+
+    /// An expansion that reads a value as arithmetic or as a name, where a
+    /// subscript in that value runs commands: what runs cannot be told.
+    fn evaluates(&mut self, names: bool) {
+        if names {
+            self.tokens.push(Token::Opaque);
         }
     }
 
@@ -463,7 +592,10 @@ impl Lexer {
     /// a word of the command; a heredoc's body is what the command reads.
     fn redirection(&mut self, first: char, chars: &mut Chars<'_>) -> Option<()> {
         // `2>` names a descriptor, not a word of the command.
-        if self.started && self.word.chars().all(|digit| digit.is_ascii_digit()) {
+        if self.started
+            && self.printed.is_none()
+            && self.word.chars().all(|digit| digit.is_ascii_digit())
+        {
             self.word.clear();
             self.started = false;
         } else {
@@ -482,6 +614,11 @@ impl Lexer {
         }
         while matches!(chars.peek(), Some('<' | '>')) {
             chars.next();
+        }
+        if chars.peek() == Some(&'(') {
+            self.tokens.push(Token::Opaque);
+        } else if first == '<' {
+            self.tokens.push(Token::Input);
         }
         if chars.next_if_eq(&'&').is_some() {
             while chars
@@ -518,7 +655,7 @@ impl Lexer {
     fn read_heredocs(&mut self, chars: &mut Chars<'_>) -> Option<()> {
         for heredoc in std::mem::take(&mut self.heredocs) {
             self.tokens[heredoc.at] = Token::Stdin {
-                body: heredoc_body(chars, &heredoc)?,
+                body: heredoc_body(chars, &heredoc, self.in_substitution)?,
                 expands: !heredoc.quoted,
             };
         }
@@ -526,81 +663,333 @@ impl Lexer {
     }
 
     fn finish(&mut self) {
+        self.braces = 0;
+        self.brackets = 0;
         if self.started {
             let word = std::mem::take(&mut self.word);
+            let printed = self.printed.take();
             if self.redirect_target {
                 self.redirect_target = false;
             } else {
-                self.tokens.push(Token::Word(word));
+                self.tokens.push(match printed {
+                    Some(Printing { splits, as_text }) => Token::Printed {
+                        word,
+                        splits,
+                        as_text,
+                    },
+                    None => Token::Word(word),
+                });
             }
             self.started = false;
         }
     }
 
+    /// The end of a pipeline, followed by the commands of its substitutions.
     fn boundary(&mut self) {
         self.finish();
         self.tokens.push(Token::Break);
+        self.tokens.append(&mut self.substituted);
+    }
+
+    /// The end of the text being read, or of the substitution it is.
+    fn end(&mut self) {
+        self.finish();
+        if !self.substituted.is_empty() {
+            self.tokens.push(Token::Break);
+            self.tokens.append(&mut self.substituted);
+        }
     }
 
     /// The commands inside a substitution run too, so they are read as
-    /// commands of their own, between boundaries. What it prints becomes part
-    /// of a word of the command around it, so a heredoc inside it is data
-    /// only when that command keeps what it is given as data. Otherwise the
-    /// heredoc is read as commands here (ADR 0188).
-    fn substitution(&mut self, inner: Vec<Token>) -> Option<()> {
+    /// commands of their own once the command around them ends. What the
+    /// substitution prints becomes part of the word being read. A heredoc in
+    /// it is data only as the text of a gh or git message, title or body,
+    /// which is all that word can be there. Anywhere else, what it prints may
+    /// be words a command runs, so the heredoc is read as commands here
+    /// (ADR 0188).
+    fn substitution(&mut self, inner: Vec<Token>, quoted: bool) -> Option<()> {
+        let text = self.computed(quoted);
+        for token in inner {
+            match token {
+                Token::Stdin { body, .. } if !text => {
+                    self.substituted.push(Token::Break);
+                    self.substituted.extend(tokens(&body)?);
+                    self.substituted.push(Token::Break);
+                }
+                other => self.substituted.push(other),
+            }
+        }
+        self.substituted.push(Token::Break);
+        Some(())
+    }
+
+    /// Bash computes the part of the word now read as it runs the command:
+    /// what a substitution prints, a variable, `~`, `$'...'` or `$"..."`, a
+    /// brace list or a glob. It may be any word, so for gh and git it counts
+    /// only as a text flag's value (`holds_text`), and only when it stays
+    /// `whole`, one word. Returns whether it is that value (ADR 0188).
+    fn computed(&mut self, whole: bool) -> bool {
+        let slot = self.in_text_flag();
+        let before = self.printed.unwrap_or(Printing {
+            splits: false,
+            as_text: true,
+        });
+        self.started = true;
+        self.printed = Some(Printing {
+            splits: before.splits || !whole,
+            as_text: before.as_text && slot,
+        });
+        whole && slot
+    }
+
+    /// Whether the word being read, as written up to the part now read, is
+    /// the value of a gh or git flag whose value is only text.
+    fn in_text_flag(&self) -> bool {
         let start = self
             .tokens
             .iter()
             .rposition(|token| matches!(token, Token::Break | Token::Pipe))
             .map_or(0, |at| at + 1);
-        let around: Vec<String> = self.tokens[start..]
+        let command: Vec<(&str, Option<bool>)> = self.tokens[start..]
             .iter()
-            .filter_map(|token| match token {
-                Token::Word(word) => Some(word.clone()),
-                _ => None,
-            })
+            .filter_map(Token::said)
             .collect();
-        let kept = keeps_its_input(&around);
-        self.boundary();
-        for token in inner {
-            match token {
-                Token::Stdin { body, .. } if !kept => {
-                    self.tokens.push(Token::Break);
-                    self.tokens.extend(tokens(&body)?);
-                    self.tokens.push(Token::Break);
-                }
-                other => self.tokens.push(other),
-            }
-        }
-        self.tokens.push(Token::Break);
-        Some(())
+        holds_text(&command, &self.word)
     }
 }
 
-/// After `$`, whether `((` follows: arithmetic, not a substitution.
-fn opens_arithmetic(chars: &Chars<'_>) -> bool {
-    let mut ahead = chars.clone();
-    ahead.next() == Some('(') && ahead.next() == Some('(')
+/// The flags of gh and git whose value is a message, title or body.
+const GH_TEXT_FLAGS: &[&str] = &[
+    "--body",
+    "-b",
+    "--title",
+    "-t",
+    "--notes",
+    "-n",
+    "--subject",
+];
+const GIT_TEXT_FLAGS: &[&str] = &["-m", "--message"];
+/// The gh commands those flags give a pull request's, issue's or release's
+/// text to, and the git commands that take `-m` as a message.
+const GH_TEXT_COMMANDS: &[(&str, &str)] = &[
+    ("pr", "create"),
+    ("pr", "edit"),
+    ("pr", "comment"),
+    ("pr", "review"),
+    ("pr", "merge"),
+    ("issue", "create"),
+    ("issue", "edit"),
+    ("issue", "comment"),
+    ("release", "create"),
+    ("release", "edit"),
+];
+const GIT_TEXT_COMMANDS: &[&str] = &["commit", "tag", "notes"];
+/// Flags of those commands that take no value in any of them, so the word
+/// after one is read as a flag. gh's `-a`, `-m`, `-p` and `-r` are not here:
+/// each takes a value in `pr create` and none in another of these commands.
+const GH_SWITCHES: &[&str] = &[
+    "--draft",
+    "-d",
+    "--fill",
+    "-f",
+    "--web",
+    "-w",
+    "--dry-run",
+    "--prerelease",
+    "--latest",
+    "--generate-notes",
+    "--verify-tag",
+    "--edit-last",
+    "--approve",
+    "--request-changes",
+    "--comment",
+    "--squash",
+    "--rebase",
+    "--merge",
+    "--delete-branch",
+    "--admin",
+    "--auto",
+];
+const GIT_SWITCHES: &[&str] = &[
+    "-a",
+    "--all",
+    "--amend",
+    "--allow-empty",
+    "--no-verify",
+    "-s",
+    "--signoff",
+    "-q",
+    "--quiet",
+    "-f",
+    "--force",
+    "--no-edit",
+];
+
+/// A gh or git command that takes text: where its flags begin, its text
+/// flags, and its flags that take no value.
+struct TextCommand {
+    start: usize,
+    flags: &'static [&'static str],
+    switches: &'static [&'static str],
 }
 
-/// Arithmetic up to the `))` that closes the `((` just read. Nothing in it
-/// runs, unless it holds a substitution, which is not read: `None`.
-fn skip_arithmetic(chars: &mut Chars<'_>) -> Option<()> {
-    let mut depth = 2_usize;
+/// The command a gh or git line runs, when it is one that takes text and is
+/// named as written. Any other command may take its flags' values in ways
+/// the gate does not know, so none of its flags holds only text.
+fn text_command(command: &[(&str, Option<bool>)]) -> Option<TextCommand> {
+    let Some((&(program, None), arguments)) = command.split_first() else {
+        return None;
+    };
+    match system_name(program)? {
+        "gh" => match arguments {
+            [(noun, None), (verb, None), ..] if GH_TEXT_COMMANDS.contains(&(*noun, *verb)) => {
+                Some(TextCommand {
+                    start: 3,
+                    flags: GH_TEXT_FLAGS,
+                    switches: GH_SWITCHES,
+                })
+            }
+            _ => None,
+        },
+        "git" => git_command(arguments)
+            .filter(|&at| GIT_TEXT_COMMANDS.contains(&arguments[at].0))
+            .map(|at| TextCommand {
+                start: at + 2,
+                flags: GIT_TEXT_FLAGS,
+                switches: GIT_SWITCHES,
+            }),
+        _ => None,
+    }
+}
+
+/// Whether a word being read, `word` as written so far, is the value of a
+/// text flag of the command whose words before it are `command`: in gh a
+/// pull request's, issue's or release's text, and in git a commit's, tag's
+/// or note's message. The flag counts only where gh or git reads it as a
+/// flag, not as the value of the flag before it, as `-b` is after
+/// `--template` (ADR 0188).
+fn holds_text(command: &[(&str, Option<bool>)], word: &str) -> bool {
+    let Some(text) = text_command(command) else {
+        return false;
+    };
+    let at = match word.split_once('=') {
+        Some((flag, _)) if flag.starts_with("--") => {
+            text.flags.contains(&flag).then_some(command.len())
+        }
+        _ => match command.split_last() {
+            Some((&(flag, None), _)) if text.flags.contains(&flag) => Some(command.len() - 1),
+            _ => None,
+        },
+    };
+    at.and_then(|at| command.get(text.start..at))
+        .is_some_and(|before| read_as_flag(before, text.switches))
+}
+
+/// Whether gh or git reads the word after `before`, the words from its
+/// command's first flag on, as a flag. Nothing before it may end the flags
+/// or be a computed word that can be any word, and the word just before it
+/// must take no value: a word that is not a flag, a flag with its value
+/// attached, a flag that takes none, or a text flag's computed value.
+fn read_as_flag(before: &[(&str, Option<bool>)], switches: &[&str]) -> bool {
+    before.iter().all(|&(word, printed)| match printed {
+        None => !matches!(word, "--" | "--end-of-options"),
+        Some(text) => text,
+    }) && before.last().is_none_or(|&(word, printed)| match printed {
+        Some(_) => true,
+        None => {
+            !word.starts_with('-')
+                || (word.starts_with("--") && word.contains('='))
+                || switches.contains(&word)
+        }
+    })
+}
+
+/// A program's name when the word runs the system's own: the bare name, or
+/// the name under `/bin`, `/usr/bin` or `/usr/local/bin`.
+fn system_name(word: &str) -> Option<&str> {
+    let name = ["/usr/local/bin/", "/usr/bin/", "/bin/"]
+        .iter()
+        .find_map(|folder| word.strip_prefix(folder))
+        .unwrap_or(word);
+    (!name.is_empty() && !name.contains('/')).then_some(name)
+}
+
+/// What bash reads at `((` or `$((`.
+enum Parenthesis {
+    /// Arithmetic: how many characters from the second `(` through the
+    /// closing `))`, and whether it `names` a variable. Bash reads a
+    /// variable's value as arithmetic in turn, and a subscript there runs
+    /// commands.
+    Arithmetic { length: usize, names: bool },
+    /// A subshell, or a substitution's commands, because the `)` that closes
+    /// the second `(` is not followed at once by another.
+    Commands,
+}
+
+/// At the second `(` of `((` or `$((`: what bash reads from there. `None`
+/// when that cannot be told: a quote, an escape, a backquote or a
+/// substitution inside, or no `)` at all.
+fn arithmetic(chars: &Chars<'_>) -> Option<Parenthesis> {
+    let mut ahead = chars.clone();
+    let mut depth = 0_usize;
+    let mut length = 0_usize;
+    let mut names = false;
     loop {
-        match chars.next()? {
+        length += 1;
+        match ahead.next()? {
             '(' => depth += 1,
             ')' => {
-                depth -= 1;
+                depth = depth.checked_sub(1)?;
                 if depth == 0 {
-                    return Some(());
+                    return Some(if ahead.next() == Some(')') {
+                        Parenthesis::Arithmetic {
+                            length: length + 1,
+                            names,
+                        }
+                    } else {
+                        Parenthesis::Commands
+                    });
                 }
             }
-            '`' => return None,
-            '$' if chars.peek() == Some(&'(') && !opens_arithmetic(chars) => return None,
+            '\'' | '"' | '\\' | '`' => return None,
+            '$' if ahead.peek() == Some(&'(') => return None,
+            name if name == '$' || name == '_' || name.is_ascii_alphabetic() => names = true,
             _ => {}
         }
     }
+}
+
+/// What `$(` opens.
+enum Dollar {
+    /// Arithmetic, passed over. It `names` a variable, whose value bash
+    /// reads as arithmetic too.
+    Arithmetic { names: bool },
+    /// A substitution's commands, read to the `)` that closes it.
+    Substitution(Vec<Token>),
+}
+
+fn dollar_parenthesis(chars: &mut Chars<'_>) -> Option<Dollar> {
+    if chars.peek() == Some(&'(')
+        && let Parenthesis::Arithmetic { length, names } = arithmetic(chars)?
+    {
+        chars.nth(length - 1);
+        return Some(Dollar::Arithmetic { names });
+    }
+    lex(chars, true).map(Dollar::Substitution)
+}
+
+/// Whether `$` and then `character` expand a parameter: a name, a digit, or
+/// one of bash's own, such as `$_`, the last word of the command before.
+fn parameter(character: char) -> bool {
+    character.is_ascii_alphanumeric()
+        || matches!(character, '_' | '@' | '*' | '#' | '?' | '$' | '!' | '-')
+}
+
+/// After `$`: `${...}` or `$[...]`. Either can read a value as a name or as
+/// arithmetic (`${!x}`, `${x@P}`, `${a[i]}`, `${x:i}`, `$[x]`), where a
+/// subscript runs commands, so neither is read.
+fn evaluates_a_value(chars: &Chars<'_>) -> bool {
+    matches!(chars.clone().next(), Some('{' | '['))
 }
 
 fn take_backquoted(chars: &mut Chars<'_>) -> Option<String> {
@@ -614,9 +1003,12 @@ fn take_backquoted(chars: &mut Chars<'_>) -> Option<String> {
     }
 }
 
-/// The word after `<<` or `<<-`, without its quotes, and whether any part of
-/// it was quoted. `None` when there is no word.
+/// The word after `<<` or `<<-`, as bash takes its quotes off, and whether
+/// any part of it was quoted. `None` when there is no word, or when bash
+/// would read it in a way this does not: `$'...'`, `$"..."`, a `$(`, `${`
+/// or `$[`, or a backquote.
 fn heredoc_delimiter(chars: &mut Chars<'_>) -> Option<(String, bool)> {
+    let expands = |chars: &Chars<'_>| matches!(chars.clone().next(), Some('(' | '{' | '['));
     while matches!(chars.peek(), Some(' ' | '\t')) {
         chars.next();
     }
@@ -631,20 +1023,46 @@ fn heredoc_delimiter(chars: &mut Chars<'_>) -> Option<(String, bool)> {
         }
         chars.next();
         match next {
-            '\'' | '"' => {
+            '\'' => {
                 quoted = true;
                 loop {
                     match chars.next()? {
-                        closing if closing == next => break,
-                        '\\' if next == '"' => word.push(chars.next()?),
+                        '\'' => break,
                         other => word.push(other),
                     }
                 }
             }
-            '\\' => {
+            // In double quotes a backslash is kept unless it escapes `$`, a
+            // backquote, `"`, a backslash or a newline.
+            '"' => {
                 quoted = true;
-                word.push(chars.next()?);
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '\\' => match chars.next()? {
+                            '\n' => {}
+                            escaped @ ('$' | '`' | '"' | '\\') => word.push(escaped),
+                            other => {
+                                word.push('\\');
+                                word.push(other);
+                            }
+                        },
+                        '`' => return None,
+                        '$' if expands(chars) => return None,
+                        other => word.push(other),
+                    }
+                }
             }
+            // A backslash and newline join the lines, and quote nothing.
+            '\\' => match chars.next()? {
+                '\n' => {}
+                escaped => {
+                    quoted = true;
+                    word.push(escaped);
+                }
+            },
+            '`' => return None,
+            '$' if matches!(chars.peek(), Some('\'' | '"')) || expands(chars) => return None,
             other => word.push(other),
         }
     }
@@ -652,17 +1070,28 @@ fn heredoc_delimiter(chars: &mut Chars<'_>) -> Option<(String, bool)> {
 }
 
 /// The lines up to the one that is only the delimiter, which is read and
-/// left out. `None` when the text ends first.
-fn heredoc_body(chars: &mut Chars<'_>, heredoc: &Heredoc) -> Option<String> {
+/// left out. In an unquoted body a backslash and newline join two lines, as
+/// bash reads it, before the line is compared and in the body returned.
+/// `None` when the text ends first, or, inside a `$(`, at a line that starts
+/// with the delimiter and goes on, where bash 5.2 ends the body too.
+fn heredoc_body(chars: &mut Chars<'_>, heredoc: &Heredoc, in_substitution: bool) -> Option<String> {
     let mut body = String::new();
     loop {
         chars.peek()?;
         let mut line = String::new();
-        for character in chars.by_ref() {
-            if character == '\n' {
-                break;
+        while let Some(character) = chars.next() {
+            match character {
+                '\n' => break,
+                '\\' if !heredoc.quoted => match chars.next() {
+                    Some('\n') => {}
+                    Some(escaped) => {
+                        line.push('\\');
+                        line.push(escaped);
+                    }
+                    None => line.push('\\'),
+                },
+                other => line.push(other),
             }
-            line.push(character);
         }
         let line = if heredoc.strip_tabs {
             line.trim_start_matches('\t')
@@ -671,6 +1100,9 @@ fn heredoc_body(chars: &mut Chars<'_>, heredoc: &Heredoc) -> Option<String> {
         };
         if line == heredoc.delimiter {
             return Some(body);
+        }
+        if in_substitution && line.starts_with(heredoc.delimiter.as_str()) {
+            return None;
         }
         body.push_str(line);
         body.push('\n');
@@ -691,14 +1123,15 @@ fn expansions(body: &str) -> Option<Vec<Token>> {
                 found.extend(tokens(&take_backquoted(&mut chars)?)?);
                 found.push(Token::Break);
             }
-            '$' if opens_arithmetic(&chars) => {
-                chars.nth(1);
-                skip_arithmetic(&mut chars)?;
-            }
-            '$' if chars.next_if_eq(&'(').is_some() => {
-                found.extend(lex(&mut chars, true)?);
-                found.push(Token::Break);
-            }
+            '$' if chars.next_if_eq(&'(').is_some() => match dollar_parenthesis(&mut chars)? {
+                Dollar::Substitution(inner) => {
+                    found.extend(inner);
+                    found.push(Token::Break);
+                }
+                Dollar::Arithmetic { names: true } => found.push(Token::Opaque),
+                Dollar::Arithmetic { names: false } => {}
+            },
+            '$' if evaluates_a_value(&chars) => found.push(Token::Opaque),
             _ => {}
         }
     }
@@ -707,9 +1140,15 @@ fn expansions(body: &str) -> Option<Vec<Token>> {
 
 /// Every merge `command` makes, and the folder each runs in.
 fn merges_in(command: &str, cwd: Option<&Path>, depth: usize) -> Parsed {
-    let mentions_merge = command.to_ascii_lowercase().contains("merge");
-    match tokens(command).filter(|_| depth <= MAX_NESTING) {
-        Some(tokens) => merges_among(&tokens, cwd, depth),
+    merges_within(command, cwd, depth, true)
+}
+
+/// The merges in text a command runs or reads. `plain` says that nothing
+/// around the text can run what a heredoc in it gives a command.
+fn merges_within(text: &str, cwd: Option<&Path>, depth: usize, plain: bool) -> Parsed {
+    let mentions_merge = text.to_ascii_lowercase().contains("merge");
+    match tokens(text).filter(|_| depth <= MAX_NESTING) {
+        Some(tokens) => merges_among(&tokens, cwd, depth, plain),
         None if mentions_merge => Parsed::Unclear,
         None => Parsed::Merges(Vec::new()),
     }
@@ -718,10 +1157,11 @@ fn merges_in(command: &str, cwd: Option<&Path>, depth: usize) -> Parsed {
 /// The merges among one command's tokens.
 ///
 /// A heredoc's body is read as commands, as a file written from it may be
-/// run later. Only when every program in its pipeline keeps what it reads as
-/// data is a body that cannot be read as commands left as data, with what an
-/// unquoted one expands still read (ADR 0188).
-fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize) -> Parsed {
+/// run later. A body that cannot be read as commands is left as data only
+/// when no command here, nor any around it, can run what it is given, with
+/// what an unquoted one expands still read (ADR 0188).
+fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool) -> Parsed {
+    let data = plain && runs_nothing_it_is_given(tokens);
     let mut folder = cwd.map(Path::to_path_buf);
     let mut merges = Vec::new();
     for pipeline in tokens.split(|token| *token == Token::Break) {
@@ -729,9 +1169,6 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize) -> Parsed {
             .split(|token| *token == Token::Pipe)
             .map(Simple::from)
             .collect();
-        let data = commands
-            .iter()
-            .all(|command| keeps_its_input(&command.words));
         for (place, command) in commands.iter().enumerate() {
             // What it reads: its own heredocs, or those the commands before
             // it pass on down the pipe.
@@ -755,10 +1192,10 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize) -> Parsed {
                 Step::Other => {}
             }
             for &(body, expands) in &command.input {
-                let found = match merges_in(body, folder.as_deref(), depth + 1) {
+                let found = match merges_within(body, folder.as_deref(), depth + 1, data) {
                     Parsed::Unclear if data && expands => expansions(body)
                         .map_or(Parsed::Unclear, |run| {
-                            merges_among(&run, folder.as_deref(), depth + 1)
+                            merges_among(&run, folder.as_deref(), depth + 1, data)
                         }),
                     Parsed::Unclear if data => Parsed::Merges(Vec::new()),
                     found => found,
@@ -769,7 +1206,7 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize) -> Parsed {
                 }
             }
             for text in read {
-                match merges_in(&text, folder.as_deref(), depth + 1) {
+                match merges_within(&text, folder.as_deref(), depth + 1, data) {
                     Parsed::Merges(inner) => merges.extend(inner),
                     Parsed::Unclear => return Parsed::Unclear,
                 }
@@ -794,24 +1231,158 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
         };
         for token in tokens {
             match token {
-                Token::Word(word) => command.words.push(word.clone()),
+                Token::Word(word) | Token::Printed { word, .. } => command.words.push(word.clone()),
                 Token::Stdin { body, expands } => command.input.push((body, *expands)),
-                Token::Break | Token::Pipe => {}
+                Token::Opaque | Token::Break | Token::Pipe | Token::Input => {}
             }
         }
         command
     }
 }
 
-/// Programs that keep what they read on standard input as data: they print,
-/// store or send it, and never run it.
-const KEEPS_INPUT: &[&str] = &["cat", "tee", "gh", "git"];
+/// Whether no command here can run what it is given or a file it is named:
+/// no process substitution or value read as a name, and every command one
+/// of a few that print, store or send what they read. That includes the
+/// commands an unquoted heredoc runs as it is read (ADR 0188).
+fn runs_nothing_it_is_given(tokens: &[Token]) -> bool {
+    let mut piped = false;
+    !tokens.contains(&Token::Opaque)
+        && tokens
+            .split_inclusive(|token| matches!(token, Token::Break | Token::Pipe))
+            .all(|command| {
+                let fed = piped
+                    || command
+                        .iter()
+                        .any(|token| matches!(token, Token::Stdin { .. } | Token::Input));
+                piped = command.last() == Some(&Token::Pipe);
+                inert(command, fed)
+            })
+        && tokens.iter().all(|token| match token {
+            Token::Stdin {
+                body,
+                expands: true,
+            } => expansions(body).is_some_and(|run| runs_nothing_it_is_given(&run)),
+            _ => true,
+        })
+}
 
-fn keeps_its_input(words: &[String]) -> bool {
-    program(words)
-        .first()
-        .map(|first| first.rsplit('/').next().unwrap_or(first))
-        .is_some_and(|name| KEEPS_INPUT.contains(&name))
+/// Programs that run nothing they read and no file they are named.
+const INERT: &[&str] = &[
+    "cat", "tee", "echo", "printf", "cd", "pwd", "true", "false", ":", "mkdir", "ls", "rm",
+];
+/// gh's commands that send what they are given as text or as a request.
+const GH_INERT: &[&str] = &[
+    "pr", "issue", "release", "gist", "api", "label", "search", "repo",
+];
+/// git's commands that store, send or show what they are given.
+const GIT_INERT: &[&str] = &[
+    "add",
+    "commit",
+    "push",
+    "status",
+    "diff",
+    "log",
+    "show",
+    "tag",
+    "notes",
+    "fetch",
+    "rev-parse",
+    "hash-object",
+    "branch",
+    "switch",
+    "checkout",
+];
+
+/// One simple command that runs nothing it is given: a program named as
+/// written, never through a wrapper, a path of its own or a word bash
+/// computes. `fed` is whether it reads standard input from a heredoc, a
+/// file or a pipe.
+///
+/// - `printf` counts without `-v`, which names a variable whose subscript
+///   runs commands, and with a first word as written.
+/// - gh and git count only with one of their own commands named as written,
+///   and a word bash computes only as the value of a text flag
+///   (`holds_text`), never splitting.
+/// - gh or git fed counts only when it reads all of that input as text or
+///   a request first, so an editor it opens reads none of it.
+/// - gh counts without `--`, after which it hands words to git.
+/// - git counts without a flag that names a program for it to run.
+fn inert(command: &[Token], fed: bool) -> bool {
+    let words: Vec<(&str, Option<bool>)> = command.iter().filter_map(Token::said).collect();
+    let Some((&(first, None), arguments)) = words.split_first() else {
+        return words.is_empty();
+    };
+    let text = arguments.iter().all(|&(_, printed)| printed != Some(false));
+    match system_name(first) {
+        Some("printf") => !matches!(
+            arguments.first(),
+            Some(&(word, printed)) if printed.is_some() || word.starts_with("-v")
+        ),
+        Some(name) if INERT.contains(&name) => true,
+        Some("gh") => {
+            let plain: Vec<String> = arguments.iter().map(|&(word, _)| word.to_owned()).collect();
+            text && !arguments.contains(&("--", None))
+                && (!fed || gh_line(&plain).reads_all_input())
+                && matches!(arguments.first(), Some(&(noun, None)) if GH_INERT.contains(&noun))
+        }
+        Some("git") => {
+            text && !arguments
+                .iter()
+                .any(|&(word, _)| starts_a_long_flag(word, GIT_PROGRAM_FLAGS))
+                && (!fed || git_reads_all_input(arguments))
+                && git_command(arguments).is_some_and(|at| GIT_INERT.contains(&arguments[at].0))
+        }
+        _ => false,
+    }
+}
+
+/// git's long flags that name a program for it to run.
+const GIT_PROGRAM_FLAGS: &[&str] = &["receive-pack", "exec", "upload-pack"];
+/// git's long flags that read standard input before its message.
+const GIT_FIRST_READERS: &[&str] = &["patch", "interactive"];
+
+/// Whether `word` is a long flag git may read as one of these. git takes
+/// any start of a long flag's name that only one of its flags begins with,
+/// so every start counts.
+fn starts_a_long_flag(word: &str, flags: &[&str]) -> bool {
+    let Some(flag) = word.strip_prefix("--") else {
+        return false;
+    };
+    let name = flag.split_once('=').map_or(flag, |(name, _)| name);
+    !name.is_empty() && flags.iter().any(|long| long.starts_with(name))
+}
+
+/// Whether git reads all of its standard input as the message, `-F -`,
+/// before its hooks or an editor run, so they read none of it. Its
+/// `--patch` and `--interactive`, and a short `-p`, read it first.
+fn git_reads_all_input(arguments: &[(&str, Option<bool>)]) -> bool {
+    let message = arguments.contains(&("-F-", None))
+        || arguments.contains(&("--file=-", None))
+        || arguments
+            .windows(2)
+            .any(|pair| matches!(pair, [("-F" | "--file", None), ("-", None)]));
+    message
+        && !arguments.iter().any(|&(word, _)| {
+            starts_a_long_flag(word, GIT_FIRST_READERS)
+                || (!word.starts_with("--")
+                    && word.len() > 1
+                    && word.starts_with('-')
+                    && word.contains('p'))
+        })
+}
+
+/// Where git's command is among its arguments, after its `-C <folder>` and
+/// `--no-pager`, when it is named as written.
+fn git_command(arguments: &[(&str, Option<bool>)]) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        match &arguments[at..] {
+            [("--no-pager", None), ..] => at += 1,
+            [("-C", None), _, ..] => at += 2,
+            [(_, None), ..] => return Some(at),
+            _ => return None,
+        }
+    }
 }
 
 enum Step {
@@ -954,6 +1525,31 @@ struct GhLine {
     disables_auto_merge: bool,
     /// `--input`: the file the request body is read from.
     input: Option<String>,
+    /// `--body-file`: the file a pull request's or issue's text is read from.
+    body_file: Option<String>,
+}
+
+impl GhLine {
+    /// Whether gh sends its standard input as the request: `--input -`, or
+    /// a field's `@-`.
+    fn sends_input(&self) -> bool {
+        self.input.as_deref().is_some_and(is_standard_input)
+            || self.fields.iter().any(|field| {
+                field
+                    .split_once('=')
+                    .and_then(|(_, value)| value.strip_prefix('@'))
+                    .is_some_and(is_standard_input)
+            })
+    }
+
+    /// Whether gh reads all of its standard input as text or a request
+    /// before it does anything else, so nothing it opens can read any of it:
+    /// the request, `--body-file -`, or `-F -`.
+    fn reads_all_input(&self) -> bool {
+        self.sends_input()
+            || self.body_file.as_deref().is_some_and(is_standard_input)
+            || self.fields.iter().any(|field| is_standard_input(field))
+    }
 }
 
 fn gh_line(arguments: &[String]) -> GhLine {
@@ -993,6 +1589,7 @@ fn gh_line(arguments: &[String]) -> GhLine {
             "-f" | "-F" | "--field" | "--raw-field" => line.fields.push(value),
             "--match-head-commit" => line.head = Some(value),
             "--input" => line.input = Some(value),
+            "--body-file" => line.body_file = Some(value),
             _ => {}
         }
     }
@@ -1003,14 +1600,7 @@ fn gh_line(arguments: &[String]) -> GhLine {
 /// when told to read it: `--input -`, or a field's `@-`.
 fn gh(arguments: &[String], input: &[String]) -> Option<Merge> {
     let line = gh_line(arguments);
-    let reads_input = line.input.as_deref().is_some_and(is_standard_input)
-        || line.fields.iter().any(|field| {
-            field
-                .split_once('=')
-                .and_then(|(_, value)| value.strip_prefix('@'))
-                .is_some_and(is_standard_input)
-        });
-    let body = if reads_input { input } else { &[] };
+    let body = if line.sends_input() { input } else { &[] };
     let positional = |index: usize| line.positionals.get(index).map(String::as_str);
     match (positional(0), positional(1)) {
         (Some("pr"), Some("merge")) if !line.disables_auto_merge => Some(Merge {
@@ -1296,8 +1886,18 @@ mod tests {
             .into_iter()
             .map(|token| match token {
                 Token::Word(word) => word,
+                Token::Printed {
+                    word,
+                    splits: false,
+                    ..
+                } => format!("<printed:{word}>"),
+                Token::Printed {
+                    word, splits: true, ..
+                } => format!("<split:{word}>"),
+                Token::Opaque => "<opaque>".to_owned(),
                 Token::Break => "<break>".to_owned(),
                 Token::Pipe => "<pipe>".to_owned(),
+                Token::Input => "<input>".to_owned(),
                 Token::Stdin { body, .. } => format!("<stdin:{body}>"),
             })
             .collect()
@@ -1325,10 +1925,33 @@ mod tests {
                 "merge", "2", "<pipe>", "cat"
             ]
         );
+        // A substitution's commands follow the command whose word holds what
+        // it prints, so that command keeps all its words.
         assert_eq!(
-            words(r#"echo "x $(gh pr merge 3) y""#),
+            words(r#"echo "x $(gh pr merge 3) y" z"#),
             [
-                "echo", "x ", "<break>", "gh", "pr", "merge", "3", "<break>", " y"
+                "echo",
+                "<printed:x  y>",
+                "z",
+                "<break>",
+                "gh",
+                "pr",
+                "merge",
+                "3",
+                "<break>"
+            ]
+        );
+        assert_eq!(
+            words("a $(b)c | d; e"),
+            [
+                "a",
+                "<split:c>",
+                "<pipe>",
+                "d",
+                "<break>",
+                "b",
+                "<break>",
+                "e"
             ]
         );
         assert_eq!(words("gh pr \\\nmerge 4"), ["gh", "pr", "merge", "4"]);
@@ -1375,13 +1998,11 @@ mod tests {
                 "pr",
                 "create",
                 "--body",
-                "",
+                "<printed:>",
                 "<break>",
                 "cat",
                 "<stdin:1) it's\n>",
                 "<break>",
-                "<break>",
-                "",
                 "<break>",
                 "y"
             ]
@@ -1390,16 +2011,52 @@ mod tests {
         assert_eq!(
             words("eval \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\""),
             [
-                "eval", "", "<break>", "cat", "<break>", "gh", "pr", "merge", "5", "<break>",
-                "<break>", "<break>", "<break>", ""
+                "eval",
+                "<printed:>",
+                "<break>",
+                "cat",
+                "<break>",
+                "gh",
+                "pr",
+                "merge",
+                "5",
+                "<break>",
+                "<break>",
+                "<break>",
+                "<break>"
             ]
         );
         assert_eq!(tokens("x=\"$(cat <<'BODY'\nit's\nBODY\n)\""), None);
+        // A gh flag that is not a text flag does not keep its value as text.
+        assert!(
+            !words("gh api -X PUT \"$(cat <<'B'\nx\nB\n)\"").contains(&"<stdin:x\n>".to_owned())
+        );
+        assert!(
+            words("gh pr create --body \"$(cat <<'B'\nx\nB\n)\"")
+                .contains(&"<stdin:x\n>".to_owned())
+        );
+        // Only gh and git are known to keep a flag's value as text.
+        assert_eq!(
+            words("echo -m \"$(cat <<'B'\nx\nB\n)\""),
+            [
+                "echo",
+                "-m",
+                "<printed:>",
+                "<break>",
+                "cat",
+                "<break>",
+                "x",
+                "<break>",
+                "<break>",
+                "<break>",
+                "<break>"
+            ]
+        );
         // `<<` in arithmetic is a shift.
         assert_eq!(
             words("echo $((1<<2)) \"$((3<<1))\" x; (( y <<= 1 )) && z"),
             [
-                "echo", "", "", "x", "<break>", "<break>", "<break>", "<break>", "z"
+                "echo", "", "", "x", "<break>", "<break>", "<opaque>", "<break>", "<break>", "z"
             ]
         );
         assert_eq!(tokens("echo $(( $(gh pr merge 5) ))"), None);
@@ -1535,6 +2192,11 @@ mod tests {
     fn a_heredoc_that_cannot_be_read_is_data_only_where_nothing_may_run_it() {
         for data in OPENS_A_PULL_REQUEST.into_iter().chain([
             "git commit -F - <<'EOF'\nDon't merge yet.\nEOF",
+            "git commit --file=- <<'EOF'\nDon't merge yet.\nEOF",
+            "git tag -a v1 -F- <<'EOF'\nIt's not merged.\nEOF",
+            "cat <<'EOF' | git commit -F -\nDon't merge yet.\nEOF",
+            "gh pr comment 5 --body-file - <<'EOF'\nIt's not a merge.\nEOF",
+            "gh issue comment 5 -F - <<'EOF'\nIt's not a merge.\nEOF",
             "cat > note.txt <<-'EOF'\n\tIt's not a merge.\n\tEOF\ngh pr view 3",
             "cat <<'EOF' | tee -a log | /usr/bin/cat\nIt's $(gh pr merge 5), unexpanded.\nEOF",
             "gh pr create --body-file - <<'EOF'\nThe merge settings move.\nEOF",
@@ -1613,6 +2275,435 @@ mod tests {
                 merges_in(unclear, Some(Path::new("/srv")), 0),
                 Parsed::Unclear,
                 "{unclear}"
+            );
+        }
+    }
+
+    /// Refused one way or another: a merge found, or a command not read.
+    fn refused(command: &str) -> bool {
+        merges_in(command, Some(Path::new("/srv")), 0) != Parsed::Merges(Vec::new())
+    }
+
+    /// `((` is arithmetic only where bash reads it so: the parenthesis that
+    /// closes the second `(` is followed at once by `)`. Otherwise bash runs
+    /// a subshell, and `$((` is a substitution holding one (ADR 0188).
+    #[test]
+    fn arithmetic_is_only_what_bash_reads_as_arithmetic() {
+        for subshell in [
+            "((gh pr merge 5) )",
+            "x=$((gh pr merge 5) )",
+            "echo \"$((gh pr merge 5) )\"",
+            "(((gh pr merge 5) ) )",
+            "cat <<EOF >/dev/null\n$((gh pr merge 5) )\nit's\nEOF",
+        ] {
+            assert_eq!(
+                only_merge(subshell, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{subshell}"
+            );
+        }
+        assert_eq!(
+            words("echo $(( (1) << 2 )) \"$((3<<(1)))\" x; (( (y) <<= 1 )) && z"),
+            [
+                "echo", "", "", "x", "<break>", "<break>", "<opaque>", "<break>", "<break>", "z"
+            ]
+        );
+        // A name in arithmetic, `${...}` and `$[...]` read a value as
+        // arithmetic or as a name, where a subscript runs commands.
+        for evaluates in [
+            "echo $((x))",
+            "echo \"$((_ + 1))\"",
+            "(( _ ))",
+            "echo $[_]",
+            "echo ${!x}",
+            "echo \"${x@P}\"",
+            "cat <<EOF\n$((_))\nEOF",
+            "cat <<EOF\n${!x}\nEOF",
+        ] {
+            let line = tokens(evaluates).expect(evaluates);
+            let opaque = line.contains(&Token::Opaque)
+                || line.iter().any(|token| match token {
+                    Token::Stdin {
+                        body,
+                        expands: true,
+                    } => expansions(body).is_some_and(|run| run.contains(&Token::Opaque)),
+                    _ => false,
+                });
+            assert!(opaque, "{evaluates}");
+        }
+        assert!(
+            !tokens("echo $x \"$y\" $((1 + 2)) '$((z))'")
+                .is_some_and(|line| line.contains(&Token::Opaque))
+        );
+        for unclear in [
+            "(( $((gh pr merge 5) ) ))",
+            "echo $(( \")\" )) gh pr merge 5",
+            "((gh pr merge 5 \"))\" ) )",
+        ] {
+            assert_eq!(
+                merges_in(unclear, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "a quote or a substitution in arithmetic is not read: {unclear}"
+            );
+        }
+    }
+
+    /// A heredoc ends at the line bash ends it at, so no line bash runs is
+    /// read as its body (ADR 0188).
+    #[test]
+    fn a_heredoc_ends_where_bash_ends_it() {
+        // In double quotes a backslash stays unless it escapes `$`, a
+        // backquote, `"`, a backslash or a newline.
+        assert_eq!(
+            words("cat <<\"E\\OF\"\nEOF\nE\\OF\nx"),
+            ["cat", "<stdin:EOF\n>", "<break>", "x"]
+        );
+        assert_eq!(
+            words("cat <<\"E\\$OF\"\nE$OF\nx"),
+            ["cat", "<stdin:>", "<break>", "x"]
+        );
+        assert_eq!(
+            words("cat <<\"E\\\nOF\"\nEOF\nx"),
+            ["cat", "<stdin:>", "<break>", "x"]
+        );
+        // Unquoted, a backslash and newline join two lines, before the line
+        // is compared with the delimiter and in the body bash passes on.
+        assert_eq!(
+            words("cat <<EOF\na\\\nb\nE\\\nOF\nx"),
+            ["cat", "<stdin:ab\n>", "<break>", "x"]
+        );
+        assert_eq!(
+            words("cat <<-EOF\n\tbody\n\tE\\\n\tOF\n\tEOF\nx"),
+            ["cat", "<stdin:body\nE\tOF\n>", "<break>", "x"]
+        );
+        // Quoted, or with the backslash itself escaped, nothing joins.
+        assert_eq!(
+            words("cat <<'EOF'\nE\\\nOF\nEOF\nx"),
+            ["cat", "<stdin:E\\\nOF\n>", "<break>", "x"]
+        );
+        assert_eq!(
+            words("cat <<EOF\nE\\\\\nOF\nEOF\nx"),
+            ["cat", "<stdin:E\\\\\nOF\n>", "<break>", "x"]
+        );
+        // `$'...'` and `$"..."` delimiters are not read, and inside a
+        // substitution bash also ends the heredoc at a line such as `EOF)`.
+        for unread in [
+            "cat <<$'EOF'\nx\nEOF",
+            "cat <<$\"EOF\"\nx\nEOF",
+            "cat <<$(echo E)OF\nx\n$\nEOF",
+            "cat <<\"${x}\"\nx\n${x}",
+            "cat <<`a`\nx\n`a`",
+            "x=$(cat <<'EOF'\nbody\nEOF)\necho y\nEOF\n)",
+            "x=$( (cat <<'EOF'\nbody\nEOF) )\nEOF\n)",
+        ] {
+            assert_eq!(tokens(unread), None, "{unread:?}");
+        }
+        assert_eq!(
+            only_merge("cat <<E\\\nOF\nit's $(gh pr merge 5)\nEOF", "/srv")
+                .pull_request
+                .as_deref(),
+            Some("5"),
+            "a backslash and newline in the delimiter quote nothing, so the body expands"
+        );
+        for hidden in [
+            "cat <<\"E\\OF\"\n'\nE\\OF\ngh pr merge 5\nEOF",
+            "cat <<$'EOF'\n'\nEOF\ngh pr merge 5\n$EOF",
+            "cat <<EOF\n'\nE\\\nOF\ngh pr merge 5\nEOF",
+            "gh pr create --body \"$(cat <<'EOF'\n'\nEOF)\"\ngh pr merge 5\nEOF\n)\"",
+        ] {
+            assert!(refused(hidden), "a line bash runs is not body: {hidden}");
+        }
+    }
+
+    /// A body that cannot be read as commands is data only in a line where
+    /// every command is one that runs nothing it is given and no file: cat,
+    /// tee, echo and a few like them, gh with its own nouns and git with its
+    /// own commands. A substitution's output is words of its command, so a
+    /// heredoc in one is data only as the text of a gh or git message, title
+    /// or body in double quotes (ADR 0188).
+    #[test]
+    fn a_body_that_cannot_be_read_is_data_only_in_a_line_that_runs_nothing() {
+        let hidden = "gh pr merge 5\nx=$(( $(echo 1) ))";
+        for runs in [
+            "cat <<'B' > >(bash)\ngh pr merge 5\n'\nB".to_owned(),
+            "cat <<'B' | tee >(bash)\ngh pr merge 5\n'\nB".to_owned(),
+            "exec > >(bash)\ncat <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            "( cat <<'B' ) | bash\ngh pr merge 5\n'\nB".to_owned(),
+            "{\ncat <<'B'\ngh pr merge 5\n'\nB\n} | bash".to_owned(),
+            "if true; then\ncat <<'B'\ngh pr merge 5\n'\nB\nfi | bash".to_owned(),
+            "f() {\ncat <<'B'\ngh pr merge 5\n'\nB\n}\nf | bash".to_owned(),
+            "cat <<'B' $(true) | bash\ngh pr merge 5\n'\nB".to_owned(),
+            "mkfifo f; bash < f & cat <<'B' > f\ngh pr merge 5\n'\nB".to_owned(),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\nbash m.sh"),
+            format!("gh alias set --shell mg - <<'B'\n{hidden}\nB\ngh mg"),
+            "gh codespace ssh <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            "git -c alias.x='!bash' x <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            "./cat <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            // `ghci` runs what it reads.
+            "gh$(echo ci) pr view <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            "\"gh$(echo ci)\" pr view <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            "\"$(echo bash)\" <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            // What splits can be any of gh's commands, such as `checkout`,
+            // which runs git and so its hooks.
+            "gh pr $(echo checkout) 5 <<'B'\ngh pr merge 5\n'\nB".to_owned(),
+            // bash runs the outer body, which writes a script run after it.
+            format!("bash <<'A'\ncat > m.sh <<'B'\n{hidden}\nB\nA\nbash m.sh"),
+            // An unquoted body runs its substitutions, here the script.
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ncat <<EOF\n$(bash m.sh)\nEOF"),
+            // Arithmetic reads a name's value as arithmetic in turn, and a
+            // subscript in it runs commands: `$_` holds the last word.
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\necho 'a[$(bash m.sh)]' >/dev/null; echo $((_))"
+            ),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\necho 'a[$(bash m.sh)]' >/dev/null; echo $[_]"),
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\necho 'a[$(bash m.sh)]' >/dev/null; echo \"${{!_}}\""
+            ),
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\necho 'a[$(bash m.sh)]' >/dev/null\ncat <<EOF\n$((_))\nEOF"
+            ),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\nprintf -v 'a[$(bash m.sh)]' x"),
+            // git runs an editor on the standard input it was given, and
+            // runs the program `--receive-pack` names.
+            "git commit <<'B'\n:!gh pr merge 5\n'\nB".to_owned(),
+            "cat <<'B' | git tag -a v1\n:!gh pr merge 5\n'\nB".to_owned(),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ngit push --receive-pack='bash m.sh' . HEAD"),
+            "gh pr comment 5 --editor <<'B'\n:!gh pr merge 5\n'\nB".to_owned(),
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngh repo clone o/r -- --upload-pack='bash m.sh'"
+            ),
+            // The same, given the body as a file on standard input, or a
+            // flag git takes by its start, or a printed flag or `--`.
+            "cat > m.txt <<'B'\n:!gh pr merge 5\n'\nB\ngit commit < m.txt".to_owned(),
+            "cat > m.txt <<'B'\n:!gh pr merge 5\n'\nB\ngh pr comment 5 --editor < m.txt".to_owned(),
+            "git commit -p -F - <<'B'\ne\n:!gh pr merge 5\n'\nB".to_owned(),
+            "git commit --inter -F - <<'B'\n:!gh pr merge 5\n'\nB".to_owned(),
+            // Each layer on its own, with nothing given on standard input:
+            // an unquoted substitution after a text flag splits into flags,
+            // a printed part of a name (`rpm`, read as `rm`), and gh's and
+            // git's commands that run what they are named.
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngh repo clone o/r --title $(echo -- -u 'bash m.sh')"
+            ),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\nr$(echo p)m --eval '%(bash m.sh)'"),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ngh alias set --shell mg 'bash m.sh' && gh mg"),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ngit -c alias.x='!bash m.sh' x"),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ngit push --rec='bash m.sh' . HEAD"),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ngit push \"$(echo --receive-pack=x)\" . HEAD"),
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngh repo clone o/r \"$(echo --)\" -u 'bash m.sh'"
+            ),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\nprintf \"$(echo '-va[$(bash m.sh)]')\" x"),
+            "gh $(cat <<'B'\npr merge 5 --subject '\nB\n)".to_owned(),
+            "gh api -X PUT \"$(cat <<'B'\nrepos/o/r/pulls/5/merge?x='\nB\n)\"".to_owned(),
+            "gh pr merge 5 --body $(cat <<'B'\nx --repo o/r '\nB\n)".to_owned(),
+        ] {
+            assert_eq!(
+                merges_in(&runs, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "{runs}"
+            );
+        }
+        for data in [
+            "cd /srv && git add a.md && git commit -m \"$(cat <<'EOF'\nfix: it isn't a merge\nEOF\n)\" && git push",
+            "gh pr create --title t --body \"$(cat <<'EOF'\nIt's the merge fix\nEOF\n)\" --base main",
+            "gh pr create --title t --body=\"$(cat <<'EOF'\nIt's the merge fix\nEOF\n)\"",
+            "gh issue comment 5 -b \"Summary: $(cat <<'EOF'\nit's merged\nEOF\n)\"",
+            "mkdir -p docs && cat > docs/x.md <<'EOF'\nThe merge gate's rule.\nEOF",
+            "gh api repos/o/r/issues/5/comments -F body=@- <<'EOF'\nIt's not a merge.\nEOF",
+        ] {
+            assert_eq!(
+                merges_in(data, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{data}"
+            );
+        }
+        let merge = only_merge(
+            "gh pr merge 5 --squash -b \"$(cat <<'EOF'\nIt's merged.\nEOF\n)\" --match-head-commit abc1234",
+            "/srv",
+        );
+        assert_eq!(
+            (merge.pull_request.as_deref(), merge.head),
+            (Some("5"), Head::Named("abc1234".into())),
+            "the words after a substitution stay its command's"
+        );
+    }
+
+    /// What a substitution prints is a message's text only as the value of a
+    /// text flag, of a gh or git command that takes text, where gh or git
+    /// reads that flag as a flag (ADR 0188). After `--template`, `-q`, `-o`
+    /// or `--trailer`, `-b` or `-m` is that flag's value, and the printed
+    /// word is an endpoint or a flag.
+    #[test]
+    fn a_printed_word_is_text_only_as_the_value_of_a_flag_read_as_one() {
+        let keeps = |text: &str| words(text).contains(&"<stdin:x\n>".to_owned());
+        // The flag is first, or after a word that is not a flag, a flag with
+        // its value attached, a flag that takes none, or a text flag's value.
+        for kept in [
+            "git commit -a -m \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr comment 5 --body \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr create --base=main -b \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr create -t \"$(echo t)\" -b \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr create --draft --body=\"$(cat <<'B'\nx\nB\n)\"",
+        ] {
+            assert!(keeps(kept), "{kept}");
+        }
+        for read in [
+            "gh api -X PUT -b \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr checkout -b \"$(cat <<'B'\nx\nB\n)\"",
+            "git push -m \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr create --base \"$(cat <<'B'\nx\nB\n)\"",
+            "gh pr create --base=\"$(cat <<'B'\nx\nB\n)\"",
+            "git commit --trailer -m \"$(cat <<'B'\nx\nB\n)\"",
+            "git commit \"$(echo --trailer)\" -m \"$(cat <<'B'\nx\nB\n)\"",
+            "git commit -- x -m \"$(cat <<'B'\nx\nB\n)\"",
+            "git commit --end-of-options x -m \"$(cat <<'B'\nx\nB\n)\"",
+            // A program or command that a substitution prints part of may be
+            // another one, such as `git-x`.
+            "\"git$(echo -x)\" commit -m \"$(cat <<'B'\nx\nB\n)\"",
+            "gh \"pr$(echo x)\" create -b \"$(cat <<'B'\nx\nB\n)\"",
+        ] {
+            assert!(!keeps(read), "{read}");
+        }
+
+        let hidden = "gh pr merge 5\nx=$(( $(echo 1) ))";
+        for runs in [
+            "gh api -X PUT --template -b \"$(cat <<'B'\nrepos/o/r/pulls/5/merge?x='\nB\n)\""
+                .to_owned(),
+            "gh api -X PUT -q -b \"$(cat <<'B'\nrepos/o/r/pulls/5/merge?x='\nB\n)\"".to_owned(),
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngit push -o -m \"$(echo --receive-pack=bash m.sh)\" . HEAD"
+            ),
+            "git commit -F - --trailer -m \"$(echo --patch)\" <<'B'\ne\n:!gh pr merge 5\n'\nB"
+                .to_owned(),
+            // A word printed before a flag's name is not that flag's value.
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngit push \"$(printf '%s' '--receive-pack=bash m.sh ')\"--message=x . HEAD"
+            ),
+            // Each on its own: `git fetch -m` takes no value, an unquoted
+            // substitution in a text flag's value splits, and a word is text
+            // only when every substitution in it is.
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngit fetch -m \"$(echo --upload-pack=bash m.sh)\" ."
+            ),
+            format!("cat > m.sh <<'B'\n{hidden}\nB\ngit commit -m $(echo x --patch)"),
+            format!(
+                "cat > m.sh <<'B'\n{hidden}\nB\ngit commit \"$(echo --patch)\"--message=\"$(echo x)\""
+            ),
+        ] {
+            assert_eq!(
+                merges_in(&runs, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "{runs}"
+            );
+        }
+        for data in [
+            "git commit -a -m \"$(cat <<'EOF'\nDon't merge yet\nEOF\n)\"",
+            "gh pr create --draft --title \"$(cat <<'EOF'\nIt's the merge fix\nEOF\n)\" --body \"$(cat <<'EOF'\nIt's the merge fix\nEOF\n)\"",
+            "gh pr comment 5 --body \"$(cat <<'EOF'\nIt's not a merge\nEOF\n)\"",
+            "gh pr create --base=main -b \"$(cat <<'EOF'\nIt's the merge fix\nEOF\n)\"",
+        ] {
+            assert_eq!(
+                merges_in(data, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{data}"
+            );
+        }
+    }
+
+    /// A word bash computes as it runs the command may be any word, as what a
+    /// substitution prints may be: a variable, `~`, `$'...'` or `$"..."`, a
+    /// brace list or a glob. For gh, git and printf it counts only as the
+    /// quoted value of a text flag (ADR 0188).
+    #[test]
+    fn a_word_bash_computes_counts_only_as_a_text_flags_value() {
+        assert_eq!(
+            words("echo \"$x\" $y ~ a* b? c[d] {e,f} -{g..h} $'i' $\"j\" k$'\\''"),
+            [
+                "echo",
+                "<printed:$x>",
+                "<split:$y>",
+                "<printed:~>",
+                "<split:a*>",
+                "<split:b?>",
+                "<split:c[d]>",
+                "<split:{e,f}>",
+                "<split:-{g..h}>",
+                "<printed:$i>",
+                "<printed:$j>",
+                "<printed:k$\\'>",
+            ]
+        );
+        // A brace with no list, a `[` with no `]`, a `~` not first, and what
+        // is quoted are as written.
+        assert_eq!(
+            words("gh api repos/{owner}/{repo} [ x] x~ '*' \\* \"$\" $ ''~ {x} {x},y {x.y} y{ a,b"),
+            [
+                "gh",
+                "api",
+                "repos/{owner}/{repo}",
+                "[",
+                "x]",
+                "x~",
+                "*",
+                "*",
+                "$",
+                "$",
+                "~",
+                "{x}",
+                "{x},y",
+                "{x.y}",
+                "y{",
+                "a,b",
+            ]
+        );
+        // `$'...'` ends at its own quote, which a backslash escapes.
+        assert_eq!(
+            words("echo $'\\'' ; x #'"),
+            ["echo", "<printed:$\\'>", "<break>", "x"]
+        );
+        // With extglob on, `!(x)` and its like are patterns, not subshells.
+        for pattern in ["ls !(x)", "ls @(a|b)", "ls x+(y)", "ls *(z)", "ls ?(z)"] {
+            assert_eq!(tokens(pattern), None, "{pattern}");
+        }
+        assert!(tokens("f() { :; }").is_some());
+
+        let hidden = "cat > m.sh <<'B'\ngh pr merge 5\nx=$(( $(echo 1) ))\nB\n";
+        let file = "cat > '--receive-pack=bash m.sh' < /dev/null\n";
+        let editor = "<<'B'\ne\n:!gh pr merge 5\n'\nB";
+        for runs in [
+            format!("{hidden}git push {{\"--receive-pack=bash m.sh\",}} . HEAD"),
+            format!("{hidden}git push $'--receive-pack=bash m.sh' . HEAD"),
+            format!("{hidden}git push --receive-pa$'ck=bash m.sh' . HEAD"),
+            format!("{hidden}git push $\"--receive-pack=bash m.sh\" . HEAD"),
+            format!("{hidden}{file}git push --rece* . HEAD"),
+            format!("{hidden}{file}git push --receive-pac[k]='bash m.sh' . HEAD"),
+            format!("{hidden}{file}git push . HEAD !(cat)"),
+            format!("{hidden}: --receive-pack='bash m.sh'; git push \"$_\" . HEAD"),
+            format!("{hidden}: '--receive-pack=bash m.sh'; git push $_ . HEAD"),
+            format!("{hidden}printf {{-v,}} 'a[$(bash m.sh)]' x"),
+            format!("{hidden}gh repo clone o/r {{--,}} -u 'bash m.sh'"),
+            format!("git commit -F - {{--trailer,}} -m \"$(echo --patch)\" {editor}"),
+            format!("git commit -F - $'-p' {editor}"),
+            format!("git commit -F - -{{o..q}} {editor}"),
+        ] {
+            assert_eq!(
+                merges_in(&runs, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "{runs}"
+            );
+        }
+        for data in [
+            "gh pr create --title \"$TITLE\" --body \"$(cat <<'EOF'\nIt's the merge fix\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nDon't merge yet\nEOF\n)\" -m \"Refs $T\"",
+            "gh api repos/{owner}/{repo}/issues/5/comments -F body=@- <<'EOF'\nIt's not a merge\nEOF",
+            "cd ~/x && git commit -F - <<'EOF'\nDon't merge yet\nEOF",
+            "ls \"$HOME\"/*.md && cat > x.md <<'EOF'\nIt's the merge fix\nEOF",
+        ] {
+            assert_eq!(
+                merges_in(data, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{data}"
             );
         }
     }
