@@ -27,9 +27,12 @@
 //!
 //! ⚠️ IT READS COMMAND TEXT, SO IT HAS LIMITS. It sees `gh pr merge`, the merge
 //! API through `gh api` or `curl`, GraphQL's merge mutations, and those inside
-//! `bash -c`, `eval` or a substitution. A script file, an alias, or a query
-//! read from a file is not seen, and neither is a session without Swarm's
-//! grant mod. ADR 0179 names what that leaves uncovered.
+//! `bash -c`, `eval`, a substitution, or a heredoc. A heredoc that cannot be
+//! read as commands, given only to programs that never run it, is data: a
+//! pull request's body that says "merge" is not a merge (ADR 0188). A script
+//! file, an alias, a here-string, or a query read from a file is not seen, and
+//! neither is a session without Swarm's grant mod. ADR 0179 names what that
+//! leaves uncovered.
 
 use std::{
     path::{Path, PathBuf},
@@ -163,8 +166,9 @@ struct Merge {
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
     Merges(Vec<Merge>),
-    /// It mentions a merge and does not parse: quotes left open, or nesting
-    /// deeper than `MAX_NESTING`.
+    /// It mentions a merge and does not parse: quotes or a heredoc left open,
+    /// nesting deeper than `MAX_NESTING`, or a shell that reads its commands
+    /// from a pipe.
     Unclear,
 }
 
@@ -281,19 +285,38 @@ fn could_not_check(error: &str) -> String {
 #[derive(Debug, PartialEq, Eq)]
 enum Token {
     Word(String),
-    /// Anything that ends one simple command: `;`, `&`, `|`, a newline, a
+    /// Anything that ends one pipeline: `;`, `&`, `||`, a newline, a
     /// parenthesis, or the edge of a command substitution.
     Break,
+    /// `|`: the next command reads this one's output.
+    Pipe,
+    /// A heredoc's body: what the command it belongs to reads on standard
+    /// input (ADR 0188). It `expands` when no part of its delimiter was
+    /// quoted, so its `$(...)` and backquotes run as the shell reads it.
+    Stdin {
+        body: String,
+        expands: bool,
+    },
 }
 
+type Chars<'a> = std::iter::Peekable<std::str::Chars<'a>>;
+
 /// Splits shell text into words and command boundaries, as far as deciding
-/// what runs needs: quotes, escapes, comments, redirections and command
-/// substitution, whose inside is read as commands of its own.
+/// what runs needs: quotes, escapes, comments, redirections, heredocs, and
+/// command substitution, whose inside is read as commands of its own.
 ///
-/// `None` when a quote or a substitution is never closed.
+/// `None` when a quote, a substitution or a heredoc is never closed.
 fn tokens(text: &str) -> Option<Vec<Token>> {
+    lex(&mut text.chars().peekable(), false)
+}
+
+/// Reads commands to the end of the text or, for a `$(` read inside double
+/// quotes (`substitution`), to the parenthesis that closes it. Reading the
+/// substitution from the same text, rather than cutting it out first, keeps
+/// a parenthesis inside its quotes or heredocs from closing it.
+fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
     let mut lexer = Lexer::default();
-    let mut chars = text.chars().peekable();
+    let mut depth = 0_usize;
     while let Some(character) = chars.next() {
         match character {
             '\'' => {
@@ -305,34 +328,7 @@ fn tokens(text: &str) -> Option<Vec<Token>> {
                     }
                 }
             }
-            '"' => {
-                lexer.started = true;
-                loop {
-                    match chars.next()? {
-                        '"' => break,
-                        '\\' => {
-                            let escaped = chars.next()?;
-                            if !matches!(escaped, '"' | '\\' | '$' | '`' | '\n') {
-                                lexer.word.push('\\');
-                            }
-                            if escaped != '\n' {
-                                lexer.word.push(escaped);
-                            }
-                        }
-                        // The rest of the quote is still one word.
-                        '`' => {
-                            lexer.substitution(&take_backquoted(&mut chars)?)?;
-                            lexer.started = true;
-                        }
-                        '$' if chars.peek() == Some(&'(') => {
-                            chars.next();
-                            lexer.substitution(&take_parenthesised(&mut chars)?)?;
-                            lexer.started = true;
-                        }
-                        other => lexer.word.push(other),
-                    }
-                }
-            }
+            '"' => lexer.double_quoted(chars)?,
             '\\' => match chars.next() {
                 Some('\n') | None => {}
                 Some(escaped) => {
@@ -341,35 +337,53 @@ fn tokens(text: &str) -> Option<Vec<Token>> {
                 }
             },
             ' ' | '\t' => lexer.finish(),
-            '\n' | ';' | '&' | '|' | '(' | ')' => lexer.boundary(),
-            '`' => lexer.substitution(&take_backquoted(&mut chars)?)?,
-            '$' if chars.peek() == Some(&'(') => {
+            '\n' => {
+                lexer.boundary();
+                lexer.read_heredocs(chars)?;
+            }
+            '|' if chars.peek() == Some(&'|') => {
                 chars.next();
                 lexer.boundary();
             }
-            '<' | '>' => {
-                // `2>` names a descriptor, not a word of the command.
-                if lexer.started && lexer.word.chars().all(|digit| digit.is_ascii_digit()) {
-                    lexer.word.clear();
-                    lexer.started = false;
-                } else {
-                    lexer.finish();
-                }
-                while matches!(chars.peek(), Some('<' | '>')) {
-                    chars.next();
-                }
+            '|' => {
+                // `|&` pipes standard error as well.
                 if chars.peek() == Some(&'&') {
                     chars.next();
-                    while chars
-                        .peek()
-                        .is_some_and(|next| next.is_ascii_digit() || *next == '-')
-                    {
-                        chars.next();
-                    }
-                } else {
-                    lexer.redirect_target = true;
                 }
+                lexer.pipe();
             }
+            ';' | '&' => lexer.boundary(),
+            // `(( ... ))` is arithmetic, where `<<` is a shift.
+            '(' if chars.next_if_eq(&'(').is_some() => {
+                lexer.boundary();
+                skip_arithmetic(chars)?;
+            }
+            '(' => {
+                depth += 1;
+                lexer.boundary();
+            }
+            ')' if substitution && depth == 0 => {
+                lexer.finish();
+                return lexer.heredocs.is_empty().then_some(lexer.tokens);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                lexer.boundary();
+            }
+            '`' => {
+                lexer.substitution(tokens(&take_backquoted(chars)?)?)?;
+                lexer.started = true;
+            }
+            '$' if opens_arithmetic(chars) => {
+                chars.nth(1);
+                skip_arithmetic(chars)?;
+                lexer.started = true;
+            }
+            '$' if chars.next_if_eq(&'(').is_some() => {
+                lexer.substitution(lex(chars, true)?)?;
+                lexer.started = true;
+            }
+            '<' | '>' => lexer.redirection(character, chars)?,
             '#' if !lexer.started => {
                 while chars.peek().is_some_and(|next| *next != '\n') {
                     chars.next();
@@ -381,8 +395,10 @@ fn tokens(text: &str) -> Option<Vec<Token>> {
             }
         }
     }
+    // A substitution the text never closes, or a heredoc whose body never
+    // came: what the shell would run cannot be told.
     lexer.finish();
-    Some(lexer.tokens)
+    (!substitution && lexer.heredocs.is_empty()).then_some(lexer.tokens)
 }
 
 #[derive(Default)]
@@ -393,9 +409,122 @@ struct Lexer {
     started: bool,
     /// The next word is a redirection's file, not part of the command.
     redirect_target: bool,
+    /// Heredocs on the current line, in order: their bodies start after the
+    /// next newline.
+    heredocs: Vec<Heredoc>,
+}
+
+struct Heredoc {
+    delimiter: String,
+    /// `<<-`: leading tabs are taken off each line and the delimiter's.
+    strip_tabs: bool,
+    /// Any quoting in the delimiter keeps the body as written. Unquoted, its
+    /// `$(...)` and backquotes run as the heredoc is read.
+    quoted: bool,
+    /// Where its `Token::Stdin` waits for the body.
+    at: usize,
 }
 
 impl Lexer {
+    /// The rest of a double-quoted string, whose opening quote has been read.
+    fn double_quoted(&mut self, chars: &mut Chars<'_>) -> Option<()> {
+        self.started = true;
+        loop {
+            match chars.next()? {
+                '"' => return Some(()),
+                '\\' => {
+                    let escaped = chars.next()?;
+                    if !matches!(escaped, '"' | '\\' | '$' | '`' | '\n') {
+                        self.word.push('\\');
+                    }
+                    if escaped != '\n' {
+                        self.word.push(escaped);
+                    }
+                }
+                // The rest of the quote is still one word.
+                '`' => {
+                    self.substitution(tokens(&take_backquoted(chars)?)?)?;
+                    self.started = true;
+                }
+                '$' if opens_arithmetic(chars) => {
+                    chars.nth(1);
+                    skip_arithmetic(chars)?;
+                }
+                '$' if chars.next_if_eq(&'(').is_some() => {
+                    self.substitution(lex(chars, true)?)?;
+                    self.started = true;
+                }
+                other => self.word.push(other),
+            }
+        }
+    }
+
+    /// A redirection, whose first `<` or `>` has been read. Its file is not
+    /// a word of the command; a heredoc's body is what the command reads.
+    fn redirection(&mut self, first: char, chars: &mut Chars<'_>) -> Option<()> {
+        // `2>` names a descriptor, not a word of the command.
+        if self.started && self.word.chars().all(|digit| digit.is_ascii_digit()) {
+            self.word.clear();
+            self.started = false;
+        } else {
+            self.finish();
+        }
+        if first == '<' && chars.peek() == Some(&'<') {
+            chars.next();
+            if chars.peek() != Some(&'<') {
+                let strip_tabs = chars.next_if_eq(&'-').is_some();
+                let (delimiter, quoted) = heredoc_delimiter(chars)?;
+                self.heredoc(delimiter, strip_tabs, quoted);
+                return Some(());
+            }
+            // A here-string's word is passed over, as it always was; ADR
+            // 0188 names that limit.
+        }
+        while matches!(chars.peek(), Some('<' | '>')) {
+            chars.next();
+        }
+        if chars.next_if_eq(&'&').is_some() {
+            while chars
+                .peek()
+                .is_some_and(|next| next.is_ascii_digit() || *next == '-')
+            {
+                chars.next();
+            }
+        } else {
+            self.redirect_target = true;
+        }
+        Some(())
+    }
+
+    fn pipe(&mut self) {
+        self.finish();
+        self.tokens.push(Token::Pipe);
+    }
+
+    fn heredoc(&mut self, delimiter: String, strip_tabs: bool, quoted: bool) {
+        self.heredocs.push(Heredoc {
+            delimiter,
+            strip_tabs,
+            quoted,
+            at: self.tokens.len(),
+        });
+        self.tokens.push(Token::Stdin {
+            body: String::new(),
+            expands: false,
+        });
+    }
+
+    /// The bodies of this line's heredocs, which start after its newline.
+    fn read_heredocs(&mut self, chars: &mut Chars<'_>) -> Option<()> {
+        for heredoc in std::mem::take(&mut self.heredocs) {
+            self.tokens[heredoc.at] = Token::Stdin {
+                body: heredoc_body(chars, &heredoc)?,
+                expands: !heredoc.quoted,
+            };
+        }
+        Some(())
+    }
+
     fn finish(&mut self) {
         if self.started {
             let word = std::mem::take(&mut self.word);
@@ -414,16 +543,67 @@ impl Lexer {
     }
 
     /// The commands inside a substitution run too, so they are read as
-    /// commands of their own, between boundaries.
-    fn substitution(&mut self, inner: &str) -> Option<()> {
+    /// commands of their own, between boundaries. What it prints becomes part
+    /// of a word of the command around it, so a heredoc inside it is data
+    /// only when that command keeps what it is given as data. Otherwise the
+    /// heredoc is read as commands here (ADR 0188).
+    fn substitution(&mut self, inner: Vec<Token>) -> Option<()> {
+        let start = self
+            .tokens
+            .iter()
+            .rposition(|token| matches!(token, Token::Break | Token::Pipe))
+            .map_or(0, |at| at + 1);
+        let around: Vec<String> = self.tokens[start..]
+            .iter()
+            .filter_map(|token| match token {
+                Token::Word(word) => Some(word.clone()),
+                _ => None,
+            })
+            .collect();
+        let kept = keeps_its_input(&around);
         self.boundary();
-        self.tokens.extend(tokens(inner)?);
+        for token in inner {
+            match token {
+                Token::Stdin { body, .. } if !kept => {
+                    self.tokens.push(Token::Break);
+                    self.tokens.extend(tokens(&body)?);
+                    self.tokens.push(Token::Break);
+                }
+                other => self.tokens.push(other),
+            }
+        }
         self.tokens.push(Token::Break);
         Some(())
     }
 }
 
-fn take_backquoted(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+/// After `$`, whether `((` follows: arithmetic, not a substitution.
+fn opens_arithmetic(chars: &Chars<'_>) -> bool {
+    let mut ahead = chars.clone();
+    ahead.next() == Some('(') && ahead.next() == Some('(')
+}
+
+/// Arithmetic up to the `))` that closes the `((` just read. Nothing in it
+/// runs, unless it holds a substitution, which is not read: `None`.
+fn skip_arithmetic(chars: &mut Chars<'_>) -> Option<()> {
+    let mut depth = 2_usize;
+    loop {
+        match chars.next()? {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(());
+                }
+            }
+            '`' => return None,
+            '$' if chars.peek() == Some(&'(') && !opens_arithmetic(chars) => return None,
+            _ => {}
+        }
+    }
+}
+
+fn take_backquoted(chars: &mut Chars<'_>) -> Option<String> {
     let mut inner = String::new();
     loop {
         match chars.next()? {
@@ -434,60 +614,204 @@ fn take_backquoted(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opti
     }
 }
 
-/// The text up to the parenthesis that closes a `$(`, which has been read.
-fn take_parenthesised(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
-    let mut inner = String::new();
-    let mut depth = 1_usize;
-    loop {
-        let next = chars.next()?;
+/// The word after `<<` or `<<-`, without its quotes, and whether any part of
+/// it was quoted. `None` when there is no word.
+fn heredoc_delimiter(chars: &mut Chars<'_>) -> Option<(String, bool)> {
+    while matches!(chars.peek(), Some(' ' | '\t')) {
+        chars.next();
+    }
+    let mut word = String::new();
+    let mut quoted = false;
+    while let Some(&next) = chars.peek() {
+        if matches!(
+            next,
+            ' ' | '\t' | '\n' | ';' | '&' | '|' | '(' | ')' | '<' | '>'
+        ) {
+            break;
+        }
+        chars.next();
         match next {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(inner);
+            '\'' | '"' => {
+                quoted = true;
+                loop {
+                    match chars.next()? {
+                        closing if closing == next => break,
+                        '\\' if next == '"' => word.push(chars.next()?),
+                        other => word.push(other),
+                    }
                 }
+            }
+            '\\' => {
+                quoted = true;
+                word.push(chars.next()?);
+            }
+            other => word.push(other),
+        }
+    }
+    (quoted || !word.is_empty()).then_some((word, quoted))
+}
+
+/// The lines up to the one that is only the delimiter, which is read and
+/// left out. `None` when the text ends first.
+fn heredoc_body(chars: &mut Chars<'_>, heredoc: &Heredoc) -> Option<String> {
+    let mut body = String::new();
+    loop {
+        chars.peek()?;
+        let mut line = String::new();
+        for character in chars.by_ref() {
+            if character == '\n' {
+                break;
+            }
+            line.push(character);
+        }
+        let line = if heredoc.strip_tabs {
+            line.trim_start_matches('\t')
+        } else {
+            &line
+        };
+        if line == heredoc.delimiter {
+            return Some(body);
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+}
+
+/// The commands an unquoted heredoc's body runs as the shell reads it: its
+/// `$(...)` and backquotes. Everything else in it is data.
+fn expansions(body: &str) -> Option<Vec<Token>> {
+    let mut found = Vec::new();
+    let mut chars = body.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\\' => {
+                chars.next();
+            }
+            '`' => {
+                found.extend(tokens(&take_backquoted(&mut chars)?)?);
+                found.push(Token::Break);
+            }
+            '$' if opens_arithmetic(&chars) => {
+                chars.nth(1);
+                skip_arithmetic(&mut chars)?;
+            }
+            '$' if chars.next_if_eq(&'(').is_some() => {
+                found.extend(lex(&mut chars, true)?);
+                found.push(Token::Break);
             }
             _ => {}
         }
-        inner.push(next);
     }
+    Some(found)
 }
 
 /// Every merge `command` makes, and the folder each runs in.
 fn merges_in(command: &str, cwd: Option<&Path>, depth: usize) -> Parsed {
     let mentions_merge = command.to_ascii_lowercase().contains("merge");
-    let Some(tokens) = tokens(command).filter(|_| depth <= MAX_NESTING) else {
-        return if mentions_merge {
-            Parsed::Unclear
-        } else {
-            Parsed::Merges(Vec::new())
-        };
-    };
+    match tokens(command).filter(|_| depth <= MAX_NESTING) {
+        Some(tokens) => merges_among(&tokens, cwd, depth),
+        None if mentions_merge => Parsed::Unclear,
+        None => Parsed::Merges(Vec::new()),
+    }
+}
+
+/// The merges among one command's tokens.
+///
+/// A heredoc's body is read as commands, as a file written from it may be
+/// run later. Only when every program in its pipeline keeps what it reads as
+/// data is a body that cannot be read as commands left as data, with what an
+/// unquoted one expands still read (ADR 0188).
+fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize) -> Parsed {
     let mut folder = cwd.map(Path::to_path_buf);
     let mut merges = Vec::new();
-    for words in tokens.split(|token| *token == Token::Break) {
-        let words: Vec<String> = words
-            .iter()
-            .filter_map(|token| match token {
-                Token::Word(word) => Some(word.clone()),
-                Token::Break => None,
-            })
+    for pipeline in tokens.split(|token| *token == Token::Break) {
+        let commands: Vec<Simple<'_>> = pipeline
+            .split(|token| *token == Token::Pipe)
+            .map(Simple::from)
             .collect();
-        match step(&words) {
-            Step::ChangeFolder(target) => folder = moved(folder, target.as_deref()),
-            Step::Merge(mut merge) => {
-                merge.folder.clone_from(&folder);
-                merges.push(merge);
+        let data = commands
+            .iter()
+            .all(|command| keeps_its_input(&command.words));
+        for (place, command) in commands.iter().enumerate() {
+            // What it reads: its own heredocs, or those the commands before
+            // it pass on down the pipe.
+            let reads = if command.input.is_empty() {
+                &commands[..place]
+            } else {
+                &commands[place..=place]
+            };
+            let input: Vec<String> = reads
+                .iter()
+                .flat_map(|command| command.input.iter().map(|(body, _)| (*body).to_owned()))
+                .collect();
+            let mut read = Vec::new();
+            match step(&command.words, &input) {
+                Step::ChangeFolder(target) => folder = moved(folder, target.as_deref()),
+                Step::Merge(mut merge) => {
+                    merge.folder.clone_from(&folder);
+                    merges.push(merge);
+                }
+                Step::Nested(text) => read.push(text),
+                Step::Other => {}
             }
-            Step::Nested(text) => match merges_in(&text, folder.as_deref(), depth + 1) {
-                Parsed::Merges(inner) => merges.extend(inner),
-                Parsed::Unclear => return Parsed::Unclear,
-            },
-            Step::Other => {}
+            for &(body, expands) in &command.input {
+                let found = match merges_in(body, folder.as_deref(), depth + 1) {
+                    Parsed::Unclear if data && expands => expansions(body)
+                        .map_or(Parsed::Unclear, |run| {
+                            merges_among(&run, folder.as_deref(), depth + 1)
+                        }),
+                    Parsed::Unclear if data => Parsed::Merges(Vec::new()),
+                    found => found,
+                };
+                match found {
+                    Parsed::Merges(inner) => merges.extend(inner),
+                    Parsed::Unclear => return Parsed::Unclear,
+                }
+            }
+            for text in read {
+                match merges_in(&text, folder.as_deref(), depth + 1) {
+                    Parsed::Merges(inner) => merges.extend(inner),
+                    Parsed::Unclear => return Parsed::Unclear,
+                }
+            }
         }
     }
     Parsed::Merges(merges)
+}
+
+/// One simple command: its words, and each heredoc it reads with whether
+/// that heredoc expands.
+struct Simple<'a> {
+    words: Vec<String>,
+    input: Vec<(&'a str, bool)>,
+}
+
+impl<'a> From<&'a [Token]> for Simple<'a> {
+    fn from(tokens: &'a [Token]) -> Self {
+        let mut command = Simple {
+            words: Vec::new(),
+            input: Vec::new(),
+        };
+        for token in tokens {
+            match token {
+                Token::Word(word) => command.words.push(word.clone()),
+                Token::Stdin { body, expands } => command.input.push((body, *expands)),
+                Token::Break | Token::Pipe => {}
+            }
+        }
+        command
+    }
+}
+
+/// Programs that keep what they read on standard input as data: they print,
+/// store or send it, and never run it.
+const KEEPS_INPUT: &[&str] = &["cat", "tee", "gh", "git"];
+
+fn keeps_its_input(words: &[String]) -> bool {
+    program(words)
+        .first()
+        .map(|first| first.rsplit('/').next().unwrap_or(first))
+        .is_some_and(|name| KEEPS_INPUT.contains(&name))
 }
 
 enum Step {
@@ -499,7 +823,8 @@ enum Step {
     Other,
 }
 
-fn step(words: &[String]) -> Step {
+/// What one simple command does, from its words and the heredocs it reads.
+fn step(words: &[String], input: &[String]) -> Step {
     let words = program(words);
     let Some(name) = words
         .first()
@@ -528,7 +853,7 @@ fn step(words: &[String]) -> Step {
                 .iter()
                 .position(|argument| !argument.starts_with('-'))
                 .map_or(&[][..], |start| &arguments[start..]);
-            match step(rest) {
+            match step(rest, &[]) {
                 Step::Merge(mut merge) => {
                     merge.unreadable = Some("its number arrives on standard input");
                     Step::Merge(merge)
@@ -536,10 +861,15 @@ fn step(words: &[String]) -> Step {
                 _ => Step::Other,
             }
         }
-        "gh" => gh(arguments).map_or(Step::Other, Step::Merge),
-        "curl" => curl(arguments).map_or(Step::Other, Step::Merge),
+        "gh" => gh(arguments, input).map_or(Step::Other, Step::Merge),
+        "curl" => curl(arguments, input).map_or(Step::Other, Step::Merge),
         _ => Step::Other,
     }
+}
+
+/// `-` or `/dev/stdin`, as a file a request body is read from.
+fn is_standard_input(file: &str) -> bool {
+    matches!(file, "-" | "/dev/stdin")
 }
 
 /// The words from the program on: assignments and wrappers that run the rest
@@ -622,6 +952,8 @@ struct GhLine {
     fields: Vec<String>,
     head: Option<String>,
     disables_auto_merge: bool,
+    /// `--input`: the file the request body is read from.
+    input: Option<String>,
 }
 
 fn gh_line(arguments: &[String]) -> GhLine {
@@ -660,14 +992,25 @@ fn gh_line(arguments: &[String]) -> GhLine {
             "-X" | "--method" => line.method = Some(value),
             "-f" | "-F" | "--field" | "--raw-field" => line.fields.push(value),
             "--match-head-commit" => line.head = Some(value),
+            "--input" => line.input = Some(value),
             _ => {}
         }
     }
     line
 }
 
-fn gh(arguments: &[String]) -> Option<Merge> {
+/// `input` is the heredocs the command reads, which gh sends as the request
+/// when told to read it: `--input -`, or a field's `@-`.
+fn gh(arguments: &[String], input: &[String]) -> Option<Merge> {
     let line = gh_line(arguments);
+    let reads_input = line.input.as_deref().is_some_and(is_standard_input)
+        || line.fields.iter().any(|field| {
+            field
+                .split_once('=')
+                .and_then(|(_, value)| value.strip_prefix('@'))
+                .is_some_and(is_standard_input)
+        });
+    let body = if reads_input { input } else { &[] };
     let positional = |index: usize| line.positionals.get(index).map(String::as_str);
     match (positional(0), positional(1)) {
         (Some("pr"), Some("merge")) if !line.disables_auto_merge => Some(Merge {
@@ -677,17 +1020,12 @@ fn gh(arguments: &[String]) -> Option<Merge> {
             head: line.head.clone().map_or(Head::Unnamed, Head::Named),
             unreadable: None,
         }),
-        (Some("api"), Some("graphql")) => line
-            .fields
-            .iter()
-            .any(|field| names_a_merge_mutation(field))
-            .then(|| {
-                graphql_merge(
-                    line.fields
-                        .iter()
-                        .any(|field| field.contains("expectedHeadOid")),
-                )
-            }),
+        (Some("api"), Some("graphql")) => {
+            let request = || line.fields.iter().chain(body);
+            request()
+                .any(|part| names_a_merge_mutation(part))
+                .then(|| graphql_merge(request().any(|part| part.contains("expectedHeadOid"))))
+        }
         (Some("api"), Some(endpoint)) => {
             let (repo, number) = merge_endpoint(endpoint)?;
             line.method
@@ -697,11 +1035,15 @@ fn gh(arguments: &[String]) -> Option<Merge> {
                     folder: None,
                     repo,
                     pull_request: Some(number),
-                    head: line
+                    head: match line
                         .fields
                         .iter()
                         .find_map(|field| field.strip_prefix("sha="))
-                        .map_or(Head::Unnamed, |sha| Head::Named(sha.to_owned())),
+                    {
+                        Some(sha) => Head::Named(sha.to_owned()),
+                        None if body.iter().any(|part| part.contains("\"sha\"")) => Head::Hidden,
+                        None => Head::Unnamed,
+                    },
                     unreadable: None,
                 })
         }
@@ -709,7 +1051,9 @@ fn gh(arguments: &[String]) -> Option<Merge> {
     }
 }
 
-fn curl(arguments: &[String]) -> Option<Merge> {
+/// `input` is the heredocs the command reads, which curl sends as data given
+/// as `@-`.
+fn curl(arguments: &[String], input: &[String]) -> Option<Merge> {
     let mut method = None;
     let mut data = Vec::new();
     let mut urls = Vec::new();
@@ -718,7 +1062,16 @@ fn curl(arguments: &[String]) -> Option<Merge> {
         match word.as_str() {
             "-X" | "--request" => method = words.next().cloned(),
             "-d" | "--data" | "--data-raw" | "--data-binary" | "--json" => {
-                data.extend(words.next().cloned());
+                if let Some(value) = words.next() {
+                    // `--data-raw` sends an `@` as it is.
+                    if word != "--data-raw"
+                        && value.strip_prefix('@').is_some_and(is_standard_input)
+                    {
+                        data.extend_from_slice(input);
+                    } else {
+                        data.push(value.clone());
+                    }
+                }
             }
             attached if attached.starts_with("-X") && attached.len() > 2 => {
                 method = Some(attached[2..].to_owned());
@@ -944,6 +1297,8 @@ mod tests {
             .map(|token| match token {
                 Token::Word(word) => word,
                 Token::Break => "<break>".to_owned(),
+                Token::Pipe => "<pipe>".to_owned(),
+                Token::Stdin { body, .. } => format!("<stdin:{body}>"),
             })
             .collect()
     }
@@ -967,7 +1322,7 @@ mod tests {
             words("cd /a && gh pr view 1\ngh pr merge 2|cat"),
             [
                 "cd", "/a", "<break>", "<break>", "gh", "pr", "view", "1", "<break>", "gh", "pr",
-                "merge", "2", "<break>", "cat"
+                "merge", "2", "<pipe>", "cat"
             ]
         );
         assert_eq!(
@@ -979,6 +1334,84 @@ mod tests {
         assert_eq!(words("gh pr \\\nmerge 4"), ["gh", "pr", "merge", "4"]);
         assert_eq!(tokens("gh pr merge 'open"), None);
         assert_eq!(tokens(r#"echo "$(gh pr merge 5""#), None);
+    }
+
+    /// A heredoc's body is what its command reads on standard input, one token
+    /// beside that command's words, and never read as lines of the shell
+    /// (ADR 0188). It ends at the line that is just its delimiter.
+    #[test]
+    fn a_heredoc_body_belongs_to_its_command_and_is_not_read_as_shell() {
+        assert_eq!(
+            words("cat <<'EOF' >out | wc\nit's (1\nEOF\necho done"),
+            [
+                "cat",
+                "<stdin:it's (1\n>",
+                "<pipe>",
+                "wc",
+                "<break>",
+                "echo",
+                "done"
+            ]
+        );
+        assert_eq!(
+            words("a <<A && b <<-\"B\"\none\nA\n\t\ttwo\n\tB\nc"),
+            [
+                "a",
+                "<stdin:one\n>",
+                "<break>",
+                "<break>",
+                "b",
+                "<stdin:two\n>",
+                "<break>",
+                "c"
+            ]
+        );
+        // Inside a substitution whose output gh keeps as data, the heredoc
+        // stays the input of its own command, and its `)` closes nothing.
+        assert_eq!(
+            words("gh pr create --body \"$(cat <<'BODY'\n1) it's\nBODY\n)\" ; y"),
+            [
+                "gh",
+                "pr",
+                "create",
+                "--body",
+                "",
+                "<break>",
+                "cat",
+                "<stdin:1) it's\n>",
+                "<break>",
+                "<break>",
+                "",
+                "<break>",
+                "y"
+            ]
+        );
+        // Whose output a shell may run, it is read as commands there.
+        assert_eq!(
+            words("eval \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\""),
+            [
+                "eval", "", "<break>", "cat", "<break>", "gh", "pr", "merge", "5", "<break>",
+                "<break>", "<break>", "<break>", ""
+            ]
+        );
+        assert_eq!(tokens("x=\"$(cat <<'BODY'\nit's\nBODY\n)\""), None);
+        // `<<` in arithmetic is a shift.
+        assert_eq!(
+            words("echo $((1<<2)) \"$((3<<1))\" x; (( y <<= 1 )) && z"),
+            [
+                "echo", "", "", "x", "<break>", "<break>", "<break>", "<break>", "z"
+            ]
+        );
+        assert_eq!(tokens("echo $(( $(gh pr merge 5) ))"), None);
+        assert_eq!(
+            tokens("cat <<EOF\nno end"),
+            None,
+            "a body the text never closes"
+        );
+        assert_eq!(tokens("cat <<EOF"), None, "a body that never starts");
+        assert_eq!(tokens("echo \"$(cat <<EOF)\"\nx\nEOF"), None);
+        assert_eq!(tokens("cat <<"), None, "a heredoc with no delimiter");
+        assert_eq!(words("a || b |& c"), ["a", "<break>", "b", "<pipe>", "c"]);
     }
 
     fn only_merge(command: &str, cwd: &str) -> Merge {
@@ -1084,6 +1517,139 @@ mod tests {
         }
         assert_eq!(merges_in("gh pr merge 'open", None, 0), Parsed::Unclear);
         assert_eq!(merges_in("echo 'open", None, 0), Parsed::Merges(Vec::new()));
+    }
+
+    /// The three commands a worker was refused for: none of them merges,
+    /// and "merge" is only in the pull request's text.
+    const OPENS_A_PULL_REQUEST: [&str; 3] = [
+        "gh pr create --title \"Rename /ship\" --body \"$(cat <<'BODY'\n## Summary\nThe merge-settings check moves; test_merge_settings covers it.\nIt doesn't change what runs (see #48).\n1) rename, 2) docs\nBODY\n)\"",
+        "cat > body.md <<'BODY'\nThe merge-settings check moves; test_merge_settings covers it.\nIt doesn't change what runs.\nBODY\ngh pr create --title \"Rename /ship\" --body-file body.md",
+        "gh pr create --title \"Rename /ship\" --body-file /tmp/body.md",
+    ];
+
+    /// A heredoc's body is read as commands, as a file written from it may
+    /// be run later. Only a body that cannot be read as commands, which no
+    /// program in its pipeline may run (cat, tee, gh and git keep what they
+    /// read as data), is left as data (ADR 0188).
+    #[test]
+    fn a_heredoc_that_cannot_be_read_is_data_only_where_nothing_may_run_it() {
+        for data in OPENS_A_PULL_REQUEST.into_iter().chain([
+            "git commit -F - <<'EOF'\nDon't merge yet.\nEOF",
+            "cat > note.txt <<-'EOF'\n\tIt's not a merge.\n\tEOF\ngh pr view 3",
+            "cat <<'EOF' | tee -a log | /usr/bin/cat\nIt's $(gh pr merge 5), unexpanded.\nEOF",
+            "gh pr create --body-file - <<'EOF'\nThe merge settings move.\nEOF",
+            "gh api graphql -f query='{ viewer { login } }' <<'EOF'\nmutation { mergePullRequest }\nEOF",
+        ]) {
+            assert_eq!(
+                merges_in(data, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{data}"
+            );
+        }
+
+        for (expanded, number) in [
+            (
+                "cat <<EOF\nit's merged: $(gh pr merge 5 --match-head-commit abc1234)\nEOF",
+                "5",
+            ),
+            (
+                "gh pr comment 5 --body-file - <<EOF\nit's `gh pr merge 6`\nEOF",
+                "6",
+            ),
+        ] {
+            assert_eq!(
+                only_merge(expanded, "/srv").pull_request.as_deref(),
+                Some(number),
+                "an unquoted heredoc runs its substitutions: {expanded}"
+            );
+        }
+        assert_eq!(
+            merges_in(
+                "cat <<EOF\nit's $(gh pr merge 5\nEOF",
+                Some(Path::new("/srv")),
+                0
+            ),
+            Parsed::Unclear,
+            "a substitution an unquoted body never closes"
+        );
+
+        let shell = only_merge(
+            "cd /srv/next && bash <<'EOF'\ngh pr merge 3\nEOF",
+            "/home/w",
+        );
+        assert_eq!(shell.pull_request.as_deref(), Some("3"));
+        assert_eq!(shell.folder.as_deref(), Some(Path::new("/srv/next")));
+        for run in [
+            "env A=1 sh -s <<-EOF\n\tgh pr merge 5\n\tEOF",
+            "sudo -u w bash <<'EOF'\ngh pr merge 5\nEOF",
+            "timeout 60 bash <<'EOF'\ngh pr merge 5\nEOF",
+            "ssh host <<'EOF'\ngh pr merge 5\nEOF",
+            "docker exec -i c ksh <<'EOF'\ngh pr merge 5\nEOF",
+            "cat <<'EOF' | sh\ngh pr merge 5\nEOF",
+            "echo \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\" | bash",
+            "eval \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\"",
+            "python3 - <<'EOF'\ngh pr merge 5\nEOF",
+            "cat > m.sh <<'EOF'\ngh pr merge 5\nEOF\nchmod +x m.sh && ./m.sh",
+            "tee m.sh <<'EOF' >/dev/null\ngh pr merge 5\nEOF\nsource m.sh",
+            "gh pr comment 5 --body-file - <<'EOF'\n`gh pr merge 5` is the next step.\nEOF",
+        ] {
+            assert_eq!(
+                only_merge(run, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "a merge that reads as a command in a heredoc counts: {run}"
+            );
+        }
+
+        for unclear in [
+            "bash <<'EOF'\ngh pr merge 3 --subject 'oops\nEOF",
+            "cat <<'EOF' | sh\nit's a merge\nEOF",
+            "python3 - <<'EOF'\nprint('don't merge')\nEOF",
+            "eval \"$(cat <<'EOF'\nit's a merge\nEOF\n)\"",
+            "x=\"$(cat <<'EOF'\nit's a merge\nEOF\n)\"",
+            "gh pr create --body-file - <<'EOF'\nmerge it",
+            "gh pr merge 5 --subject \"it's",
+        ] {
+            assert_eq!(
+                merges_in(unclear, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "{unclear}"
+            );
+        }
+    }
+
+    /// gh and curl send a heredoc as their request when told to read it:
+    /// `--input -` and `-d @-`, or piped from cat (ADR 0188).
+    #[test]
+    fn gh_and_curl_read_their_request_from_a_heredoc() {
+        let with_body = only_merge(
+            "gh pr merge 7 --match-head-commit 35e32938 --body-file - <<'EOF'\nIt's merged.\nEOF",
+            "/srv",
+        );
+        assert_eq!(with_body.head, Head::Named("35e32938".into()));
+        let graphql = only_merge(
+            "gh api graphql --input - <<'EOF'\n{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: $id, expectedHeadOid: $oid}) { clientMutationId } }\"}\nEOF",
+            "/srv",
+        );
+        assert_eq!(graphql.head, Head::Hidden);
+        assert!(graphql.unreadable.is_some());
+        let piped = only_merge(
+            "cat <<'EOF' | gh api graphql --input -\n{\"query\": \"mutation { mergePullRequest(input: {clientMutationId: \\\"it's\\\"}) { clientMutationId } }\"}\nEOF",
+            "/srv",
+        );
+        assert!(
+            piped.unreadable.is_some(),
+            "gh reads the request piped to it"
+        );
+        let rest = only_merge(
+            "gh api -X PUT repos/miopea/swarm-next/pulls/5/merge --input - <<'EOF'\n{\"sha\": \"35e32938\"}\nEOF",
+            "/srv",
+        );
+        assert_eq!(rest.head, Head::Hidden);
+        let posted = only_merge(
+            "curl -X PUT https://api.github.com/repos/miopea/swarm-next/pulls/5/merge -d @- <<'EOF'\n{\"sha\": \"35e32938\"}\nEOF",
+            "/srv",
+        );
+        assert_eq!(posted.head, Head::Hidden);
     }
 
     fn pull(author: &str, owner: &str, public: bool) -> Facts {
@@ -1423,6 +1989,43 @@ mod tests {
             Verdict::Pass,
             "the merging account's own pull request in a private repository"
         );
+    }
+
+    /// The worker's three commands open a pull request without GitHub being
+    /// asked anything, while a merge hidden in text that cannot be read is
+    /// still refused.
+    #[tokio::test]
+    async fn a_pull_request_whose_text_says_merge_opens_and_a_hidden_merge_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let unanswered = grant_config(directory.path(), "http://127.0.0.1:9/mcp");
+        let missing = GhCli {
+            program: directory.path().join("no-such-gh"),
+        };
+        for command in OPENS_A_PULL_REQUEST {
+            assert_eq!(
+                gate(&unanswered, &input(command, directory.path()), &missing).await,
+                Verdict::Pass,
+                "{command}"
+            );
+        }
+        for (hidden, why_refused) in [
+            ("gh pr merge 5 --subject \"it's", "cannot be read"),
+            (
+                "bash <<'EOF'\ngh pr merge 5 --subject \"it's\nEOF",
+                "cannot be read",
+            ),
+            (
+                "cat > m.sh <<'EOF'\ngh pr merge 5\nEOF\n./m.sh",
+                "gh could not be run",
+            ),
+        ] {
+            let Verdict::Refuse(why) =
+                gate(&unanswered, &input(hidden, directory.path()), &missing).await
+            else {
+                panic!("a merge hidden in a heredoc is refused: {hidden}");
+            };
+            assert!(why.contains(why_refused), "{why}");
+        }
     }
 
     #[tokio::test]
