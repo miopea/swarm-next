@@ -232,8 +232,10 @@ fn judge(judged: &[Judged]) -> Judgement {
                 }
             }
             Judged::Unread { what, head } => {
+                // Say only what is known: an answer it could not read is not
+                // a stranger's pull request or a public repository.
                 let which = format!(
-                    "Swarm could not check who opened the pull request this merges ({what}), so it counts it as someone else's pull request in the operator's own public repository. If it is not, try again"
+                    "This command may merge a pull request, and Swarm could not read who opened it ({what}), so it cannot tell whether the rule covers this merge and holds it as if it did. Try again first"
                 );
                 if *head == Head::Unnamed {
                     return Judgement::Refuse(name_the_head(&which));
@@ -804,14 +806,35 @@ impl Default for GhCli {
 }
 
 impl GhCli {
-    async fn json(&self, folder: &Path, arguments: &[&str]) -> Result<Value, String> {
-        let mut child = tokio::process::Command::new(&self.program)
+    /// gh as the worker's shell would run it, but never in colour.
+    ///
+    /// ⚠️ EVERY WORKER SESSION FORCES COLOUR. Swarm starts each terminal with
+    /// `CLICOLOR_FORCE=1` and `FORCE_COLOR=3` and without `NO_COLOR`, to match
+    /// the browser's xterm, and the gate inherits that environment. gh then
+    /// colours its JSON even into a pipe, and `NO_COLOR` does not override
+    /// `CLICOLOR_FORCE`; `GH_FORCE_TTY` colours it too unless `NO_COLOR` is
+    /// set. `FORCE_COLOR` does not move gh 2.103.3 and goes as well, as the
+    /// API's own gh calls already do. Only gh's environment changes here,
+    /// never the session's.
+    fn command(&self, folder: &Path, arguments: &[&str]) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(&self.program);
+        command
             .args(arguments)
             .current_dir(folder)
+            .env_remove("CLICOLOR_FORCE")
+            .env_remove("GH_FORCE_TTY")
+            .env_remove("FORCE_COLOR")
+            .env("NO_COLOR", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        command
+    }
+
+    async fn json(&self, folder: &Path, arguments: &[&str]) -> Result<Value, String> {
+        let mut child = self
+            .command(folder, arguments)
             .spawn()
             .map_err(|error| format!("gh could not be run: {error}"))?;
         let mut stdout = child.stdout.take().ok_or("gh gave no output")?;
@@ -1177,11 +1200,10 @@ mod tests {
     }
 
     /// A gh that answers for the operator's account, one repository and one
-    /// pull request, and records every call it gets.
+    /// pull request, and records every call it gets. It colours its JSON
+    /// unless colour is cleared, as gh does under `CLICOLOR_FORCE` or
+    /// `GH_FORCE_TTY` and, stricter than gh 2.103.3, under `FORCE_COLOR`.
     fn stub_gh(directory: &Path, author: &str, visibility: &str) -> GhCli {
-        use std::os::unix::fs::PermissionsExt;
-        let calls = directory.join("calls");
-        let script = directory.join("gh");
         let pull = json!({
             "author": { "login": author, "is_bot": author.starts_with("app/") },
             "headRefOid": "35e32938c0ffee",
@@ -1189,10 +1211,23 @@ mod tests {
             "url": "https://github.com/miopea/swarm-next/pull/7",
         });
         let repository = json!({ "owner": { "login": "miopea" }, "visibility": visibility });
+        script_gh(
+            directory,
+            &format!(
+                "colour() {{ if [ -n \"$NO_COLOR\" ] && [ -z \"$CLICOLOR_FORCE$GH_FORCE_TTY$FORCE_COLOR\" ]; then cat; else printf '\\033[1;37m'; cat; printf '\\033[m'; fi; }}\ncase \"$1 $2\" in\n  'api user') echo '{{\"login\":\"miopea\"}}' | colour ;;\n  'pr view') echo '{pull}' | colour ;;\n  'repo view') echo '{repository}' | colour ;;\n  *) exit 1 ;;\nesac\n"
+            ),
+        )
+    }
+
+    /// A gh that runs `body` after recording the call.
+    fn script_gh(directory: &Path, body: &str) -> GhCli {
+        use std::os::unix::fs::PermissionsExt;
+        let calls = directory.join("calls");
+        let script = directory.join("gh");
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\necho \"$PWD $*\" >> '{}'\ncase \"$1 $2\" in\n  'api user') echo '{{\"login\":\"miopea\"}}' ;;\n  'pr view') echo '{pull}' ;;\n  'repo view') echo '{repository}' ;;\n  *) exit 1 ;;\nesac\n",
+                "#!/bin/sh\necho \"$PWD $*\" >> '{}'\n{body}",
                 calls.display()
             ),
         )
@@ -1338,6 +1373,58 @@ mod tests {
         );
     }
 
+    /// gh colours its JSON under `CLICOLOR_FORCE`, even into a pipe, and
+    /// `NO_COLOR` does not override it. A worker's session can carry it, and
+    /// the gate runs gh in that session's environment, so the merging
+    /// account's own pull request in a private repository was refused as one
+    /// gh could not answer for.
+    #[tokio::test]
+    async fn gh_is_run_without_colour_whatever_the_workers_environment_says() {
+        let directory = tempfile::tempdir().unwrap();
+        let own = stub_gh(directory.path(), "miopea", "PRIVATE");
+        // Set or not in this test's own environment, gh never sees them.
+        let command = own.command(directory.path(), &["api", "user"]);
+        let set: Vec<(String, Option<String>)> = command
+            .as_std()
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        for (name, value) in [
+            ("CLICOLOR_FORCE", None),
+            ("GH_FORCE_TTY", None),
+            ("FORCE_COLOR", None),
+            ("NO_COLOR", Some("1")),
+        ] {
+            assert!(
+                set.contains(&(name.to_owned(), value.map(str::to_owned))),
+                "{name} in {set:?}"
+            );
+        }
+
+        let merge = only_merge("gh pr merge 7", directory.path().to_str().unwrap());
+        let read = facts(&own, &merge)
+            .await
+            .expect("gh's answer is JSON once colour is off");
+        assert_eq!((read.author.as_str(), read.public), ("miopea", false));
+
+        let unanswered = grant_config(directory.path(), "http://127.0.0.1:9/mcp");
+        assert_eq!(
+            gate(
+                &unanswered,
+                &input("gh pr merge 7 --squash", directory.path()),
+                &own
+            )
+            .await,
+            Verdict::Pass,
+            "the merging account's own pull request in a private repository"
+        );
+    }
+
     #[tokio::test]
     async fn anything_that_cannot_be_checked_is_refused() {
         let directory = tempfile::tempdir().unwrap();
@@ -1353,12 +1440,25 @@ mod tests {
             panic!("a pull request gh cannot read is refused");
         };
         assert!(
-            why.contains(
-                "could not check who opened the pull request this merges (gh could not be run"
-            ),
+            why.contains("could not read who opened it (gh could not be run"),
             "{why}"
         );
+        assert!(
+            !why.contains("counts it as someone else's"),
+            "an answer it could not read is not dressed as a stranger's pull request: {why}"
+        );
         assert!(why.contains("Swarm could not be asked"), "{why}");
+
+        let garbled = script_gh(directory.path(), "echo 'not json'\n");
+        let Verdict::Refuse(why) =
+            gate(&unanswered, &input(command, directory.path()), &garbled).await
+        else {
+            panic!("an answer gh gives that is not JSON is refused");
+        };
+        assert!(
+            why.contains("could not read who opened it (gh's answer was not JSON)"),
+            "{why}"
+        );
 
         assert!(matches!(
             gate(&unanswered, b"not json", &missing).await,
