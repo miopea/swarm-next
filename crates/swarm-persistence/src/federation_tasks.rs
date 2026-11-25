@@ -3999,6 +3999,7 @@ mod tests {
                     subject: "the fix".to_owned(),
                     changed_paths: vec!["src/lib.rs".to_owned()],
                     found_in: None,
+                    on_default_branch: Some(true),
                 }],
                 now + 1,
             )

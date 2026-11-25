@@ -223,6 +223,7 @@ mod tests {
             subject: format!("feat: {sha}"),
             changed_paths: vec!["src/lib.rs".to_owned()],
             found_in: None,
+            on_default_branch: Some(true),
         }
     }
 

@@ -16501,6 +16501,7 @@ mod tests {
                     subject: "fix: gated".to_owned(),
                     changed_paths: vec!["src/lib.rs".to_owned()],
                     found_in: None,
+                    on_default_branch: Some(true),
                 }],
                 1_000,
             )
@@ -16585,6 +16586,7 @@ mod tests {
                     subject: "feat: checked".to_owned(),
                     changed_paths: vec!["src/lib.rs".to_owned()],
                     found_in: None,
+                    on_default_branch: Some(true),
                 })
                 .collect();
             store
@@ -16680,6 +16682,7 @@ mod tests {
             subject: "feat: scoped".to_owned(),
             changed_paths: vec![path.to_owned()],
             found_in: None,
+            on_default_branch: Some(true),
         };
         store
             .record_task_commits(
@@ -16750,6 +16753,7 @@ mod tests {
                         subject: "docs: write".to_owned(),
                         changed_paths: vec![path.to_owned()],
                         found_in: None,
+                        on_default_branch: Some(true),
                     }],
                     1_000,
                 )
@@ -16777,6 +16781,60 @@ mod tests {
         assert_eq!(
             kind_of(within),
             Some(serde_json::json!("settling")),
+            "{status}"
+        );
+    }
+
+    /// Documentation its default branch did not hold waits for its merge, so
+    /// the list says so and does not call it settling (ADR 0189).
+    #[tokio::test]
+    async fn documentation_off_the_default_branch_is_shown_waiting_for_its_merge() {
+        use swarm_domain::{CommitRepositoryState, CommitVerdict, TaskCommit, TaskState};
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+        let task = store
+            .create_task("Delete a stale skill copy", "/workspace/petal")
+            .unwrap()
+            .id;
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task, state).unwrap();
+        }
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[TaskCommit {
+                    sha: "4444dddd5555eeee".to_owned(),
+                    verdict: CommitVerdict::Present,
+                    subject: "docs: delete the copy".to_owned(),
+                    changed_paths: vec!["docs/guide.md".to_owned()],
+                    found_in: None,
+                    on_default_branch: Some(false),
+                }],
+                1_000,
+            )
+            .unwrap();
+
+        let status =
+            response_json(authorized_get(app, "/api/v1/orchestration/coordinator").await).await;
+        let row = status["unsettled_review"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["task_id"] == task.to_string())
+            .cloned()
+            .unwrap_or_else(|| panic!("the task is listed: {status}"));
+        assert_eq!(row["kind"], "docs_off_default_branch", "{status}");
+        assert!(
+            row["reason"]
+                .as_str()
+                .unwrap()
+                .contains("default branch did not hold"),
             "{status}"
         );
     }

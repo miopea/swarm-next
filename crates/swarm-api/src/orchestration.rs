@@ -214,6 +214,13 @@ fn unsettled_review(state: &Arc<AppState>) -> Result<Vec<UnsettledReviewResponse
                         "report_unsettled",
                         "commits were reported and could not be checked in that workspace",
                     ),
+                    // Nothing to deploy, and not finished: a pull request to
+                    // merge or work to push. It stays open so the card for its
+                    // merge can still be filed on it (ADR 0189).
+                    swarm_domain::CommitSettlement::DocumentationOffDefaultBranch => (
+                        "docs_off_default_branch",
+                        "its commits are documentation only, and its repository's default branch did not hold them all when they were recorded",
+                    ),
                     // Settleable, so the sweep will take it on its next pass
                     // and it is here only in the seconds between the two --
                     // unless the sweep leaves it for Queen because it crossed

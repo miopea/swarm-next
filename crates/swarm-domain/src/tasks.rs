@@ -822,6 +822,16 @@ pub struct TaskCommit {
     /// different fact from "found, but somewhere else".
     #[serde(default)]
     pub found_in: Option<String>,
+    /// Whether the repository's default branch held this commit when it was
+    /// reported (ADR 0189).
+    ///
+    /// `Some(false)` is a commit the default branch does not reach: a pull
+    /// request's branch waiting for its merge, or work not yet pushed. `None`
+    /// is nothing established: git could not say, as for a commit this
+    /// repository does not have, the repository's default branch could not be
+    /// found, or the row was recorded before this was asked.
+    #[serde(default)]
+    pub on_default_branch: Option<bool>,
 }
 
 /// What a task's worker said it produced, and what the repository said back.
@@ -851,8 +861,16 @@ pub struct TaskCommitReport {
 pub enum CommitSettlement {
     /// The worker reported, and reported nothing. There is nothing to deploy.
     NothingBuilt,
-    /// Everything reported is documentation, checked and reachable.
+    /// Everything reported is documentation, checked, reachable, and on the
+    /// repository's default branch.
     DocumentationOnly,
+    /// Everything reported is documentation, checked and reachable, but the
+    /// default branch did not hold all of it when it was reported (ADR 0189).
+    ///
+    /// Nothing to deploy, and not finished either: a pull request still to
+    /// merge, or work still to push. No automatic close may rest on it, because
+    /// closing the task closes the route its merge card needs.
+    DocumentationOffDefaultBranch,
     /// At least one reachable commit touches something that is not
     /// documentation. A claim of "nothing to deploy" contradicts this.
     BuiltCode,
@@ -946,15 +964,25 @@ pub fn commit_settlement(report: Option<&TaskCommitReport>) -> CommitSettlement 
     {
         return CommitSettlement::Unestablished;
     }
-    if report
+    if !report
         .commits
         .iter()
         .flat_map(|commit| commit.changed_paths.iter())
         .all(|path| documentation_path(path))
     {
+        return CommitSettlement::BuiltCode;
+    }
+    // A REF IS NOT A MERGE. `Present` is any ref reaching the commit, and a
+    // pull request's branch is a ref, so documentation still waiting for its
+    // merge is unfinished work rather than finished paperwork (ADR 0189).
+    if report
+        .commits
+        .iter()
+        .all(|commit| commit.on_default_branch == Some(true))
+    {
         CommitSettlement::DocumentationOnly
     } else {
-        CommitSettlement::BuiltCode
+        CommitSettlement::DocumentationOffDefaultBranch
     }
 }
 

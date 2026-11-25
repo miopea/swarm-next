@@ -52,6 +52,7 @@ import type { UnsettledReview } from "../api";
 const KIND_LABELS: Record<string, string> = {
   claim_unapproved: "Claim unapproved",
   code_no_deployment: "Code, no deploy",
+  docs_off_default_branch: "Docs unmerged",
   nothing_reported: "Nothing reported",
   report_unsettled: "Report unchecked",
   scope_crossed: "Scope crossed",

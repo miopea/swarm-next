@@ -1717,6 +1717,7 @@ mod commit_settlement_tests {
             subject: "something".to_owned(),
             changed_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
             found_in: None,
+            on_default_branch: Some(true),
         }
     }
 
@@ -1814,6 +1815,40 @@ mod commit_settlement_tests {
         assert_eq!(
             commit_settlement(Some(&report(vec![commit(CommitVerdict::Present, &[])]))),
             CommitSettlement::Unestablished
+        );
+    }
+
+    /// ⚠️ A PULL REQUEST'S BRANCH IS A REF, so `Present` alone said nothing
+    /// about whether the work had landed. Documentation still on its branch
+    /// was settled as finished, the task closed, and the merge card it needed
+    /// was refused because the task was no longer open (ADR 0189).
+    #[test]
+    fn documentation_the_default_branch_does_not_hold_is_not_settled() {
+        let off = |on_default_branch| TaskCommit {
+            on_default_branch,
+            ..commit(CommitVerdict::Present, &["docs/b.md"])
+        };
+        for (label, second) in [
+            ("on a branch", off(Some(false))),
+            ("never asked", off(None)),
+        ] {
+            assert_eq!(
+                commit_settlement(Some(&report(vec![
+                    commit(CommitVerdict::Present, &["docs/a.md"]),
+                    second,
+                ]))),
+                CommitSettlement::DocumentationOffDefaultBranch,
+                "a commit {label} must keep documentation from settling"
+            );
+        }
+        // Code is code wherever it is. A branch does not soften a contradicted
+        // no-deployment claim into an unfinished one.
+        assert_eq!(
+            commit_settlement(Some(&report(vec![TaskCommit {
+                on_default_branch: Some(false),
+                ..commit(CommitVerdict::Present, &["crates/swarm-api/src/lib.rs"])
+            }]))),
+            CommitSettlement::BuiltCode
         );
     }
 }

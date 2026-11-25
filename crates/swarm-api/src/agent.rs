@@ -6937,7 +6937,7 @@ fn record_independent_check_tool() -> Tool {
 fn record_task_commits_tool() -> Tool {
     tool(
         "swarm_record_task_commits",
-        "Record which commits your task produced, so that what it built is a checked fact rather than something you assert. Swarm reads your workspace and stores what it finds: whether each commit exists, whether any ref still reaches it, and which paths it touches. Checked ONCE, now, and never recomputed — a squash or rebase later does not rewrite what was true when you reported. Report an EMPTY list to say the task built nothing; that is an answer, and it is different from never reporting at all.",
+        "Record which commits your task produced, so that what it built is a checked fact rather than something you assert. Swarm reads your workspace and stores what it finds: whether each commit exists, whether any ref still reaches it, whether the repository's default branch holds it, and which paths it touches. Checked ONCE, now, and never recomputed — a squash or rebase later does not rewrite what was true when you reported. Documentation-only work closes itself only once the default branch holds every commit, so after its pull request merges, record them again from an up-to-date checkout. A squash merge leaves a branch's commits off the default branch for good: record no deployment instead, for Queen to approve. Report an EMPTY list to say the task built nothing; that is an answer, and it is different from never reporting at all.",
         &json!({
             "type": "object",
             "properties": {
@@ -17102,6 +17102,7 @@ mod tests {
                 subject: String::new(),
                 changed_paths: vec!["src/lib.rs".to_owned()],
                 found_in: None,
+                on_default_branch: None,
             })
             .collect();
         store

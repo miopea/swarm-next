@@ -55,7 +55,7 @@ Three categories, and they are handled differently on purpose:
 | Category | How it is settled |
 | --- | --- |
 | Investigation — nothing was built | Derived: no commits attributed to the task |
-| Docs-only changes | Derived: every attributed commit touches docs paths only |
+| Docs-only changes | Derived: every attributed commit touches docs paths only, and the repository's default branch holds it (ADR 0189) |
 | Abandoned or superseded | **Not settled at all** — it gets its own terminal state |
 
 The third is the one worth noticing. Abandoned work is not completed work needing

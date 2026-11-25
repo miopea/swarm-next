@@ -2176,19 +2176,80 @@ pub(super) async fn verify_reported_commits(
                 subject: String::new(),
                 changed_paths: Vec::new(),
                 found_in: None,
+                on_default_branch: None,
             })
             .collect();
         return (CommitRepositoryState::NotARepository, unchecked);
     }
+    let default = default_branch(workspace).await;
     let mut verified = Vec::with_capacity(shas.len());
     for sha in shas {
         let mut found = verify_one(workspace, sha).await;
         if found.verdict == CommitVerdict::Missing {
             found = locate_elsewhere(elsewhere, sha).await.unwrap_or(found);
         }
+        // Asked in this workspace only: git cannot say for a commit it does
+        // not have, so one found in another workspace stays `None`.
+        if let Some(branch) = default.as_deref() {
+            found.on_default_branch = holds(workspace, branch, &found.sha).await;
+        }
         verified.push(found);
     }
     (CommitRepositoryState::Read, verified)
+}
+
+/// The full name of the ref a repository's work lands on (ADR 0189).
+///
+/// origin/HEAD names it where a clone set it. A checkout whose remote was
+/// added after `git init` has none, and 8 of this Hive's checkouts had none on
+/// 2026-11-24, so origin's main or master stands in. A repository with no
+/// remote has nowhere to merge to, and its own main or master is where its work
+/// lands: the dogfood fixtures are such repositories. Anything else is `None`,
+/// and then nothing is established about where a commit is.
+async fn default_branch(workspace: &str) -> Option<String> {
+    let head = git(
+        workspace,
+        &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+    )
+    .await
+    .map(|head| head.trim().to_owned())
+    .filter(|head| !head.is_empty());
+    let remotes = git(workspace, &["remote"]).await?;
+    let fallbacks = if remotes.trim().is_empty() {
+        ["refs/heads/main", "refs/heads/master"]
+    } else {
+        ["refs/remotes/origin/main", "refs/remotes/origin/master"]
+    };
+    // origin/HEAD first, but only when the branch it names exists: after the
+    // remote renames its default and a prune, it names a ref that is gone.
+    let candidates: Vec<String> = head
+        .into_iter()
+        .chain(fallbacks.into_iter().map(str::to_owned))
+        .collect();
+    let mut arguments = vec!["for-each-ref", "--format=%(refname)"];
+    arguments.extend(candidates.iter().map(String::as_str));
+    let listed = git(workspace, &arguments).await?;
+    candidates
+        .into_iter()
+        .find(|candidate| listed.lines().any(|line| line.trim() == candidate))
+}
+
+/// Whether `branch` reaches `sha`, or `None` when git could not say.
+///
+/// The full ref name is the pattern, so git lists that ref or nothing.
+async fn holds(workspace: &str, branch: &str, sha: &str) -> Option<bool> {
+    git(
+        workspace,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "--contains",
+            sha,
+            branch,
+        ],
+    )
+    .await
+    .map(|refs| !refs.trim().is_empty())
 }
 
 /// Looks for one missing SHA in the other workspaces this Hive knows about.
@@ -2228,6 +2289,7 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
             subject: String::new(),
             changed_paths: Vec::new(),
             found_in: None,
+            on_default_branch: None,
         };
     }
     // RECORDED BY THE FULL SHA, not by the name given. An abbreviation kept
@@ -2303,6 +2365,7 @@ async fn verify_one(workspace: &str, sha: &str) -> TaskCommit {
         subject,
         changed_paths,
         found_in: None,
+        on_default_branch: None,
     }
 }
 
@@ -2581,6 +2644,150 @@ mod commit_verification_tests {
 
         assert_eq!(commits[0].verdict, CommitVerdict::Missing);
         assert_eq!(commits[0].found_in, None);
+    }
+
+    /// Commits a new documentation file and answers its full SHA.
+    fn commit_note(dir: &std::path::Path, name: &str) -> String {
+        std::fs::write(dir.join("docs").join(name), "another note\n").expect("write");
+        git_in(dir, &["add", "docs"]);
+        git_in(dir, &["commit", "--quiet", "-m", "docs: another note"]);
+        git_in(dir, &["rev-parse", "HEAD"])
+    }
+
+    fn on_default_branch(commits: &[TaskCommit]) -> Vec<Option<bool>> {
+        commits
+            .iter()
+            .map(|commit| commit.on_default_branch)
+            .collect()
+    }
+
+    /// ⚠️ A PULL REQUEST'S BRANCH IS A REF TOO (ADR 0189). `Present` asks
+    /// whether ANY ref reaches a commit, so documentation still waiting for its
+    /// merge read exactly like documentation on main, and its task closed with
+    /// the pull request open. Each commit now also says whether the
+    /// repository's default branch held it.
+    #[tokio::test]
+    async fn a_commit_says_whether_the_default_branch_holds_it() {
+        let (seed, landed) = repository_with_one_commit();
+        let root = tempfile::tempdir().unwrap();
+        let origin = root.path().join("origin.git");
+        let checkout = root.path().join("checkout");
+        git_in(
+            root.path(),
+            &[
+                "clone",
+                "--quiet",
+                "--bare",
+                seed.path().to_str().unwrap(),
+                origin.to_str().unwrap(),
+            ],
+        );
+        // A clone, so origin/HEAD names main the way a clone sets it.
+        git_in(
+            root.path(),
+            &[
+                "clone",
+                "--quiet",
+                origin.to_str().unwrap(),
+                checkout.to_str().unwrap(),
+            ],
+        );
+        git_in(&checkout, &["config", "user.email", "worker@example.test"]);
+        git_in(&checkout, &["config", "user.name", "Worker"]);
+        // A pull request's branch, pushed and waiting for its merge.
+        git_in(&checkout, &["switch", "--quiet", "-c", "docs/rename"]);
+        let branch = commit_note(&checkout, "branch.md");
+        git_in(&checkout, &["push", "--quiet", "origin", "docs/rename"]);
+        // Committed on main and not pushed.
+        git_in(&checkout, &["switch", "--quiet", "main"]);
+        let unpushed = commit_note(&checkout, "unpushed.md");
+        let invented = "0123456789abcdef0123456789abcdef01234567".to_owned();
+        let workspace = checkout.to_str().unwrap();
+        let shas = [landed.clone(), branch.clone(), unpushed, invented];
+
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas).await;
+        assert_eq!(
+            commits.iter().map(|c| c.verdict).collect::<Vec<_>>(),
+            [
+                CommitVerdict::Present,
+                CommitVerdict::Present,
+                CommitVerdict::Present,
+                CommitVerdict::Missing
+            ],
+            "every one but the invented SHA is reachable from some ref"
+        );
+        assert_eq!(
+            on_default_branch(&commits),
+            [Some(true), Some(false), Some(false), None]
+        );
+
+        // origin/HEAD is read, not assumed to be main: a repository may land
+        // its work on a branch of another name.
+        git_in(&checkout, &["remote", "set-head", "origin", "docs/rename"]);
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas[..2]).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(true)]);
+
+        // An origin/HEAD naming a branch that is gone, as after the remote
+        // renamed its default and a prune, is not the default branch.
+        git_in(
+            &checkout,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/gone",
+            ],
+        );
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas[..2]).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(false)]);
+
+        // Not every checkout has origin/HEAD: one whose remote was added after
+        // `git init` never does. origin's main names the default branch there.
+        git_in(&checkout, &["remote", "set-head", "origin", "--delete"]);
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas[..2]).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(false)]);
+
+        // Without main on origin, origin's master.
+        git_in(&checkout, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        git_in(
+            &checkout,
+            &["update-ref", "refs/remotes/origin/master", &branch],
+        );
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas[..2]).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(true)]);
+
+        // With no origin/HEAD and no main or master on origin, the default
+        // branch cannot be found, and nothing is established either way.
+        git_in(
+            &checkout,
+            &["update-ref", "-d", "refs/remotes/origin/master"],
+        );
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas[..2]).await;
+        assert_eq!(on_default_branch(&commits), [None, None]);
+    }
+
+    /// A repository with no remote has nowhere to merge to, so its own main or
+    /// master is where its work lands. The dogfood fixtures are such
+    /// repositories, and their documentation tasks still close themselves.
+    #[tokio::test]
+    async fn a_repository_with_no_remote_lands_its_work_on_its_own_main() {
+        let (dir, landed) = repository_with_one_commit();
+        let path = dir.path();
+        git_in(path, &["switch", "--quiet", "-c", "topic"]);
+        let topic = commit_note(path, "topic.md");
+        let workspace = path.to_str().unwrap();
+        let shas = [landed, topic];
+
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(false)]);
+
+        git_in(path, &["branch", "--quiet", "-m", "main", "master"]);
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(false)]);
+
+        // Holding both, main is the one asked.
+        git_in(path, &["branch", "--quiet", "main", "topic"]);
+        let (_, commits) = verify_reported_commits(workspace, &[], &shas).await;
+        assert_eq!(on_default_branch(&commits), [Some(true), Some(true)]);
     }
 
     /// A commit named by an abbreviated SHA or a branch is recorded by the full
