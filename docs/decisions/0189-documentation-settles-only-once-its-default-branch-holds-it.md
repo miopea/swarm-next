@@ -79,6 +79,13 @@ moment each commit was recorded:
   Queen approves it, as for any claim the facts do not settle. The worker's
   tool description says this.
 - **The merge card.** The task is still open, so the card can be filed on it.
+- **Work already in Review when this is installed.** Its commits were
+  recorded before the question was asked, so they carry NULL. A docs-only
+  task there does not close, and Queen's list shows it as "Docs unmerged".
+  It is unstuck the same way as new work: its worker fetches and records
+  its commits again, and the next pass closes it if the default branch now
+  holds them all. If it does not, as after a squash merge or in a shallow
+  checkout, the worker records no deployment and Queen approves the claim.
 
 ## Consequences
 
