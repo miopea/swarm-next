@@ -472,22 +472,112 @@ mod tests {
         }
     }
 
-    /// ADR 0190: the grant mod looks for a merge, and for gh or curl, as
-    /// written and as bash may spell it, with quotes, backslashes and
-    /// escapes read as the merge gate reads them, so a merge spelled that
-    /// way still reaches the gate.
+    /// Runs the grant mod's `tool.check` hook under node with a stand-in for
+    /// Claude's engine, which allows each command. Arguments: the module's
+    /// path, then the commands as a JSON array. Prints, for each, whether
+    /// the hook sent it to `provider-merge` and whether the hook threw.
+    const GRANT_MOD_HARNESS: &str = r"
+import { pathToFileURL } from 'node:url'
+const [modulePath, commandsJson] = process.argv.slice(-2)
+const { register } = await import(pathToFileURL(modulePath).href)
+const hooks = new Map()
+register((event, _matcher, hook) => {
+  hooks.set(event, hook)
+  return { catch() {} }
+})
+const check = hooks.get('tool.check')
+const results = []
+for (const command of JSON.parse(commandsJson)) {
+  let sent = false
+  const $ = {
+    session: { cwd: async () => '/srv' },
+    process: {
+      run: async argv => {
+        sent ||= argv[1] === 'provider-merge'
+        return { exitCode: 0, stdout: 'pass\n' }
+      },
+    },
+  }
+  let threw = false
+  try {
+    await check($, { input: { command } }, async () => ({ decision: 'allow' }))
+  } catch {
+    threw = true
+  }
+  results.push({ sent, threw })
+}
+console.log(JSON.stringify(results))
+";
+
+    /// ADR 0190: the grant mod sends the gate a command that spells a merge
+    /// and gh or curl as bash may spell them: with quotes, a backslash and
+    /// newline, a `$` before a quote, escapes, or an expansion that may be
+    /// empty taken out. It sends no other. This runs the module Swarm
+    /// writes, so each of those pieces is held to what it does; node is
+    /// required, and CI installs it.
     #[test]
     fn the_grant_mod_looks_for_a_merge_as_bash_may_spell_it() {
-        for part in [
-            "const spellings = [command, withoutQuotes(command), withoutQuotes(unescaped(command))]",
-            "spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => RUNS_GITHUB.test(text))",
-            ".replace(/['\"\\\\]/g, '')",
-            "const ESCAPE = /\\\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3}))/g",
-        ] {
-            assert!(GRANT_MOD_MODULE.contains(part), "{part}");
+        let sent = [
+            "gh pr merge 5",
+            "gh pr mer''ge 5",
+            "g''h pr merge 5",
+            "gh pr mer\\\nge 5",
+            "gh pr mer$'g'e 5",
+            "gh pr $'\\x6derge' 5",
+            "gh pr $'mer\\u0067e' 5",
+            "gh pr $'mer\\U00000067e' 5",
+            "gh pr $'mer\\147e' 5",
+            "gh pr mer${z}ge 5",
+            "gh pr mer$(true)ge 5",
+            "gh pr mer`true`ge 5",
+            "gh pr mer$z\"ge\" 5",
+            "gh pr mer$1ge 5",
+            "g${z}h pr merge 5",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "gh api graphql -f query='mutation { enqueuePullRequest(input: {}) { x } }'",
+        ];
+        let not_sent = [
+            "cargo test merge_gate",
+            "git merge origin/main",
+            "gh pr view 5",
+            "echo merge && gh_view 5",
+            // An escape past the last letter is not read as one.
+            "echo '\\UFFFFFFFF'",
+        ];
+        let directory = tempfile::tempdir().unwrap();
+        let folder = grant_mod(
+            &directory.path().join("worker.json"),
+            &std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+        let commands: Vec<&str> = sent.iter().chain(&not_sent).copied().collect();
+        let output = std::process::Command::new("node")
+            .args([
+                "--experimental-strip-types",
+                "--no-warnings",
+                "--input-type=module",
+                "-e",
+                GRANT_MOD_HARNESS,
+            ])
+            .arg(folder.join("hooks/register.ts"))
+            .arg(serde_json::to_string(&commands).unwrap())
+            .output()
+            .expect("node runs the grant mod, as CI installs it");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let results: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(results.len(), commands.len());
+        for (command, result) in commands.iter().zip(&results) {
+            assert_eq!(result["threw"], false, "the hook threw on {command:?}");
+            assert_eq!(
+                result["sent"],
+                sent.contains(command),
+                "sent to the gate: {command:?}"
+            );
         }
-        // The check that fails refuses through the same test.
-        assert!(GRANT_MOD_MODULE.contains("mayMerge((e.input as { command?: unknown }).command)"));
     }
 
     /// ADR 0129: the grant mod names this release's helper and this worker's

@@ -46,16 +46,41 @@ other than the one bash merges:
   `merge${x}PullRequest`;
 - a folder changed by `pushd` or `popd`, or by `cd` to a computed folder.
 
+A review of this decision's first draft found more, which that draft passed
+or, for the folder, checked against the wrong pull request:
+- a shell reading a script the gate cannot see, as `bash <(...)`,
+  `source <(...)` or `echo '...' | bash`, which that draft let through,
+  though 1.25.0 and `main` refuse all but the last;
+- a `cd` inside a condition, a loop or a coprocess, which that draft, now
+  reading reserved words, carried to the commands after it where bash may
+  not run it;
+- a `cd` after `&&`, in the background, a subshell or a pipeline, which
+  that draft carried as 1.25.0 does, and one bash searches through
+  `CDPATH` or runs through `eval`, which none of them followed;
+- `case` forms it still misread, `env -vS'...'`, `su -c`, `script -qc`,
+  `flock -c` and `rbash -c`, code run by `python3 -c` or `perl -e`;
+- curl's `-T` sending a `PUT`, and its abbreviated flags, as `--data-r` or
+  `--conf`;
+- `gh pr mer${z}ge 5`, which bash reads as a merge;
+- a `PATH` set by `read -r PATH` or through `declare -n`.
+
 ## Decision
 
 - **A merge is looked for as bash may spell it.** The grant mod and the gate
   each look for "merge" or `enqueuePullRequest`, and for `gh` or `curl`, in
-  three spellings of the command:
+  four spellings of the command:
   - as written;
-  - without its quotes and backslashes, a `$` before a quote, an empty `$()`
-    or pair of backquotes, and a backslash and newline;
+  - without its quotes and backslashes, a `$` before a quote, and a
+    backslash and newline;
   - the same, after reading each `\xHH`, `\NNN`, `\uHHHH` and `\UHHHHHHHH`
-    as the letter it names, as `$'...'`, printf and JSON do.
+    as the letter it names, as `$'...'`, printf and JSON do;
+  - that, without each expansion bash may make empty: `${...}`, a `$(...)`
+    with no parenthesis inside, a backquoted command, `$` and a name, and
+    `$` and a digit or one of bash's own parameters. So `gh pr mer${z}ge 5`
+    and ``mer` `ge`` are found.
+
+  A test runs the grant mod's own module under node, so each of these is
+  checked as the mod runs it, not as text the module holds.
 - **A command whose runs cannot be told from its text is not read.** Where
   the command mentions a merge, it is refused as unreadable, and never
   grantable, when it holds:
@@ -67,11 +92,36 @@ other than the one bash merges:
     read as they are, and so is arithmetic that names no variable;
   - a function defined, as `f() {` or `function f {`. `a=()` is an array;
   - a program word bash computes;
+  - a shell reading a script the gate cannot see: a script named by a word
+    bash computes, as `bash <(...)`, `source <(...)` and `. <(...)` are, or
+    standard input that is not a heredoc it reads, as `bash < <(...)`,
+    `cat <(...) | bash` and `echo '...' | bash` are. The shells are `bash`,
+    `sh`, `zsh`, `dash`, `ksh`, `mksh`, `rbash` and `ash`. A script named as
+    a file is not read, as before;
+  - a program that runs code in a language of its own, Python, Perl, Ruby,
+    Node, PHP or awk, given a word or a heredoc that spells a merge and gh
+    or curl, as `python3 -c 'import os; os.system("gh pr merge 5")'` or
+    `python3 <<'EOF'` with the same code, or code from a word bash computes
+    or from input the gate cannot see. Given only flags, one of them
+    `--version` or `--help`, it prints about itself and exits, so input it
+    is given counts only if it spells a merge;
   - for gh, a computed word up to its command, and for `gh pr merge` or
-    `gh api`, one that may split or is not a whole word;
-  - for curl, a computed word that may split or is not the value of `-H`,
-    `-u`, `-A`, `-o` or `-w`;
-  - for `sudo`, `ssh` and the other programs below, a computed word.
+    `gh api`, one that may split or is not a whole word. Two are read
+    instead. The value of an output flag, as `--jq "$Q"`, only shapes what
+    gh prints. A quoted endpoint that is `gh api`'s only operand, as
+    `gh api "$URL"`, may be any endpoint: a request through it may be
+    GraphQL, and a `PUT` through it is held as a merge of any pull request;
+  - for curl, a computed word that may split, or that starts with a part
+    bash computes and so may be a flag such as `-K`, unless it is the value
+    of `-H`, `-u`, `-A`, `-o` or `-w`. A quoted address with a written start,
+    as `"https://api.github.com/$P"`, or one given to `--url`, is read as
+    any address: a `PUT` to it is held as a merge of any pull request, and
+    a body the gate cannot see sent to it is held as a request it cannot
+    read;
+  - for `sudo`, `ssh` and the other programs below, a computed word;
+  - in double quotes, `"$@"`, `"${@}"` and `"${a[@]}"`, which are any
+    number of words, so in a merge they may be any flags. `"$*"`,
+    `"${a[2]}"` and `"${#a[@]}"` are one word.
 
   In a heredoc body that is only printed (ADR 0188), none of these runs, so
   the body does not count.
@@ -80,7 +130,20 @@ other than the one bash merges:
   `coproc NAME {`, `command`, `builtin`, `exec` and `exec -a`, `nohup`,
   `nice`, `stdbuf`, `timeout` and `env` each come before the program. A
   folder that `env -C` or `env --chdir` names is the merge's folder, and
-  `cd` under a wrapper moves nothing after it. `env -S` runs its string.
+  `cd` under a wrapper moves nothing after it. `env -S` runs its string,
+  also at the end of a group of `env`'s letters, as `env -vS'...'`; a letter
+  `env` does not know leaves the command held.
+- **A runner given commands as one string is read.** The string after
+  `su -c`, `runuser -c`, `flock -c`, `script -c` and `--command`, and the
+  words after `ssh`'s host or `watch`'s flags, are read as commands of the
+  same command, and a merge in them is held, as below.
+- **A `case` is read as bash reads it.** Its subject and `in` are words,
+  each pattern up to its `)` is no command, `|` separates patterns and a
+  `(` may open one, and `;;`, `;&` and `;;&` end a clause. `esac` closes the
+  case only where bash reads it as a word of its own. So a `)` in a
+  pattern, inside a substitution or not, as in `$(case x in x) ...;; esac)`,
+  `$(case x in x|esac) ...;; esac)` or `$(time -p case ...)`, ends neither
+  the substitution nor the case.
 - **A merge another program runs is held.** gh or curl run by `sudo`,
   `doas`, `runuser`, `su`, `watch`, `flock`, `ssh`, `setsid`, `chroot`,
   `nsenter`, `unshare` or `parallel`, or among the words of any other
@@ -106,16 +169,21 @@ other than the one bash merges:
   sees.** After a function, a `PATH` change, `alias`, `hash`, `enable`,
   `.`, `source` or `shopt` in the command, `cat` or `tee` piping a heredoc
   into gh may print something else. A request gh or curl reads from
-  standard input there is held as one the gate cannot see.
+  standard input there is held as one the gate cannot see. A `PATH` change
+  is also a word `PATH` given to a command, as `read -r PATH`, or a value
+  `PATH`, as `declare -n p=PATH`.
 - **A process substitution's commands are read.** `<(...)` and `>(...)` run
   as a word, after digits as `2>(...)`, or as a redirection's file.
-- **A `case` pattern's `)` inside a substitution does not end it.**
 - **Every redirection bash reads is one.** `&>`, `>|` and `>&file` are read
   as redirections of the command.
 - **curl's flags are read as curl reads them.** A group of one-letter flags
   ends at the first that takes a value, which takes the rest of the word or
-  the next. Values may be attached. These send a body the gate cannot see,
-  so a request with one is held when it may be GraphQL:
+  the next. Values may be attached. curl takes any unambiguous start of a
+  long flag for the flag, so a strict start of one that sends a body or
+  sets the method, as `--data-r`, `--js` or `--upload-f`, is held as a
+  request the gate cannot see, and `--conf` is read as `--config`. `-T`
+  sends with `PUT` unless `-X` names another method. These send a body the
+  gate cannot see, so a request with one is held when it may be GraphQL:
   - `-d @file` and its other names, `--data-ascii` among them;
   - `--data-urlencode` with a file;
   - `-T` and `--upload-file`;
@@ -139,37 +207,60 @@ other than the one bash merges:
 - **A folder the gate does not follow is not told.** `pushd` with one
   plain folder is followed. Any other `pushd`, `popd`, and `cd` to a folder
   bash computes, leave the merge's folder untold, so its repository must be
-  named.
+  named. So does a `cd` that may not run in this shell, or runs in a shell
+  of its own:
+  - in an `if`, `while`, `until`, `for`, `select`, `{ ... }` or `case`,
+    the condition included, and in a coprocess's compound;
+  - after `&&` or `||`, to the end of that list;
+  - in parentheses, in a list run in the background, in a pipeline of more
+    than one command, and in a substitution;
+  - in text `eval` runs, and after `source` or `.`, whose script may move
+    the shell;
+  - a `cd` to a folder that starts with none of `/`, `.` and `~`, when
+    `CDPATH` is set in the gate's environment or named in the command,
+    since bash searches it first.
+
+  A `cd` run by `coproc` alone, as `coproc cd own`, moves nothing after it.
+  A `cd` before a condition, as in `cd own; if ...; fi; gh pr merge 5`, is
+  followed as before.
 
 ## What this does not cover
 
 - **A merge spelled only through an expansion whose text never spells it.**
   A brace list or sequence, as `{mer,}ge` or `{l..n}erge`, a glob matching a
-  file of that name, a curl URL pattern, as `.../pulls/5/mer{ge,}`, or a
-  variable set by an earlier command, in a command that otherwise names no
-  merge. The grant mod never sends it to the gate, so the gate cannot hold
-  it. The gate does hold `curl -X PUT .../pulls/5/mer{ge,}` when it is sent.
-  Whether the mod should send every gh or curl command is an open product
-  question (`docs/09-open-questions.md`).
-- **A program given a command as one quoted string**, as
-  `ssh host 'gh pr merge 5'` or `su -c 'gh pr merge 5' w`. The gate does
-  not read the string as commands. `sudo bash -c '...'` is read.
+  file of that name, a curl URL pattern, as `.../pulls/5/mer{ge,}`, an
+  expansion that supplies letters, as `mer${z:-g}e` or `mer$(printf g)e`,
+  or a variable set by an earlier command, in a command that otherwise
+  names no merge. The grant mod never sends it to the gate, so the gate
+  cannot hold it. The gate does hold `curl -X PUT .../pulls/5/mer{ge,}`
+  when it is sent. Whether the mod should send every gh or curl command is
+  an open product question (`docs/09-open-questions.md`).
+- **Code in another language that never spells the merge**, as Python
+  running `'gh pr mer' + 'ge 5'`. The gate does not read Python, Perl or
+  the others; it refuses their code only when a word spells a merge and gh
+  or curl, or when it cannot see the code.
+- **HTTP clients other than gh and curl**, as
+  `wget --method=PUT .../pulls/5/merge`, `httpie`, or a library call from a
+  program. The gate reads only gh's and curl's requests.
+- **Merging a branch rather than a pull request.** GraphQL `mergeBranch`,
+  the branch merges API, `gh api -X POST repos/o/r/merges` and the same sent
+  by curl, merge one branch into another as a push does. They are still to
+  be fixed separately, as ADR 0188 listed the REST one, and ADR 0179 names
+  a push.
 - **A config written before the command, or in a way the gate does not
   read**: gh's config, a git config file given with `--file`, `~/.curlrc`
   written by an earlier command, and `gh alias set NAME -` reading its
   expansion from standard input.
-- **A `cd` inside a pipeline, a subshell or a condition.** The gate carries
-  it to the commands after it, as 1.25.0 does, where bash does not. A gh
-  that only logs its folder showed both asking about the other folder after
-  `(cd other)`, `cd other | true` and `false && cd other`. To be fixed
-  separately.
-- **The branch merges API**, `gh api -X POST repos/o/r/merges` and the same
-  sent by curl, which merges one branch into another as a push does. It is
-  still to be fixed separately, as ADR 0188 listed it.
+- **A `CDPATH` the gate does not see.** The gate reads `CDPATH` from its own
+  environment and from the command. One the worker's shell sets from a
+  profile, and which the worker's own process does not carry, is not seen.
+  A relative `cd` there is followed to the folder bash would not use, and
+  a merge after it is checked against that folder's repository.
 - **What the gate now holds instead of reading.** `gh api graphql --input
   /dev/fd/0` is held as a request read from a file it cannot see, not read
-  as standard input. A function, and `gh $(echo ...)`, are not followed:
-  the command is refused.
+  as standard input. A function, `gh $(echo ...)`, a shell reading a script
+  from `<(...)` or a pipe, and code in another language from a word bash
+  computes, are not followed: the command is refused.
 - ADR 0188's other limits stand. The ones this decision fixes are listed in
   its Context.
 
@@ -199,10 +290,12 @@ rule rests on, with harmless commands in place of a merge:
 curl 8.5.0 was run on its flag forms. It refuses `--data=@file` as an
 unknown option and exits 2, so that spelling sends nothing.
 
-The grant mod's check was cut from `register.ts` and run under node
-24.19.0 on the spelled forms below and on four commands it must not send.
-Main's sends none of the thirteen quoted, escaped or `$'...'` forms to the
-gate. This change's sends all of them, and still none of the four.
+A test writes the grant mod as the engine does and runs its module under
+node, which strips the types itself, with a stand-in for the engine's
+`tool.check` hook. It checks that the module sends seventeen spelled forms
+to the gate and not five ordinary commands. `main`'s module sends none of
+the quoted forms, and this decision's first draft misses `mer${z}ge`. CI's
+rust job installs node 24 for it; it ran here under node 24.19.0.
 
 | Command | 1.25.0 | main | This change |
 | --- | --- | --- | --- |
@@ -234,7 +327,8 @@ gate. This change's sends all of them, and still none of the four.
 | A merge mutation in an unquoted heredoc spelled `merge${x}PullRequest` or `mer\\u0067ePullRequest`, given to `gh api graphql --input -` | pass | pass | refuse |
 | `echo $'\'' ; gh pr merge 5 # '` | pass | refuse | refuse |
 | `GH_REPO`, `GH_TOKEN`, `GH_HOST`, `export GH_REPO` or `env GH_REPO` before a merge; `env --unset=GH_TOKEN`; `pushd /tmp && gh pr merge 5`; `sudo gh pr merge 5`; `env --chdir=/tmp gh pr merge 5` | refuse | refuse | refuse |
-| Limits: `ssh host 'gh pr merge 5'`, `su -c 'gh pr merge 5' w`, `gh alias set m - <<'B'` then `gh m` | pass | pass | pass |
+| `ssh host 'gh pr merge 5'`, `su -c 'gh pr merge 5' w`, limits of the first draft | pass | pass | refuse |
+| Limit: `gh alias set m - <<'B'` then `gh m` | pass | pass | pass |
 | Limit: `curl -X PUT .../pulls/5/mer{ge,}`, which no grant mod sends | pass | pass | refuse |
 | Limit: the branch merges API, `gh api -X POST repos/o/r/merges` | pass | pass | pass |
 | Cost: `gh api graphql --input - --jq ...mergeable` given an unquoted heredoc with `$N` in its query | pass | pass | refuse |
@@ -242,17 +336,107 @@ gate. This change's sends all of them, and still none of the four.
 | Cost: `x=1; echo $((x)) && gh pr view 5 --json mergeable`, or a function defined before it | pass | pass | refuse |
 | Twenty-four ordinary commands, among them the same request with the delimiter quoted and `$n` as a GraphQL variable, `gh pr view 5 --json mergeable`, `timeout 60 cargo test merge_gate`, `diff <(git show HEAD:a) a`, `echo "$(case x in x) echo hi;; esac)"`, `export PATH=$HOME/.cargo/bin:$PATH && cargo build`, `args=()`, `printf '%s' 'a[1]'`, `GH_HOST=x gh pr view 5`, `nice -n 5 cargo build` and `curl --variable` | pass | pass | pass |
 
-Eighteen tests are new, and each passes on this change. The seventeen for
-the gate fail on `main`'s gate. The grant mod's fails on `main`'s module,
-which holds none of the text it looks for. Seventy-two
-pieces of the change were removed one at a time, and a named test failed
-each time. That includes the grant mod's spellings, which a test reads
-from the module. Two earlier pieces made no test fail when removed. Both
-were deleted, because each guarded nothing the rest of the gate misses:
-- a mark that held a heredoc body as unreadable beside a process
-  substitution, whose commands the gate already reads;
-- doubt carried from what a printed body expands. Its only source was
-  printf given a bracketed word, which bash does not evaluate.
+### The review of the first draft
+
+Seventy-three more commands ran the same way on four builds: 1.25.0,
+`main`, the first draft at `ae3059c7`, and this change.
+
+| Command | 1.25.0 | main | First draft | This change |
+| --- | --- | --- | --- | --- |
+| `bash <(echo gh pr merge 5)`, `source <(...)`, `. <(...)`, `bash < <(...)`, `cat <(...) \| bash`, or `bash <(echo gh api -X PUT .../pulls/5/merge)` | refuse | refuse | pass | refuse |
+| `echo 'gh pr merge 5' \| bash` | pass | pass | pass | refuse |
+| `echo "$( (case x in x) true;; esac) ; gh pr merge 5 )"`, `$(case x in x\|esac) ...` or `$(time -p case ...)` | pass | pass | pass | refuse |
+| `env -vS'gh pr merge 5'` | pass | pass | pass | refuse |
+| curl `-T /dev/null` or `-sT` to `.../pulls/5/merge`, `--upload-f`, a merge mutation sent with `--data-r`, `--js` or `--data-b`, or `--conf m.cfg` | pass | pass | pass | refuse |
+| A merge run by `python3 -c`, `perl -e`, `script -qc`, `flock -c`, `rbash -c`, `ssh host '...'`, `ssh echo '...'`, `su w -c '...'` or `watch --interval 5 '...'` | pass | pass | pass | refuse |
+| `gh pr mer${z}ge 5` | pass | pass | pass | refuse |
+| `g${z}h pr merge 5` | pass | pass | refuse | refuse |
+| `gh pr mer$(true)ge 5`, `mer$( )ge` or ``mer` `ge`` | pass | refuse | refuse | refuse |
+| `read -r PATH <<< /tmp/x` or `declare -n p=PATH; p=/tmp/x`, then `cat <<'C' \| gh api graphql --input -` | pass | pass | pass | refuse |
+| `gh pr merge 5 --subject "$@"`, or `"${a[@]}"` | refuse | refuse | refuse | refuse |
+| `gh api -X PUT "repos/o/r/pulls/$N/merge"`, a merge mutation to `gh api "$URL"`, or `curl -X PUT "https://api.github.com/$P"` | pass | pass | refuse | refuse |
+| Cost narrowed: `gh api "repos/$REPO/pulls/5" --jq .merged`, `gh api repos/o/r/pulls/"$N"`, `gh api "$URL" --jq .mergeable`, `curl -s "https://api.github.com/repos/o/r/pulls/$N" \| jq .mergeable`, or a `"${prs[@]}"` loop asking for `mergeable` | pass | pass | refuse | pass |
+| Cost: `gh api repos/$REPO/pulls/5 --jq .mergeable`, the same in a loop over `$pr`, `-F n=$N` beside a `mergeable` query, curl to `.../pulls/$N` unquoted, `[[ $n -gt 0 ]]` or a function and `trap` before `gh pr view 5 --json mergeable`, or `curl -s "$URL" \| jq .mergeable` | pass | pass | refuse | refuse |
+| Cost: `node -v` or `python3 -V` before `gh pr view 5 --json mergeable` | pass | pass | pass | refuse |
+| Twelve ordinary commands, among them `python3 --version` or `node --help` before `gh pr view 5 --json mergeable`, `echo 'gh pr view 5' \| bash`, `script -qc 'gh pr view 5' /dev/null`, `case x in merge) gh pr view 5;; esac` and `curl -X POST -T m.json .../pulls/5/merge` | pass | pass | pass | pass |
+| Limits: `wget --method=PUT`, GraphQL `mergeBranch`, `gh api -X POST repos/o/r/merges`, Python joining `'mer' + 'ge'`, `mer${z:-g}e` and `mer$(printf g)e` | pass | pass | pass | pass |
+| `curl -X PUT .../pulls/5/mer{ge,}`, which no grant mod sends | pass | pass | refuse | refuse |
+
+The 159 commands above answer the same on this change as on the first
+draft, apart from `ssh host '...'` and `su -c '...'`, which now refuse.
+
+A gh that only logs the folder it runs in and then fails stood first on
+PATH for twenty-one folder forms:
+- On 1.25.0, `main` and the first draft, gh was asked about `other` after
+  `false && cd other`, `cd other &`, `(cd other)` and `cd other | true`,
+  where bash stays where it was. It was asked about the first folder after
+  `eval 'cd other'`, where bash moves.
+- The first draft also asked about `other` after
+  `if false; then cd other; fi`, `while false`, `for d in;`, an `else` not
+  taken and `coproc { cd other; }`, where 1.25.0 and `main` asked about the
+  first folder: the regression the review found.
+- With `CDPATH` set, all three asked about `start/own`, where bash went to
+  the `CDPATH` folder's `own`.
+
+This change asks gh in no folder for each of those: it leaves the folder
+untold and refuses. It still follows `cd other && ...`, `cd other; ...`,
+`cd other || exit 1; ...`, `cd ./own` under `CDPATH`, and a `cd` after a
+`case` or after `source`. `coproc cd other` moves nothing after it. Bash
+5.2.21 was run on the `CDPATH` form and on the `case` forms.
+
+curl 8.5.0 was run against a stub server on 127.0.0.1:
+- `-T` and `-sT` sent `PUT`;
+- `-T` with `-X POST`, before or after, sent `POST`;
+- `--upload-f` sent `PUT`, and `--data-r`, `--data-b` and `--js` sent a
+  body;
+- `--conf` read the config and sent its request;
+- `--req` and `--reque` are ambiguous and exit 2, as does `--request=PUT`;
+- `--sil` and a `--disable` that is not first sent a plain `GET`.
+
+Python 3, Perl, Node, PHP and gawk were each given code on standard input
+with only `--version` or `--help`. None ran it, and each ran it with no
+flag. Ruby is not installed here, so for Ruby the rule rests on its manual.
+
+A check of this change before it was committed found one more. Python,
+Perl or Node reading its code from a heredoc, as `python3 <<'EOF'` running
+`os.system("gh pr merge 5")`, `perl - <<'EOF'` or `cat <<'EOF' | node`,
+passed on 1.25.0, `main` and the first draft, since the gate read the body
+only as shell commands. It is refused now. `python3 - <<'EOF'` with
+`gh pr merge 5` as its body, which ADR 0188 held as a merge, is refused
+with it: Python reads the body as code, which the gate does not read.
+
+### Tests and ablations
+
+Twenty-eight tests are new, and each passes on this change: twenty-seven
+for the gate and the grant mod's. The seventeen for the gate from the first
+draft fail on `main`'s gate. The ten from this review fail on `main`'s gate
+and on the first draft's. The grant mod's fails with `main`'s module and
+with the first draft's.
+
+On the final source, 188 pieces of the change were removed one at a time,
+and a named test failed each time. These are the first draft's 72, moved
+to where this review left their code, and 116 for this review's pieces.
+The grant mod's are among them, since its test runs the module. The source
+was restored byte for byte after each.
+
+Pieces that no test could tell from their absence were deleted, not kept:
+- in the first draft, a mark that held a heredoc body as unreadable beside
+  a process substitution, whose commands the gate already reads; and doubt
+  carried from what a printed body expands, whose only source was printf
+  given a bracketed word, which bash does not evaluate;
+- in this review:
+  - the empty `$()` and pair of backquotes that the grant mod and the gate
+    took out, which taking out each expansion that may be empty covers;
+  - an arm for `|` between `case` patterns, whose words are dropped
+    anyway;
+  - `watch`'s `-n` and `--interval` values, a number, which is read as a
+    program whose words are read;
+  - a check that gh's open endpoint does not start with `-`, which no
+    operand does;
+  - `${!prefix@}` as many words, a name read as a value, which the gate
+    already holds;
+  - a pass for `-c` given no code, and a reset of `&&` at a clause's end,
+    which the `case` already makes uncertain.
 
 ## Consequences
 
@@ -268,6 +452,37 @@ were deleted, because each guarded nothing the rest of the gate misses:
 - A merge whose number or flags bash computes, as
   `for i in 5; do gh pr merge $i; done`, is refused and cannot be granted.
   Writing the number lets the gate read it.
+- **A variable in a gh api or curl word refuses an ordinary command once
+  the command says merge, mergeable or merged.** The gate cannot tell what
+  such a word becomes, and an unquoted one may split into several words,
+  any of them a flag such as `-X PUT`. So these are refused, though they
+  only read:
+  - `gh api repos/$REPO/pulls/5 --jq .mergeable`, and the same in a loop
+    over `$pr`;
+  - `gh api graphql -F n=$N -f query='... mergeable ...'`;
+  - `curl -s https://api.github.com/repos/o/r/pulls/$N | jq .mergeable`;
+  - `curl -s "$URL" | jq .mergeable`, whose address, starting with what
+    bash computes, may be a flag such as `-K`.
+
+  Where it could be narrowed without passing a merge, it was. Quoting the
+  variable makes it one word, so these pass: `gh api "repos/$REPO/pulls/5"`,
+  `gh api repos/o/r/pulls/"$N"`, `gh api "$URL"` as the only operand,
+  `--jq "$Q"`, a quoted curl address with a written start, as
+  `"https://api.github.com/repos/o/r/pulls/$N"`, `--url "$U"`, and
+  `"${prs[@]}"` in a `for` loop's list. Each of these is held instead when
+  the request is a `PUT`, or sends a body the gate cannot see.
+- A command that mentions a merge is refused when it holds a shell reading
+  a script the gate cannot see, as `cat x | bash`, or a program in another
+  language reading code it cannot see, as `python3 "$S"`, `node -v` or
+  `python3 -V`, which read standard input as far as the gate can tell.
+  `--version` and `--help` pass. A heredoc such a program reads as data
+  is refused too when it spells a merge and gh or curl, as
+  `awk '{print $1}' <<'EOF'` or `python3 m.py <<'EOF'` with
+  `gh pr merge 5` as its body, which `main` held as a merge to grant.
+- A `cd` that may not run in this shell, as `true && cd crates` or
+  `(cd crates)`, leaves the folder untold. A merge after it must name its
+  repository with `--repo`, or the `cd` must come first, as
+  `cd crates; ...`, or on its own.
 - A merge run through `sudo`, `ssh` or another program, or in a command
   that sets what gh reads, as `GH_REPO=o/r gh pr merge 5`, needs its head
   named and the operator's grant, even in a private repository or for the

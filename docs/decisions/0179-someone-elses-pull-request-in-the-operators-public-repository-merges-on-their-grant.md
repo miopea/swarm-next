@@ -130,11 +130,15 @@ sessions on the operator's machine, as the next point says.
   - a script file;
   - a shell alias or function set by an earlier command;
   - a GraphQL query read from a file (`-F query=@file`);
-  - a merge made by another program from a command it is given as one
-    string, as `ssh host 'gh pr merge 5'` (ADR 0190, proposed);
   - a merge spelled only through an expansion whose text never spells it,
-    as a brace list, a glob or a curl URL pattern, which the grant mod does
-    not send to the gate (ADR 0190, proposed);
+    as a brace list, a glob, a curl URL pattern, `${z:-g}` or
+    `$(printf g)`, which the grant mod does not send to the gate (ADR 0190,
+    proposed);
+  - a merge made by code in another language that never spells it, as
+    Python joining `'mer' + 'ge'` (ADR 0190, proposed);
+  - a merge sent by an HTTP client other than gh and curl, as `wget`, and a
+    branch merged rather than a pull request: GraphQL `mergeBranch` and the
+    REST merges API (ADR 0190, proposed);
   - a config written by an earlier command: gh's, git's or curl's.
 - **Merging without a merge command.** Fetching a pull request's branch and
   pushing it to `main` (`gh pr checkout`, then `git push origin HEAD:main`)

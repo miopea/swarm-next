@@ -24,6 +24,11 @@ jobs:
             sleep $((attempt * 5))
           done
       - run: rustup override set 1.97.1
+      # The grant mod's test runs its TypeScript module under node, which
+      # strips the types itself from 22.6 on (ADR 0190).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - run: python3 scripts/test-prune-target.py
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings

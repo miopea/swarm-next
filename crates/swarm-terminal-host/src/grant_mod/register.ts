@@ -21,14 +21,18 @@ const notes = new Map<string, string>()
 // written and as bash may spell it, as Swarm does too (ADR 0190).
 const MAY_MERGE = /merge|enqueuepullrequest/i
 const RUNS_GITHUB = /\b(gh|curl)\b/
-// Without a backslash and newline, a `$` before a quote, an empty `$()` or
-// pair of backquotes, and every quote and backslash.
+// Without a backslash and newline, a `$` before a quote, and every quote and
+// backslash.
 const withoutQuotes = (text: string): string =>
   text
     .replace(/\\\n/g, '')
     .replace(/\$(?=['"])/g, '')
-    .replace(/\$\(\)|``/g, '')
     .replace(/['"\\]/g, '')
+// Without what bash expands in a word, which may be empty: `${...}`, a `$(...)`
+// with no parenthesis inside, a backquoted command, `$` and a name, and `$`
+// and a digit or one of bash's own parameters.
+const EXPANSION = /\$\{[^}]*\}|\$\([^()]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]/g
+const withoutExpansions = (text: string): string => text.replace(EXPANSION, '')
 // Each escape bash's `$'...'`, printf or JSON reads as a letter, read as it:
 // `\xHH`, `\NNN` in octal, `\uHHHH` and `\UHHHHHHHH`.
 const ESCAPE = /\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3}))/g
@@ -39,7 +43,13 @@ const unescaped = (text: string): string =>
   })
 const mayMerge = (command: unknown): command is string => {
   if (typeof command !== 'string') return false
-  const spellings = [command, withoutQuotes(command), withoutQuotes(unescaped(command))]
+  const read = unescaped(command)
+  const spellings = [
+    command,
+    withoutQuotes(command),
+    withoutQuotes(read),
+    withoutQuotes(withoutExpansions(read)),
+  ]
   return (
     spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => RUNS_GITHUB.test(text))
   )
