@@ -104,19 +104,25 @@ function workerEngineUpdate(
 }
 
 /**
- * How the workers behind an installed provider release split (ADR 0122): the Claude workers
- * Swarm moves onto it with /restart by itself, the ones of those Claude already refused, and
- * the rest, which only stopping and starting can move.
+ * How the workers behind an installed provider release split (ADR 0122), by name: the Claude
+ * workers Swarm moves onto it with /restart by itself (`inPlace`), the ones of those Claude
+ * already refused (`refused`) and the ones it has not (`moving`), and the rest, which only
+ * stopping and starting can move. A worker behind on two providers is one worker.
+ *
+ * Names, not counts: "1 worker still runs the older release" left the operator unable to
+ * tell which one.
  */
-export function providerUpdateCounts(superseded: SupersededProvider[]) {
-  const behind = new Set(superseded.flatMap((entry) => entry.worker_ids));
+export function providerUpdateWorkers(superseded: SupersededProvider[]) {
+  const names: Record<string, string> = Object.assign({}, ...superseded.map((entry) => entry.worker_names));
+  const behind = [...new Set(superseded.flatMap((entry) => entry.worker_ids))];
   const inPlace = new Set(superseded.flatMap((entry) => entry.in_place_worker_ids));
   const refused = new Set(superseded.flatMap((entry) => entry.asked_worker_ids));
+  const named = (keep: (worker: string) => boolean) => behind.filter(keep).map((worker) => names[worker]);
   return {
-    behind: behind.size,
-    inPlace: inPlace.size,
-    refused: refused.size,
-    stopAndStart: [...behind].filter((worker) => !inPlace.has(worker)).length,
+    inPlace: named((worker) => inPlace.has(worker)),
+    moving: named((worker) => inPlace.has(worker) && !refused.has(worker)),
+    refused: named((worker) => refused.has(worker)),
+    stopAndStart: named((worker) => !inPlace.has(worker)),
   };
 }
 
@@ -158,39 +164,49 @@ function runningWorkers(count: number): string {
  */
 function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary | undefined {
   if (superseded.length === 0) return undefined;
-  const counts = providerUpdateCounts(superseded);
+  const { inPlace, moving, refused, stopAndStart } = providerUpdateWorkers(superseded);
   const named = supersededReleaseNames(superseded);
-  if (counts.stopAndStart > 0) {
-    const others = counts.inPlace > 0
-      ? ` Swarm moves the other ${workers(counts.inPlace)} onto it by itself.`
+  if (stopAndStart.length > 0) {
+    const count = stopAndStart.length;
+    const others = moving.length > 0
+      ? ` Swarm moves the other ${workers(moving.length)} onto it by itself: ${listed(moving)}.`
+      : "";
+    // The restart asks these again as well (ADR 0122), so they are not among the ones Swarm
+    // is moving by itself: it asks only once for each release.
+    const asked = refused.length > 0
+      ? ` Claude did not restart ${listed(refused)} when asked, and the restart asks again.`
       : "";
     return {
       kind: "provider",
       label: "Provider update",
-      detail: `${named} is installed, and ${runningWorkers(counts.stopAndStart)} started before that, so ${counts.stopAndStart === 1 ? "it is" : "they are"} still running the older release.${others}`,
+      detail: `${named} is installed, and ${runningWorkers(count)} started before that: ${listed(stopAndStart)}. ${count === 1 ? "It is" : "They are"} still running the older release.${others}${asked}`,
       busy: false,
       action: "restart_providers",
       actionLabel: "Restart onto the new release",
-      consequence: `${runningWorkers(counts.stopAndStart)} ${counts.stopAndStart === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations on the newer release. Running work is interrupted; unsent terminal input may be lost.`,
-      costShort: `Restarts ${runningWorkers(counts.stopAndStart)}`,
+      consequence: `${runningWorkers(count)} ${count === 1 ? "is" : "are"} restarted. Swarm attempts to resume their saved conversations on the newer release. Running work is interrupted; unsent terminal input may be lost.`,
+      costShort: `Restarts ${fewNames(stopAndStart)}`,
     };
   }
-  if (counts.refused > 0) {
+  if (refused.length > 0) {
+    const others = moving.length > 0
+      ? ` Swarm is moving the other ${workers(moving.length)} onto it: ${listed(moving)}.`
+      : "";
     return {
       kind: "provider",
       label: "Provider update",
-      detail: `${named} is installed. Claude did not restart ${workers(counts.refused)} onto it. It refuses while Remote Control is connected or background work is running.`,
+      detail: `${named} is installed. Claude did not restart ${listed(refused)} onto it. It refuses while Remote Control is connected or background work is running.${others}`,
       busy: false,
       action: "restart_providers",
       actionLabel: "Retry the restart",
+      costShort: `Claude refused ${fewNames(refused)}`,
     };
   }
   return {
     kind: "provider",
     label: "Updating workers",
-    detail: `${named} is installed. Swarm is moving ${workers(counts.inPlace)} onto it, each as soon as it is free, and their conversations carry on.`,
+    detail: `${named} is installed. Swarm is moving ${workers(inPlace.length)} onto it: ${listed(inPlace)}. Each goes as soon as it is free, and its conversation carries on.`,
     busy: false,
-    costShort: `Automatic, as ${counts.inPlace === 1 ? "it comes" : "each comes"} free`,
+    costShort: `Moving ${fewNames(inPlace)}`,
   };
 }
 
@@ -203,7 +219,17 @@ const SETTING_NAME: Record<RestartBoundSetting, string> = {
   system_access: "System access",
 };
 
-function listed(names: string[]): string {
+/**
+ * Up to three names, then how many more: "Aster, Bramble, Clover and 2 more". For the rail's
+ * one line, whose name opens every one of them in Settings. "and 2 more" does not break, so
+ * a line that wraps never leaves "more" on its own.
+ */
+function fewNames(names: string[]): string {
+  return names.length <= 3 ? listed(names) : `${names.slice(0, 3).join(", ")} and\u00a0${names.length - 3}\u00a0more`;
+}
+
+/** "Aster, Bramble and Clover". */
+export function listed(names: string[]): string {
   return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 

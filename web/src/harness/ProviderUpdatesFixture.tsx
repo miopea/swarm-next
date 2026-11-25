@@ -5,8 +5,10 @@ import ProviderReleaseAction from "../settings/ProviderReleaseAction";
 
 /**
  * The Updates card and the rail's row for a Claude update (ADR 0122), in the state ?state=
- * names: "automatic" (Swarm is moving both workers itself), "refused" (Claude refused one), or
- * "mixed" (a Codex worker beside them still needs stopping). Nothing is restarted.
+ * names: "automatic" (Swarm is moving both workers itself), "refused" (Claude refused one),
+ * "mixed" (a Codex worker beside them still needs stopping), "mixed-refused" (both), or
+ * "many" (five Codex workers beside them, more than the rail's line names). Nothing is
+ * restarted.
  */
 export default function ProviderUpdatesFixture() {
   const state = new URLSearchParams(window.location.search).get("state") ?? "automatic";
@@ -16,11 +18,23 @@ export default function ProviderUpdatesFixture() {
       version: "2.1.310",
       installed_at: 1_000,
       worker_ids: ["petal", "thistle"],
+      worker_names: { petal: "Petal", thistle: "Thistle" },
       in_place_worker_ids: ["petal", "thistle"],
-      asked_worker_ids: state === "refused" ? ["thistle"] : [],
+      asked_worker_ids: state === "refused" || state === "mixed-refused" ? ["thistle"] : [],
     },
-    ...(state === "mixed"
-      ? [{ provider: "codex" as const, version: null, installed_at: 1_000, worker_ids: ["clover"], in_place_worker_ids: [], asked_worker_ids: [] }]
+    ...(state === "mixed" || state === "mixed-refused"
+      ? [{ provider: "codex" as const, version: null, installed_at: 1_000, worker_ids: ["clover"], worker_names: { clover: "Clover" }, in_place_worker_ids: [], asked_worker_ids: [] }]
+      : []),
+    ...(state === "many"
+      ? [{
+        provider: "codex" as const,
+        version: null,
+        installed_at: 1_000,
+        worker_ids: ["clover", "woodruff", "daisy", "elder", "fern"],
+        worker_names: { clover: "Clover", woodruff: "Sweet Woodruff", daisy: "Daisy", elder: "Elder", fern: "Fern" },
+        in_place_worker_ids: [],
+        asked_worker_ids: [],
+      }]
       : []),
   ];
   const rail = runtimeUpdates(undefined, undefined, undefined, superseded);

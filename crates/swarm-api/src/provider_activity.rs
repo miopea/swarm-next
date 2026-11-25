@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -41,6 +41,9 @@ pub(super) struct SupersededProviderView {
     version: Option<String>,
     installed_at: Option<i64>,
     worker_ids: Vec<String>,
+    /// The roster name of each of those workers, by id, so that the notice can
+    /// say which workers it means and not only how many.
+    worker_names: BTreeMap<String, String>,
     /// Of those, the workers Swarm moves onto the release itself with
     /// `/restart` (ADR 0122). The rest need stopping and starting.
     in_place_worker_ids: Vec<String>,
@@ -51,6 +54,7 @@ pub(super) struct SupersededProviderView {
 /// The workers still running a provider release that disk has moved past.
 ///
 /// A failed roster read is unavailable evidence, not an empty update list.
+/// So is a worker behind the release that the roster cannot name.
 fn superseded_providers(
     state: &AppState,
     claude_release: Option<&swarm_terminal::ProviderRelease>,
@@ -58,7 +62,8 @@ fn superseded_providers(
     codex_release: Option<&swarm_terminal::ProviderRelease>,
     executables: &HashMap<WorkerSessionId, Option<String>>,
 ) -> Result<Vec<SupersededProviderView>, ApiError> {
-    let sessions = crate::task_store(state)?
+    let store = crate::task_store(state)?;
+    let sessions = store
         .active_worker_sessions()
         .map_err(|error| crate::task_store_error(&error))?;
     let running = |session: &swarm_persistence::ActiveWorkerSession| {
@@ -66,7 +71,7 @@ fn superseded_providers(
             .get(&session.session_id)
             .and_then(Option::as_deref)
     };
-    Ok([
+    let mut superseded = [
         (
             "claude_code",
             swarm_domain::ProviderKind::ClaudeCode,
@@ -109,6 +114,7 @@ fn superseded_providers(
                 .iter()
                 .map(|session| session.worker_id.to_string())
                 .collect(),
+            worker_names: BTreeMap::new(),
             in_place_worker_ids: in_place
                 .iter()
                 .map(|session| session.worker_id.to_string())
@@ -120,7 +126,35 @@ fn superseded_providers(
                 .collect(),
         })
     })
-    .collect())
+    .collect::<Vec<_>>();
+    if superseded.is_empty() {
+        return Ok(superseded);
+    }
+    let roster = store
+        .list_worker_profiles()
+        .map_err(|error| crate::task_store_error(&error))?
+        .into_iter()
+        .map(|profile| (profile.id.to_string(), profile.name))
+        .collect::<HashMap<_, _>>();
+    for provider in &mut superseded {
+        provider.worker_names = provider
+            .worker_ids
+            .iter()
+            .map(|id| {
+                roster
+                    .get(id)
+                    .map(|name| (id.clone(), name.clone()))
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                            "provider_status_unavailable",
+                            "A worker on an older provider release is not on the roster. Existing workers are unchanged.",
+                        )
+                    })
+            })
+            .collect::<Result<_, _>>()?;
+    }
+    Ok(superseded)
 }
 
 async fn observe(
@@ -829,6 +863,56 @@ mod tests {
         let off = view(Some(false));
         assert_eq!(off[0].worker_ids, vec![worker.id.to_string()]);
         assert!(off[0].in_place_worker_ids.is_empty());
+    }
+
+    /// The notice said "1 worker still runs the older release" and the
+    /// operator could not tell which. Each worker behind the release comes
+    /// with its roster name, and a worker already on it is not named.
+    #[test]
+    fn each_worker_behind_the_release_comes_with_its_name() {
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let mut sessions = Vec::new();
+        for (position, name) in [(1, "Petal"), (2, "Moss")] {
+            let worker = store
+                .create_worker(
+                    name,
+                    ProviderKind::ClaudeCode,
+                    &format!("/workspace/{name}"),
+                    false,
+                    position,
+                )
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            sessions.push((worker.id, session));
+        }
+        let state = AppState::default().with_task_store(store);
+        let release = swarm_terminal::ProviderRelease {
+            resolved_path: "/home/op/.local/share/claude/versions/2.1.311".into(),
+            version: Some("2.1.311".into()),
+            installed_at: Some(1_000),
+        };
+        let [(petal, petal_session), (_, moss_session)] = sessions[..] else {
+            unreachable!("two workers were made");
+        };
+        let executables = HashMap::from([
+            (
+                petal_session,
+                Some("/home/op/.local/share/claude/versions/2.1.310".to_owned()),
+            ),
+            (
+                moss_session,
+                Some("/home/op/.local/share/claude/versions/2.1.311".to_owned()),
+            ),
+        ]);
+
+        let view = superseded_providers(&state, Some(&release), None, None, &executables).unwrap();
+
+        assert_eq!(view[0].worker_ids, vec![petal.to_string()]);
+        assert_eq!(
+            serde_json::to_value(&view[0]).unwrap()["worker_names"],
+            serde_json::json!({ petal.to_string(): "Petal" })
+        );
     }
 
     const RULE: &str = "────────────────────────────────────────";
