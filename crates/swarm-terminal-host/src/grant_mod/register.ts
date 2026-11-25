@@ -34,12 +34,40 @@ const withoutQuotes = (text: string): string =>
 const EXPANSION = /\$\{[^}]*\}|\$\([^()]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]/g
 const withoutExpansions = (text: string): string => text.replace(EXPANSION, '')
 // Each escape bash's `$'...'`, printf or JSON reads as a letter, read as it:
-// `\xHH`, `\NNN` in octal, `\uHHHH` and `\UHHHHHHHH`.
-const ESCAPE = /\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3}))/g
+// `\xHH`, `\NNN` in octal, `\uHHHH`, `\UHHHHHHHH`, and the one-letter
+// escapes, as `\t` and `\n`.
+const ESCAPE =
+  /\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3})|([abeEfnrtv]))/g
+const LETTERS: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  e: '\x1b',
+  E: '\x1b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+}
 const unescaped = (text: string): string =>
-  text.replace(ESCAPE, (escape: string, x?: string, u?: string, wide?: string, octal?: string) => {
-    const code = octal === undefined ? parseInt(x ?? u ?? wide ?? '', 16) : parseInt(octal, 8)
-    return code <= 0x10ffff ? String.fromCodePoint(code) : escape
+  text.replace(
+    ESCAPE,
+    (escape: string, x?: string, u?: string, wide?: string, octal?: string, letter?: string) => {
+      if (letter !== undefined) return LETTERS[letter] ?? escape
+      const code = octal === undefined ? parseInt(x ?? u ?? wide ?? '', 16) : parseInt(octal, 8)
+      return code <= 0x10ffff ? String.fromCodePoint(code) : escape
+    },
+  )
+// With each run of `%HH` escapes read as the text its bytes make, as a server
+// may read an address's path. A run that makes no UTF-8 is kept as written.
+const PERCENT = /(?:%[0-9a-fA-F]{2})+/g
+const percentDecoded = (text: string): string =>
+  text.replace(PERCENT, (run: string) => {
+    try {
+      return decodeURIComponent(run)
+    } catch {
+      return run
+    }
   })
 const mayMerge = (command: unknown): command is string => {
   if (typeof command !== 'string') return false
@@ -47,7 +75,7 @@ const mayMerge = (command: unknown): command is string => {
   const spellings = [
     command,
     withoutQuotes(command),
-    withoutQuotes(read),
+    withoutQuotes(percentDecoded(read)),
     withoutQuotes(withoutExpansions(read)),
   ]
   return (

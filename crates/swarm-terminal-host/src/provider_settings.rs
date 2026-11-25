@@ -535,6 +535,11 @@ console.log(JSON.stringify(results))
             "g${z}h pr merge 5",
             "curl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
             "gh api graphql -f query='mutation { enqueuePullRequest(input: {}) { x } }'",
+            "bash -c $'\\tgh pr merge 5'",
+            "eval $'\\ngh pr merge 5'",
+            "make -f - <<< $'all:\\n\\tgh pr merge 5'",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6derge",
+            "gh api -X PUT repos/o/r/pulls/5/%6Derge",
         ];
         let not_sent = [
             "cargo test merge_gate",

@@ -446,7 +446,7 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                     lexer.pattern_ends();
                 } else if substitution && lexer.depth == 0 {
                     lexer.end();
-                    return lexer.heredocs.is_empty().then_some(lexer.tokens);
+                    return (lexer.heredocs.is_empty() && lexer.closed()).then_some(lexer.tokens);
                 } else {
                     lexer.depth = lexer.depth.saturating_sub(1);
                     lexer.boundary();
@@ -471,10 +471,11 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
             other => lexer.unquoted(other, chars.peek().copied()),
         }
     }
-    // A substitution the text never closes, or a heredoc whose body never
-    // came: what the shell would run cannot be told.
+    // A substitution the text never closes, a heredoc whose body never
+    // came, or a `case`, compound or `[[` left open: what the shell would
+    // run cannot be told.
     lexer.end();
-    (!substitution && lexer.heredocs.is_empty()).then_some(lexer.tokens)
+    (!substitution && lexer.heredocs.is_empty() && lexer.closed()).then_some(lexer.tokens)
 }
 
 /// What bash computes in a word.
@@ -514,8 +515,8 @@ struct Lexer {
     /// How many `[` outside quotes the word holds: a `]` after one makes a
     /// glob.
     brackets: usize,
-    /// The next word is a redirection's file, not part of the command.
-    redirect_target: bool,
+    /// What the next word is when it is not part of the command.
+    target: Target,
     /// Heredocs on the current line, in order: their bodies start after the
     /// next newline.
     heredocs: Vec<Heredoc>,
@@ -534,6 +535,48 @@ struct Lexer {
     list_start: usize,
     /// The `case` commands open around it, innermost last.
     cases: Vec<Case>,
+    /// What bash reads after the last word, when a word was the last thing
+    /// read (`Lexer::position`).
+    follows: Follows,
+    /// Inside `[[ ... ]]`, whose words are no commands.
+    conditional: bool,
+}
+
+/// A word after a redirection, which is no part of the command.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Target {
+    /// The next word is part of the command.
+    #[default]
+    None,
+    /// A redirection's file.
+    File,
+    /// A here-string's word, what the command reads, on standard input
+    /// when `true`.
+    HereString(bool),
+}
+
+/// What bash reads after a word, as far as reserved words go: where a word
+/// is reserved, bash reads it so only where it reads a command.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Follows {
+    /// A command: after a reserved word in `RESERVED` read as one, after
+    /// `time -p`, and after a compound's close, `fi`, `done`, `}`, `esac` or
+    /// `]]`, where an outer compound's next word may come.
+    #[default]
+    Command,
+    /// After `time`: `-p`, or a command.
+    Time,
+    /// After `coproc`: a compound command, or a name or a simple command.
+    Coproc,
+    /// After `coproc` and a word: an opener, which makes that word the
+    /// coprocess's name, is the only word reserved here.
+    Named,
+    /// After `for` or `select`: its name.
+    Name,
+    /// After `for` or `select` and its name, where `do` is reserved.
+    List,
+    /// After an argument, a name or any other word.
+    Argument,
 }
 
 /// Where bash is in reading a `case` command.
@@ -642,21 +685,39 @@ impl Lexer {
         }
     }
 
-    /// The rest of a `$'...'` string, whose opening has been read. Bash
-    /// reads its escapes, so a backslash keeps a quote from ending it.
+    /// The rest of a `$'...'` string, whose opening has been read: quoted
+    /// text, which bash makes as it reads the command. It finds where the
+    /// string ends first, reading a backslash and the character after it as
+    /// a pair, so `\'` ends nothing, and then reads each escape. A `\0` ends
+    /// what it keeps (ADR 0190).
     fn ansi_c_quoted(&mut self, chars: &mut Chars<'_>) -> Option<()> {
-        self.computed(true);
-        self.word.push('$');
+        self.started = true;
+        self.quotes += 1;
+        let mut body = String::new();
         loop {
             match chars.next()? {
-                '\'' => return Some(()),
+                '\'' => break,
                 '\\' => {
-                    self.word.push('\\');
-                    self.word.push(chars.next()?);
+                    body.push('\\');
+                    body.push(chars.next()?);
                 }
-                other => self.word.push(other),
+                other => body.push(other),
             }
         }
+        let mut escapes = body.chars().peekable();
+        while let Some(next) = escapes.next() {
+            let text = if next == '\\' {
+                ansi_c_escape(&mut escapes)
+            } else {
+                next.to_string()
+            };
+            if let Some((kept, _)) = text.split_once('\0') {
+                self.word.push_str(kept);
+                break;
+            }
+            self.word.push_str(&text);
+        }
+        Some(())
     }
 
     /// A character of the word outside quotes, before `next`. A glob, a
@@ -735,26 +796,85 @@ impl Lexer {
 
     /// Whether `word` stands where bash reads a command, so a reserved word
     /// there is one: at the start, after a list's or a pipeline's end, or
-    /// after a reserved word, `time -p` among them. After `coproc` and its
-    /// name, it is a compound command.
+    /// after a word bash reads as reserved itself (`Follows`). A reserved
+    /// word given as an argument, as `echo if`, is a word. Inside `[[ ... ]]`
+    /// none is.
     fn at_command_start(&self, word: &str) -> bool {
-        let mut said = self
+        !self.conditional
+            && match self.position() {
+                Follows::Command | Follows::Time | Follows::Coproc => true,
+                Follows::Named => word == "case" || OPENERS.contains(&word),
+                Follows::List => word == "do",
+                Follows::Name | Follows::Argument => false,
+            }
+    }
+
+    /// What bash reads where the word now read stands, from what was read
+    /// last: a command after a list's or a pipeline's end, and after a
+    /// word what that word left (`follows`).
+    fn position(&self) -> Follows {
+        match self
             .tokens
             .iter()
             .rev()
-            .filter(|token| **token != Token::Apart);
-        match (said.next(), said.next()) {
-            (None | Some(Token::Break | Token::Pipe), _) => true,
-            (Some(Token::Word(last)), before) if last == "-p" => {
-                matches!(before, Some(Token::Word(before)) if before == "time")
-            }
-            (Some(Token::Word(last)), _) if last == "coproc" => true,
-            (Some(Token::Word(_)), Some(Token::Word(before))) if before == "coproc" => {
-                word == "case" || OPENERS.contains(&word)
-            }
-            (Some(Token::Word(last)), _) => RESERVED.contains(&last.as_str()),
-            (Some(_), _) => false,
+            .find(|token| **token != Token::Apart)
+        {
+            None | Some(Token::Break | Token::Pipe) => Follows::Command,
+            Some(Token::Word(_)) => self.follows,
+            Some(_) => Follows::Argument,
         }
+    }
+
+    /// What bash reads after `word`, read at `at`, where `starts` says it
+    /// stands where bash reads a command, as written, and `plain` that no
+    /// part of it is quoted or computed.
+    fn after(
+        &mut self,
+        at: Follows,
+        word: &str,
+        read: &CaseWord,
+        plain: bool,
+        starts: bool,
+    ) -> Follows {
+        if self.conditional {
+            if plain && word == "]]" {
+                self.conditional = false;
+                return Follows::Command;
+            }
+            return Follows::Argument;
+        }
+        if *read == CaseWord::Grammar {
+            return if word == "esac" {
+                Follows::Command
+            } else {
+                Follows::Argument
+            };
+        }
+        match word {
+            _ if !starts => match at {
+                Follows::Name => Follows::List,
+                _ => Follows::Argument,
+            },
+            "time" => Follows::Time,
+            "-p" if at == Follows::Time => Follows::Command,
+            "coproc" => Follows::Coproc,
+            "for" | "select" => Follows::Name,
+            "[[" => {
+                self.conditional = true;
+                Follows::Argument
+            }
+            _ if RESERVED.contains(&word) || CLOSERS.contains(&word) || word == "esac" => {
+                Follows::Command
+            }
+            _ if at == Follows::Coproc => Follows::Named,
+            _ => Follows::Argument,
+        }
+    }
+
+    /// Whether no `case`, compound command or `[[` is left open, as bash
+    /// needs where the text ends: one left open is a syntax error.
+    fn closed(&self) -> bool {
+        self.cases.is_empty() && self.compounds == 0 && !self.conditional
     }
 
     /// Whether this is reading a `case` command's patterns.
@@ -860,8 +980,10 @@ impl Lexer {
                 self.heredoc(delimiter, strip_tabs, quoted, standard);
                 return Some(());
             }
-            // A here-string's word is passed over, as it always was; ADR
-            // 0188 names that limit.
+            // A here-string: its word, and a newline, are the input.
+            chars.next();
+            self.target = Target::HereString(standard);
+            return Some(());
         }
         // `>|` writes over a file even with noclobber set.
         if first == '>' {
@@ -888,7 +1010,7 @@ impl Lexer {
             }
             return Some(());
         }
-        self.redirect_target = true;
+        self.target = Target::File;
         Some(())
     }
 
@@ -936,20 +1058,18 @@ impl Lexer {
         if self.started {
             let word = std::mem::take(&mut self.word);
             let printed = self.printed.take();
-            if self.redirect_target {
-                self.redirect_target = false;
-            } else {
-                let read = self.read_as_case(&word, plain && printed.is_none());
+            if self.target == Target::None {
+                let plain = plain && printed.is_none();
+                let read = self.read_as_case(&word, plain);
                 if read == CaseWord::Pattern {
                     // A pattern is not a word of any command.
                     self.started = false;
                     return;
                 }
-                let opens = read == CaseWord::Other
-                    && plain
-                    && printed.is_none()
-                    && self.at_command_start(&word)
-                    && self.compound(&word);
+                let at = self.position();
+                let starts = read == CaseWord::Other && plain && self.at_command_start(&word);
+                let opens = starts && self.compound(&word);
+                self.follows = self.after(at, &word, &read, plain, starts);
                 self.tokens.push(match printed {
                     Some(Printing {
                         splits,
@@ -965,6 +1085,21 @@ impl Lexer {
                 });
                 if opens {
                     self.tokens.push(Token::Apart);
+                }
+            } else {
+                // A here-string bash computes no part of is input the gate
+                // sees, as a quoted heredoc's body is. Any other is input it
+                // cannot see (ADR 0190).
+                match std::mem::take(&mut self.target) {
+                    Target::HereString(standard) if printed.is_none() => {
+                        self.tokens.push(Token::Stdin {
+                            body: word,
+                            expands: false,
+                            standard,
+                        });
+                    }
+                    Target::HereString(_) => self.tokens.push(Token::Input),
+                    Target::File | Target::None => {}
                 }
             }
             self.started = false;
@@ -1078,8 +1213,8 @@ impl Lexer {
     }
 
     /// Bash computes the part of the word now read as it runs the command:
-    /// what a substitution prints, a variable, `~`, `$'...'` or `$"..."`, a
-    /// brace list or a glob. It may be any word, so for gh and git it counts
+    /// what a substitution prints, a variable, `~`, `$"..."`, a brace list
+    /// or a glob. It may be any word, so for gh and git it counts
     /// only as a text flag's value (`holds_text`), and only when it stays
     /// `whole`, one word. Returns whether it is that value (ADR 0188).
     fn computed(&mut self, whole: bool) -> bool {
@@ -1405,6 +1540,68 @@ fn quoted_words(chars: &Chars<'_>) -> bool {
     }
 }
 
+/// One escape in a `$'...'` string's text, after its backslash: the text
+/// bash 5.2 makes of it. `\cX` is the control letter of X, a backslash
+/// after `\c` takes a second one with it, and an escape bash does not name
+/// is kept as written.
+fn ansi_c_escape(chars: &mut Chars<'_>) -> String {
+    let Some(named) = chars.next() else {
+        return "\\".to_owned();
+    };
+    let letter = match named {
+        'a' => '\u{7}',
+        'b' => '\u{8}',
+        'e' | 'E' => '\u{1b}',
+        'f' => '\u{c}',
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        'v' => '\u{b}',
+        '\\' | '\'' | '"' | '?' => named,
+        'c' => match chars.next() {
+            None => return "\\c".to_owned(),
+            Some('?') => '\u{7f}',
+            Some('\\') => {
+                chars.next_if_eq(&'\\');
+                '\u{1c}'
+            }
+            Some(control) if control.is_ascii() => {
+                u8::try_from(control).map_or(control, |byte| char::from(byte & 0x1f))
+            }
+            Some(other) => return format!("\\c{other}"),
+        },
+        'x' | 'u' | 'U' | '0'..='7' => {
+            let (radix, most) = match named {
+                'x' => (16, 2),
+                'u' => (16, 4),
+                'U' => (16, 8),
+                _ => (8, 3),
+            };
+            let mut digits = if radix == 8 {
+                named.to_string()
+            } else {
+                String::new()
+            };
+            while digits.len() < most
+                && let Some(digit) = chars.next_if(|next| next.is_digit(radix))
+            {
+                digits.push(digit);
+            }
+            // Bash keeps the low byte of an octal escape past 255.
+            let value = u32::from_str_radix(&digits, radix)
+                .ok()
+                .map(|value| if radix == 8 { value & 0xff } else { value });
+            match value.and_then(char::from_u32) {
+                Some(letter) => letter,
+                None if radix == 8 => return format!("\\{digits}"),
+                None => return format!("\\{named}{digits}"),
+            }
+        }
+        other => return format!("\\{other}"),
+    };
+    letter.to_string()
+}
+
 /// At a `(`: whether it is `()` after a name, which defines a function.
 /// bash reads no other `()`: an empty subshell does not parse.
 fn defines_a_function(chars: &Chars<'_>) -> bool {
@@ -1571,6 +1768,11 @@ fn merges_in(command: &str, cwd: Option<&Path>, depth: usize) -> Parsed {
         plain: true,
         names_hold: true,
         curl_configured: configures_curl(command),
+        cdpath: if std::env::var_os("CDPATH").is_some_and(|path| !path.is_empty()) {
+            Cdpath::Set
+        } else {
+            Cdpath::Unset
+        },
     };
     // In a command that mentions a merge, a part bash computes or evaluates
     // where it decides what runs may be that merge (ADR 0190).
@@ -1592,14 +1794,26 @@ struct Scope {
     /// The whole command writes or names curl's own config, which can hold
     /// any request a later `curl` sends.
     curl_configured: bool,
+    /// Whether `CDPATH` may be set where the text runs: in Swarm's own
+    /// environment, or by the text around it, which a shell it runs
+    /// inherits.
+    cdpath: Cdpath,
+}
+
+/// Whether `cd` may look for a folder in the folders `CDPATH` names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cdpath {
+    Unset,
+    Set,
 }
 
 impl Scope {
-    fn inner(self, plain: bool, names_hold: bool) -> Self {
+    fn inner(self, plain: bool, names_hold: bool, cdpath: Cdpath) -> Self {
         Self {
             depth: self.depth + 1,
             plain,
             names_hold,
+            cdpath,
             ..self
         }
     }
@@ -1630,13 +1844,13 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, scope: Scope) -> (Parsed, 
     let names_hold = scope.names_hold && !redefines_names(tokens);
     let mut doubted = tokens.contains(&Token::Opaque) || defines_a_function_by_name(tokens);
     let mut folder = cwd.map(Path::to_path_buf);
-    // `cd` looks for a folder named without `/` or `.` first in each folder
-    // `CDPATH` names, which this does not follow.
-    let searched = std::env::var_os("CDPATH").is_some_and(|path| !path.is_empty())
-        || tokens
-            .iter()
-            .filter_map(Token::said)
-            .any(|(word, _)| word.contains("CDPATH"));
+    let searched = searches_cdpath(tokens, scope);
+    // A word here spells a merge and gh or curl, as a string a variable
+    // holds does.
+    let spelled = tokens
+        .iter()
+        .filter_map(Token::said)
+        .any(|(word, _)| may_merge(word));
     let mut merges = Vec::new();
     for pipeline in tokens.split(|token| *token == Token::Break) {
         let commands: Vec<Simple<'_>> = pipeline
@@ -1674,6 +1888,20 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, scope: Scope) -> (Parsed, 
                     found.push(merge);
                 }
                 Step::Nested(text) => read.push(text),
+                // A program this does not know may run what it reads from a
+                // pipe or a redirection, which the gate cannot see, as a
+                // merge: one a word of the command spells, as a variable
+                // may hold it, or one echo or printf before it in the pipe
+                // prints (ADR 0190). A heredoc it reads is read as commands
+                // below.
+                Step::Unread => {
+                    doubted |= (place > 0 || command.redirected)
+                        && input.is_none()
+                        && (spelled
+                            || commands[..place]
+                                .iter()
+                                .any(|before| prints_a_merge(&before.words)));
+                }
                 Step::Other => {}
             }
             // Commands run in this shell, as `eval` and `source` run them,
@@ -1681,7 +1909,8 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, scope: Scope) -> (Parsed, 
             if around.moves_here {
                 folder = None;
             }
-            let inner = scope.inner(data, names_hold);
+            let cdpath = if searched { Cdpath::Set } else { Cdpath::Unset };
+            let inner = scope.inner(data, names_hold, cdpath);
             for &(body, expands) in &command.heredocs {
                 let expanded = || {
                     expansions(body).map_or((Parsed::Unclear, false), |run| {
@@ -1736,10 +1965,10 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, scope: Scope) -> (Parsed, 
 const SETS_WHAT_GH_READS: &str = "it sets or clears a variable gh reads to choose the repository, the account or the program, so Swarm cannot ask gh what it would merge";
 
 /// Whether a command mentions a merge, as written or as bash may spell it:
-/// with its quotes, backslashes and empty substitutions taken out, or with
-/// an escape such as `\x6d` or a JSON `g` read as its letter. The grant
-/// mod sends the gate a command only when one of these also names gh or
-/// curl (ADR 0190).
+/// with its quotes, backslashes and empty substitutions taken out, with an
+/// escape such as `\x6d`, `\t` or a JSON `g` read as its letter, or with
+/// an address's `%6d` read as its letter. The grant mod sends the gate a
+/// command only when one of these also names gh or curl (ADR 0190).
 fn mentions_a_merge(text: &str) -> bool {
     spellings(text).iter().any(|spelling| {
         let lower = spelling.to_ascii_lowercase();
@@ -1748,16 +1977,50 @@ fn mentions_a_merge(text: &str) -> bool {
 }
 
 /// The text as written, without what bash takes out of a word, the same
-/// with its escapes read, and that without what bash expands, which may be
-/// empty.
+/// with its escapes and its `%HH` escapes read, and the text with its
+/// escapes read without what bash expands, which may be empty.
 fn spellings(text: &str) -> [String; 4] {
     let unescaped = unescaped(text);
     [
         text.to_owned(),
         without_quotes(text),
-        without_quotes(&unescaped),
+        without_quotes(&percent_decoded(&unescaped)),
         without_quotes(&without_expansions(&unescaped)),
     ]
+}
+
+/// The text with each run of `%HH` escapes read as the text its bytes make,
+/// as a server may read an address's path. A run that makes no UTF-8 is
+/// kept as written, as the grant mod keeps it.
+fn percent_decoded(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let run = &rest[start..];
+        rest = run;
+        let mut bytes = Vec::new();
+        while let Some(byte) = rest
+            .strip_prefix('%')
+            .and_then(|after| after.get(..2))
+            .filter(|hex| hex.bytes().all(|digit| digit.is_ascii_hexdigit()))
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            bytes.push(byte);
+            rest = &rest[3..];
+        }
+        if bytes.is_empty() {
+            out.push('%');
+            rest = &rest[1..];
+            continue;
+        }
+        match String::from_utf8(bytes) {
+            Ok(decoded) => out.push_str(&decoded),
+            Err(_) => out.push_str(&run[..run.len() - rest.len()]),
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The text without a backslash and newline, a `$` before a quote, and
@@ -1814,14 +2077,31 @@ fn without_expansions(text: &str) -> String {
 }
 
 /// The text with each escape bash's `$'...'`, printf or JSON reads as a
-/// letter read as it: `\xHH`, `\NNN` in octal, `\uHHHH` and `\UHHHHHHHH`.
-/// A request body's JSON reads `g` as `g`, so GitHub does too.
+/// letter read as it: `\xHH`, `\NNN` in octal, `\uHHHH`, `\UHHHHHHHH`, and
+/// the one-letter escapes, as `\t` and `\n`. A request body's JSON reads
+/// `g` as `g`, so GitHub does too.
 fn unescaped(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(character) = chars.next() {
         if character != '\\' {
             out.push(character);
+            continue;
+        }
+        let letter = match chars.peek() {
+            Some('a') => Some('\u{7}'),
+            Some('b') => Some('\u{8}'),
+            Some('e' | 'E') => Some('\u{1b}'),
+            Some('f') => Some('\u{c}'),
+            Some('n') => Some('\n'),
+            Some('r') => Some('\r'),
+            Some('t') => Some('\t'),
+            Some('v') => Some('\u{b}'),
+            _ => None,
+        };
+        if let Some(letter) = letter {
+            chars.next();
+            out.push(letter);
             continue;
         }
         let (radix, most) = match chars.peek() {
@@ -1933,8 +2213,9 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
 
 /// What a command reads on standard input, as far as the gate can see it:
 /// its own heredocs on standard input, or those the commands before it pass
-/// on down the pipe as written. `None` is input it cannot see: a file, a
-/// here-string or a descriptor, a command that prints anything else, or the
+/// on down the pipe as written, a here-string bash computes no part of among
+/// them. `None` is input it cannot see: a file, a here-string bash computes
+/// in part or a descriptor, a command that prints anything else, or the
 /// shell's own. A heredoc on another descriptor is none of these. Where a
 /// name may run something other than its program (`names_hold` false), no
 /// command is known to pass its input on.
@@ -1961,6 +2242,27 @@ fn seen_input(commands: &[Simple<'_>], place: usize, names_hold: bool) -> Option
     }
 }
 
+/// Whether `CDPATH` may be set where these commands run: around this text,
+/// by a word that names it, or by a name bash computes, which may be it.
+/// `cd` looks for a folder named without `/` or `.` first in each folder it
+/// names, which the gate does not follow.
+fn searches_cdpath(tokens: &[Token], scope: Scope) -> bool {
+    scope.cdpath == Cdpath::Set
+        || sets_a_name_bash_computes(tokens)
+        || tokens
+            .iter()
+            .filter_map(Token::said)
+            .any(|(word, _)| word.contains("CDPATH"))
+}
+
+/// Whether a command is echo or printf whose words, as they print them
+/// together, spell a merge and gh or curl.
+fn prints_a_merge(words: &[String]) -> bool {
+    words.split_first().is_some_and(|(first, rest)| {
+        matches!(system_name(first), Some("echo" | "printf")) && may_merge(&rest.join(" "))
+    })
+}
+
 /// Whether a command prints what it reads, as it reads it: `cat` with no
 /// file, or `tee`.
 fn passes_on(words: &[String]) -> bool {
@@ -1978,10 +2280,12 @@ fn passes_on(words: &[String]) -> bool {
 /// program it names: a function defined, an alias, a hashed path, a
 /// builtin turned on or off, a script read into the shell, or `PATH` set,
 /// by an assignment, by a command given its name, as `read` and `printf
-/// -v` are, or through a reference to it (`declare -n p=PATH`).
+/// -v` are, through a reference to it (`declare -n p=PATH`), or as a name
+/// bash computes, which may be it.
 fn redefines_names(tokens: &[Token]) -> bool {
     tokens.contains(&Token::Opaque)
         || defines_a_function_by_name(tokens)
+        || sets_a_name_bash_computes(tokens)
         || tokens.iter().filter_map(Token::said).any(|(word, _)| {
             word == "PATH"
                 || assignment(word).is_some_and(|(name, value)| name == "PATH" || value == "PATH")
@@ -2017,14 +2321,59 @@ fn defines_a_function_by_name(tokens: &[Token]) -> bool {
 
 /// Whether a variable gh or curl reads to choose the repository, the
 /// account or the program is set or cleared anywhere in these commands: an
-/// assignment of one, as a command's prefix or `export`'s argument, or its
-/// name alone as a word, as `unset`, `read` and `env -u` take it.
+/// assignment of one, as a command's prefix or `export`'s argument, its
+/// name alone as a word, as `unset`, `read` and `env -u` take it, or a
+/// name bash computes, which may be one.
 fn sets_what_gh_reads(tokens: &[Token]) -> bool {
-    tokens.iter().filter_map(Token::said).any(|(word, _)| {
-        let name = assignment(word)
-            .map_or_else(|| word.strip_prefix("-u").unwrap_or(word), |(name, _)| name);
-        is_name(name) && chooses_what_gh_merges(name)
-    })
+    sets_a_name_bash_computes(tokens)
+        || tokens.iter().filter_map(Token::said).any(|(word, _)| {
+            let name = assignment(word)
+                .map_or_else(|| word.strip_prefix("-u").unwrap_or(word), |(name, _)| name);
+            is_name(name) && chooses_what_gh_merges(name)
+        })
+}
+
+/// Whether a command here sets a variable whose name bash computes, which
+/// may be any name (ADR 0190): an argument of `declare`, `typeset`,
+/// `local`, `export` or `readonly` that bash computes and that is no
+/// assignment to a name as written, any it computes with `-n`, which makes
+/// a reference, the name `printf -v` sets, or one `read`, `mapfile`,
+/// `readarray` or `getopts` is given.
+fn sets_a_name_bash_computes(tokens: &[Token]) -> bool {
+    tokens
+        .split(|token| matches!(token, Token::Break | Token::Pipe))
+        .any(|command| {
+            let simple = Simple::from(command);
+            let (at, _) = program(&simple.words, &simple.printed);
+            let Some(first) = simple.words.get(at) else {
+                return false;
+            };
+            let arguments = &simple.words[at + 1..];
+            let computed = &simple.printed[at + 1..];
+            let mut given = arguments.iter().zip(computed);
+            match system_name(first) {
+                Some(name @ ("declare" | "typeset" | "local" | "export" | "readonly")) => {
+                    let reference = !matches!(name, "export" | "readonly")
+                        && arguments
+                            .iter()
+                            .any(|word| word.starts_with('-') && word.contains('n'));
+                    given.any(|(word, printed)| {
+                        printed.is_some() && (reference || assignment(word).is_none())
+                    })
+                }
+                Some("printf") => match (arguments.first(), computed.first()) {
+                    (Some(flag), Some(None)) if flag == "-v" => {
+                        computed.get(1).is_some_and(Option::is_some)
+                    }
+                    (Some(flag), Some(printed)) => flag.starts_with("-v") && printed.is_some(),
+                    _ => false,
+                },
+                Some("read" | "mapfile" | "readarray" | "getopts") => {
+                    computed.iter().any(Option::is_some)
+                }
+                _ => false,
+            }
+        })
 }
 
 /// gh's own variables that change only how it prints or asks, not what it
@@ -2097,7 +2446,8 @@ fn runs_nothing_it_is_given(tokens: &[Token]) -> bool {
 
 /// Programs that run nothing they read and no file they are named.
 const INERT: &[&str] = &[
-    "cat", "tee", "echo", "printf", "cd", "pwd", "true", "false", ":", "mkdir", "ls", "rm",
+    "cat", "tee", "echo", "printf", "cd", "pwd", "true", "false", ":", "mkdir", "ls", "rm", "grep",
+    "egrep", "fgrep",
 ];
 /// gh's commands that send what they are given as text or as a request.
 const GH_INERT: &[&str] = &[
@@ -2270,6 +2620,10 @@ enum Step {
     Merge(Merge),
     /// Text a shell runs as commands: `bash -c '...'`, `eval ...`.
     Nested(String),
+    /// A program this does not know, with no command found among its
+    /// words: it may run what it reads in its own way, as m4, tclsh and
+    /// `make -f -` do.
+    Unread,
     Other,
 }
 
@@ -2331,8 +2685,10 @@ const RUNNERS: &[&str] = &[
 /// What a shell, `source`, `.` or `eval` runs, or `None` for any other
 /// program. A shell runs the text after `-c`. A script it reads from a word
 /// bash computes, as `<(...)` is, or from input the gate cannot see may be
-/// any commands (ADR 0190). One named as a file is not read. `source` and
-/// `.` run a script in this shell, and `eval` runs its words there.
+/// any commands (ADR 0190), as may text after `-c`, or `eval`'s, that bash
+/// computes in part: the shell parses what bash put there. One named as a
+/// file is not read. `source` and `.` run a script in this shell, and
+/// `eval` runs its words there.
 fn script_step(
     name: &str,
     arguments: &[String],
@@ -2342,7 +2698,10 @@ fn script_step(
 ) -> Option<Step> {
     let step = match name {
         _ if SHELLS.contains(&name) => match shell_script(arguments) {
-            Script::Text(text) => Step::Nested(text),
+            Script::Text(at) => {
+                around.doubt |= computed[at].is_some();
+                Step::Nested(arguments[at].clone())
+            }
             Script::Operand(at) => {
                 around.doubt |= computed[at].is_some();
                 Step::Other
@@ -2358,6 +2717,7 @@ fn script_step(
             Step::Other
         }
         "eval" => {
+            around.doubt |= computed.iter().any(Option::is_some);
             let text = arguments.join(" ");
             around.moves_here = moves_the_shell(&text);
             Step::Nested(text)
@@ -2389,16 +2749,19 @@ fn step_at(
     let arguments = &words[1..];
     let computed = &printed[1..];
     let name = first.rsplit('/').next().unwrap_or(first);
-    // A variable that names a program another one runs.
+    // A variable that names a program another one runs. A value bash
+    // computes in part may be any commands (ADR 0190).
     if matches!(
         name,
         "export" | "declare" | "typeset" | "local" | "readonly"
     ) {
-        around.runs.extend(arguments.iter().filter_map(|argument| {
-            assignment(argument)
-                .filter(|(name, _)| names_a_program(name))
-                .map(|(_, value)| value.to_owned())
-        }));
+        for (argument, printed) in arguments.iter().zip(computed) {
+            if let Some((_, value)) = assignment(argument).filter(|(name, _)| names_a_program(name))
+            {
+                around.doubt |= printed.is_some();
+                around.runs.push(value.to_owned());
+            }
+        }
     }
     if let Some(evaluated) = evaluates_what_it_is_given(name, arguments) {
         around.doubt |= evaluated;
@@ -2408,15 +2771,7 @@ fn step_at(
         return step;
     }
     match name {
-        "cd" => {
-            let target = arguments
-                .iter()
-                .position(|argument| !matches!(argument.as_str(), "-P" | "-L" | "-e" | "-@"));
-            match target {
-                Some(at) if computed[at].is_some() => Step::LoseFolder,
-                target => Step::ChangeFolder(target.map(|at| arguments[at].clone())),
-            }
-        }
+        "cd" => cd(arguments, computed),
         "pushd" => match (arguments, computed) {
             ([target], [None]) if !target.starts_with(['-', '+']) => {
                 Step::ChangeFolder(Some(target.clone()))
@@ -2427,53 +2782,51 @@ fn step_at(
         // `trap` runs its first word as commands when its signal comes.
         "trap" => arguments
             .iter()
-            .find(|argument| !matches!(argument.as_str(), "-p" | "-l" | "--"))
-            .map_or(Step::Other, |text| Step::Nested(text.clone())),
-        "xargs" => {
-            let start = arguments
-                .iter()
-                .position(|argument| !argument.starts_with('-'))
-                .unwrap_or(arguments.len());
-            // xargs reads standard input itself, for its command's words.
-            match step_at(
-                &arguments[start..],
-                &computed[start..],
-                Some(&[]),
-                scope,
-                around,
-                true,
-            ) {
-                Step::Merge(mut merge) => {
-                    merge.unreadable = Some("its number arrives on standard input");
-                    Step::Merge(merge)
-                }
-                _ => Step::Other,
-            }
-        }
+            .position(|argument| !matches!(argument.as_str(), "-p" | "-l" | "--"))
+            .map_or(Step::Other, |at| {
+                around.doubt |= computed[at].is_some();
+                Step::Nested(arguments[at].clone())
+            }),
+        "xargs" => xargs(arguments, computed, scope, around),
+        // An alias, gh's or git's, runs its value as commands.
         "gh" => {
             around.doubt |= gh_doubts(arguments, computed);
-            gh_alias(arguments).map_or_else(
-                || {
-                    gh(arguments, input, open_endpoint(arguments, computed))
-                        .map_or(Step::Other, Step::Merge)
-                },
-                Step::Nested,
-            )
+            match gh_alias(arguments) {
+                Some(text) => {
+                    around.doubt |= computed.iter().any(Option::is_some);
+                    Step::Nested(text)
+                }
+                None => gh(arguments, input, open_endpoint(arguments, computed))
+                    .map_or(Step::Other, Step::Merge),
+            }
         }
         "curl" => {
             let (merge, doubt) = curl(arguments, computed, input, scope.curl_configured);
             around.doubt |= doubt;
             merge.map_or(Step::Other, Step::Merge)
         }
-        "git" => git_runs(arguments).map_or(Step::Other, Step::Nested),
-        // An alias runs its value as commands in place of its name.
-        "alias" => Step::Nested(
-            arguments
-                .iter()
-                .filter_map(|argument| argument.split_once('=').map(|(_, value)| value))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
+        "git" => match git_runs(arguments) {
+            Some(text) => {
+                around.doubt |= computed.iter().any(Option::is_some);
+                Step::Nested(text)
+            }
+            // git's other commands, as `rebase -x`, `bisect run` and
+            // `submodule foreach`, may run a word they are given.
+            None if through && !git_stores_or_shows(arguments, computed) => {
+                run_through(name, arguments, computed, scope, around)
+            }
+            None => Step::Other,
+        },
+        "alias" => {
+            around.doubt |= computed.iter().any(Option::is_some);
+            Step::Nested(
+                arguments
+                    .iter()
+                    .filter_map(|argument| argument.split_once('=').map(|(_, value)| value))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        }
         _ if !through || INERT.contains(&name) || name == "export" => Step::Other,
         _ => {
             if interprets(name) {
@@ -2484,14 +2837,182 @@ fn step_at(
     }
 }
 
+/// Whether git's command is one of those that store, send or show what
+/// they are given (`GIT_INERT`), named as written.
+fn git_stores_or_shows(arguments: &[String], computed: &[Option<Printing>]) -> bool {
+    let said: Vec<(&str, Option<bool>)> = arguments
+        .iter()
+        .zip(computed)
+        .map(|(word, printed)| {
+            (
+                word.as_str(),
+                printed.map(|printed| !printed.splits && printed.as_text),
+            )
+        })
+        .collect();
+    git_command(&said).is_some_and(|at| GIT_INERT.contains(&said[at].0))
+}
+
+/// Where `cd` moves, as bash's does: past its flags, `-L`, `-P`, `-e` and
+/// `-@` in a group or not, and a `--`, to its one folder, or home with
+/// none. With more than one, or a flag it does not have, it refuses and
+/// moves nowhere, which this does not follow (ADR 0190).
+fn cd(arguments: &[String], computed: &[Option<Printing>]) -> Step {
+    let flag = |at: usize| {
+        computed[at].is_none()
+            && arguments[at].strip_prefix('-').is_some_and(|letters| {
+                !letters.is_empty() && letters.chars().all(|letter| "LPe@".contains(letter))
+            })
+    };
+    let mut at = 0;
+    while at < arguments.len() && flag(at) {
+        at += 1;
+    }
+    let ended = arguments.get(at).is_some_and(|word| word == "--") && computed[at].is_none();
+    at += usize::from(ended);
+    match (&arguments[at..], &computed[at..]) {
+        ([], _) => Step::ChangeFolder(None),
+        ([target], [None]) if ended || !target.starts_with('-') => {
+            Step::ChangeFolder(Some(target.clone()))
+        }
+        _ => Step::LoseFolder,
+    }
+}
+
+/// What xargs runs: its command, given words from its input or a file,
+/// which the gate does not see. Without `-I`, they follow its words, as
+/// words bash computes that split; with it, each word holding its string
+/// holds one. An option this does not know may be one that changes how it
+/// reads, so it is not read (ADR 0190).
+fn xargs(
+    arguments: &[String],
+    computed: &[Option<Printing>],
+    scope: Scope,
+    around: &mut Around,
+) -> Step {
+    let Some((start, replace)) = xargs_options(arguments, computed) else {
+        around.doubt = true;
+        return Step::Other;
+    };
+    // With no command it runs `echo`.
+    if start == arguments.len() {
+        return Step::Other;
+    }
+    let mut words = arguments[start..].to_vec();
+    let mut printed = computed[start..].to_vec();
+    let given = Printing {
+        splits: replace.is_none(),
+        as_text: false,
+        leads: true,
+    };
+    if let Some(string) = &replace {
+        for (word, printing) in words.iter().zip(printed.iter_mut()) {
+            if word.contains(string.as_str()) {
+                *printing = Some(given);
+            }
+        }
+    } else {
+        words.push(String::new());
+        printed.push(Some(given));
+    }
+    // xargs reads standard input itself, for its command's words.
+    step_at(&words, &printed, Some(&[]), scope, around, true)
+}
+
+/// Where xargs's command starts, past its options, and the string `-I`,
+/// `-i` or `--replace` gives, which its input replaces. `None` when an
+/// option is one this does not know, or a word bash computes.
+fn xargs_options(
+    arguments: &[String],
+    computed: &[Option<Printing>],
+) -> Option<(usize, Option<String>)> {
+    const ALONE: &[&str] = &[
+        "null",
+        "no-run-if-empty",
+        "verbose",
+        "interactive",
+        "exit",
+        "open-tty",
+        "show-limits",
+        "help",
+        "version",
+    ];
+    const VALUED: &[&str] = &[
+        "arg-file",
+        "delimiter",
+        "max-args",
+        "max-procs",
+        "max-chars",
+        "process-slot-var",
+    ];
+    let mut replace = None;
+    let mut at = 0;
+    while let Some(word) = arguments.get(at) {
+        if !word.starts_with('-') || word == "-" {
+            break;
+        }
+        if computed[at].is_some() {
+            return None;
+        }
+        at += 1;
+        if word == "--" {
+            break;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            let (flag, value) = long
+                .split_once('=')
+                .map_or((long, None), |(flag, value)| (flag, Some(value)));
+            match flag {
+                "replace" => replace = Some(value.unwrap_or("{}").to_owned()),
+                "eof" | "max-lines" => {}
+                _ if ALONE.contains(&flag) && value.is_none() => {}
+                _ if VALUED.contains(&flag) => {
+                    if value.is_none() {
+                        computed.get(at)?;
+                        at += 1;
+                    }
+                }
+                _ => return None,
+            }
+            continue;
+        }
+        for (place, letter) in word.char_indices().skip(1) {
+            let rest = &word[place + letter.len_utf8()..];
+            match letter {
+                '0' | 'r' | 't' | 'p' | 'x' | 'o' => continue,
+                'e' | 'l' => {}
+                'i' => replace = Some(if rest.is_empty() { "{}" } else { rest }.to_owned()),
+                'a' | 'd' | 'E' | 'I' | 'L' | 'n' | 'P' | 's' => {
+                    let value = if rest.is_empty() {
+                        let value = arguments.get(at)?;
+                        if computed[at].is_some() {
+                            return None;
+                        }
+                        at += 1;
+                        value.as_str()
+                    } else {
+                        rest
+                    };
+                    if letter == 'I' {
+                        replace = Some(value.to_owned());
+                    }
+                }
+                _ => return None,
+            }
+            break;
+        }
+    }
+    Some((at, replace))
+}
+
 /// Shells, which run a script: the text after `-c`, a file, or what they
 /// read on standard input.
 const SHELLS: &[&str] = &["bash", "sh", "zsh", "dash", "ksh", "mksh", "rbash", "ash"];
 
 /// Where a shell's script comes from.
 enum Script {
-    /// The text after `-c`.
-    Text(String),
+    /// The text after `-c`, the word at this place among its arguments.
+    Text(usize),
     /// A file named by the word at this place among its arguments.
     Operand(usize),
     /// Standard input: no file named, or `-s`.
@@ -2518,9 +3039,11 @@ fn shell_script(arguments: &[String]) -> Script {
             break;
         };
         if word.starts_with('-') && letters.contains('c') {
-            return arguments
-                .get(at + 1)
-                .map_or(Script::Input, |text| Script::Text(text.clone()));
+            return if at + 1 < arguments.len() {
+                Script::Text(at + 1)
+            } else {
+                Script::Input
+            };
         }
         input |= letters.contains('s');
         // `-o` and `-O` take the next word, an option's name.
@@ -2644,7 +3167,11 @@ fn evaluates_what_it_is_given(name: &str, arguments: &[String]) -> Option<bool> 
 
 /// A program this does not know, which may run a command among its words,
 /// as `sudo -u w gh ...`, `ssh host gh ...` and `find . -exec gh ...` do:
-/// the first such command, which runs apart and cannot be checked.
+/// the first such command, which runs apart and cannot be checked. A
+/// runner's text that bash computes in part may be any commands. With no
+/// such command among its words, a word that spells a merge and gh or curl
+/// may be one it runs in its own way, as sed's `e` and vim's `!` run
+/// theirs, and so may what it reads (`Step::Unread`; ADR 0190).
 fn run_through(
     name: &str,
     arguments: &[String],
@@ -2655,6 +3182,7 @@ fn run_through(
     around.unreadable.get_or_insert(THROUGH_ANOTHER_PROGRAM);
     around.apart = true;
     if let Some(text) = shell_text(name, arguments) {
+        around.doubt |= computed.iter().any(Option::is_some);
         return Step::Nested(text);
     }
     let runner = RUNNERS.contains(&name);
@@ -2676,7 +3204,8 @@ fn run_through(
             return found;
         }
     }
-    Step::Other
+    around.doubt |= arguments.iter().any(|text| may_merge(text));
+    Step::Unread
 }
 
 /// The text a runner hands a shell as commands (ADR 0190): `su`, `runuser`,
@@ -2746,13 +3275,15 @@ fn is_standard_input(file: &str) -> bool {
 /// reserved words before it, and the wrappers that run the rest as a
 /// command, with what those say about how it runs. A word bash computes
 /// is matched as written, so it is one of these only where bash runs it as
-/// written, as `$'env'`.
+/// written.
 fn program(words: &[String], printed: &[Option<Printing>]) -> (usize, Around) {
     let mut around = Around::default();
     let mut at = 0;
     while let Some(word) = words.get(at) {
         if let Some((name, value)) = assignment(word) {
+            // A value bash computes in part may be any commands.
             if names_a_program(name) {
+                around.doubt |= printed[at].is_some();
                 around.runs.push(value.to_owned());
             }
             at += 1;
@@ -2868,8 +3399,14 @@ fn env_options(rest: &[String], printed: &[Option<Printing>], around: &mut Aroun
                     }
                 }
             }
-            // The string is split into the command and its first words.
+            // The string is split into the command and its first words. One
+            // bash computes in part may be any commands (ADR 0190).
             "-S" | "--split-string" => {
+                around.doubt |= printed
+                    .get(at..)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(Option::is_some);
                 let after = at + 1 + usize::from(separate);
                 let mut text = given.unwrap_or_default().to_owned();
                 for word in rest.get(after..).unwrap_or_default() {
@@ -3698,7 +4235,9 @@ fn unseen_request() -> Merge {
 /// is read in any case of its letters, since whether GitHub does was not run.
 fn graphql_endpoint(url: &str) -> bool {
     url.split(['?', '#']).next().is_some_and(|path| {
-        let path = path.trim_end_matches('/').to_ascii_lowercase();
+        let path = percent_decoded(path)
+            .trim_end_matches('/')
+            .to_ascii_lowercase();
         path == "graphql" || path.ends_with("/graphql")
     })
 }
@@ -3717,10 +4256,11 @@ fn graphql_merge(head_named: bool) -> Merge {
     }
 }
 
-/// `repos/<owner>/<name>/pulls/<number>/merge`, as a path or a URL. The
-/// repository is `None` when gh fills it in from the folder (`{owner}`).
+/// `repos/<owner>/<name>/pulls/<number>/merge`, as a path or a URL, with
+/// its `%HH` escapes read (ADR 0190). The repository is `None` when gh
+/// fills it in from the folder (`{owner}`).
 fn merge_endpoint(text: &str) -> Option<(Option<String>, String)> {
-    let path = text.split(['?', '#']).next()?;
+    let path = percent_decoded(text.split(['?', '#']).next()?);
     let path = &path[path.find("repos/")? + "repos/".len()..];
     let parts: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     let [owner, name, "pulls", number, "merge"] = parts.as_slice() else {
@@ -4172,8 +4712,8 @@ mod tests {
                 Some("3")
             );
         }
-        let piped = only_merge("echo 3 | xargs gh pr merge --squash", "/srv/next");
-        assert!(piped.unreadable.is_some(), "the number arrives on stdin");
+        // The number arrives on standard input, a word the gate cannot see.
+        assert!(unclear("echo 3 | xargs gh pr merge --squash"));
 
         let merge = only_merge("cd ../next && gh pr merge 1", "/srv/app");
         assert_eq!(merge.folder.as_deref(), Some(Path::new("/srv/app/../next")));
@@ -4276,7 +4816,6 @@ mod tests {
             "ssh host <<'EOF'\ngh pr merge 5\nEOF",
             "docker exec -i c ksh <<'EOF'\ngh pr merge 5\nEOF",
             "cat <<'EOF' | sh\ngh pr merge 5\nEOF",
-            "eval \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\"",
             "cat > m.sh <<'EOF'\ngh pr merge 5\nEOF\nchmod +x m.sh && ./m.sh",
             "tee m.sh <<'EOF' >/dev/null\ngh pr merge 5\nEOF\nsource m.sh",
             "gh pr comment 5 --body-file - <<'EOF'\n`gh pr merge 5` is the next step.\nEOF",
@@ -4297,6 +4836,9 @@ mod tests {
             "python3 - <<'EOF'\ngh pr merge 5\nEOF",
             "python3 - <<'EOF'\nprint('don't merge')\nEOF",
             "eval \"$(cat <<'EOF'\nit's a merge\nEOF\n)\"",
+            // eval parses what bash put in its words, which may be any
+            // commands (ADR 0190).
+            "eval \"$(cat <<'EOF'\ngh pr merge 5\nEOF\n)\"",
             "x=\"$(cat <<'EOF'\nit's a merge\nEOF\n)\"",
             "gh pr create --body-file - <<'EOF'\nmerge it",
             "gh pr merge 5 --subject \"it's",
@@ -4697,9 +5239,10 @@ mod tests {
     }
 
     /// A word bash computes as it runs the command may be any word, as what a
-    /// substitution prints may be: a variable, `~`, `$'...'` or `$"..."`, a
-    /// brace list or a glob. For gh, git and printf it counts only as the
-    /// quoted value of a text flag (ADR 0188).
+    /// substitution prints may be: a variable, `~`, `$"..."`, a brace list
+    /// or a glob. For gh, git and printf it counts only as the quoted value
+    /// of a text flag (ADR 0188). `$'...'` is text bash makes as it reads
+    /// the command (ADR 0190).
     #[test]
     fn a_word_bash_computes_counts_only_as_a_text_flags_value() {
         assert_eq!(
@@ -4714,9 +5257,9 @@ mod tests {
                 "<split:c[d]>",
                 "<split:{e,f}>",
                 "<split:-{g..h}>",
-                "<printed:$i>",
+                "i",
                 "<printed:$j>",
-                "<printed:k$\\'>",
+                "k'",
             ]
         );
         // A brace with no list, a `[` with no `]`, a `~` not first, and what
@@ -4743,10 +5286,7 @@ mod tests {
             ]
         );
         // `$'...'` ends at its own quote, which a backslash escapes.
-        assert_eq!(
-            words("echo $'\\'' ; x #'"),
-            ["echo", "<printed:$\\'>", "<break>", "x"]
-        );
+        assert_eq!(words("echo $'\\'' ; x #'"), ["echo", "'", "<break>", "x"]);
         // With extglob on, `!(x)` and its like are patterns, not subshells.
         for pattern in ["ls !(x)", "ls @(a|b)", "ls x+(y)", "ls *(z)", "ls ?(z)"] {
             assert_eq!(tokens(pattern), None, "{pattern}");
@@ -5336,8 +5876,6 @@ mod tests {
             "gh pr $(echo merge) 5",
             "gh {pr,merge} 5",
             "gh pr {merge,} 5",
-            "gh pr $'merge' 5",
-            "gh pr $'\\x6derge' 5",
             "V=merge; gh pr ${V} 5",
             "V=merge; gh pr \"${V}\" 5",
             "for i in 5; do gh pr merge $i; done",
@@ -5737,6 +6275,348 @@ mod tests {
                 "{command}"
             );
         }
+    }
+
+    /// A reserved word is one only where bash reads a command. Given as an
+    /// argument, as `echo if`, it is a word, and a `case` after it opens
+    /// nothing, so the merge after it is read (ADR 0190).
+    #[test]
+    fn a_reserved_word_given_as_an_argument_opens_nothing() {
+        for command in [
+            "echo if case x in; gh pr merge 5",
+            "echo do case x in; gh pr merge 5",
+            ": then case x in\ngh pr merge 5",
+            "echo time -p case x in; gh pr merge 5",
+            "printf '%s\\n' if case x in; gh pr merge 5",
+            "echo if case x in; gh api -X PUT repos/o/r/pulls/5/merge",
+            "echo if case x in; curl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{command}"
+            );
+        }
+        let graphql = "echo if case x in; gh api graphql -f query='mutation { mergePullRequest(input:{pullRequestId:\"X\"}) { clientMutationId } }'";
+        assert!(only_merge(graphql, "/srv").unreadable.is_some());
+        // Where bash does read a command, `case` still opens one.
+        assert!(!refused("echo if; case x in merge) gh pr view 5;; esac"));
+    }
+
+    /// A closer given as an argument closes nothing, so a `cd` after it is
+    /// still in the compound. Where bash reads a reserved word, after a
+    /// compound's close, after `[[ ... ]]` and as `do` after `for` and its
+    /// name, it is one, so the compound it opens is counted (ADR 0190).
+    #[test]
+    fn a_compound_is_counted_only_where_bash_reads_its_words() {
+        for command in [
+            "if true; then echo then fi; else cd own; fi; gh pr merge 5",
+            "if false; then echo then fi; ! cd own; fi; gh pr merge 5",
+            "if false; then echo then fi; cd own; fi; gh pr merge 5",
+            "while false; do echo do done; cd own; done; gh pr merge 5",
+            "if { false; } then if true; then :; fi; cd own; fi; gh pr merge 5",
+            "if [[ -n x ]] then if true; then :; fi; cd own; fi; gh pr merge 5",
+            "set --; for x do if true; then :; fi; cd own; done; gh pr merge 5",
+        ] {
+            assert_eq!(only_merge(command, "/srv").folder, None, "{command}");
+        }
+        // An opener given as an argument opens nothing, so the `cd` after
+        // its line runs here.
+        for command in [
+            "echo then if; cd own; gh pr merge 5",
+            "echo do {; cd own; gh pr merge 5",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").folder.as_deref(),
+                Some(Path::new("/srv/own")),
+                "{command}"
+            );
+        }
+    }
+
+    /// Text that ends inside a `case`, a compound command or `[[`, which
+    /// bash refuses as a syntax error, is not read: one that mentions a
+    /// merge is refused (ADR 0190).
+    #[test]
+    fn text_that_ends_inside_a_case_or_a_compound_is_not_read() {
+        for command in [
+            "echo hi; case x in\ngh pr merge 5",
+            "case x in x) gh pr merge 5",
+            "if true; then gh pr merge 5",
+            "while true; do gh pr merge 5",
+            "{ gh pr merge 5",
+            "[[ -n x && gh == merge",
+            "echo \"$(if true; then gh pr merge 5)\"",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        for open in ["case x in", "if true; then echo hi", "{ echo", "[[ -n x"] {
+            assert_eq!(tokens(open), None, "{open}");
+        }
+        for closed in [
+            "if true; then echo hi; fi",
+            "[[ -n x ]] && echo \"]]\"",
+            "case x in x) echo;; esac",
+        ] {
+            assert!(tokens(closed).is_some(), "{closed}");
+        }
+    }
+
+    /// `$'...'` is the text bash makes of it, each escape read, up to a
+    /// `\0`, and not a word bash computes. So a merge after a tab or a
+    /// newline in one is read, and the grant mod's spelling finds its gh
+    /// (ADR 0190).
+    #[test]
+    fn an_ansi_c_string_is_the_text_bash_makes_of_it() {
+        assert_eq!(
+            words("echo $'a\\tb' $'\\x41\\101\\u0042' $'a\\0b' $'\\cA\\e' $'\\q' $'\\'' x"),
+            ["echo", "a\tb", "AAB", "a", "\u{1}\u{1b}", "\\q", "'", "x"]
+        );
+        // Bash finds where the string ends first, reading a backslash and
+        // the character after it as a pair, and then reads its escapes:
+        // `\c` before a backslash takes a second one with it, and `\c` at
+        // the end is kept as written.
+        assert_eq!(
+            words("echo $'\\c\\\\' $'a\\c\\\\b' $'\\c\\'x' $'a\\c' y"),
+            ["echo", "\u{1c}", "a\u{1c}b", "\u{1c}'x", "a\\c", "y"]
+        );
+        assert_eq!(
+            words("echo $'\\c\\'; gh pr merge 5 #'"),
+            ["echo", "\u{1c}'; gh pr merge 5 #"]
+        );
+        for command in [
+            "bash -c $'\\tgh pr merge 5'",
+            "eval $'\\ngh pr merge 5'",
+            "bash -c $'\\x09gh pr merge 5'",
+            "gh pr $'merge' 5",
+            "gh pr $'\\x6derge' 5",
+            "echo $'\\c\\\\'; gh pr merge 5 #'",
+            "echo $'\\c'; gh pr merge 5 #'",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{command}"
+            );
+        }
+        assert!(may_merge("bash -c $'\\tgh pr merge 5'"));
+        assert!(may_merge("eval $'\\ngh pr merge 5'"));
+    }
+
+    /// A program the gate does not know, given a word that spells a merge
+    /// and gh or curl, may run it, as sed's `e`, expect's `spawn`, vim's
+    /// `!`, `sg -c`, tmux and git's `rebase -x` do, and so may it what a
+    /// command before it in the pipe prints, as m4, tclsh and `make -f -`
+    /// do. Such a command is not read. A here-string bash computes no part
+    /// of is input the gate sees, read as commands as a heredoc is, and a
+    /// merge found there is held as another program's. grep and the
+    /// commands the gate knows run nothing they are given (ADR 0190).
+    #[test]
+    fn a_program_given_a_merge_it_may_run_is_not_read() {
+        for command in [
+            "sed -n '1e gh pr merge 5' <<< x",
+            "sed 's/.*/gh pr merge 5/e' <<< x",
+            "echo x | sed -n '1e gh pr merge 5'",
+            "echo 'syscmd(gh pr merge 5)' | m4",
+            "echo 'exec gh pr merge 5' | tclsh",
+            "printf 'all:\\n\\tgh pr merge 5\\n' | make -f -",
+            "echo 'gh pr merge 5' | sudo bash",
+            "echo 'gh pr merge 5' | ssh host",
+            "echo gh pr merge 5 | m4",
+            // A merge a variable holds, printed into such a program.
+            "c='gh pr merge 5'; echo \"$c\" | sudo bash",
+            "c='gh pr merge 5'; echo \"$c\" | ssh host",
+            "c='gh pr merge 5'; sudo bash <<< \"$c\"",
+            "c='syscmd(gh pr merge 5)'; printf '%s' \"$c\" | m4",
+            "c='exec gh pr merge 5'; tclsh <<< \"$c\"",
+            "expect -c 'spawn gh pr merge 5; expect eof'",
+            "vim -es -u NONE -c '!gh pr merge 5' -c q",
+            "sg users -c 'gh pr merge 5'",
+            "tmux new -d 'gh pr merge 5'",
+            "sudo sed -n '1e gh pr merge 5' <<< x",
+            "git rebase -x 'gh pr merge 5' HEAD~1",
+            "git -C . rebase --exec='gh pr merge 5' HEAD~1",
+            "git submodule foreach 'gh pr merge 5'",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        for command in [
+            "m4 <<< 'syscmd(gh pr merge 5)'",
+            "tclsh <<< 'exec gh pr merge 5'",
+            "make -f - <<< $'all:\\n\\tgh pr merge 5'",
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert_eq!(merge.pull_request.as_deref(), Some("5"), "{command}");
+            assert_eq!(merge.unreadable, Some(THROUGH_ANOTHER_PROGRAM), "{command}");
+        }
+        // A here-string bash computes in part is input the gate cannot see.
+        assert_eq!(
+            words("m4 <<< \"$x\" <<< 'syscmd(gh)'"),
+            ["m4", "<input>", "<stdin:syscmd(gh)>"]
+        );
+        // git's own command that runs its words runs them as another
+        // program's.
+        assert_eq!(
+            only_merge("git bisect run gh pr merge 5", "/srv").unreadable,
+            Some(THROUGH_ANOTHER_PROGRAM)
+        );
+        for command in [
+            "grep -rn 'gh pr merge' docs",
+            "git log --grep='gh pr merge'",
+            "git commit -m 'Say gh pr merge 5 needs --repo'",
+            "echo 'gh pr merge 5' >> notes.md",
+            "gh pr comment 5 --body 'Run gh pr merge 5 once it is green'",
+            "gh pr view \"$N\" --json mergeable | jq -r .mergeable",
+            "gh pr view 5 --json mergeable,mergeStateStatus | jq -r .mergeable",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// xargs gives its command words from its input, which the gate does
+    /// not see: words bash computes, at the end or, with `-I`, where its
+    /// string stands. A string it gives a shell may be any commands
+    /// (ADR 0190).
+    #[test]
+    fn xargs_gives_its_command_words_the_gate_cannot_see() {
+        for command in [
+            "echo merge 5 | xargs gh pr",
+            "printf merge | xargs -I{} gh pr {} 5",
+            "printf merge | xargs -I {} gh pr {} 5",
+            "printf merge | xargs --replace=R gh pr R 5",
+            "echo 'gh pr merge 5' | xargs -I{} bash -c {}",
+            "echo 'gh pr merge 5' | xargs -i sh -c {}",
+            "echo 'gh pr merge 5' | xargs bash -c",
+            "echo 3 | xargs -n 1 sudo gh pr merge",
+            // An option this does not know may change what it reads.
+            "printf merge | xargs -J % gh pr % 5",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        assert_eq!(
+            only_merge("echo x | xargs -0 bash -c 'gh pr merge 5'", "/srv")
+                .pull_request
+                .as_deref(),
+            Some("5")
+        );
+        for command in [
+            "gh pr list --json number --jq '.[].number' | xargs -n1 gh pr view --json mergeable",
+            "echo 5 | xargs -I{} gh pr view {} --json mergeable",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// Text a shell parses as commands, given in a word bash computes in
+    /// part, is parsed with what bash put there, so `bash -c "... $N"`,
+    /// `eval`, a runner's string, `trap`, an alias and the values that name
+    /// a program may run any commands: a command that mentions a merge is
+    /// not read (ADR 0190).
+    #[test]
+    fn script_text_bash_computes_may_be_any_commands() {
+        for run in [
+            "bash -c \"gh pr view $N\"",
+            "bash -c \"gh pr view $(cat n)\"",
+            "eval \"gh pr view $N\"",
+            "eval gh pr view \"$N\"",
+            "su w -c \"gh pr view $N\"",
+            "script -qc \"gh pr view $N\" /dev/null",
+            "ssh host \"gh pr view $N\"",
+            "watch \"gh pr view $N\"",
+            "trap \"gh pr view $N\" EXIT",
+            "alias v=\"gh pr view $N\"",
+            "env -S \"gh pr view $N\"",
+            "git -c alias.v=\"!gh pr view $N\" v",
+            "gh alias set v --shell \"gh pr view $N\"",
+            "GIT_EDITOR=\"gh pr view $N\" git commit",
+            "export GIT_EDITOR=\"gh pr view $N\"",
+        ] {
+            let command = format!("N='5; gh pr merge 5'; {run}");
+            assert!(unclear(&command), "{command}");
+        }
+        for command in [
+            "bash -c 'gh pr view \"$1\" --json mergeable' _ 5",
+            "eval 'gh pr view 5 --json mergeable'",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// `cd` moves as bash's does: past its flags, in a group or not, and
+    /// `--`, to its one folder. Given more than one, or a flag it does not
+    /// have, it refuses and moves nowhere, which the gate does not follow
+    /// (ADR 0190).
+    #[test]
+    fn cd_moves_only_to_one_folder_past_its_flags() {
+        for command in ["cd own x; gh pr merge 5", "cd -x own; gh pr merge 5"] {
+            assert_eq!(only_merge(command, "/srv").folder, None, "{command}");
+        }
+        for (command, folder) in [
+            ("cd -- own; gh pr merge 5", "/srv/own"),
+            ("cd -LP own; gh pr merge 5", "/srv/own"),
+            ("cd -P -- own; gh pr merge 5", "/srv/own"),
+            ("cd -- -x; gh pr merge 5", "/srv/-x"),
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").folder.as_deref(),
+                Some(Path::new(folder)),
+                "{command}"
+            );
+        }
+    }
+
+    /// A command may set a variable whose name bash computes, as
+    /// `declare "CD${z}PATH=..."` and `printf -v "$n"` do. It may be any
+    /// name: `CDPATH`, `PATH` and the variables gh reads among them. A
+    /// shell the command runs inherits a `CDPATH` set around it
+    /// (ADR 0190).
+    #[test]
+    fn a_name_bash_computes_may_be_any_name() {
+        for command in [
+            "export CDPATH=../x; bash -c 'cd own && gh pr merge 5'",
+            "export CD${z}PATH=../x; eval 'cd own && gh pr merge 5'",
+            "declare \"CD${z}PATH=../x\"; cd own && gh pr merge 5",
+            "export CD${z}PATH=../x; cd own && gh pr merge 5",
+            "printf -v CD${z}PATH ../x; cd own && gh pr merge 5",
+            "n=CD; declare \"${n}PATH=../x\"; cd own && gh pr merge 5",
+            "read -r \"$n\" <<< ../x; cd own && gh pr merge 5",
+            "declare -n r=\"$n\"; r=../x; cd own && gh pr merge 5",
+        ] {
+            assert_eq!(only_merge(command, "/srv").folder, None, "{command}");
+        }
+        assert_eq!(
+            only_merge("export GH_${z}REPO=o/r; gh pr merge 5", "/srv").unreadable,
+            Some(SETS_WHAT_GH_READS)
+        );
+        assert!(refused(&format!(
+            "export PA${{z}}TH=/tmp/x; cat <<'C' | gh api graphql --input -\n{INNOCENT}\nC"
+        )));
+        // A value bash computes, under a name as written, sets that name.
+        assert_eq!(
+            only_merge("export FOO=\"$x\"; cd own && gh pr merge 5", "/srv")
+                .folder
+                .as_deref(),
+            Some(Path::new("/srv/own"))
+        );
+    }
+
+    /// An address's path is read with each `%HH` escape decoded, as a
+    /// server may read it. Whether GitHub's does was not tried (ADR 0190).
+    #[test]
+    fn an_address_is_read_with_its_percent_escapes_decoded() {
+        for command in [
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6derge",
+            "gh api -X PUT repos/o/r/pulls/5/%6Derge",
+            "gh api -X PUT repos/o/r/pulls/5%2Fmerge",
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert_eq!(merge.pull_request.as_deref(), Some("5"), "{command}");
+            assert_eq!(merge.repo.as_deref(), Some("o/r"), "{command}");
+        }
+        assert!(mentions_a_merge("gh api -X PUT repos/o/r/pulls/5/%6derge"));
+        assert!(refused(&format!(
+            "gh api graph%71l --input - <<'EOF'\n{MUTATION}\nEOF"
+        )));
     }
 
     /// A runner given commands as one string, as `script -qc`, `flock -c`,

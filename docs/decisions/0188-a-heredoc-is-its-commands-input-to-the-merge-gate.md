@@ -252,7 +252,10 @@ bodies as commands, and changes only what an unreadable body means.
 - **ADR 0190 fixes the merges below that were to be fixed separately**, all
   but one: the branch merges API, `gh api -X POST repos/o/r/merges` and the
   same sent by curl, still passes and is still to be fixed separately.
-  Four of the limits under "Already outside what the gate reads" changed:
+  Five of the limits under "Already outside what the gate reads" changed:
+  - a here-string bash computes no part of is now read as a heredoc's body
+    is: input the command reads, and commands. One bash computes in part
+    is input the gate cannot see;
   - an alias set in the same command is now read;
   - `eval "$var"`, with a variable the gate cannot read, is refused in a
     command that mentions a merge;
@@ -261,7 +264,9 @@ bodies as commands, and changes only what an unreadable body means.
     or when the gate cannot see its code. So `python3 - <<'EOF'` with
     `gh pr merge 5` in its body, which this decision held as a merge, is
     refused;
-  - text piped into a shell, as `echo '...' | sh`, is refused there.
+  - text piped into a shell, as `echo '...' | sh`, is refused there, and so
+    is a merge a variable holds piped into a program the gate does not know,
+    as `echo "$c" | sudo bash`.
 - **A file written from an unreadable body is not followed when something
   runs it without the command naming it.** Three such cases pass that 1.25.0
   refused:
