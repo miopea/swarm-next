@@ -1170,19 +1170,9 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool)
             .map(Simple::from)
             .collect();
         for (place, command) in commands.iter().enumerate() {
-            // What it reads: its own heredocs, or those the commands before
-            // it pass on down the pipe.
-            let reads = if command.input.is_empty() {
-                &commands[..place]
-            } else {
-                &commands[place..=place]
-            };
-            let input: Vec<String> = reads
-                .iter()
-                .flat_map(|command| command.input.iter().map(|(body, _)| (*body).to_owned()))
-                .collect();
+            let input = seen_input(&commands, place);
             let mut read = Vec::new();
-            match step(&command.words, &input) {
+            match step(&command.words, input.as_deref()) {
                 Step::ChangeFolder(target) => folder = moved(folder, target.as_deref()),
                 Step::Merge(mut merge) => {
                     merge.folder.clone_from(&folder);
@@ -1216,11 +1206,13 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool)
     Parsed::Merges(merges)
 }
 
-/// One simple command: its words, and each heredoc it reads with whether
-/// that heredoc expands.
+/// One simple command: its words, each heredoc it reads with whether that
+/// heredoc expands, and whether its standard input comes from a file, a
+/// here-string or a descriptor.
 struct Simple<'a> {
     words: Vec<String>,
     input: Vec<(&'a str, bool)>,
+    redirected: bool,
 }
 
 impl<'a> From<&'a [Token]> for Simple<'a> {
@@ -1228,15 +1220,57 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
         let mut command = Simple {
             words: Vec::new(),
             input: Vec::new(),
+            redirected: false,
         };
         for token in tokens {
             match token {
                 Token::Word(word) | Token::Printed { word, .. } => command.words.push(word.clone()),
                 Token::Stdin { body, expands } => command.input.push((body, *expands)),
-                Token::Opaque | Token::Break | Token::Pipe | Token::Input => {}
+                Token::Input => command.redirected = true,
+                Token::Opaque | Token::Break | Token::Pipe => {}
             }
         }
         command
+    }
+}
+
+/// What a command reads on standard input, as far as the gate can see it:
+/// its own heredocs, or those the commands before it pass on down the pipe
+/// as written. `None` is input it cannot see: a file, a here-string or a
+/// descriptor, a command that prints anything else, or the shell's own.
+fn seen_input(commands: &[Simple<'_>], place: usize) -> Option<Vec<String>> {
+    let mut at = place;
+    loop {
+        let command = &commands[at];
+        if command.redirected {
+            return None;
+        }
+        if !command.input.is_empty() {
+            return Some(
+                command
+                    .input
+                    .iter()
+                    .map(|(body, _)| (*body).to_owned())
+                    .collect(),
+            );
+        }
+        at = at.checked_sub(1)?;
+        if !passes_on(&commands[at].words) {
+            return None;
+        }
+    }
+}
+
+/// Whether a command prints what it reads, as it reads it: `cat` with no
+/// file, or `tee`.
+fn passes_on(words: &[String]) -> bool {
+    let Some((first, rest)) = words.split_first() else {
+        return false;
+    };
+    match system_name(first) {
+        Some("cat") => rest.iter().all(|word| word == "-"),
+        Some("tee") => true,
+        _ => false,
     }
 }
 
@@ -1306,6 +1340,9 @@ const GIT_INERT: &[&str] = &[
 /// - gh or git fed counts only when it reads all of that input as text or
 ///   a request first, so an editor it opens reads none of it.
 /// - gh counts without `--`, after which it hands words to git.
+/// - gh counts without a flag that opens the editor or browser its config
+///   names, which the same command may write (`gh_opens_a_program`), and
+///   not as `gh gist edit`, which opens the editor with no flag.
 /// - git counts without a flag that names a program for it to run.
 fn inert(command: &[Token], fed: bool) -> bool {
     let words: Vec<(&str, Option<bool>)> = command.iter().filter_map(Token::said).collect();
@@ -1322,6 +1359,9 @@ fn inert(command: &[Token], fed: bool) -> bool {
         Some("gh") => {
             let plain: Vec<String> = arguments.iter().map(|&(word, _)| word.to_owned()).collect();
             text && !arguments.contains(&("--", None))
+                && !arguments.iter().any(|&(word, _)| gh_opens_a_program(word))
+                // It opens the editor with no flag.
+                && !matches!(arguments, [("gist", None), ("edit", None), ..])
                 && (!fed || gh_line(&plain).reads_all_input())
                 && matches!(arguments.first(), Some(&(noun, None)) if GH_INERT.contains(&noun))
         }
@@ -1334,6 +1374,28 @@ fn inert(command: &[Token], fed: bool) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a gh flag opens the editor or the browser gh's config names:
+/// `--editor` or `--web`, or `-e` or `-w` among one-letter flags before one
+/// that takes the rest of the word as its value.
+fn gh_opens_a_program(word: &str) -> bool {
+    if let Some(long) = word.strip_prefix("--") {
+        let name = long.split_once('=').map_or(long, |(name, _)| name);
+        return matches!(name, "editor" | "web");
+    }
+    let Some(letters) = word.strip_prefix('-') else {
+        return false;
+    };
+    for letter in letters.chars() {
+        if matches!(letter, 'e' | 'w') {
+            return true;
+        }
+        if GH_VALUE_FLAGS.contains(&format!("-{letter}").as_str()) {
+            return false;
+        }
+    }
+    false
 }
 
 /// git's long flags that name a program for it to run.
@@ -1394,8 +1456,9 @@ enum Step {
     Other,
 }
 
-/// What one simple command does, from its words and the heredocs it reads.
-fn step(words: &[String], input: &[String]) -> Step {
+/// What one simple command does, from its words and what it reads on
+/// standard input; `None` is input the gate cannot see.
+fn step(words: &[String], input: Option<&[String]>) -> Step {
     let words = program(words);
     let Some(name) = words
         .first()
@@ -1424,7 +1487,8 @@ fn step(words: &[String], input: &[String]) -> Step {
                 .iter()
                 .position(|argument| !argument.starts_with('-'))
                 .map_or(&[][..], |start| &arguments[start..]);
-            match step(rest, &[]) {
+            // xargs reads standard input itself, for its command's words.
+            match step(rest, Some(&[])) {
                 Step::Merge(mut merge) => {
                     merge.unreadable = Some("its number arrives on standard input");
                     Step::Merge(merge)
@@ -1527,6 +1591,9 @@ struct GhLine {
     input: Option<String>,
     /// `--body-file`: the file a pull request's or issue's text is read from.
     body_file: Option<String>,
+    /// The files the request is read from, other than standard input: a
+    /// typed field's `key=@file` (`-f` sends an `@` as it is), or `--input`.
+    files: Vec<String>,
 }
 
 impl GhLine {
@@ -1586,9 +1653,24 @@ fn gh_line(arguments: &[String]) -> GhLine {
         match flag {
             "-R" | "--repo" => line.repo = Some(value),
             "-X" | "--method" => line.method = Some(value),
-            "-f" | "-F" | "--field" | "--raw-field" => line.fields.push(value),
+            "-f" | "--raw-field" => line.fields.push(value),
+            "-F" | "--field" => {
+                if let Some(file) = value
+                    .split_once('=')
+                    .and_then(|(_, value)| value.strip_prefix('@'))
+                    .filter(|file| !is_standard_input(file))
+                {
+                    line.files.push(file.to_owned());
+                }
+                line.fields.push(value);
+            }
             "--match-head-commit" => line.head = Some(value),
-            "--input" => line.input = Some(value),
+            "--input" => {
+                if !is_standard_input(&value) {
+                    line.files.push(value.clone());
+                }
+                line.input = Some(value);
+            }
             "--body-file" => line.body_file = Some(value),
             _ => {}
         }
@@ -1596,11 +1678,16 @@ fn gh_line(arguments: &[String]) -> GhLine {
     line
 }
 
-/// `input` is the heredocs the command reads, which gh sends as the request
-/// when told to read it: `--input -`, or a field's `@-`.
-fn gh(arguments: &[String], input: &[String]) -> Option<Merge> {
+/// `input` is what the command reads on standard input, which gh sends as the
+/// request when told to read it: `--input -`, or a field's `@-`. `None` is
+/// input the gate cannot see.
+fn gh(arguments: &[String], input: Option<&[String]>) -> Option<Merge> {
     let line = gh_line(arguments);
-    let body = if line.sends_input() { input } else { &[] };
+    let body = if line.sends_input() {
+        input
+    } else {
+        Some(&[][..])
+    };
     let positional = |index: usize| line.positionals.get(index).map(String::as_str);
     match (positional(0), positional(1)) {
         (Some("pr"), Some("merge")) if !line.disables_auto_merge => Some(Merge {
@@ -1611,10 +1698,16 @@ fn gh(arguments: &[String], input: &[String]) -> Option<Merge> {
             unreadable: None,
         }),
         (Some("api"), Some("graphql")) => {
-            let request = || line.fields.iter().chain(body);
-            request()
-                .any(|part| names_a_merge_mutation(part))
-                .then(|| graphql_merge(request().any(|part| part.contains("expectedHeadOid"))))
+            let request = || line.fields.iter().chain(body.unwrap_or_default());
+            if request().any(|part| names_a_merge_mutation(part)) {
+                Some(graphql_merge(
+                    request().any(|part| part.contains("expectedHeadOid")),
+                ))
+            } else if body.is_none() || !line.files.is_empty() {
+                Some(unseen_request())
+            } else {
+                None
+            }
         }
         (Some("api"), Some(endpoint)) => {
             let (repo, number) = merge_endpoint(endpoint)?;
@@ -1631,7 +1724,13 @@ fn gh(arguments: &[String], input: &[String]) -> Option<Merge> {
                         .find_map(|field| field.strip_prefix("sha="))
                     {
                         Some(sha) => Head::Named(sha.to_owned()),
-                        None if body.iter().any(|part| part.contains("\"sha\"")) => Head::Hidden,
+                        None if body
+                            .unwrap_or_default()
+                            .iter()
+                            .any(|part| part.contains("\"sha\"")) =>
+                        {
+                            Head::Hidden
+                        }
                         None => Head::Unnamed,
                     },
                     unreadable: None,
@@ -1641,12 +1740,16 @@ fn gh(arguments: &[String], input: &[String]) -> Option<Merge> {
     }
 }
 
-/// `input` is the heredocs the command reads, which curl sends as data given
-/// as `@-`.
-fn curl(arguments: &[String], input: &[String]) -> Option<Merge> {
+/// `input` is what the command reads on standard input, which curl sends as
+/// data given as `@-`. `None` is input the gate cannot see.
+fn curl(arguments: &[String], input: Option<&[String]>) -> Option<Merge> {
     let mut method = None;
     let mut data = Vec::new();
     let mut urls = Vec::new();
+    // Data read from a file, or from input the gate cannot see.
+    let mut unseen = false;
+    // A config file, which can hold the URL and the data.
+    let mut configured = false;
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
@@ -1654,14 +1757,19 @@ fn curl(arguments: &[String], input: &[String]) -> Option<Merge> {
             "-d" | "--data" | "--data-raw" | "--data-binary" | "--json" => {
                 if let Some(value) = words.next() {
                     // `--data-raw` sends an `@` as it is.
-                    if word != "--data-raw"
-                        && value.strip_prefix('@').is_some_and(is_standard_input)
-                    {
-                        data.extend_from_slice(input);
-                    } else {
-                        data.push(value.clone());
+                    match value.strip_prefix('@').filter(|_| word != "--data-raw") {
+                        Some(file) if is_standard_input(file) => match input {
+                            Some(input) => data.extend_from_slice(input),
+                            None => unseen = true,
+                        },
+                        Some(_) => unseen = true,
+                        None => data.push(value.clone()),
                     }
                 }
+            }
+            "-K" | "--config" => {
+                words.next();
+                configured = true;
             }
             attached if attached.starts_with("-X") && attached.len() > 2 => {
                 method = Some(attached[2..].to_owned());
@@ -1674,6 +1782,9 @@ fn curl(arguments: &[String], input: &[String]) -> Option<Merge> {
         return Some(graphql_merge(
             data.iter().any(|body| body.contains("expectedHeadOid")),
         ));
+    }
+    if configured || (unseen && urls.iter().any(|url| graphql_endpoint(url))) {
+        return Some(unseen_request());
     }
     let (repo, number) = urls.iter().find_map(|url| merge_endpoint(url))?;
     method
@@ -1700,6 +1811,26 @@ fn names_a_merge_mutation(text: &str) -> bool {
     ]
     .iter()
     .any(|mutation| text.contains(mutation))
+}
+
+/// A GraphQL request the gate cannot read, which may be any merge (ADR 0188).
+fn unseen_request() -> Merge {
+    Merge {
+        folder: None,
+        repo: None,
+        pull_request: None,
+        head: Head::Unnamed,
+        unreadable: Some(
+            "it reads its GraphQL request from a file or an input Swarm cannot see, so give the request in the command itself",
+        ),
+    }
+}
+
+/// Whether a URL is GitHub's GraphQL endpoint.
+fn graphql_endpoint(url: &str) -> bool {
+    url.split(['?', '#'])
+        .next()
+        .is_some_and(|path| path.trim_end_matches('/').ends_with("/graphql"))
 }
 
 fn graphql_merge(head_named: bool) -> Merge {
@@ -2469,6 +2600,15 @@ mod tests {
             "cat <<'B' | git tag -a v1\n:!gh pr merge 5\n'\nB".to_owned(),
             format!("cat > m.sh <<'B'\n{hidden}\nB\ngit push --receive-pack='bash m.sh' . HEAD"),
             "gh pr comment 5 --editor <<'B'\n:!gh pr merge 5\n'\nB".to_owned(),
+            // gh runs the editor or browser its config names, which the same
+            // command may write.
+            "cat > ~/.config/gh/config.yml <<'B'\neditor: sh -c 'gh pr merge 5'\nbrowser: don't-open\nB\ngh pr comment 5 -e".to_owned(),
+            "cat > ~/.config/gh/config.yml <<'B'\neditor: sh -c 'gh pr merge 5'\nbrowser: don't-open\nB\ngh pr comment 5 --editor".to_owned(),
+            "cat > ~/.config/gh/config.yml <<'B'\nbrowser: sh -c 'gh pr merge 5'\neditor: don't-open\nB\ngh pr view 5 -w".to_owned(),
+            "cat > ~/.config/gh/config.yml <<'B'\nbrowser: sh -c 'gh pr merge 5'\neditor: don't-open\nB\ngh repo view --web".to_owned(),
+            "cat > ~/.config/gh/config.yml <<'B'\neditor: sh -c 'gh pr merge 5'\nbrowser: don't-open\nB\ngh issue comment 5 -we".to_owned(),
+            // `gh gist edit` opens the editor with no flag at all.
+            "cat > ~/.config/gh/config.yml <<'B'\neditor: sh -c 'gh pr merge 5'\nbrowser: don't-open\nB\ngh gist edit 1234".to_owned(),
             format!(
                 "cat > m.sh <<'B'\n{hidden}\nB\ngh repo clone o/r -- --upload-pack='bash m.sh'"
             ),
@@ -2511,6 +2651,8 @@ mod tests {
             "gh issue comment 5 -b \"Summary: $(cat <<'EOF'\nit's merged\nEOF\n)\"",
             "mkdir -p docs && cat > docs/x.md <<'EOF'\nThe merge gate's rule.\nEOF",
             "gh api repos/o/r/issues/5/comments -F body=@- <<'EOF'\nIt's not a merge.\nEOF",
+            // A value given to a flag beside it is not the editor's letter.
+            "cat > notes.md <<'B'\nIt's the merge note.\nB\ngh pr comment 5 -Ro/web --body-file notes.md",
         ] {
             assert_eq!(
                 merges_in(data, Some(Path::new("/srv")), 0),
@@ -2741,6 +2883,77 @@ mod tests {
             "/srv",
         );
         assert_eq!(posted.head, Head::Hidden);
+    }
+
+    /// A GraphQL request gh or curl reads from a file, or from standard input
+    /// that is not a heredoc passed on as written, may be a merge the gate
+    /// cannot read, so it is held as one: the command must give the request
+    /// itself (ADR 0188).
+    #[test]
+    fn a_graphql_request_the_gate_cannot_see_is_held_as_a_merge() {
+        let mutation =
+            "mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }";
+        let json = "{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\", \"note\": \"don't\"}";
+        let escaped = "{\"query\": \"mutation { merge\\u0050ullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\", \"note\": \"don't\"}";
+        let innocent = "{\"query\": \"query { viewer { login } }\"}";
+        for unseen in [
+            format!("cat > q.graphql <<'B'\n{mutation}#don't\nB\ngh api graphql -F query=@q.graphql"),
+            format!("cat > q.json <<'B'\n{json}\nB\ngh api graphql --input q.json"),
+            format!("cat > q.json <<'B'\n{json}\nB\ngh api graphql --input - < q.json"),
+            format!(
+                "tee q.graphql > /dev/null <<'B'\n{mutation}#don't\nB\ngh api graphql -F query=@q.graphql"
+            ),
+            format!(
+                "cat > q.graphql <<'B'\n{mutation}#don't\nB\ncat q.graphql | gh api graphql -F query=@-"
+            ),
+            format!("cat > q.json <<'B'\n{escaped}\nB\ngh api graphql --input q.json"),
+            // Readable as shell, or written by printf: the file is still the
+            // request, and the gate does not read it.
+            format!("cat > q.graphql <<'B'\n{mutation}\nB\ngh api graphql -F query=@q.graphql"),
+            format!("printf '%s' '{mutation}' > q.graphql && gh api graphql -F query=@q.graphql"),
+            "gh api graphql --field query=@q.graphql".to_owned(),
+            "gh api graphql -Fquery=@q.graphql".to_owned(),
+            format!("gh api graphql --input /dev/fd/0 <<'B'\n{innocent}\nB"),
+            // Standard input from a here-string, a file named after the
+            // heredoc, a command that changes or prints what it passes on,
+            // or nothing at all.
+            "gh api graphql --input - <<< \"$request\"".to_owned(),
+            format!("cat <<'B' | gh api graphql --input - <<< \"$request\"\n{innocent}\nB"),
+            format!("gh api graphql --input - <<'B' < q.json\n{innocent}\nB"),
+            // cat prints a file it is named, not its heredoc.
+            format!("cat q.graphql <<'B' | gh api graphql --input -\n{innocent}\nB"),
+            "sed 's/x/merge/' <<'B' | gh api graphql --input -\n{\"query\": \"mutation { xPullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\"}\nB".to_owned(),
+            "printf '%s' \"$request\" | gh api graphql --input -".to_owned(),
+            "gh api graphql --input -".to_owned(),
+            "curl -X POST https://api.github.com/graphql -d @q.json".to_owned(),
+            "curl https://api.github.com/graphql --json @q.json".to_owned(),
+            "curl https://api.github.com/graphql -d @- < q.json".to_owned(),
+            "curl -K request.cfg".to_owned(),
+        ] {
+            let merge = only_merge(&unseen, "/srv");
+            assert_eq!(merge.head, Head::Unnamed, "{unseen}");
+            assert!(merge.unreadable.is_some(), "{unseen}");
+        }
+        for seen in [
+            format!("gh api graphql --input - <<'B'\n{innocent}\nB"),
+            format!("cat <<'B' | gh api graphql --input -\n{innocent}\nB"),
+            format!("cat <<'B' | tee request.json | gh api graphql --input -\n{innocent}\nB"),
+            // `-f` sends an `@` as it is.
+            "gh api graphql -f query=@q.graphql".to_owned(),
+            "gh api graphql -f query='query { viewer { login } }'".to_owned(),
+            // Only a GraphQL request can hide a merge: a REST merge names
+            // its endpoint.
+            "gh api repos/o/r/issues/5/comments --input body.json".to_owned(),
+            format!("curl https://api.github.com/graphql -d @- <<'B'\n{innocent}\nB"),
+            "curl https://api.github.com/graphql --data-raw @q.json".to_owned(),
+            "curl -d @body.json https://api.github.com/repos/o/r/issues/5/comments".to_owned(),
+        ] {
+            assert_eq!(
+                merges_in(&seen, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{seen}"
+            );
+        }
     }
 
     fn pull(author: &str, owner: &str, public: bool) -> Facts {
