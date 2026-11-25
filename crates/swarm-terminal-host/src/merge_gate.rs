@@ -304,12 +304,14 @@ enum Token {
     Pipe,
     /// Standard input from a file, a here-string or another descriptor.
     Input,
-    /// A heredoc's body: what the command it belongs to reads on standard
-    /// input (ADR 0188). It `expands` when no part of its delimiter was
-    /// quoted, so its `$(...)` and backquotes run as the shell reads it.
+    /// A heredoc's body: what the command it belongs to reads, on standard
+    /// input when it is `standard`, given no descriptor or 0 (ADR 0188). It
+    /// `expands` when no part of its delimiter was quoted, so its `$(...)`
+    /// and backquotes run as the shell reads it.
     Stdin {
         body: String,
         expands: bool,
+        standard: bool,
     },
 }
 
@@ -355,6 +357,7 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
         match character {
             '\'' => {
                 lexer.started = true;
+                lexer.quotes += 1;
                 loop {
                     match chars.next()? {
                         '\'' => break,
@@ -367,6 +370,7 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                 Some('\n') | None => {}
                 Some(escaped) => {
                     lexer.started = true;
+                    lexer.quotes += 1;
                     lexer.word.push(escaped);
                 }
             },
@@ -467,6 +471,9 @@ struct Lexer {
     word: String,
     /// A word has begun, even an empty quoted one.
     started: bool,
+    /// How many quoted or escaped parts the word holds: with one, it
+    /// names no descriptor before a redirection.
+    quotes: usize,
     /// Bash computes part of the word.
     printed: Option<Printing>,
     /// The `{` outside quotes in the word that no `}` has closed: a `,` or
@@ -494,14 +501,30 @@ struct Heredoc {
     /// Any quoting in the delimiter keeps the body as written. Unquoted, its
     /// `$(...)` and backquotes run as the heredoc is read.
     quoted: bool,
+    /// On standard input: no descriptor before `<<`, or 0.
+    standard: bool,
     /// Where its `Token::Stdin` waits for the body.
     at: usize,
+}
+
+/// Whether a word right before a redirection is a `{name}`, for which bash
+/// opens a new descriptor and sets the variable `name` to it.
+fn names_a_descriptor(word: &str) -> bool {
+    word.strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .is_some_and(|name| {
+            name.starts_with(|first: char| first.is_ascii_alphabetic() || first == '_')
+                && name
+                    .chars()
+                    .all(|letter| letter.is_ascii_alphanumeric() || letter == '_')
+        })
 }
 
 impl Lexer {
     /// The rest of a double-quoted string, whose opening quote has been read.
     fn double_quoted(&mut self, chars: &mut Chars<'_>) -> Option<()> {
         self.started = true;
+        self.quotes += 1;
         loop {
             match chars.next()? {
                 '"' => return Some(()),
@@ -591,11 +614,17 @@ impl Lexer {
     /// A redirection, whose first `<` or `>` has been read. Its file is not
     /// a word of the command; a heredoc's body is what the command reads.
     fn redirection(&mut self, first: char, chars: &mut Chars<'_>) -> Option<()> {
-        // `2>` names a descriptor, not a word of the command.
-        if self.started
-            && self.printed.is_none()
-            && self.word.chars().all(|digit| digit.is_ascii_digit())
-        {
+        // `2>` and `{fd}>` name a descriptor, not a word of the command, when
+        // no quote or backslash is in them. A heredoc is standard input only
+        // on descriptor 0, which it takes unnamed.
+        let mut standard = true;
+        let plain = self.started && self.printed.is_none() && self.quotes == 0;
+        if plain && self.word.chars().all(|digit| digit.is_ascii_digit()) {
+            standard = self.word.chars().all(|digit| digit == '0');
+            self.word.clear();
+            self.started = false;
+        } else if plain && names_a_descriptor(&self.word) {
+            standard = false;
             self.word.clear();
             self.started = false;
         } else {
@@ -606,7 +635,7 @@ impl Lexer {
             if chars.peek() != Some(&'<') {
                 let strip_tabs = chars.next_if_eq(&'-').is_some();
                 let (delimiter, quoted) = heredoc_delimiter(chars)?;
-                self.heredoc(delimiter, strip_tabs, quoted);
+                self.heredoc(delimiter, strip_tabs, quoted, standard);
                 return Some(());
             }
             // A here-string's word is passed over, as it always was; ADR
@@ -638,16 +667,18 @@ impl Lexer {
         self.tokens.push(Token::Pipe);
     }
 
-    fn heredoc(&mut self, delimiter: String, strip_tabs: bool, quoted: bool) {
+    fn heredoc(&mut self, delimiter: String, strip_tabs: bool, quoted: bool, standard: bool) {
         self.heredocs.push(Heredoc {
             delimiter,
             strip_tabs,
             quoted,
+            standard,
             at: self.tokens.len(),
         });
         self.tokens.push(Token::Stdin {
             body: String::new(),
             expands: false,
+            standard,
         });
     }
 
@@ -657,6 +688,7 @@ impl Lexer {
             self.tokens[heredoc.at] = Token::Stdin {
                 body: heredoc_body(chars, &heredoc, self.in_substitution)?,
                 expands: !heredoc.quoted,
+                standard: heredoc.standard,
             };
         }
         Some(())
@@ -665,6 +697,7 @@ impl Lexer {
     fn finish(&mut self) {
         self.braces = 0;
         self.brackets = 0;
+        self.quotes = 0;
         if self.started {
             let word = std::mem::take(&mut self.word);
             let printed = self.printed.take();
@@ -1181,7 +1214,7 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool)
                 Step::Nested(text) => read.push(text),
                 Step::Other => {}
             }
-            for &(body, expands) in &command.input {
+            for &(body, expands) in &command.heredocs {
                 let found = match merges_within(body, folder.as_deref(), depth + 1, data) {
                     Parsed::Unclear if data && expands => expansions(body)
                         .map_or(Parsed::Unclear, |run| {
@@ -1206,12 +1239,13 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool)
     Parsed::Merges(merges)
 }
 
-/// One simple command: its words, each heredoc it reads with whether that
-/// heredoc expands, and whether its standard input comes from a file, a
-/// here-string or a descriptor.
+/// One simple command: its words, each heredoc it is given with whether that
+/// heredoc expands, the ones it reads on standard input, and whether its
+/// standard input comes from a file, a here-string or a descriptor.
 struct Simple<'a> {
     words: Vec<String>,
-    input: Vec<(&'a str, bool)>,
+    heredocs: Vec<(&'a str, bool)>,
+    input: Vec<&'a str>,
     redirected: bool,
 }
 
@@ -1219,13 +1253,23 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
     fn from(tokens: &'a [Token]) -> Self {
         let mut command = Simple {
             words: Vec::new(),
+            heredocs: Vec::new(),
             input: Vec::new(),
             redirected: false,
         };
         for token in tokens {
             match token {
                 Token::Word(word) | Token::Printed { word, .. } => command.words.push(word.clone()),
-                Token::Stdin { body, expands } => command.input.push((body, *expands)),
+                Token::Stdin {
+                    body,
+                    expands,
+                    standard,
+                } => {
+                    command.heredocs.push((body, *expands));
+                    if *standard {
+                        command.input.push(body);
+                    }
+                }
                 Token::Input => command.redirected = true,
                 Token::Opaque | Token::Break | Token::Pipe => {}
             }
@@ -1235,9 +1279,10 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
 }
 
 /// What a command reads on standard input, as far as the gate can see it:
-/// its own heredocs, or those the commands before it pass on down the pipe
-/// as written. `None` is input it cannot see: a file, a here-string or a
-/// descriptor, a command that prints anything else, or the shell's own.
+/// its own heredocs on standard input, or those the commands before it pass
+/// on down the pipe as written. `None` is input it cannot see: a file, a
+/// here-string or a descriptor, a command that prints anything else, or the
+/// shell's own. A heredoc on another descriptor is none of these.
 fn seen_input(commands: &[Simple<'_>], place: usize) -> Option<Vec<String>> {
     let mut at = place;
     loop {
@@ -1250,7 +1295,7 @@ fn seen_input(commands: &[Simple<'_>], place: usize) -> Option<Vec<String>> {
                 command
                     .input
                     .iter()
-                    .map(|(body, _)| (*body).to_owned())
+                    .map(|body| (*body).to_owned())
                     .collect(),
             );
         }
@@ -1295,6 +1340,7 @@ fn runs_nothing_it_is_given(tokens: &[Token]) -> bool {
             Token::Stdin {
                 body,
                 expands: true,
+                ..
             } => expansions(body).is_some_and(|run| runs_nothing_it_is_given(&run)),
             _ => true,
         })
@@ -1341,8 +1387,9 @@ const GIT_INERT: &[&str] = &[
 ///   a request first, so an editor it opens reads none of it.
 /// - gh counts without `--`, after which it hands words to git.
 /// - gh counts without a flag that opens the editor or browser its config
-///   names, which the same command may write (`gh_opens_a_program`), and
-///   not as `gh gist edit`, which opens the editor with no flag.
+///   names, which the same command may write (`gh_opens_a_program`), other
+///   than as a text flag's value, and not as `gh gist edit`, which opens
+///   the editor with no flag.
 /// - git counts without a flag that names a program for it to run.
 fn inert(command: &[Token], fed: bool) -> bool {
     let words: Vec<(&str, Option<bool>)> = command.iter().filter_map(Token::said).collect();
@@ -1359,7 +1406,10 @@ fn inert(command: &[Token], fed: bool) -> bool {
         Some("gh") => {
             let plain: Vec<String> = arguments.iter().map(|&(word, _)| word.to_owned()).collect();
             text && !arguments.contains(&("--", None))
-                && !arguments.iter().any(|&(word, _)| gh_opens_a_program(word))
+                // A text flag's value is text, whatever it starts with.
+                && !arguments.iter().enumerate().any(|(at, &(word, _))| {
+                    gh_opens_a_program(word) && !holds_text(&words[..=at], word)
+                })
                 // It opens the editor with no flag.
                 && !matches!(arguments, [("gist", None), ("edit", None), ..])
                 && (!fed || gh_line(&plain).reads_all_input())
@@ -1376,26 +1426,18 @@ fn inert(command: &[Token], fed: bool) -> bool {
     }
 }
 
-/// Whether a gh flag opens the editor or the browser gh's config names:
-/// `--editor` or `--web`, or `-e` or `-w` among one-letter flags before one
-/// that takes the rest of the word as its value.
+/// Whether a gh flag may open the editor or the browser gh's config names:
+/// `--editor` or `--web`, or a group of one-letter flags with an `e` or a
+/// `w` anywhere. Which letter takes the rest of a group as its value depends
+/// on the command (`-f` is `--fill` to `gh pr create`), so a value written
+/// beside its flag counts too.
 fn gh_opens_a_program(word: &str) -> bool {
     if let Some(long) = word.strip_prefix("--") {
         let name = long.split_once('=').map_or(long, |(name, _)| name);
         return matches!(name, "editor" | "web");
     }
-    let Some(letters) = word.strip_prefix('-') else {
-        return false;
-    };
-    for letter in letters.chars() {
-        if matches!(letter, 'e' | 'w') {
-            return true;
-        }
-        if GH_VALUE_FLAGS.contains(&format!("-{letter}").as_str()) {
-            return false;
-        }
-    }
-    false
+    word.strip_prefix('-')
+        .is_some_and(|letters| letters.contains(['e', 'w']))
 }
 
 /// git's long flags that name a program for it to run.
@@ -1626,31 +1668,28 @@ fn gh_line(arguments: &[String]) -> GhLine {
         let (flag, attached) = if let Some((flag, value)) = word.split_once('=')
             && flag.starts_with("--")
         {
-            (flag, Some(value.to_owned()))
-        } else if word.len() > 2
-            && word.starts_with('-')
-            && !word.starts_with("--")
-            && word.is_char_boundary(2)
-            && GH_VALUE_FLAGS.contains(&&word[..2])
-        {
-            (&word[..2], Some(word[2..].to_owned()))
+            (flag.to_owned(), Some(value.to_owned()))
+        } else if word.starts_with("--") {
+            (word.clone(), None)
+        } else if let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) {
+            let Some((flag, value)) = one_letter_value(letters) else {
+                continue;
+            };
+            (flag, value)
         } else {
-            (word.as_str(), None)
-        };
-        if !flag.starts_with('-') || flag == "-" {
             line.positionals.push(word.clone());
             continue;
-        }
+        };
         if flag == "--disable-auto" {
             line.disables_auto_merge = true;
         }
-        if !GH_VALUE_FLAGS.contains(&flag) {
+        if !GH_VALUE_FLAGS.contains(&flag.as_str()) {
             continue;
         }
         let Some(value) = attached.or_else(|| words.next().cloned()) else {
             continue;
         };
-        match flag {
+        match flag.as_str() {
             "-R" | "--repo" => line.repo = Some(value),
             "-X" | "--method" => line.method = Some(value),
             "-f" | "--raw-field" => line.fields.push(value),
@@ -1678,6 +1717,25 @@ fn gh_line(arguments: &[String]) -> GhLine {
     line
 }
 
+/// The first flag in a group of one-letter flags (`letters`, after its `-`)
+/// that takes a value, as pflag reads the group: the letters before it take
+/// none, and it takes the rest of the word, less one `=`, or the next word
+/// when nothing is left (`None` here).
+fn one_letter_value(letters: &str) -> Option<(String, Option<String>)> {
+    let (at, letter) = letters
+        .char_indices()
+        .find(|&(_, letter)| GH_VALUE_FLAGS.contains(&format!("-{letter}").as_str()))?;
+    let rest = &letters[at + letter.len_utf8()..];
+    let value = rest
+        .strip_prefix('=')
+        .filter(|value| !value.is_empty())
+        .unwrap_or(rest);
+    Some((
+        format!("-{letter}"),
+        (!value.is_empty()).then(|| value.to_owned()),
+    ))
+}
+
 /// `input` is what the command reads on standard input, which gh sends as the
 /// request when told to read it: `--input -`, or a field's `@-`. `None` is
 /// input the gate cannot see.
@@ -1697,7 +1755,7 @@ fn gh(arguments: &[String], input: Option<&[String]>) -> Option<Merge> {
             head: line.head.clone().map_or(Head::Unnamed, Head::Named),
             unreadable: None,
         }),
-        (Some("api"), Some("graphql")) => {
+        (Some("api"), Some(endpoint)) if graphql_endpoint(endpoint) => {
             let request = || line.fields.iter().chain(body.unwrap_or_default());
             if request().any(|part| names_a_merge_mutation(part)) {
                 Some(graphql_merge(
@@ -1826,11 +1884,14 @@ fn unseen_request() -> Merge {
     }
 }
 
-/// Whether a URL is GitHub's GraphQL endpoint.
+/// Whether an endpoint or URL is GitHub's GraphQL endpoint: `graphql`, with
+/// a leading `/`, or a URL whose path ends there, as gh reads all three. It
+/// is read in any case of its letters, since whether GitHub does was not run.
 fn graphql_endpoint(url: &str) -> bool {
-    url.split(['?', '#'])
-        .next()
-        .is_some_and(|path| path.trim_end_matches('/').ends_with("/graphql"))
+    url.split(['?', '#']).next().is_some_and(|path| {
+        let path = path.trim_end_matches('/').to_ascii_lowercase();
+        path == "graphql" || path.ends_with("/graphql")
+    })
 }
 
 fn graphql_merge(head_named: bool) -> Merge {
@@ -2244,6 +2305,21 @@ mod tests {
         assert_eq!(merge.pull_request.as_deref(), Some("160"));
         assert_eq!(merge.head, Head::Named("35e3".into()));
 
+        // pflag reads `-iX` as `-i` and then `-X`, which takes the rest of
+        // the word or the next one.
+        for grouped in [
+            "gh api -iX PUT repos/o/r/pulls/5/merge",
+            "gh api repos/o/r/pulls/5/merge -iX PUT",
+            "gh api repos/o/r/pulls/5/merge -iXput",
+        ] {
+            let merge = only_merge(grouped, "/");
+            assert_eq!(
+                (merge.repo.as_deref(), merge.pull_request.as_deref()),
+                (Some("o/r"), Some("5")),
+                "{grouped}"
+            );
+        }
+
         let merge = only_merge(
             "gh api --method=put repos/{owner}/{repo}/pulls/9/merge",
             "/x",
@@ -2257,6 +2333,16 @@ mod tests {
         );
         assert_eq!(merge.head, Head::Hidden);
         assert!(merge.unreadable.is_some());
+        // gh reads a leading `/` and its host's URL as the same endpoint.
+        for endpoint in ["/graphql", "https://api.github.com/graphql"] {
+            let merge = only_merge(
+                &format!(
+                    r#"gh api {endpoint} -f query='mutation {{ mergePullRequest(input: {{pullRequestId: "PR_1", expectedHeadOid: "abc"}}) {{ clientMutationId }} }}'"#
+                ),
+                "/",
+            );
+            assert_eq!(merge.head, Head::Hidden, "{endpoint}");
+        }
 
         let merge = only_merge(
             r#"curl -sS -X PUT -H "Authorization: Bearer $T" https://api.github.com/repos/miopea/swarm-next/pulls/5/merge -d '{"sha":"abc"}'"#,
@@ -2457,6 +2543,7 @@ mod tests {
                     Token::Stdin {
                         body,
                         expands: true,
+                        ..
                     } => expansions(body).is_some_and(|run| run.contains(&Token::Opaque)),
                     _ => false,
                 });
@@ -2651,8 +2738,6 @@ mod tests {
             "gh issue comment 5 -b \"Summary: $(cat <<'EOF'\nit's merged\nEOF\n)\"",
             "mkdir -p docs && cat > docs/x.md <<'EOF'\nThe merge gate's rule.\nEOF",
             "gh api repos/o/r/issues/5/comments -F body=@- <<'EOF'\nIt's not a merge.\nEOF",
-            // A value given to a flag beside it is not the editor's letter.
-            "cat > notes.md <<'B'\nIt's the merge note.\nB\ngh pr comment 5 -Ro/web --body-file notes.md",
         ] {
             assert_eq!(
                 merges_in(data, Some(Path::new("/srv")), 0),
@@ -2669,6 +2754,40 @@ mod tests {
             (Some("5"), Head::Named("abc1234".into())),
             "the words after a substitution stay its command's"
         );
+    }
+
+    /// Which letter of a group of gh's one-letter flags takes the rest as
+    /// its value depends on the command (`-f` is `--fill` to `gh pr create`
+    /// and takes a value in `gh api`), so any group holding an `e` or a `w`
+    /// may open the editor or browser gh's config names (ADR 0188). A value
+    /// given as its own word is not a group, nor is a text flag's value.
+    #[test]
+    fn any_group_of_gh_flags_with_an_e_or_a_w_may_open_a_program() {
+        let browser = "cat > ~/.config/gh/config.yml <<'B'\nbrowser: sh -c 'gh pr merge 5'\neditor: don't-open\nB\n";
+        let editor = "cat > ~/.config/gh/config.yml <<'B'\neditor: sh -c 'gh pr merge 5'\nbrowser: don't-open\nB\n";
+        let note = "cat > notes.md <<'B'\nIt's the merge note.\nB\n";
+        for runs in [
+            format!("{browser}gh pr create -fw"),
+            format!("{editor}gh pr create -fe"),
+            format!("{browser}gh gist create -pw f.txt"),
+            format!("{note}gh pr comment 5 -Ro/web --body-file notes.md"),
+        ] {
+            assert_eq!(
+                merges_in(&runs, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "{runs}"
+            );
+        }
+        for data in [
+            format!("{note}gh pr comment 5 -R o/web --body-file notes.md"),
+            format!("{note}gh pr comment 5 --body \"- fixed the web view\""),
+        ] {
+            assert_eq!(
+                merges_in(&data, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{data}"
+            );
+        }
     }
 
     /// What a substitution prints is a message's text only as the value of a
@@ -2913,6 +3032,21 @@ mod tests {
             format!("printf '%s' '{mutation}' > q.graphql && gh api graphql -F query=@q.graphql"),
             "gh api graphql --field query=@q.graphql".to_owned(),
             "gh api graphql -Fquery=@q.graphql".to_owned(),
+            // The endpoint with a leading `/`, or as its host's URL.
+            format!("cat > q.graphql <<'B'\n{mutation}#don't\nB\ngh api /graphql -F query=@q.graphql"),
+            "gh api /graphql --input q.json".to_owned(),
+            "gh api https://api.github.com/graphql --input q.json".to_owned(),
+            // `-F` after a flag that takes no value, in one group.
+            "gh api graphql -iF query=@q.graphql".to_owned(),
+            "gh api graphql -iFquery=@q.graphql".to_owned(),
+            // pflag takes one `=` off a one-letter flag's value.
+            "gh api graphql -F=query=@q.graphql".to_owned(),
+            "gh api graphql -iF=query=@q.graphql".to_owned(),
+            // A heredoc on another descriptor is not standard input.
+            format!("cat <<'A' | gh api graphql --input - 3<<'C'\n{json}\nA\nx\nC"),
+            format!("cat <<'A' | gh api graphql -F query=@- 3<<'C'\n{mutation}#don't\nA\nx\nC"),
+            format!("cat q.json | gh api graphql --input - 3<<'C'\n{innocent}\nC"),
+            format!("gh api graphql --input - 3<<'C'\n{innocent}\nC"),
             format!("gh api graphql --input /dev/fd/0 <<'B'\n{innocent}\nB"),
             // Standard input from a here-string, a file named after the
             // heredoc, a command that changes or prints what it passes on,
@@ -2936,10 +3070,13 @@ mod tests {
         }
         for seen in [
             format!("gh api graphql --input - <<'B'\n{innocent}\nB"),
+            format!("gh api graphql --input - 0<<'B'\n{innocent}\nB"),
             format!("cat <<'B' | gh api graphql --input -\n{innocent}\nB"),
             format!("cat <<'B' | tee request.json | gh api graphql --input -\n{innocent}\nB"),
-            // `-f` sends an `@` as it is.
+            // `-f` sends an `@` as it is, grouped or not.
             "gh api graphql -f query=@q.graphql".to_owned(),
+            "gh api graphql -if query=@q.graphql".to_owned(),
+            "gh api /graphql -f query='query { viewer { login } }'".to_owned(),
             "gh api graphql -f query='query { viewer { login } }'".to_owned(),
             // Only a GraphQL request can hide a merge: a REST merge names
             // its endpoint.
@@ -2953,6 +3090,86 @@ mod tests {
                 Parsed::Merges(Vec::new()),
                 "{seen}"
             );
+        }
+    }
+
+    /// bash gives a heredoc to standard input unless a descriptor stands
+    /// right before `<<`: digits no quote or backslash touches, or a
+    /// `{name}`, for which bash opens a new one. A quoted or escaped digit,
+    /// or a braced word that is not a name, is a word of the command (ADR
+    /// 0188).
+    #[test]
+    fn a_heredoc_is_standard_input_unless_bash_reads_a_descriptor_before_it() {
+        assert_eq!(
+            words(
+                "cat - {1x}<<'H' \"3\"<<'C' \\4<<'D' '6'<<'G' {fd}<<'E' 5<<'F'\nh\nH\nc\nC\nd\nD\ng\nG\ne\nE\nf\nF"
+            ),
+            [
+                "cat",
+                "-",
+                "{1x}",
+                "<stdin:h\n>",
+                "3",
+                "<stdin:c\n>",
+                "4",
+                "<stdin:d\n>",
+                "6",
+                "<stdin:g\n>",
+                "<stdin:e\n>",
+                "<stdin:f\n>",
+                "<break>"
+            ]
+        );
+        let mutation =
+            "mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }";
+        let json = "{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\", \"note\": \"don't\"}";
+        let innocent = "{\"query\": \"query { viewer { login } }\"}";
+        let viewer = "query { viewer { login } }";
+        for held in [
+            // A quoted or escaped digit: the heredoc is standard input, and
+            // what is piped is not.
+            format!(
+                "cat <<'A' | gh api graphql -F query=@- --jq \"3\"<<'C'\n{viewer}\nA\n{mutation}#don't\nC"
+            ),
+            format!(
+                "cat <<'A' | gh api graphql -F query=@- --jq \\3<<'C'\n{viewer}\nA\n{mutation}#don't\nC"
+            ),
+            format!("cat <<'A' | gh api graphql --input - --jq '3'<<'C'\n{innocent}\nA\n{json}\nC"),
+            format!(
+                "cat <<'A' | curl -d @- https://api.github.com/graphql \"3\"<<'C'\n{innocent}\nA\n{json}\nC"
+            ),
+            // A named descriptor: what is piped is standard input, and the
+            // heredoc is not.
+            format!(
+                "cat <<'A' | gh api graphql -F query=@- {{fd}}<<'C'\n{mutation}#don't\nA\nx\nC"
+            ),
+            format!("cat <<'A' | gh api graphql --input - {{fd}}<<'C'\n{json}\nA\nx\nC"),
+            format!("cat q.json | gh api graphql --input - {{fd}}<<'C'\n{innocent}\nC"),
+            format!(
+                "cat q.json | curl -d @- https://api.github.com/graphql {{fd}}<<'C'\n{innocent}\nC"
+            ),
+        ] {
+            assert!(only_merge(&held, "/srv").unreadable.is_some(), "{held}");
+        }
+        let piped =
+            format!("cat <<'A' | gh api graphql --input - {{fd}}<<'C'\n{innocent}\nA\nx\nC");
+        assert_eq!(
+            merges_in(&piped, Some(Path::new("/srv")), 0),
+            Parsed::Merges(Vec::new()),
+            "{piped}"
+        );
+    }
+
+    /// Whether GitHub ignores the case of its GraphQL endpoint's path was
+    /// not run, so the endpoint is held in any case (ADR 0188).
+    #[test]
+    fn the_graphql_endpoint_is_held_in_any_case_of_its_letters() {
+        for held in [
+            "gh api GraphQL -F query=@q.graphql",
+            "gh api /GRAPHQL --input q.json",
+            "curl -d @q.json https://api.github.com/GraphQL",
+        ] {
+            assert!(only_merge(held, "/srv").unreadable.is_some(), "{held}");
         }
     }
 

@@ -84,9 +84,13 @@ bodies as commands, and changes only what an unreadable body means.
   - gh does not count when it may run the editor or the browser its config
     names, which the same command can write, as
     `cat > ~/.config/gh/config.yml <<'B'` with `editor: sh -c '...'`. That
-    is `-e` or `--editor`, `-w` or `--web`, alone or among one-letter flags
-    before one that takes a value, and `gh gist edit`, which opens the
-    editor with no flag.
+    is `--editor` or `--web`, any group of one-letter flags holding an `e`
+    or a `w`, and `gh gist edit`, which opens the editor with no flag.
+    Which letter of a group takes the rest as its value depends on the
+    command: `-f` is `--fill` to `gh pr create` and takes a value in
+    `gh api`. So a value written beside its flag counts too, as in
+    `-Ro/web`. A text flag's value does not, because gh takes the next word
+    as that value whatever it starts with.
   - git does not count with a long flag that names a program for it to run:
     `--receive-pack`, `--exec` or `--upload-pack`. git takes any start of a
     long flag's name that only one flag begins with, so `--rec` counts as
@@ -167,19 +171,36 @@ bodies as commands, and changes only what an unreadable body means.
   `gh api --input -`, a `gh api` field set to `@-`, or curl's `-d @-`.
   - The heredoc can be the command's own, or one piped to it from
     `cat <<EOF |`.
+  - A heredoc is standard input only with no descriptor before `<<`, or 0.
+    One on another descriptor, as in `3<<'C'`, is given to the command but
+    is not what it reads on standard input. Its body is still read as
+    commands.
+  - A descriptor is what bash reads as one: digits with no quote or
+    backslash in them, or a `{name}`, for which bash opens a new descriptor,
+    as in `{fd}<<'C'`. A quoted or escaped digit, as in `"3"<<'C'` or
+    `\3<<'C'`, is a word of the command, and its heredoc is standard input.
   - A GraphQL merge mutation in that request is a merge.
   - For the merge API, a `sha` in it names the head as hidden, as
     `curl -d` already did.
 - **A GraphQL request the gate cannot see is held as a merge it cannot
   read.** It is refused as 1.25.0 refused it, with the note to give the
-  request in the command itself. That is:
+  request in the command itself. gh reads the endpoint `graphql`, `/graphql`
+  and a URL whose path ends in `/graphql`, such as
+  `https://api.github.com/graphql`, as the same one, and so does the gate.
+  It reads them in any case of their letters, as in `gh api GraphQL`,
+  because whether GitHub does was not run.
+  It reads a group of one-letter flags as gh's flag parser does: the
+  letters before the first that takes a value take none, and that one takes
+  the rest of the word, less one `=`, or the next word. So `-iF query=@q`
+  is `-i` and then `-F`. That is:
   - `gh api graphql` reading its request from a file: a field's `key=@file`
     after `-F` or `--field`, or `--input file`. `/dev/fd/0` counts as a
     file. `-f` sends an `@` as it is.
   - `gh api graphql` sending standard input the gate cannot see: a file, a
     here-string or a descriptor after `<`, a pipe from anything but `cat`
     with no file or `tee`, or nothing at all. A heredoc is seen when it is
-    the command's own, or passed down the pipe by `cat` or `tee`.
+    the command's own on standard input, or passed down the pipe by `cat`
+    or `tee`.
   - curl sending `-d`, `--data`, `--data-binary` or `--json` from `@file`,
     or from `@-` with such input, to GitHub's GraphQL endpoint. `--data-raw`
     sends an `@` as it is.
@@ -232,8 +253,6 @@ bodies as commands, and changes only what an unreadable body means.
 - **Found while fixing the second review, and passing on this change.** The
   code that reads them is unchanged since 1.25.0, which passes them too. To
   be fixed separately:
-  - a GraphQL merge sent to the REST path `/graphql`, as in
-    `gh api /graphql -f query='mutation { mergePullRequest(...) }'`;
   - curl's data attached to its flag, as in `curl .../graphql -d'{...}'`;
   - the branch merges API, `gh api -X POST repos/o/r/merges`, which merges
     a branch, such as a pull request's head, into another;
@@ -242,12 +261,34 @@ bodies as commands, and changes only what an unreadable body means.
   - curl's own config, `~/.curlrc`, which curl reads unless told not to,
     written by the same command with the data or the URL, then a bare
     `curl`.
+
+  That list also named a GraphQL merge sent to `/graphql` with an inline
+  `-f query='mutation { mergePullRequest(...) }'`. The gate now reads
+  `/graphql` as GraphQL, so that one is refused.
+- **Found by the third review, and passing on this change and on 1.25.0.**
+  To be fixed separately:
+  - curl's config named with its value attached, `curl -Kq.cfg`;
+  - curl's `--data-ascii @q.json`, another name for `-d`;
+  - a URL curl expands, as in `'https://api.github.com/{graphql}'`, which
+    curl's globbing turns into `/graphql`.
+
+  The same review named `gh api -iX PUT repos/o/r/pulls/5/merge`, a REST
+  merge whose `-X` sat in a group. The group reading above reads it as
+  `-X PUT`, so it is refused, and so is curl given a decoy heredoc on
+  another descriptor.
+- **Found verifying the sixth version, and passing on this change and on
+  1.25.0.** A readable GraphQL merge given to gh inside a `{ ...; }` group,
+  piped in, as in `cat <<'A' | { gh api graphql --input -; }`, or as the
+  group's own heredoc, as in `{ gh api graphql --input -; } <<'A'`. The gate
+  does not read gh as the group's first command. An unreadable one is
+  refused, as by 1.25.0, and so is the same in a `( ... )` subshell. To be
+  fixed separately.
 - **gh's other ways to run a program its config names.** Its pager runs only
   on a terminal, and an interactive prompt that opens the editor needs one
   too. A Claude worker's command has none: none of its standard input,
   output or error is a terminal. Neither was run. Nor was whether gh opens
-  its editor for `-e` or `gist edit` without a terminal: the gate holds them
-  as if it does.
+  its editor for `-e`, `-fe` or `gist edit`, or its browser for `-w` or
+  `-fw`, without a terminal: the gate holds them as if it does.
 - **Already outside what the gate reads (ADR 0179):**
   - a here-string (`bash <<< 'gh pr merge 5'`). Its word is passed over as a
     redirection's file, as it always was. Sent by gh or curl as a request, it
@@ -314,6 +355,11 @@ not run.
 | A merge mutation written from an unreadable body to a file by `cat` or `tee`, then sent by `gh api graphql -F query=@q.graphql` or `cat q.graphql \| gh api graphql -F query=@-` | refuse | refuse |
 | A merge mutation in a file written from a body readable as shell or by `printf`, then sent by `-F query=@q.graphql`, `--input q.json` or `--input - < q.json`; or curl's `-d @q.json` to the GraphQL endpoint | pass | refuse |
 | A gh config written from an unreadable body naming an editor or browser, then `gh pr comment 5 -e`, `gh pr view 5 --web` or `gh gist edit 1234` | refuse | refuse |
+| A merge mutation written from an unreadable body to a file, then sent by `gh api /graphql -F query=@q.graphql`, or by `gh api graphql` with `-iF query=@q.graphql`, `-iFquery=@q.graphql`, `-F=query=@q.graphql` or `-iF=query=@q.graphql`; an unreadable heredoc holding one, piped by `cat` to `gh api graphql -F query=@-` beside a `3<<'C'` decoy; a gh config written from an unreadable body naming a browser or editor, then `gh pr create -fw`, `gh pr create -fe` or `gh gist create -pw f.txt`; a file written from an unreadable body that mentions a merge, then `gh pr comment 5 -Ro/web --body-file notes.md` | refuse | refuse |
+| A merge mutation in a file written from a body readable as shell or by `printf`, then sent by `gh api /graphql --input q.json`, `gh api https://api.github.com/graphql --input q.json`, `gh api graphql -iF query=@q.graphql`, or `cat q.json \|` to `gh api graphql --input -` or `curl -d @- https://api.github.com/graphql` beside a `3<<'C'` decoy; a readable heredoc holding one, piped by `cat` to `gh api graphql --input -` beside the same decoy; `gh api /graphql -f query='mutation { mergePullRequest(...) }'`; `gh api -iX PUT repos/o/r/pulls/5/merge` and `gh api repos/o/r/pulls/5/merge -iX PUT` | pass | refuse |
+| A file written from an unreadable body that mentions a merge, then `gh pr comment 5 -R o/web --body-file notes.md` or `gh pr comment 5 --body "- fixed the web view"` | refuse | pass |
+| An unreadable heredoc holding a merge mutation, given as standard input to `gh api graphql -F query=@-` after `--jq "3"` or `--jq \3`, beside an innocent one piped by `cat`; an unreadable one piped by `cat` to `gh api graphql -F query=@-` beside a `{fd}<<'C'` decoy; a merge mutation written from an unreadable body to a file, then sent by `gh api GraphQL -F query=@q.graphql` | refuse | refuse |
+| A readable heredoc holding a merge mutation, given as standard input to `gh api graphql --input -` after `--jq "3"`, or to `curl -d @- https://api.github.com/graphql "3"`, beside an innocent one piped by `cat`; one piped by `cat` to `gh api graphql --input -`, or `cat q.json \|` to it or to `curl -d @-`, beside a `{fd}<<'C'` decoy | pass | refuse |
 | `bash ./scripts/check.sh && gh pr view 5 --json mergeable` | pass | pass |
 | `gh pr view 5 --json mergeable; echo $((1<<2))` | pass | pass |
 
@@ -348,14 +394,45 @@ The fourth version passed that verification and its first review. Its
 second review found two classes that 1.25.0 refused and it passed: a
 GraphQL request read from a file the same command wrote, and a gh config
 the same command wrote naming an editor or browser. 1.25.0 refused both
-only because it misread the body as shell. This decision is the fourth
-version with both closed, and it has not been reviewed again. Both columns
-of those three rows were run on the built gates, the installed 1.25.0 and
-this change, with gh out of reach.
+only because it misread the body as shell.
+
+The fifth version closed both and passed its own verification. Its third
+review found four routes that 1.25.0 refuses when the body cannot be read,
+and that it passed:
+- `gh api /graphql` or the full URL, because the gate matched only the word
+  `graphql`;
+- `-F` in a group after a flag that takes no value, as `-iF`, because the
+  gate split a group only when its first letter took a value;
+- a decoy heredoc on another descriptor, which the gate took for standard
+  input;
+- `-w` or `-e` after `-f` or `-p`, letters that take a value in another gh
+  command, where the gate stopped reading the group.
+
+The sixth version closed those four. The same changes refuse the readable
+and `printf` forms, which 1.25.0 passes. Fixing them found
+`-F=query=@q.graphql` passing too: gh's flag parser takes the `=` off, and
+the gate kept it. Verifying the sixth version found two more routes that
+1.25.0 refuses when the body cannot be read, and that it passed:
+- a quoted or escaped digit before `<<`, as in `--jq "3"<<'C'`, which it
+  took for a descriptor, so it saw the decoy piped in as standard input and
+  not the heredoc bash gives it. The descriptor rule brought this one in;
+  the fifth version refused it;
+- a `{name}` descriptor, as in `{fd}<<'C'`, which it took for standard
+  input.
+
+Bash 5.2.21 was run on both. This decision is the seventh version, with
+those closed and the endpoint read in any case of its letters, and it has
+not been reviewed again. Both columns of the eight rows for the second and
+third reviews and that verification, from "A merge mutation written from
+an unreadable body to a file by `cat` or `tee`" on, were run on the built
+gates, the installed 1.25.0 and this change, with gh out of reach.
 
 A hundred and nineteen pieces were removed one at a time, and a named test
-failed each time. Twenty-three more were removed for the two classes, with
-the same result.
+failed each time. Twenty-three more were removed for the second review's two
+classes, with the same result. For the third review's four and the two its
+verification found, forty-two were: twenty-two of those twenty-three again,
+since the code behind the last is gone, and twenty new. Each made a named
+test fail.
 
 ## Consequences
 
@@ -387,6 +464,17 @@ the same result.
   The request has to be in the command, as a field or a heredoc.
 - An unreadable heredoc in a command with `gh pr view --web`,
   `gh pr comment -e` or `gh gist edit` is refused when the command mentions
-  a merge.
+  a merge. So is one beside any group of gh's one-letter flags holding an
+  `e` or a `w`, even a value written beside its flag, as in `-Ro/web`.
+  Given as its own word, as in `-R o/web`, or as a text flag's value, it
+  passes.
+- A heredoc on a descriptor other than 0, given by number or as a
+  `{name}`, is not standard input. A gh or curl request read from standard
+  input beside one is held unless what standard input really carries is
+  seen. A quoted or escaped digit before `<<` is now a word of the command,
+  as bash reads it, where 1.25.0 dropped it as a descriptor.
+- A GraphQL request to `gh api GraphQL` or another spelling of the endpoint
+  in other letters is held as one to `graphql`, even if GitHub does not
+  serve it.
 - The change is in `swarm-terminal-host`. It reaches a worker only after the
   worker engine update, which stops running sessions.
