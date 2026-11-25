@@ -93,6 +93,9 @@ moment each commit was recorded:
 - The rule reads the workspace's own refs, which are only as current as its
   last fetch. A worker records again after fetching, or the merged work still
   reads as unmerged.
+- A shallow checkout cannot see past its boundary. A commit beneath it reads
+  as not held, so its documentation waits for Queen rather than settling; it
+  never reads the other way. 1 of 33 checkouts on this Hive was shallow.
 - The 8 completed tasks with open pull requests stay completed: Completed is
   final. Routing those pull requests is Queen's, and nothing here does it.
 - `swarm-domain` changes, so a release carrying this has a new worker engine
@@ -141,6 +144,8 @@ moment each commit was recorded:
 ## Not proven
 
 - Not run on a Hive, and no real pull request has been taken through it.
-- The 19 tasks whose commits reached the default branch were not dated
-  against their merges.
+- The 139 were dated by each checkout's own reflog, which says when that
+  checkout saw a commit, not when GitHub merged it. 12 of them, all in one
+  shallow checkout, read as held when recorded and not held today, because
+  git cannot walk past the shallow boundary.
 - How often squash merges will now reach Queen was not measured.
