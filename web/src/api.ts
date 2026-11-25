@@ -260,6 +260,8 @@ export type SupersededProvider = {
   version: string | null;
   installed_at: number | null;
   worker_ids: string[];
+  /** The roster name of each of those workers, by id. */
+  worker_names: Record<string, string>;
   /** Of those, the Claude workers Swarm moves onto it with /restart by itself (ADR 0122). */
   in_place_worker_ids: string[];
   /** Of those, the ones already asked and still on the older release: Claude refused. */

@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import type { SupersededProvider } from "../api";
-import { providerUpdateCounts, supersededReleaseNames } from "../runtime/runtimeUpdates";
+import { listed, providerUpdateWorkers, supersededReleaseNames } from "../runtime/runtimeUpdates";
 
 function workers(count: number): string {
   return `${count} worker${count === 1 ? "" : "s"}`;
@@ -27,20 +27,20 @@ export default function ProviderReleaseAction({ superseded, busy, onRestart }: {
 }) {
   const [confirming, setConfirming] = useState(false);
   if (superseded.length === 0) return null;
-  const counts = providerUpdateCounts(superseded);
+  const { inPlace, moving, refused, stopAndStart } = providerUpdateWorkers(superseded);
   const named = supersededReleaseNames(superseded);
   const installed = `${named} ${superseded.length === 1 ? "is" : "are"} installed`;
-  if (counts.stopAndStart === 0) {
+  if (stopAndStart.length === 0) {
     return (
       <article className="runtime-subsystem-card provider-release-action" aria-label="Provider release status">
         <header>
           <div><span className="runtime-component-name">Providers</span><strong>Update installed · Swarm is moving workers onto it</strong></div>
-          <span className={`runtime-status-badge ${counts.refused > 0 ? "attention" : "checking"}`}>{counts.refused > 0 ? "Needs a retry" : "Automatic"}</span>
+          <span className={`runtime-status-badge ${refused.length > 0 ? "attention" : "checking"}`}>{refused.length > 0 ? "Needs a retry" : "Automatic"}</span>
         </header>
-        <p>{installed}, and {workers(counts.inPlace)} still {counts.inPlace === 1 ? "runs" : "run"} the older release. Swarm restarts each one onto it with /restart as soon as it is between turns with nothing running in the background. Its conversation carries on, and a worker with work in hand is told to continue.</p>
-        {counts.refused > 0 ? (
+        <p>{installed}, and {workers(inPlace.length)} still {inPlace.length === 1 ? "runs" : "run"} the older release: {listed(inPlace)}. Swarm restarts each one onto it with /restart as soon as it is between turns with nothing running in the background. Its conversation carries on, and a worker with work in hand is told to continue.</p>
+        {refused.length > 0 ? (
           <>
-            <small role="status">Claude did not restart {workers(counts.refused)} when asked. It refuses while Remote Control is connected or background work is running, and Swarm asks only once for each release.</small>
+            <small role="status">Claude did not restart {listed(refused)} when asked. It refuses while Remote Control is connected or background work is running, and Swarm asks only once for each release.</small>
             <button className="secondary-button" type="button" disabled={busy} onClick={() => void onRestart()}>Ask again</button>
           </>
         ) : (
@@ -49,16 +49,17 @@ export default function ProviderReleaseAction({ superseded, busy, onRestart }: {
       </article>
     );
   }
-  const count = counts.stopAndStart;
+  const count = stopAndStart.length;
   return (
     <article className="runtime-subsystem-card runtime-subsystem-restart provider-release-action" aria-label="Provider release status">
       <header>
         <div><span className="runtime-component-name">Providers</span><strong>Update installed · restart to run it</strong></div>
         <span className="runtime-status-badge restart">Restart required</span>
       </header>
-      <p>{installed}, and {count} running worker{count === 1 ? "" : "s"} started before that, so {count === 1 ? "it is" : "they are"} still running the older release.</p>
+      <p>{installed}, and {count} running worker{count === 1 ? "" : "s"} started before that: {listed(stopAndStart)}. {count === 1 ? "It is" : "They are"} still running the older release.</p>
       <small>A provider keeps executing the release it started with. Restarting reloads {count === 1 ? "that worker" : "those workers"} from their saved conversations; identities, tasks, and terminal history remain durable.</small>
-      {counts.inPlace > 0 ? <small>Swarm moves the other {workers(counts.inPlace)} onto it by itself, with /restart, without interrupting them.</small> : null}
+      {moving.length > 0 ? <small>Swarm moves the other {workers(moving.length)} onto it by itself, with /restart, without interrupting them: {listed(moving)}.</small> : null}
+      {refused.length > 0 ? <small role="status">Claude did not restart {listed(refused)} when asked. Restarting asks {refused.length === 1 ? "it" : "them"} again.</small> : null}
       {!confirming ? (
         <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirming(true)}>Restart {workers(count)}</button>
       ) : (

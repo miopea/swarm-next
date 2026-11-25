@@ -1548,7 +1548,7 @@ test("a worker change re-reads which workers run behind the installed release", 
     render(<App />);
     await screen.findByRole("heading", { name: "Local system" });
     expect(screen.queryByLabelText("Provider release status")).not.toBeInTheDocument();
-    superseded = [{ provider: "claude_code", version: "9.9.9", installed_at: 1, worker_ids: ["daisy"], in_place_worker_ids: [], asked_worker_ids: [] }];
+    superseded = [{ provider: "claude_code", version: "9.9.9", installed_at: 1, worker_ids: ["daisy"], worker_names: { daisy: "Daisy" }, in_place_worker_ids: [], asked_worker_ids: [] }];
     // A worker change is held, then read again from the same cursor.
     for (let read = 0; read < 2; read += 1) {
       await waitFor(() => expect(sendEvent).toBeDefined());
