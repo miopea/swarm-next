@@ -364,6 +364,7 @@ mod tests {
             subject: "feat: x".to_owned(),
             changed_paths: owned(paths),
             found_in: None,
+            on_default_branch: Some(true),
         }
     }
 

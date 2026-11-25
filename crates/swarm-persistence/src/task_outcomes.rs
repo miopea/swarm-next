@@ -439,6 +439,7 @@ mod tests {
             subject: "build(release): refuse without headroom".to_owned(),
             changed_paths: vec!["packaging/linux/build-release.sh".to_owned()],
             found_in: None,
+            on_default_branch: Some(true),
         };
         for id in [parked.id, reviewing.id] {
             store
@@ -1285,7 +1286,8 @@ impl TaskStore {
             CommitSettlement::BuiltCode
             | CommitSettlement::Unestablished
             | CommitSettlement::NothingBuilt
-            | CommitSettlement::DocumentationOnly => {}
+            | CommitSettlement::DocumentationOnly
+            | CommitSettlement::DocumentationOffDefaultBranch => {}
         }
         let connection = self.connection()?;
         let approved: bool = connection.query_row(
@@ -1480,13 +1482,24 @@ impl TaskStore {
                 "{approver} cannot approve a completion exemption"
             )));
         }
-        if approver == "coordinator"
-            && matches!(
-                commit_settlement(self.task_commit_report(task_id)?.as_ref()),
-                CommitSettlement::BuiltCode
-            )
-        {
-            return Err(TaskStoreError::CommitsContradictNoDeployment);
+        if approver == "coordinator" {
+            match commit_settlement(self.task_commit_report(task_id)?.as_ref()) {
+                CommitSettlement::BuiltCode => {
+                    return Err(TaskStoreError::CommitsContradictNoDeployment);
+                }
+                // Not exempt, unfinished: only a person approves documentation
+                // its default branch did not hold (ADR 0189).
+                CommitSettlement::DocumentationOffDefaultBranch => {
+                    return Err(TaskStoreError::IntegrityFailure(
+                        "the coordinator cannot approve documentation its default branch did not hold"
+                            .to_owned(),
+                    ));
+                }
+                CommitSettlement::NotReported
+                | CommitSettlement::Unestablished
+                | CommitSettlement::NothingBuilt
+                | CommitSettlement::DocumentationOnly => {}
+            }
         }
         let connection = self.connection()?;
         let updated = connection.execute(
@@ -2877,7 +2890,120 @@ mod settlement_tests {
             subject: "did a thing".to_owned(),
             changed_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
             found_in: None,
+            on_default_branch: Some(true),
         }
+    }
+
+    /// ⚠️ DOCUMENTATION ON A BRANCH IS NOT FINISHED (ADR 0189). Closing it here
+    /// closed the task while its pull request was still open, and the merge
+    /// card the task then needed was refused because the task was not open.
+    /// It waits in Review instead, claiming nothing, and closes itself once its
+    /// commit is recorded again on the default branch.
+    #[test]
+    fn documentation_waits_in_review_until_the_default_branch_holds_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Delete a stale skill copy");
+        let docs = commit(&["docs/41-verification.md"]);
+        for (at, on_default_branch) in [(1_000, None), (1_100, Some(false))] {
+            store
+                .record_task_commits(
+                    task,
+                    "/workspace/petal",
+                    CommitRepositoryState::Read,
+                    &[TaskCommit {
+                        on_default_branch,
+                        ..docs.clone()
+                    }],
+                    at,
+                )
+                .unwrap();
+            assert_eq!(
+                store.task_commit_report(task).unwrap().unwrap().commits[0].on_default_branch,
+                on_default_branch,
+                "the fact is stored as recorded, and recording again replaces it"
+            );
+            assert!(
+                store
+                    .settle_reviewed_work_without_deployment(at + 1)
+                    .unwrap()
+                    .is_empty(),
+                "{on_default_branch:?} must not settle"
+            );
+            assert_eq!(store.get_task(task).unwrap().state, TaskState::Review);
+            assert_eq!(
+                store.completion_evidence(task).unwrap(),
+                CompletionEvidence::None,
+                "nothing may be claimed on the task's behalf while it waits"
+            );
+        }
+
+        // The pull request merged, and the worker records the commit again.
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[docs],
+                1_200,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .settle_reviewed_work_without_deployment(1_201)
+                .unwrap(),
+            vec![task]
+        );
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Completed);
+    }
+
+    /// A SQUASH MERGE never brings the branch's commits onto the default
+    /// branch, and a recorded commit cannot be withdrawn. The worker's claim
+    /// is still accepted, the coordinator still leaves it, and Queen's approval
+    /// is the evidence that closes the task (ADR 0189).
+    #[test]
+    fn squashed_documentation_closes_on_queens_approval_of_the_claim() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = reviewed_task(&store, "Delete a stale skill copy");
+        store
+            .record_task_commits(
+                task,
+                "/workspace/petal",
+                CommitRepositoryState::Read,
+                &[TaskCommit {
+                    on_default_branch: Some(false),
+                    ..commit(&["docs/41-verification.md"])
+                }],
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .claim_completion_exemption(task, "Squash-merged as one commit.", None, 1_100)
+                .unwrap(),
+            CompletionEvidence::ExemptionClaimed
+        );
+        assert!(
+            store
+                .settle_reviewed_work_without_deployment(1_200)
+                .unwrap()
+                .is_empty(),
+            "the coordinator does not approve a claim the facts do not settle"
+        );
+        // Nor can it be made to: the store refuses it, as it refuses code.
+        assert!(matches!(
+            store.approve_completion_exemption(task, "coordinator", "Docs only", 1_250),
+            Err(TaskStoreError::IntegrityFailure(_))
+        ));
+        assert_eq!(
+            store.completion_evidence(task).unwrap(),
+            CompletionEvidence::ExemptionClaimed
+        );
+        assert!(
+            store
+                .approve_completion_exemption(task, "queen", "Read the merge.", 1_300)
+                .unwrap()
+                .closes_a_task()
+        );
     }
 
     #[test]
@@ -3223,6 +3349,7 @@ mod settlement_tests {
                     subject: String::new(),
                     changed_paths: Vec::new(),
                     found_in: None,
+                    on_default_branch: None,
                 }],
                 1_000,
             )
@@ -3421,6 +3548,7 @@ mod commit_report_tests {
             subject: "feat: something".to_owned(),
             changed_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
             found_in: None,
+            on_default_branch: (verdict == CommitVerdict::Present).then_some(true),
         }
     }
 
@@ -3702,15 +3830,18 @@ impl TaskStore {
             // task nobody reported, and closing on it would be closing on a
             // question never asked. `BuiltCode` is left alone too: work that
             // built something and recorded no deployment is exactly what a
-            // person should look at.
+            // person should look at. So is documentation its default branch
+            // did not hold: closing it closed the task its merge card needed
+            // (ADR 0189).
             let reason = match settlement {
                 CommitSettlement::NothingBuilt => {
                     "Settled automatically: the worker reported that this task produced no commits, so there is nothing to deploy."
                 }
                 CommitSettlement::DocumentationOnly => {
-                    "Settled automatically: every commit recorded for this task touches documentation only, so there is nothing to deploy."
+                    "Settled automatically: every commit recorded for this task touches documentation only and is on its repository's default branch, so there is nothing to deploy."
                 }
                 CommitSettlement::BuiltCode
+                | CommitSettlement::DocumentationOffDefaultBranch
                 | CommitSettlement::NotReported
                 | CommitSettlement::Unestablished => continue,
             };
@@ -3723,9 +3854,10 @@ impl TaskStore {
                     "Derived: the task recorded no commits, so there is nothing that could have shipped."
                 }
                 CommitSettlement::DocumentationOnly => {
-                    "Derived: every recorded commit touches documentation only."
+                    "Derived: every recorded commit touches documentation only, and the repository's default branch held each one when it was recorded."
                 }
                 CommitSettlement::BuiltCode
+                | CommitSettlement::DocumentationOffDefaultBranch
                 | CommitSettlement::NotReported
                 | CommitSettlement::Unestablished => continue,
             };
@@ -3831,13 +3963,15 @@ impl TaskStore {
         for commit in commits {
             transaction.execute(
                 "INSERT INTO task_commits
-                     (task_id, sha, verdict, subject, changed_paths, found_in, recorded_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     (task_id, sha, verdict, subject, changed_paths, found_in,
+                      on_default_branch, recorded_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(task_id, sha) DO UPDATE SET
                      verdict = excluded.verdict,
                      subject = excluded.subject,
                      changed_paths = excluded.changed_paths,
                      found_in = excluded.found_in,
+                     on_default_branch = excluded.on_default_branch,
                      recorded_at = excluded.recorded_at",
                 params![
                     task_id.to_string(),
@@ -3846,6 +3980,7 @@ impl TaskStore {
                     commit.subject,
                     commit.changed_paths.join("\n"),
                     commit.found_in,
+                    commit.on_default_branch,
                     now
                 ],
             )?;
@@ -3933,7 +4068,7 @@ impl TaskStore {
             return Ok(None);
         };
         let mut statement = connection.prepare(
-            "SELECT sha, verdict, subject, changed_paths, found_in
+            "SELECT sha, verdict, subject, changed_paths, found_in, on_default_branch
              FROM task_commits WHERE task_id = ?1 ORDER BY recorded_at, sha",
         )?;
         let commits = statement
@@ -3952,6 +4087,7 @@ impl TaskStore {
                         .map(str::to_owned)
                         .collect(),
                     found_in: row.get(4)?,
+                    on_default_branch: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

@@ -526,7 +526,10 @@ const TASK_READ_LINKS_SCHEMA_MARKER: i64 = 233;
 /// A command card keeps the text of the script it names, or why it kept none
 /// (ADR 0187).
 const COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER: i64 = 234;
-const CURRENT_SCHEMA_VERSION: i64 = COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER;
+/// A recorded commit says whether its repository's default branch held it
+/// (ADR 0189).
+const COMMIT_DEFAULT_BRANCH_SCHEMA_MARKER: i64 = 235;
+const CURRENT_SCHEMA_VERSION: i64 = COMMIT_DEFAULT_BRANCH_SCHEMA_MARKER;
 
 /// How long a terminal is left alone after coordination has written to it.
 ///
@@ -5260,6 +5263,17 @@ fn migrate_queen_release_schema_steps(
         crate::command_scripts::migrate_command_script_snapshots(
             transaction,
             COMMAND_SCRIPT_SNAPSHOTS_SCHEMA_MARKER,
+        )?;
+    }
+    if schema_version < COMMIT_DEFAULT_BRANCH_SCHEMA_MARKER {
+        // NULL for every row already there: nobody asked those commits where
+        // they were, and a NULL settles nothing (ADR 0189).
+        add_column_once(
+            transaction,
+            "task_commits",
+            "on_default_branch",
+            "INTEGER CHECK (on_default_branch IN (0, 1))",
+            COMMIT_DEFAULT_BRANCH_SCHEMA_MARKER,
         )?;
     }
     Ok(())
@@ -11792,6 +11806,14 @@ mod tests {
                        ALTER TABLE decision_requests DROP COLUMN requested_script_withheld;",
             probe_sql: "SELECT (SELECT COUNT(*) FROM pragma_table_info('decision_requests')
                  WHERE name IN ('requested_script_text','requested_script_withheld')) = 2",
+        },
+        // Whether the default branch held a recorded commit (ADR 0189): one column.
+        SchemaStep {
+            table: "task_commits",
+            artifact: "on_default_branch",
+            undo_sql: "ALTER TABLE task_commits DROP COLUMN on_default_branch",
+            probe_sql: "SELECT COUNT(*) = 1 FROM pragma_table_info('task_commits')
+                WHERE name = 'on_default_branch'",
         },
     ];
 

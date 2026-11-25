@@ -470,6 +470,7 @@ pub(crate) mod tests {
             subject: format!("feat: {path}"),
             changed_paths: vec![path.to_owned()],
             found_in: None,
+            on_default_branch: Some(true),
         }
     }
 

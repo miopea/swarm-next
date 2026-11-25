@@ -201,3 +201,21 @@ test("an unreadable limit has its own chip, not Scope crossed", () => {
   expect(row?.textContent).toContain("Scope unreadable");
   expect(row?.textContent).not.toContain("Scope crossed");
 });
+
+/** Documentation still waiting for its merge is not settling (ADR 0189). */
+test("documentation off the default branch has its own chip, not Settling", () => {
+  render(
+    <UnsettledReviewCard
+      waiting={[
+        waiting({
+          kind: "docs_off_default_branch",
+          reason:
+            "its commits are documentation only, and its repository's default branch did not hold them all when they were recorded",
+        }),
+      ]}
+    />,
+  );
+  const row = screen.getByRole("button", { name: "Ship the picker fix" }).closest("li");
+  expect(row?.textContent).toContain("Docs unmerged");
+  expect(screen.queryByText("Settling")).toBeNull();
+});

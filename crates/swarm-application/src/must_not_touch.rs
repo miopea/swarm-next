@@ -134,6 +134,7 @@ mod tests {
             subject: format!("feat: {sha}"),
             changed_paths: owned(paths),
             found_in: None,
+            on_default_branch: Some(true),
         }
     }
 

@@ -218,6 +218,7 @@ mod tests {
             subject: format!("subject {sha}"),
             changed_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
             found_in: None,
+            on_default_branch: Some(true),
         }
     }
 

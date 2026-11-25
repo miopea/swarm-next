@@ -236,6 +236,7 @@ mod tests {
                     subject: String::new(),
                     changed_paths: Vec::new(),
                     found_in: None,
+                    on_default_branch: Some(true),
                 })
                 .collect(),
         }
