@@ -517,9 +517,6 @@ console.log(JSON.stringify(results))
     /// required, and CI installs it.
     #[test]
     fn the_grant_mod_looks_for_a_merge_as_bash_may_spell_it() {
-        // Past 32 places a `$'...'` string may begin, a command is sent.
-        let strings = |count: usize| format!("{}gh pr view 5", "echo $'x'; ".repeat(count));
-        let (most, past) = (strings(32), strings(33));
         let sent = [
             "gh pr merge 5",
             "gh pr mer''ge 5",
@@ -546,6 +543,13 @@ console.log(JSON.stringify(results))
             "make -f - <<< $'all:\\n\\tgh pr merge 5'",
             "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6derge",
             "gh api -X PUT repos/o/r/pulls/5/%6Derge",
+            // Bash takes out a quote or a backslash inside a `%HH` escape
+            // before the server reads it.
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6''derge",
+            "curl -X PUT 'https://api.github.com/repos/o/r/pulls/5/%6'\"d\"erge",
+            "gh api -X PUT repos/o/r/pulls/5/%6\\Derge",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/m%6\\5rge",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%$'\\x36'derge",
             // Outside `$'...'` a backslash and a letter are that letter.
             "gh pr $'\\x6d'\\erge 5",
             "gh pr mer$'\\x67'\\e 5",
@@ -574,7 +578,23 @@ console.log(JSON.stringify(results))
             "echo \\$'; $'\\x63'u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
             "grep -c 'x$' notes.md; eval $'\\cjgh pr merge 5'",
             "grep -c 'x$' notes.md; bash -c $'\\t'cu\\rl\\ -X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
-            past.as_str(),
+            // And one inside the merge's own word: a number's escapes read
+            // and a letter's kept find it.
+            "gh pr $'\\x6d'$(: \"$'\")\\erge 5 --repo 'o/r'",
+            "gh pr $'\\x6d'$(: \"$'\")e\\rge 5 --repo 'o/r'",
+            "gh pr mer$'\\x67'${z:+\"$'\"}\\e 5 --repo 'o/r'",
+            "gh pr $'\\x6d'`: \"$'\"`\\erge 5 --repo 'o/r'",
+            "gh api -X PUT repos/o/r/pulls/5/$'\\x6d'$(: \"$'\")\\erge -f 'a=b'",
+            "$'\\x63'$(: \"$'\")u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge -H 'a: b'",
+            "gh pr $(: \"$'\")$'\\x6d'$(: \"$'\")\\erge 5 --repo 'o/r'",
+            "gh pr $'\\x6d'$(: '$')\\erge 5 --repo 'o/r'",
+            // A `$'...'` string may make the tab or newline before gh or
+            // curl, so in a command with one, either standing anywhere is
+            // enough.
+            "eval $'\\cj'cu$(: \"$'\")\\rl' -X PUT https://api.github.com/repos/o/r/pulls/5/merge'",
+            "bash -c $'\\t'cu$(: \"$'\")\\rl$'\\cI'-X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
+            "eval $'\\cj'g${z:+\"$'\"}h' pr m'\\erge' 5'",
+            "printf $'\\n'; git log --grep=merge --author=hugh",
         ];
         let not_sent = [
             "cargo test merge_gate",
@@ -583,15 +603,28 @@ console.log(JSON.stringify(results))
             "echo merge && gh_view 5",
             // An escape past the last letter is not read as one.
             "echo '\\UFFFFFFFF'",
-            most.as_str(),
+            // Without one, gh and curl count only as words of their own.
+            "git log --grep=merge --author=hugh",
         ];
+        let commands: Vec<&str> = sent.iter().chain(&not_sent).copied().collect();
+        for (command, was_sent) in commands.iter().zip(sent_by_the_grant_mod(&commands)) {
+            assert_eq!(
+                was_sent,
+                sent.contains(command),
+                "sent to the gate: {command:?}"
+            );
+        }
+    }
+
+    /// Whether the grant mod Swarm writes sends each command to the gate,
+    /// run in node by `GRANT_MOD_HARNESS`, which CI installs.
+    fn sent_by_the_grant_mod(commands: &[&str]) -> Vec<bool> {
         let directory = tempfile::tempdir().unwrap();
         let folder = grant_mod(
             &directory.path().join("worker.json"),
             &std::env::current_exe().unwrap(),
         )
         .unwrap();
-        let commands: Vec<&str> = sent.iter().chain(&not_sent).copied().collect();
         let output = std::process::Command::new("node")
             .args([
                 "--experimental-strip-types",
@@ -611,14 +644,14 @@ console.log(JSON.stringify(results))
         );
         let results: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(results.len(), commands.len());
-        for (command, result) in commands.iter().zip(&results) {
-            assert_eq!(result["threw"], false, "the hook threw on {command:?}");
-            assert_eq!(
-                result["sent"],
-                sent.contains(command),
-                "sent to the gate: {command:?}"
-            );
-        }
+        commands
+            .iter()
+            .zip(&results)
+            .map(|(command, result)| {
+                assert_eq!(result["threw"], false, "the hook threw on {command:?}");
+                result["sent"].as_bool().expect("sent is true or false")
+            })
+            .collect()
     }
 
     /// ADR 0129: the grant mod names this release's helper and this worker's

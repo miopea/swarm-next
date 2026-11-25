@@ -21,6 +21,7 @@ const notes = new Map<string, string>()
 // written and as bash may spell it, as Swarm does too (ADR 0190).
 const MAY_MERGE = /merge|enqueuepullrequest/i
 const RUNS_GITHUB = /\b(gh|curl)\b/
+const NAMES_GITHUB = /gh|curl/
 // Without a backslash and newline, a `$` before a quote, and every quote and
 // backslash.
 const withoutQuotes = (text: string): string =>
@@ -62,53 +63,18 @@ const unescaped = (text: string): string =>
     (escape: string, x?: string, u?: string, wide?: string, octal?: string, letter?: string) =>
       letter === undefined ? numbered(escape, x, u, wide, octal) : (LETTERS[letter] ?? escape),
   )
-// The text bash makes of a `$'...'` string's body, each escape read as a
-// letter: a one-letter escape, an escape that names a letter by its number,
-// and `\cX`, the control letter of X. An escape bash does not name is kept as
-// written. Bash ends the text at a `\0` and reads `\c` before a backslash or
-// a letter past ASCII apart; this does neither, so it may send the gate more,
-// never fewer.
-const ANSI_C_ESCAPE = new RegExp(String.raw`\\(?:${NUMBERED}|c([\s\S])|([\s\S]))`, 'g')
-const ansiCText = (body: string): string =>
-  body.replace(
-    ANSI_C_ESCAPE,
-    (
-      escape: string,
-      x?: string,
-      u?: string,
-      wide?: string,
-      octal?: string,
-      control?: string,
-      named?: string,
-    ) => {
-      if (control !== undefined) return String.fromCharCode(control.charCodeAt(0) & 0x1f)
-      if (named !== undefined) return LETTERS[named] ?? escape
-      return numbered(escape, x, u, wide, octal)
-    },
-  )
-// The text with each `$'...'` string read as the text bash makes of it, its
-// end found with a backslash and the character after it read as a pair, and
-// the rest as written. Outside one, a backslash and a letter is that letter
-// once its backslash is taken out, as bash reads it, so `\e` is `e`.
-const ANSI_C = /\$'((?:[^'\\]|\\[\s\S])*)'/g
-const readAsBash = (text: string): string =>
-  text.replace(ANSI_C, (_string: string, body: string) => ansiCText(body))
-// The text read as bash reads its escapes, once from each place a `$'...'`
-// string may begin, with the text before it as written. A `$'` inside
-// quotes, after a backslash or in a comment, as in `grep 'x$'`, begins none,
-// and the text alone does not tell it from one that does. Read from the
-// first of bash's own strings, each after it is found where bash finds it.
-// Past MOST_STARTS of them there is no reading, and the command is sent.
-const MOST_STARTS = 32
-const bashReadings = (text: string): string[] | undefined => {
-  const starts: number[] = []
-  for (let at = text.indexOf("$'"); at !== -1; at = text.indexOf("$'", at + 2)) starts.push(at)
-  if (starts.length > MOST_STARTS) return undefined
-  if (starts.length === 0) return [text]
-  return starts.map(at => text.slice(0, at) + readAsBash(text.slice(at)))
-}
+// Each escape that names a letter by its number read as that letter,
+// wherever it stands, and each other escape kept, so a backslash and a
+// letter is that letter once its backslash is taken out, as bash reads it
+// outside `$'...'`. Bash makes a letter only from a letter, a backslash and
+// a letter, or such a number in `$'...'`, so this finds each merge it
+// spells, wherever a `$'...'` string begins.
+const NUMBERED_ESCAPE = new RegExp(String.raw`\\(?:${NUMBERED})`, 'g')
+const byNumber = (text: string): string => text.replace(NUMBERED_ESCAPE, numbered)
 // With each run of `%HH` escapes read as the text its bytes make, as a server
-// may read an address's path. A run that makes no UTF-8 is kept as written.
+// may read an address's path once bash has taken its quotes out, so a quote
+// or a backslash inside one, as in `%6''d`, splits nothing. A run that makes
+// no UTF-8 is kept as written.
 const PERCENT = /(?:%[0-9a-fA-F]{2})+/g
 const percentDecoded = (text: string): string =>
   text.replace(PERCENT, (run: string) => {
@@ -120,22 +86,20 @@ const percentDecoded = (text: string): string =>
   })
 const mayMerge = (command: unknown): command is string => {
   if (typeof command !== 'string') return false
-  const readings = bashReadings(command)
-  if (readings === undefined) return true
-  const all = unescaped(command)
+  const bare = withoutQuotes(command)
+  const read = byNumber(command)
   const spellings = [
     command,
-    withoutQuotes(command),
-    ...readings.flatMap(read => [
-      withoutQuotes(percentDecoded(read)),
-      withoutQuotes(withoutExpansions(read)),
-    ]),
-    withoutQuotes(percentDecoded(all)),
-    withoutQuotes(withoutExpansions(all)),
+    bare,
+    percentDecoded(bare),
+    percentDecoded(withoutQuotes(read)),
+    withoutQuotes(withoutExpansions(read)),
+    withoutQuotes(withoutExpansions(unescaped(command))),
   ]
-  return (
-    spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => RUNS_GITHUB.test(text))
-  )
+  // A `$'...'` string may make the tab or newline before gh or curl that
+  // bash splits a word at, so in a command with one, either counts anywhere.
+  const github = command.includes("$'") ? NAMES_GITHUB : RUNS_GITHUB
+  return spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => github.test(text))
 }
 const MERGE_UNCHECKED =
   'Swarm could not check this merge, so it is refused (ADR 0179). In the operator\'s own ' +
