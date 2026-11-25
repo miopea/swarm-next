@@ -85,12 +85,20 @@ bodies as commands, and changes only what an unreadable body means.
     names, which the same command can write, as
     `cat > ~/.config/gh/config.yml <<'B'` with `editor: sh -c '...'`. That
     is `--editor` or `--web`, any group of one-letter flags holding an `e`
-    or a `w`, and `gh gist edit`, which opens the editor with no flag.
-    Which letter of a group takes the rest as its value depends on the
-    command: `-f` is `--fill` to `gh pr create` and takes a value in
-    `gh api`. So a value written beside its flag counts too, as in
-    `-Ro/web`. A text flag's value does not, because gh takes the next word
-    as that value whatever it starts with.
+    or a `w` among its flags, and `gh gist edit`, which opens the editor
+    with no flag. Whether a letter of a group takes the rest as its value
+    often depends on the command: `-f` is `--fill` to `gh pr create` and
+    takes a value in `gh api`. So a group's flags end only where a value
+    must begin: at a letter that takes a value in every gh command that has
+    it, or at an `=`, after which gh's flag parser gives the letter before
+    it the rest of the word. Those letters are
+    `A B D F H L O R S T X b g j k o q`, read from `gh help reference` for
+    gh 2.103.3. A command without one refuses it and runs nothing, and `-h`
+    is not one, since it is `--help`. A later gh that gives one of them a
+    flag that takes no value needs the list changed. So `-fw`, `-pw` and
+    `-wq.title` count, and `-Ro/web`, `-Fnotes.md`, `-q.mergeable` and
+    `-f=web` do not. A text flag's value does not count, because gh takes
+    the next word as that value whatever it starts with.
   - git does not count with a long flag that names a program for it to run:
     `--receive-pack`, `--exec` or `--upload-pack`. git takes any start of a
     long flag's name that only one flag begins with, so `--rec` counts as
@@ -179,6 +187,18 @@ bodies as commands, and changes only what an unreadable body means.
     backslash in them, or a `{name}`, for which bash opens a new descriptor,
     as in `{fd}<<'C'`. A quoted or escaped digit, as in `"3"<<'C'` or
     `\3<<'C'`, is a word of the command, and its heredoc is standard input.
+  - bash also sets an array element to a new descriptor, as in
+    `{a[1]}<<'C'`. Which subscripts it takes is its own parser's to say:
+    bash 5.2.21 takes `{a[1]}`, `{a[x+1]}` and `{a["1"]}`, and reads
+    `{a[1]]}`, `{a[]}` and `{a[1]x}` as words. So a command with a braced
+    word holding a `[` right before a redirection is not read, and is
+    refused when it mentions a merge. Any other braced word, as `{1x}` or
+    `{}`, is a word of the command, as bash reads it, and its heredoc is
+    standard input.
+  - Anything put onto descriptor 0 by name is standard input the gate does
+    not follow: a dup, as `0>&3` putting back the pipe that `3>&0` saved
+    while a heredoc took its place, or a file, as `0>f`. A dup onto another
+    descriptor, as `2>&1`, leaves standard input as it was.
   - A GraphQL merge mutation in that request is a merge.
   - For the merge API, a `sha` in it names the head as hidden, as
     `curl -d` already did.
@@ -192,7 +212,10 @@ bodies as commands, and changes only what an unreadable body means.
   It reads a group of one-letter flags as gh's flag parser does: the
   letters before the first that takes a value take none, and that one takes
   the rest of the word, less one `=`, or the next word. So `-iF query=@q`
-  is `-i` and then `-F`. That is:
+  is `-i` and then `-F`. A letter that takes no value ends the group at an
+  `=` and takes the rest as its own: `-i=t -X PUT` is `--include` set to
+  true and then `-X PUT`, and all of `tX` in `-i=tX` is the value of `-i`.
+  gh 2.103.3 was run on `-i=t`, `-i=f` and `-i=tX`. That is:
   - `gh api graphql` reading its request from a file: a field's `key=@file`
     after `-F` or `--field`, or `--input file`. `/dev/fd/0` counts as a
     file. `-f` sends an `@` as it is.
@@ -360,6 +383,13 @@ not run.
 | A file written from an unreadable body that mentions a merge, then `gh pr comment 5 -R o/web --body-file notes.md` or `gh pr comment 5 --body "- fixed the web view"` | refuse | pass |
 | An unreadable heredoc holding a merge mutation, given as standard input to `gh api graphql -F query=@-` after `--jq "3"` or `--jq \3`, beside an innocent one piped by `cat`; an unreadable one piped by `cat` to `gh api graphql -F query=@-` beside a `{fd}<<'C'` decoy; a merge mutation written from an unreadable body to a file, then sent by `gh api GraphQL -F query=@q.graphql` | refuse | refuse |
 | A readable heredoc holding a merge mutation, given as standard input to `gh api graphql --input -` after `--jq "3"`, or to `curl -d @- https://api.github.com/graphql "3"`, beside an innocent one piped by `cat`; one piped by `cat` to `gh api graphql --input -`, or `cat q.json \|` to it or to `curl -d @-`, beside a `{fd}<<'C'` decoy | pass | refuse |
+| `gh api -i=t -X PUT repos/o/r/pulls/5/merge`, or with `-i=f` or `-i=F`; `gh api -i=t graphql` with an inline merge mutation, or with `-F query=@q.graphql` after a file written from an unreadable body | refuse | refuse |
+| An unreadable heredoc holding a merge mutation, piped by `cat` to `gh api graphql -F query=@-` beside `3>&0 <<'C' 0>&3` or beside an `{a[1]}<<'C'` decoy | refuse | refuse |
+| A heredoc readable as shell holding a merge mutation, piped by `cat` to `gh api graphql --input -` or `curl -d @-` beside `3>&0 <<'C' 0>&3`, or to `gh api graphql --input -` beside an `{a[1]}<<'C'` or `{a["1"]}<<'C'` decoy; a merge mutation in a heredoc after `{1x}<<'C'`, beside an innocent one piped by `cat`; `gh {a[1]}<<'C' pr merge 5` | pass | refuse |
+| A file written from an unreadable body that mentions a merge, then `gh pr comment 5` with `-Ro/web --body-file notes.md`, `-Fnotes.md`, `-Rwebteam/site -F notes.md` or `-f=web --body-file notes.md`, or `gh pr view 5 --json mergeable -q.mergeable` | refuse | pass |
+| A gh config written from an unreadable body naming a browser, then `gh pr view 5 -wq.title`, `gh pr create -fw` or `gh pr view 5 -c=t -w` | refuse | refuse |
+| `jq -n` printing an innocent query into `gh api graphql --input -`, in a command that mentions a merge | pass | refuse |
+| An innocent heredoc given to `gh api graphql --input -` with `2>&1` or `>&2`, or piped by `cat` beside a `{fd}<<'C'` decoy, in a command that mentions a merge | pass | pass |
 | `bash ./scripts/check.sh && gh pr view 5 --json mergeable` | pass | pass |
 | `gh pr view 5 --json mergeable; echo $((1<<2))` | pass | pass |
 
@@ -420,19 +450,41 @@ the gate kept it. Verifying the sixth version found two more routes that
 - a `{name}` descriptor, as in `{fd}<<'C'`, which it took for standard
   input.
 
-Bash 5.2.21 was run on both. This decision is the seventh version, with
-those closed and the endpoint read in any case of its letters, and it has
-not been reviewed again. Both columns of the eight rows for the second and
-third reviews and that verification, from "A merge mutation written from
-an unreadable body to a file by `cat` or `tee`" on, were run on the built
-gates, the installed 1.25.0 and this change, with gh out of reach.
+Bash 5.2.21 was run on both. The seventh version closed them and read the
+endpoint in any case of its letters. Its review found three routes that
+1.25.0 refuses, two of them only when the body cannot be read, and that it
+passed:
+- a letter that takes no value given one with `=`, as `-i=t` in
+  `gh api -i=t -X PUT repos/o/r/pulls/5/merge`. gh's flag parser ends the
+  group at the `=`. The gate read on to the `t` and took it for `-t`,
+  whose value was then `-X`;
+- `0>&3` putting back the pipe that `3>&0` saved after a heredoc, which
+  the gate took for the heredoc on standard input;
+- an array element as the descriptor, as in `{a[1]}<<'C'`, which the gate
+  took for a word, with the heredoc on standard input. 1.25.0 also passes
+  `gh {a[1]}<<'C' pr merge 5`, which bash runs as `gh pr merge 5`.
+
+The same review named a cost: an `e` or a `w` in a value attached to its
+flag, as in `-Fnotes.md` or `-q.mergeable`, refused a command that merges
+nothing when it mentioned a merge and held an unreadable heredoc. It also
+suggested reading any braced word before a redirection as a descriptor.
+That is not done: bash reads `{1x}<<'C'` and `{}<<'C'` as a word with the
+heredoc on standard input, so a merge in that heredoc would pass beside a
+decoy piped in.
+
+This decision is the eighth version, with those three closed and that cost
+removed, and it has not been reviewed again. Both columns of the rows from
+"A merge mutation written from an unreadable body to a file by `cat` or
+`tee`" on were run on the built gates, the installed 1.25.0 and this
+change, with gh out of reach.
 
 A hundred and nineteen pieces were removed one at a time, and a named test
 failed each time. Twenty-three more were removed for the second review's two
 classes, with the same result. For the third review's four and the two its
 verification found, forty-two were: twenty-two of those twenty-three again,
 since the code behind the last is gone, and twenty new. Each made a named
-test fail.
+test fail. For the fourth review's three and its cost, sixteen were, and
+each made a named test fail.
 
 ## Consequences
 
@@ -464,15 +516,24 @@ test fail.
   The request has to be in the command, as a field or a heredoc.
 - An unreadable heredoc in a command with `gh pr view --web`,
   `gh pr comment -e` or `gh gist edit` is refused when the command mentions
-  a merge. So is one beside any group of gh's one-letter flags holding an
-  `e` or a `w`, even a value written beside its flag, as in `-Ro/web`.
-  Given as its own word, as in `-R o/web`, or as a text flag's value, it
-  passes.
+  a merge. So is one beside a group of gh's one-letter flags with an `e` or
+  a `w` among its flags, as in `-fw` or `-wq.title`. An `e` or a `w` in a
+  value passes: given as its own word, as in `-R o/web`; attached after a
+  letter that always takes one, as in `-Ro/web` or `-q.mergeable`; after an
+  `=`, as in `-f=web`; or as a text flag's value.
 - A heredoc on a descriptor other than 0, given by number or as a
   `{name}`, is not standard input. A gh or curl request read from standard
   input beside one is held unless what standard input really carries is
   seen. A quoted or escaped digit before `<<` is now a word of the command,
-  as bash reads it, where 1.25.0 dropped it as a descriptor.
+  as bash reads it, where 1.25.0 dropped it as a descriptor. A command with
+  a braced word holding a `[` before a redirection, as `{a[1]}<<'C'`, is not
+  read, and is refused when it mentions a merge. A request read from
+  standard input after `0>&3`, or anything else put onto descriptor 0, is
+  held.
+- What another command prints into `gh api graphql --input -`, such as
+  `jq -n '{query: ...}'`, is standard input the gate cannot see. So the
+  request is held in a command that mentions a merge, even when it merges
+  nothing. 1.25.0 passes it, and passes it with a merge mutation too.
 - A GraphQL request to `gh api GraphQL` or another spelling of the endpoint
   in other letters is held as one to `graphql`, even if GitHub does not
   serve it.

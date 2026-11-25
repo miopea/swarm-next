@@ -507,6 +507,14 @@ struct Heredoc {
     at: usize,
 }
 
+/// Whether a word right before a redirection may be `{name[subscript]}`,
+/// an array element bash sets to a new descriptor. Which subscripts bash
+/// takes is its own parser's to say, so any braced word holding a `[` may
+/// be one (ADR 0188).
+fn may_name_an_element(word: &str) -> bool {
+    word.starts_with('{') && word.ends_with('}') && word.contains('[')
+}
+
 /// Whether a word right before a redirection is a `{name}`, for which bash
 /// opens a new descriptor and sets the variable `name` to it.
 fn names_a_descriptor(word: &str) -> bool {
@@ -616,17 +624,25 @@ impl Lexer {
     fn redirection(&mut self, first: char, chars: &mut Chars<'_>) -> Option<()> {
         // `2>` and `{fd}>` name a descriptor, not a word of the command, when
         // no quote or backslash is in them. A heredoc is standard input only
-        // on descriptor 0, which it takes unnamed.
+        // on descriptor 0, which it takes unnamed. Anything else put onto
+        // descriptor 0 by name, as `0>&3` puts back what `3>&0` saved, is
+        // standard input the gate does not follow.
         let mut standard = true;
+        let mut onto_input = false;
         let plain = self.started && self.printed.is_none() && self.quotes == 0;
         if plain && self.word.chars().all(|digit| digit.is_ascii_digit()) {
             standard = self.word.chars().all(|digit| digit == '0');
+            onto_input = standard && !self.word.is_empty();
             self.word.clear();
             self.started = false;
         } else if plain && names_a_descriptor(&self.word) {
             standard = false;
             self.word.clear();
             self.started = false;
+        } else if may_name_an_element(&self.word) {
+            // bash may take it as a descriptor or as a word of the command,
+            // and the gate cannot tell which.
+            return None;
         } else {
             self.finish();
         }
@@ -644,9 +660,11 @@ impl Lexer {
         while matches!(chars.peek(), Some('<' | '>')) {
             chars.next();
         }
-        if chars.peek() == Some(&'(') {
+        let substitution = chars.peek() == Some(&'(');
+        if substitution {
             self.tokens.push(Token::Opaque);
-        } else if first == '<' {
+        }
+        if (first == '<' && !substitution) || onto_input {
             self.tokens.push(Token::Input);
         }
         if chars.next_if_eq(&'&').is_some() {
@@ -1426,18 +1444,41 @@ fn inert(command: &[Token], fed: bool) -> bool {
     }
 }
 
+/// gh's one-letter flags that take a value in every gh command that has
+/// them, read from `gh help reference` for gh 2.103.3. A command without
+/// one refuses it and runs nothing. `-h` is not one: it is `--help`.
+const GH_VALUE_LETTERS: &str = "ABDFHLORSTXbgjkoq";
+
 /// Whether a gh flag may open the editor or the browser gh's config names:
 /// `--editor` or `--web`, or a group of one-letter flags with an `e` or a
-/// `w` anywhere. Which letter takes the rest of a group as its value depends
-/// on the command (`-f` is `--fill` to `gh pr create`), so a value written
-/// beside its flag counts too.
+/// `w` among its flags. Whether a letter takes the rest of a group as its
+/// value often depends on the command (`-f` is `--fill` to `gh pr create`),
+/// so the group's flags end only at a letter that takes one in every
+/// command, or at an `=`, after which pflag gives the letter before it the
+/// rest (ADR 0188).
 fn gh_opens_a_program(word: &str) -> bool {
     if let Some(long) = word.strip_prefix("--") {
         let name = long.split_once('=').map_or(long, |(name, _)| name);
         return matches!(name, "editor" | "web");
     }
-    word.strip_prefix('-')
-        .is_some_and(|letters| letters.contains(['e', 'w']))
+    let Some(letters) = word.strip_prefix('-') else {
+        return false;
+    };
+    for (at, letter) in letters.char_indices() {
+        if matches!(letter, 'e' | 'w') {
+            return true;
+        }
+        if GH_VALUE_LETTERS.contains(letter) || takes_the_rest(&letters[at + letter.len_utf8()..]) {
+            return false;
+        }
+    }
+    false
+}
+
+/// Whether pflag gives a one-letter flag the rest of its group, `rest`,
+/// whether it takes a value or not: an `=` and then something.
+fn takes_the_rest(rest: &str) -> bool {
+    rest.len() > 1 && rest.starts_with('=')
 }
 
 /// git's long flags that name a program for it to run.
@@ -1720,20 +1761,26 @@ fn gh_line(arguments: &[String]) -> GhLine {
 /// The first flag in a group of one-letter flags (`letters`, after its `-`)
 /// that takes a value, as pflag reads the group: the letters before it take
 /// none, and it takes the rest of the word, less one `=`, or the next word
-/// when nothing is left (`None` here).
+/// when nothing is left (`None` here). A letter before it that takes no
+/// value ends the group at an `=`, taking the rest as its own (ADR 0188).
 fn one_letter_value(letters: &str) -> Option<(String, Option<String>)> {
-    let (at, letter) = letters
-        .char_indices()
-        .find(|&(_, letter)| GH_VALUE_FLAGS.contains(&format!("-{letter}").as_str()))?;
-    let rest = &letters[at + letter.len_utf8()..];
-    let value = rest
-        .strip_prefix('=')
-        .filter(|value| !value.is_empty())
-        .unwrap_or(rest);
-    Some((
-        format!("-{letter}"),
-        (!value.is_empty()).then(|| value.to_owned()),
-    ))
+    for (at, letter) in letters.char_indices() {
+        let rest = &letters[at + letter.len_utf8()..];
+        if GH_VALUE_FLAGS.contains(&format!("-{letter}").as_str()) {
+            let value = rest
+                .strip_prefix('=')
+                .filter(|value| !value.is_empty())
+                .unwrap_or(rest);
+            return Some((
+                format!("-{letter}"),
+                (!value.is_empty()).then(|| value.to_owned()),
+            ));
+        }
+        if takes_the_rest(rest) {
+            return None;
+        }
+    }
+    None
 }
 
 /// `input` is what the command reads on standard input, which gh sends as the
@@ -2770,7 +2817,8 @@ mod tests {
             format!("{browser}gh pr create -fw"),
             format!("{editor}gh pr create -fe"),
             format!("{browser}gh gist create -pw f.txt"),
-            format!("{note}gh pr comment 5 -Ro/web --body-file notes.md"),
+            format!("{browser}gh pr view 5 -wq.title"),
+            format!("{browser}gh pr view 5 -c=t -w"),
         ] {
             assert_eq!(
                 merges_in(&runs, Some(Path::new("/srv")), 0),
@@ -2781,6 +2829,16 @@ mod tests {
         for data in [
             format!("{note}gh pr comment 5 -R o/web --body-file notes.md"),
             format!("{note}gh pr comment 5 --body \"- fixed the web view\""),
+            // `-R`, `-F` and `-q` take a value in every gh command, so what
+            // follows them in the group is that value.
+            format!("{note}gh pr comment 5 -Ro/web --body-file notes.md"),
+            format!("{note}gh pr comment 5 -Fnotes.md"),
+            format!("{note}gh pr comment 5 -Rwebteam/site --body-file notes.md"),
+            format!("{note}gh pr comment 5 -Fweekly.md"),
+            format!("{note}gh pr comment 5 -Rowner/the-website -F notes.md"),
+            format!("{note}gh pr view 5 --json mergeable -q.mergeable"),
+            // A letter given its value with `=` ends the group.
+            format!("{note}gh pr comment 5 -f=web --body-file notes.md"),
         ] {
             assert_eq!(
                 merges_in(&data, Some(Path::new("/srv")), 0),
@@ -3158,6 +3216,123 @@ mod tests {
             Parsed::Merges(Vec::new()),
             "{piped}"
         );
+    }
+
+    /// bash reads `{a[1]}` before a redirection as an array element to set
+    /// to a new descriptor, and `{1x}` or `{}` as a word of the command, with
+    /// the heredoc on standard input. Which `[...]` bash takes as an element
+    /// is its own parser's to say, so a braced word holding a `[` there is
+    /// not read; any other is a word, as bash reads it (ADR 0188).
+    #[test]
+    fn a_braced_word_that_may_be_an_array_element_before_a_redirection_is_not_read() {
+        let mutation =
+            "mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }";
+        let readable = "{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\"}";
+        let innocent = "{\"query\": \"query { viewer { login } }\"}";
+        for unread in [
+            format!("cat <<'A' | gh api graphql --input - {{a[1]}}<<'C'\n{readable}\nA\nx\nC"),
+            format!("cat <<'A' | gh api graphql -F query=@- {{a[x+1]}}<<'C'\n{mutation}\nA\nx\nC"),
+            format!("cat <<'A' | gh api graphql --input - {{a[1]}}< q.json\n{readable}\nA"),
+            "gh {a[1]}<<'C' pr merge 5\nx\nC".to_owned(),
+            "gh {a[1]}>/dev/null pr merge 5".to_owned(),
+        ] {
+            assert_eq!(
+                merges_in(&unread, Some(Path::new("/srv")), 0),
+                Parsed::Unclear,
+                "{unread}"
+            );
+        }
+        assert_eq!(tokens("cat - {a[1]}<<'H'\nh\nH"), None);
+        // bash takes only a word that starts with `{` and ends with `}`.
+        for word in ["{a[1]x", "x{a[1]}"] {
+            assert!(
+                tokens(&format!("cat - {word}<<'H'\nh\nH")).is_some(),
+                "{word}"
+            );
+        }
+        for heredoc_is_input in [
+            format!(
+                "cat <<'A' | gh api graphql --input - {{1x}}<<'C'\n{innocent}\nA\n{readable}\nC"
+            ),
+            format!("cat <<'A' | gh api graphql --input - {{}}<<'C'\n{innocent}\nA\n{readable}\nC"),
+        ] {
+            assert!(
+                only_merge(&heredoc_is_input, "/srv").unreadable.is_some(),
+                "{heredoc_is_input}"
+            );
+        }
+    }
+
+    /// pflag ends a group of one-letter flags at an `=`, and the letter
+    /// before it takes the rest of the word, even one that takes no value:
+    /// `-i=t` is `--include` set to true, and `-X PUT` after it is read as
+    /// ever (ADR 0188).
+    #[test]
+    fn an_equals_sign_ends_a_group_of_one_letter_flags() {
+        for grouped in [
+            "gh api -i=t -X PUT repos/o/r/pulls/5/merge",
+            "gh api -i=f -X PUT repos/o/r/pulls/5/merge",
+            "gh api -i=F -X PUT repos/o/r/pulls/5/merge",
+            "gh api repos/o/r/pulls/5/merge -i=true -X PUT",
+        ] {
+            let merge = only_merge(grouped, "/");
+            assert_eq!(
+                (merge.repo.as_deref(), merge.pull_request.as_deref()),
+                (Some("o/r"), Some("5")),
+                "{grouped}"
+            );
+        }
+        let merge = only_merge(
+            r#"gh api -i=t graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "PR_1"}) { clientMutationId } }'"#,
+            "/",
+        );
+        assert!(merge.unreadable.is_some());
+        assert!(
+            only_merge("gh api -i=t graphql -F query=@q.graphql", "/")
+                .unreadable
+                .is_some()
+        );
+        // A letter that takes a value keeps the rest of the word, less one
+        // `=`, as before.
+        let merge = only_merge("gh api -X=PUT repos/o/r/pulls/5/merge", "/");
+        assert_eq!(merge.pull_request.as_deref(), Some("5"));
+    }
+
+    /// `3>&0 <<'C' 0>&3` saves the pipe, gives the heredoc to standard input
+    /// and then puts the pipe back: a dup onto descriptor 0 leaves standard
+    /// input to whatever descriptor it names, which the gate does not follow
+    /// (ADR 0188). A dup of any other descriptor leaves it alone.
+    #[test]
+    fn a_dup_onto_descriptor_0_leaves_standard_input_unseen() {
+        let mutation =
+            "mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }";
+        let json = "{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\", \"note\": \"it`s\"}";
+        let readable = "{\"query\": \"mutation { mergePullRequest(input: {pullRequestId: \\\"X\\\"}) { clientMutationId } }\"}";
+        let innocent = "{\"query\": \"query { viewer { login } }\"}";
+        for held in [
+            format!("cat <<'A' | gh api graphql --input - 3>&0 <<'C' 0>&3\n{json}\nA\nx\nC"),
+            format!(
+                "cat <<'A' | gh api graphql -F query=@- 3>&0 <<'C' 0>&3\n{mutation}#don't\nA\nx\nC"
+            ),
+            format!(
+                "cat <<'A' | gh api graphql --input - 3>&0 <<'C' 0>&3\n{readable}\nA\n{innocent}\nC"
+            ),
+            format!(
+                "cat q.json | curl -d @- https://api.github.com/graphql 3>&0 <<'C' 0>&3\n{innocent}\nC"
+            ),
+        ] {
+            assert!(only_merge(&held, "/srv").unreadable.is_some(), "{held}");
+        }
+        for seen in [
+            format!("cat <<'B' | gh api graphql --input - 2>&1\n{innocent}\nB"),
+            format!("gh api graphql --input - <<'B' >&2\n{innocent}\nB"),
+        ] {
+            assert_eq!(
+                merges_in(&seen, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{seen}"
+            );
+        }
     }
 
     /// Whether GitHub ignores the case of its GraphQL endpoint's path was
