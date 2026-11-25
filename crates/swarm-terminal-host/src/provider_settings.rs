@@ -472,6 +472,24 @@ mod tests {
         }
     }
 
+    /// ADR 0190: the grant mod looks for a merge, and for gh or curl, as
+    /// written and as bash may spell it, with quotes, backslashes and
+    /// escapes read as the merge gate reads them, so a merge spelled that
+    /// way still reaches the gate.
+    #[test]
+    fn the_grant_mod_looks_for_a_merge_as_bash_may_spell_it() {
+        for part in [
+            "const spellings = [command, withoutQuotes(command), withoutQuotes(unescaped(command))]",
+            "spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => RUNS_GITHUB.test(text))",
+            ".replace(/['\"\\\\]/g, '')",
+            "const ESCAPE = /\\\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3}))/g",
+        ] {
+            assert!(GRANT_MOD_MODULE.contains(part), "{part}");
+        }
+        // The check that fails refuses through the same test.
+        assert!(GRANT_MOD_MODULE.contains("mayMerge((e.input as { command?: unknown }).command)"));
+    }
+
     /// ADR 0129: the grant mod names this release's helper and this worker's
     /// MCP config, as quoted literals, and nothing else is left to fill in.
     #[test]

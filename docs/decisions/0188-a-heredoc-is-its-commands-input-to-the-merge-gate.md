@@ -249,6 +249,13 @@ bodies as commands, and changes only what an unreadable body means.
 
 ## What this does not cover
 
+- **ADR 0190 fixes the merges below that were to be fixed separately**, all
+  but one: the branch merges API, `gh api -X POST repos/o/r/merges` and the
+  same sent by curl, still passes and is still to be fixed separately.
+  Two of the limits under "Already outside what the gate reads" changed:
+  - an alias set in the same command is now read;
+  - `eval "$var"`, with a variable the gate cannot read, is refused in a
+    command that mentions a merge.
 - **A file written from an unreadable body is not followed when something
   runs it without the command naming it.** Three such cases pass that 1.25.0
   refused:

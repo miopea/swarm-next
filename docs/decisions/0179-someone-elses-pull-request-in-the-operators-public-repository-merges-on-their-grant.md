@@ -69,7 +69,19 @@ merge. It never checks the author, and it reads only `gh pr merge`.
   - `;`, `&`, `|`, newlines and parentheses;
   - `cd` before the merge;
   - `bash -c`, `sh -c`, `eval`, backticks and `$(...)`, up to four levels;
-  - `env`, `sudo`, `nohup` and similar wrappers.
+  - `env`, `nohup`, `timeout` and similar wrappers, and the reserved words
+    a command follows, such as `{`, `if` and `do` (ADR 0190, proposed).
+
+  ADR 0190, proposed, adds what bash runs in place of another command, and
+  holds what it cannot read:
+  - A merge spelled with quotes or escapes is found.
+  - A process substitution's commands are read, and so are aliases, git's
+    and gh's aliases, and programs named by variables.
+  - A merge that `sudo`, `ssh` or another program runs is held, and so is
+    one in a command that sets what gh reads, such as `GH_REPO`.
+  - A command that mentions a merge and holds a function, a value bash
+    evaluates, or a word bash computes where it may decide what gh or curl
+    merges, is refused.
 
   It finds these merges:
   - `gh pr merge`, apart from `--disable-auto`;
@@ -116,9 +128,14 @@ sessions on the operator's machine, as the next point says.
     operator's GitHub credential.
 - **What the text does not show:**
   - a script file;
-  - a shell alias or function;
+  - a shell alias or function set by an earlier command;
   - a GraphQL query read from a file (`-F query=@file`);
-  - a merge made by another program.
+  - a merge made by another program from a command it is given as one
+    string, as `ssh host 'gh pr merge 5'` (ADR 0190, proposed);
+  - a merge spelled only through an expansion whose text never spells it,
+    as a brace list, a glob or a curl URL pattern, which the grant mod does
+    not send to the gate (ADR 0190, proposed);
+  - a config written by an earlier command: gh's, git's or curl's.
 - **Merging without a merge command.** Fetching a pull request's branch and
   pushing it to `main` (`gh pr checkout`, then `git push origin HEAD:main`)
   merges a stranger's code without any merge this can see, and nothing in

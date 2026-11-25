@@ -17,11 +17,33 @@ const notes = new Map<string, string>()
 
 // A command that may merge a pull request (ADR 0179). It only picks which
 // commands Swarm reads closely; Swarm decides which of them merge, and this
-// may name more than it needs to, never fewer.
+// may name more than it needs to, never fewer. Each word is looked for as
+// written and as bash may spell it, as Swarm does too (ADR 0190).
 const MAY_MERGE = /merge|enqueuepullrequest/i
 const RUNS_GITHUB = /\b(gh|curl)\b/
-const mayMerge = (command: unknown): command is string =>
-  typeof command === 'string' && MAY_MERGE.test(command) && RUNS_GITHUB.test(command)
+// Without a backslash and newline, a `$` before a quote, an empty `$()` or
+// pair of backquotes, and every quote and backslash.
+const withoutQuotes = (text: string): string =>
+  text
+    .replace(/\\\n/g, '')
+    .replace(/\$(?=['"])/g, '')
+    .replace(/\$\(\)|``/g, '')
+    .replace(/['"\\]/g, '')
+// Each escape bash's `$'...'`, printf or JSON reads as a letter, read as it:
+// `\xHH`, `\NNN` in octal, `\uHHHH` and `\UHHHHHHHH`.
+const ESCAPE = /\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3}))/g
+const unescaped = (text: string): string =>
+  text.replace(ESCAPE, (escape: string, x?: string, u?: string, wide?: string, octal?: string) => {
+    const code = octal === undefined ? parseInt(x ?? u ?? wide ?? '', 16) : parseInt(octal, 8)
+    return code <= 0x10ffff ? String.fromCodePoint(code) : escape
+  })
+const mayMerge = (command: unknown): command is string => {
+  if (typeof command !== 'string') return false
+  const spellings = [command, withoutQuotes(command), withoutQuotes(unescaped(command))]
+  return (
+    spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => RUNS_GITHUB.test(text))
+  )
+}
 const MERGE_UNCHECKED =
   'Swarm could not check this merge, so it is refused (ADR 0179). In the operator\'s own ' +
   'public repositories a merge of a pull request the account making it did not open needs ' +

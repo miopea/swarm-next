@@ -294,8 +294,9 @@ enum Token {
         splits: bool,
         as_text: bool,
     },
-    /// A process substitution: commands that read or write through a file
-    /// the gate does not follow.
+    /// What runs cannot be told from the text: a value bash reads as
+    /// arithmetic or as a name, where a subscript runs commands, or a
+    /// function defined, which a name then runs in place of its program.
     Opaque,
     /// Anything that ends one pipeline: `;`, `&`, `||`, a newline, a
     /// parenthesis, or the edge of a command substitution.
@@ -390,7 +391,16 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                 }
                 lexer.pipe();
             }
+            // `&>` and `&>>` send both outputs to a file: a redirection.
+            '&' if chars.peek() == Some(&'>') => {
+                lexer.finish();
+                chars.next();
+                lexer.redirection('>', chars)?;
+            }
             ';' | '&' => lexer.boundary(),
+            // A pattern's `)` in a `case` inside a substitution: bash reads
+            // it as the pattern's end, not the substitution's.
+            ')' if substitution && depth == 0 && lexer.in_case() => lexer.boundary(),
             // With extglob on, `!(`, `@(`, `+(`, `*(` and `?(` start a
             // pattern, which this does not read.
             '(' if lexer.word.ends_with(['!', '@', '+', '*', '?']) => return None,
@@ -407,6 +417,13 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                 }
             }
             '(' => {
+                // `name ()` defines a function, which runs in place of any
+                // program of that name: what a name runs is not told. After
+                // `=`, it is an empty array.
+                if !lexer.word.ends_with('=') && defines_a_function(chars) {
+                    lexer.finish();
+                    lexer.tokens.push(Token::Opaque);
+                }
                 depth += 1;
                 lexer.boundary();
             }
@@ -419,27 +436,14 @@ fn lex(chars: &mut Chars<'_>, substitution: bool) -> Option<Vec<Token>> {
                 lexer.boundary();
             }
             '`' => lexer.substitution(tokens(&take_backquoted(chars)?)?, false)?,
-            '$' if chars.next_if_eq(&'(').is_some() => {
-                lexer.started = true;
-                match dollar_parenthesis(chars)? {
-                    Dollar::Substitution(inner) => lexer.substitution(inner, false)?,
-                    Dollar::Arithmetic { names } => lexer.evaluates(names),
-                }
-            }
-            '$' if evaluates_a_value(chars) => {
-                lexer.evaluates(true);
-                lexer.started = true;
-                lexer.word.push('$');
-            }
-            '$' if chars.next_if_eq(&'\'').is_some() => lexer.ansi_c_quoted(chars)?,
-            // `$"..."` is the quoted text as translated.
-            '$' if chars.peek() == Some(&'"') => {
-                lexer.computed(true);
-                lexer.word.push('$');
-            }
-            '$' if chars.peek().copied().is_some_and(parameter) => {
-                lexer.computed(false);
-                lexer.word.push('$');
+            '$' => lexer.dollar(chars)?,
+            // `<(` and `>(` start a process substitution wherever they
+            // stand, even after digits: bash reads `2>(x)` as a word. Its
+            // commands run, as a substitution's do, and the word it is part
+            // of is a file's name bash computes.
+            '<' | '>' if chars.peek() == Some(&'(') => {
+                chars.next();
+                lexer.substitution(lex(chars, true)?, false)?;
             }
             '<' | '>' => lexer.redirection(character, chars)?,
             '#' if !lexer.started => {
@@ -551,8 +555,14 @@ impl Lexer {
                     Dollar::Substitution(inner) => self.substitution(inner, true)?,
                     Dollar::Arithmetic { names } => self.evaluates(names),
                 },
-                '$' if evaluates_a_value(chars) => {
+                '$' if chars.peek() == Some(&'[') => {
                     self.evaluates(true);
+                    self.computed(true);
+                    self.word.push('$');
+                }
+                '$' if chars.peek() == Some(&'{') => {
+                    self.evaluates(evaluates_a_value(chars));
+                    self.computed(true);
                     self.word.push('$');
                 }
                 '$' if chars.peek().copied().is_some_and(parameter) => {
@@ -619,6 +629,69 @@ impl Lexer {
         }
     }
 
+    /// A `$` outside quotes, which has been read: a substitution, a value
+    /// bash computes, some forms of which read a value as arithmetic or as
+    /// a name, quoted text, or a `$` as it is.
+    fn dollar(&mut self, chars: &mut Chars<'_>) -> Option<()> {
+        if chars.next_if_eq(&'(').is_some() {
+            self.started = true;
+            match dollar_parenthesis(chars)? {
+                Dollar::Substitution(inner) => self.substitution(inner, false)?,
+                Dollar::Arithmetic { names } => self.evaluates(names),
+            }
+            return Some(());
+        }
+        if chars.next_if_eq(&'\'').is_some() {
+            return self.ansi_c_quoted(chars);
+        }
+        match chars.peek().copied() {
+            Some('[' | '{') => {
+                self.evaluates(evaluates_a_value(chars));
+                self.computed(false);
+            }
+            // `$"..."` is the quoted text as translated.
+            Some('"') => {
+                self.computed(true);
+            }
+            Some(next) if parameter(next) => {
+                self.computed(false);
+            }
+            next => {
+                self.unquoted('$', next);
+                return Some(());
+            }
+        }
+        self.word.push('$');
+        Some(())
+    }
+
+    /// Whether this is reading a `case` that no `esac` has closed, as
+    /// bash reads its words where a command starts, the word being read
+    /// among them.
+    fn in_case(&self) -> bool {
+        let mut open = 0_usize;
+        let mut starts = true;
+        for token in &self.tokens {
+            match token {
+                Token::Word(word) if starts && word == "case" => open += 1,
+                Token::Word(word) if starts && word == "esac" => open = open.saturating_sub(1),
+                _ => {}
+            }
+            starts = match token {
+                Token::Break | Token::Pipe => true,
+                Token::Word(word) => RESERVED.contains(&word.as_str()),
+                _ => starts,
+            };
+        }
+        // The word being read, as bash reads it where a command starts.
+        let closing = starts
+            && self.started
+            && self.printed.is_none()
+            && self.quotes == 0
+            && self.word == "esac";
+        open > usize::from(closing)
+    }
+
     /// A redirection, whose first `<` or `>` has been read. Its file is not
     /// a word of the command; a heredoc's body is what the command reads.
     fn redirection(&mut self, first: char, chars: &mut Chars<'_>) -> Option<()> {
@@ -657,26 +730,32 @@ impl Lexer {
             // A here-string's word is passed over, as it always was; ADR
             // 0188 names that limit.
         }
+        // `>|` writes over a file even with noclobber set.
+        if first == '>' {
+            chars.next_if_eq(&'|');
+        }
         while matches!(chars.peek(), Some('<' | '>')) {
             chars.next();
         }
-        let substitution = chars.peek() == Some(&'(');
-        if substitution {
-            self.tokens.push(Token::Opaque);
-        }
-        if (first == '<' && !substitution) || onto_input {
+        if first == '<' || onto_input {
             self.tokens.push(Token::Input);
         }
-        if chars.next_if_eq(&'&').is_some() {
+        // `>&2` and `<&-` dup or close a descriptor. `>&` before anything
+        // else sends both outputs to the file it names, as `&>` does.
+        if chars.next_if_eq(&'&').is_some()
+            && chars
+                .peek()
+                .is_some_and(|next| next.is_ascii_digit() || *next == '-')
+        {
             while chars
                 .peek()
                 .is_some_and(|next| next.is_ascii_digit() || *next == '-')
             {
                 chars.next();
             }
-        } else {
-            self.redirect_target = true;
+            return Some(());
         }
+        self.redirect_target = true;
         Some(())
     }
 
@@ -1036,12 +1115,54 @@ fn parameter(character: char) -> bool {
         || matches!(character, '_' | '@' | '*' | '#' | '?' | '$' | '!' | '-')
 }
 
-/// After `$`: `${...}` or `$[...]`. Either can read a value as a name or as
+/// After `$`: whether `${...}` or `$[...]` reads a value as a name or as
 /// arithmetic (`${!x}`, `${x@P}`, `${a[i]}`, `${x:i}`, `$[x]`), where a
-/// subscript runs commands, so neither is read.
+/// subscript runs commands. A name alone, its length, or a default, a
+/// pattern or a change of case after it reads no value that way.
 fn evaluates_a_value(chars: &Chars<'_>) -> bool {
-    matches!(chars.clone().next(), Some('{' | '['))
+    let mut ahead = chars.clone();
+    match ahead.next() {
+        Some('[') => true,
+        Some('{') => {
+            // `${#}` is how many arguments there are; `${#x}` is a length.
+            if ahead.next_if_eq(&'#').is_some() && ahead.peek() == Some(&'}') {
+                return false;
+            }
+            match ahead.next() {
+                Some(first) if first.is_ascii_alphabetic() || first == '_' => {
+                    while ahead
+                        .next_if(|next| next.is_ascii_alphanumeric() || *next == '_')
+                        .is_some()
+                    {}
+                }
+                Some(first) if first.is_ascii_digit() => {
+                    while ahead.next_if(char::is_ascii_digit).is_some() {}
+                }
+                Some('@' | '*' | '?' | '-' | '$' | '0') => {}
+                _ => return true,
+            }
+            match ahead.next() {
+                Some('}' | '-' | '=' | '?' | '+' | '#' | '%' | '/' | '^' | ',') => false,
+                Some(':') => !matches!(ahead.peek(), Some('-' | '=' | '?' | '+')),
+                _ => true,
+            }
+        }
+        _ => false,
+    }
 }
+
+/// At a `(`: whether it is `()` after a name, which defines a function.
+/// bash reads no other `()`: an empty subshell does not parse.
+fn defines_a_function(chars: &Chars<'_>) -> bool {
+    let mut ahead = chars.clone();
+    while ahead.next_if(|next| matches!(next, ' ' | '\t')).is_some() {}
+    ahead.next() == Some(')')
+}
+
+/// Words after which bash reads a command, which may be a merge.
+const RESERVED: &[&str] = &[
+    "!", "{", "then", "do", "else", "elif", "if", "while", "until", "time",
+];
 
 fn take_backquoted(chars: &mut Chars<'_>) -> Option<String> {
     let mut inner = String::new();
@@ -1191,28 +1312,69 @@ fn expansions(body: &str) -> Option<Vec<Token>> {
 
 /// Every merge `command` makes, and the folder each runs in.
 fn merges_in(command: &str, cwd: Option<&Path>, depth: usize) -> Parsed {
-    merges_within(command, cwd, depth, true)
-}
-
-/// The merges in text a command runs or reads. `plain` says that nothing
-/// around the text can run what a heredoc in it gives a command.
-fn merges_within(text: &str, cwd: Option<&Path>, depth: usize, plain: bool) -> Parsed {
-    let mentions_merge = text.to_ascii_lowercase().contains("merge");
-    match tokens(text).filter(|_| depth <= MAX_NESTING) {
-        Some(tokens) => merges_among(&tokens, cwd, depth, plain),
-        None if mentions_merge => Parsed::Unclear,
-        None => Parsed::Merges(Vec::new()),
+    let scope = Scope {
+        depth,
+        plain: true,
+        names_hold: true,
+        curl_configured: configures_curl(command),
+    };
+    // In a command that mentions a merge, a part bash computes or evaluates
+    // where it decides what runs may be that merge (ADR 0190).
+    match merges_within(command, cwd, scope) {
+        (_, true) if mentions_a_merge(command) => Parsed::Unclear,
+        (parsed, _) => parsed,
     }
 }
 
-/// The merges among one command's tokens.
+/// What the text around the text being read, and the whole command, say
+/// about reading it.
+#[derive(Clone, Copy)]
+struct Scope {
+    depth: usize,
+    /// Nothing around the text can run what a heredoc in it gives a command.
+    plain: bool,
+    /// No command around the text changes what a program's name runs.
+    names_hold: bool,
+    /// The whole command writes or names curl's own config, which can hold
+    /// any request a later `curl` sends.
+    curl_configured: bool,
+}
+
+impl Scope {
+    fn inner(self, plain: bool, names_hold: bool) -> Self {
+        Self {
+            depth: self.depth + 1,
+            plain,
+            names_hold,
+            ..self
+        }
+    }
+}
+
+/// The merges in text a command runs or reads, and whether a part of what
+/// runs is one bash computes or evaluates where it decides what runs.
+fn merges_within(text: &str, cwd: Option<&Path>, scope: Scope) -> (Parsed, bool) {
+    match tokens(text).filter(|_| scope.depth <= MAX_NESTING) {
+        Some(tokens) => merges_among(&tokens, cwd, scope),
+        None if mentions_a_merge(text) => (Parsed::Unclear, false),
+        None => (Parsed::Merges(Vec::new()), false),
+    }
+}
+
+/// The merges among one command's tokens, and whether a part of what runs
+/// is one bash computes or evaluates where it decides what runs: a
+/// program, a word gh or curl reads, a value read as arithmetic or a name,
+/// or a function defined (ADR 0190).
 ///
 /// A heredoc's body is read as commands, as a file written from it may be
 /// run later. A body that cannot be read as commands is left as data only
 /// when no command here, nor any around it, can run what it is given, with
-/// what an unquoted one expands still read (ADR 0188).
-fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool) -> Parsed {
-    let data = plain && runs_nothing_it_is_given(tokens);
+/// what an unquoted one expands still read (ADR 0188). What bash computes
+/// in such a body runs only as it expands.
+fn merges_among(tokens: &[Token], cwd: Option<&Path>, scope: Scope) -> (Parsed, bool) {
+    let data = scope.plain && runs_nothing_it_is_given(tokens);
+    let names_hold = scope.names_hold && !redefines_names(tokens);
+    let mut doubted = tokens.contains(&Token::Opaque) || defines_a_function_by_name(tokens);
     let mut folder = cwd.map(Path::to_path_buf);
     let mut merges = Vec::new();
     for pipeline in tokens.split(|token| *token == Token::Break) {
@@ -1221,47 +1383,176 @@ fn merges_among(tokens: &[Token], cwd: Option<&Path>, depth: usize, plain: bool)
             .map(Simple::from)
             .collect();
         for (place, command) in commands.iter().enumerate() {
-            let input = seen_input(&commands, place);
-            let mut read = Vec::new();
-            match step(&command.words, input.as_deref()) {
+            let input = seen_input(&commands, place, names_hold);
+            let (what, around) = step(&command.words, &command.printed, input.as_deref(), scope);
+            doubted |= around.doubt;
+            // Where this command runs: a wrapper may name another folder.
+            let here = match &around.folder {
+                Some(target) => moved(folder.clone(), Some(target)),
+                None => folder.clone(),
+            };
+            let mut found = Vec::new();
+            let mut read = around.runs;
+            match what {
+                // A program of its own runs no `cd`: it moves nothing here.
+                Step::ChangeFolder(_) | Step::LoseFolder if around.apart => {}
                 Step::ChangeFolder(target) => folder = moved(folder, target.as_deref()),
+                Step::LoseFolder => folder = None,
                 Step::Merge(mut merge) => {
-                    merge.folder.clone_from(&folder);
-                    merges.push(merge);
+                    merge.folder.clone_from(&here);
+                    found.push(merge);
                 }
                 Step::Nested(text) => read.push(text),
                 Step::Other => {}
             }
+            let inner = scope.inner(data, names_hold);
             for &(body, expands) in &command.heredocs {
-                let found = match merges_within(body, folder.as_deref(), depth + 1, data) {
-                    Parsed::Unclear if data && expands => expansions(body)
-                        .map_or(Parsed::Unclear, |run| {
-                            merges_among(&run, folder.as_deref(), depth + 1, data)
-                        }),
-                    Parsed::Unclear if data => Parsed::Merges(Vec::new()),
-                    found => found,
+                let expanded = || {
+                    expansions(body).map_or((Parsed::Unclear, false), |run| {
+                        merges_among(&run, here.as_deref(), inner)
+                    })
                 };
-                match found {
-                    Parsed::Merges(inner) => merges.extend(inner),
-                    Parsed::Unclear => return Parsed::Unclear,
+                let (body_merges, body_doubted) = match merges_within(body, here.as_deref(), inner)
+                {
+                    (Parsed::Unclear, _) if data && expands => expanded(),
+                    (Parsed::Unclear, _) if data => (Parsed::Merges(Vec::new()), false),
+                    // A body that is data, with everything it expands,
+                    // runs nothing it is given: what it would doubt as
+                    // commands is only printed.
+                    (body_merges, _) if data => (body_merges, false),
+                    body => body,
+                };
+                doubted |= body_doubted;
+                match body_merges {
+                    Parsed::Merges(body_merges) => found.extend(body_merges),
+                    Parsed::Unclear => return (Parsed::Unclear, doubted),
                 }
             }
             for text in read {
-                match merges_within(&text, folder.as_deref(), depth + 1, data) {
-                    Parsed::Merges(inner) => merges.extend(inner),
-                    Parsed::Unclear => return Parsed::Unclear,
+                let (nested, nested_doubted) = merges_within(&text, here.as_deref(), inner);
+                doubted |= nested_doubted;
+                match nested {
+                    Parsed::Merges(nested) => found.extend(nested),
+                    Parsed::Unclear => return (Parsed::Unclear, doubted),
                 }
+            }
+            // A wrapper that runs gh as another account or elsewhere leaves
+            // every merge it runs unread.
+            for mut merge in found {
+                if merge.unreadable.is_none() {
+                    merge.unreadable = around.unreadable;
+                }
+                merges.push(merge);
             }
         }
     }
-    Parsed::Merges(merges)
+    // A variable gh or curl reads to choose the repository, the account or
+    // the program, set or cleared anywhere in the command, may decide what
+    // any of its merges is.
+    if sets_what_gh_reads(tokens) {
+        for merge in &mut merges {
+            merge.unreadable.get_or_insert(SETS_WHAT_GH_READS);
+        }
+    }
+    (Parsed::Merges(merges), doubted)
 }
 
-/// One simple command: its words, each heredoc it is given with whether that
-/// heredoc expands, the ones it reads on standard input, and whether its
-/// standard input comes from a file, a here-string or a descriptor.
+const SETS_WHAT_GH_READS: &str = "it sets or clears a variable gh reads to choose the repository, the account or the program, so Swarm cannot ask gh what it would merge";
+
+/// Whether a command mentions a merge, as written or as bash may spell it:
+/// with its quotes, backslashes and empty substitutions taken out, or with
+/// an escape such as `\x6d` or a JSON `g` read as its letter. The grant
+/// mod sends the gate a command only when one of these also names gh or
+/// curl (ADR 0190).
+fn mentions_a_merge(text: &str) -> bool {
+    spellings(text).iter().any(|spelling| {
+        let lower = spelling.to_ascii_lowercase();
+        lower.contains("merge") || lower.contains("enqueuepullrequest")
+    })
+}
+
+/// The text as written, without what bash takes out of a word, and the same
+/// with its escapes read.
+fn spellings(text: &str) -> [String; 3] {
+    [
+        text.to_owned(),
+        without_quotes(text),
+        without_quotes(&unescaped(text)),
+    ]
+}
+
+/// The text without a backslash and newline, a `$` before a quote, an empty
+/// `$()` or pair of backquotes, and every quote and backslash.
+fn without_quotes(text: &str) -> String {
+    text.replace("\\\n", "")
+        .replace("$'", "'")
+        .replace("$\"", "\"")
+        .replace("$()", "")
+        .replace("``", "")
+        .chars()
+        .filter(|character| !matches!(character, '\'' | '"' | '\\'))
+        .collect()
+}
+
+/// The text with each escape bash's `$'...'`, printf or JSON reads as a
+/// letter read as it: `\xHH`, `\NNN` in octal, `\uHHHH` and `\UHHHHHHHH`.
+/// A request body's JSON reads `g` as `g`, so GitHub does too.
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            out.push(character);
+            continue;
+        }
+        let (radix, most) = match chars.peek() {
+            Some('x') => (16, 2),
+            Some('u') => (16, 4),
+            Some('U') => (16, 8),
+            Some('0'..='7') => (8, 3),
+            _ => {
+                out.push(character);
+                continue;
+            }
+        };
+        // The letter that names the escape, which `\NNN` has none of.
+        let named = if radix == 16 { chars.next() } else { None };
+        let mut digits = String::new();
+        while digits.len() < most
+            && let Some(digit) = chars.next_if(|next| next.is_digit(radix))
+        {
+            digits.push(digit);
+        }
+        if let Some(letter) = u32::from_str_radix(&digits, radix)
+            .ok()
+            .and_then(char::from_u32)
+        {
+            out.push(letter);
+        } else {
+            out.push('\\');
+            out.extend(named);
+            out.push_str(&digits);
+        }
+    }
+    out
+}
+
+/// Whether the command writes or names curl's own config, `.curlrc`, or
+/// moves where curl looks for it, so a later `curl` may send anything.
+fn configures_curl(text: &str) -> bool {
+    spellings(text).iter().any(|spelling| {
+        let lower = spelling.to_ascii_lowercase();
+        lower.contains("curlrc") || lower.contains("curl_home")
+    })
+}
+
+/// One simple command: its words, with what bash computes in each, each
+/// heredoc it is given with whether that heredoc expands, the ones it reads
+/// on standard input, and whether its standard input comes from a file, a
+/// here-string, a descriptor, or a heredoc whose text bash changes.
 struct Simple<'a> {
     words: Vec<String>,
+    printed: Vec<Option<Printing>>,
     heredocs: Vec<(&'a str, bool)>,
     input: Vec<&'a str>,
     redirected: bool,
@@ -1271,20 +1562,39 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
     fn from(tokens: &'a [Token]) -> Self {
         let mut command = Simple {
             words: Vec::new(),
+            printed: Vec::new(),
             heredocs: Vec::new(),
             input: Vec::new(),
             redirected: false,
         };
         for token in tokens {
             match token {
-                Token::Word(word) | Token::Printed { word, .. } => command.words.push(word.clone()),
+                Token::Word(word) => {
+                    command.words.push(word.clone());
+                    command.printed.push(None);
+                }
+                Token::Printed {
+                    word,
+                    splits,
+                    as_text,
+                } => {
+                    command.words.push(word.clone());
+                    command.printed.push(Some(Printing {
+                        splits: *splits,
+                        as_text: *as_text,
+                    }));
+                }
                 Token::Stdin {
                     body,
                     expands,
                     standard,
                 } => {
                     command.heredocs.push((body, *expands));
-                    if *standard {
+                    // What bash makes of an unquoted body holding `$`, a
+                    // backquote or a backslash is not its text (ADR 0190).
+                    if *standard && *expands && body.contains(['$', '`', '\\']) {
+                        command.redirected = true;
+                    } else if *standard {
                         command.input.push(body);
                     }
                 }
@@ -1300,8 +1610,10 @@ impl<'a> From<&'a [Token]> for Simple<'a> {
 /// its own heredocs on standard input, or those the commands before it pass
 /// on down the pipe as written. `None` is input it cannot see: a file, a
 /// here-string or a descriptor, a command that prints anything else, or the
-/// shell's own. A heredoc on another descriptor is none of these.
-fn seen_input(commands: &[Simple<'_>], place: usize) -> Option<Vec<String>> {
+/// shell's own. A heredoc on another descriptor is none of these. Where a
+/// name may run something other than its program (`names_hold` false), no
+/// command is known to pass its input on.
+fn seen_input(commands: &[Simple<'_>], place: usize, names_hold: bool) -> Option<Vec<String>> {
     let mut at = place;
     loop {
         let command = &commands[at];
@@ -1318,7 +1630,7 @@ fn seen_input(commands: &[Simple<'_>], place: usize) -> Option<Vec<String>> {
             );
         }
         at = at.checked_sub(1)?;
-        if !passes_on(&commands[at].words) {
+        if !names_hold || !passes_on(&commands[at].words) {
             return None;
         }
     }
@@ -1337,10 +1649,102 @@ fn passes_on(words: &[String]) -> bool {
     }
 }
 
+/// Whether a name in these commands may run something other than the
+/// program it names: a function defined, an alias, a hashed path, a
+/// builtin turned on or off, a script read into the shell, or `PATH` set.
+fn redefines_names(tokens: &[Token]) -> bool {
+    tokens.contains(&Token::Opaque)
+        || defines_a_function_by_name(tokens)
+        || tokens
+            .iter()
+            .filter_map(Token::said)
+            .any(|(word, _)| assignment(word).is_some_and(|(name, _)| name == "PATH"))
+        || tokens
+            .split(|token| matches!(token, Token::Break | Token::Pipe))
+            .any(|command| {
+                let simple = Simple::from(command);
+                let (at, _) = program(&simple.words, &simple.printed);
+                simple.words.get(at).is_some_and(|first| {
+                    matches!(
+                        system_name(first),
+                        Some("alias" | "hash" | "enable" | "." | "source" | "shopt")
+                    )
+                })
+            })
+}
+
+/// Whether a command defines a function with the `function` keyword, which
+/// runs in place of any program of its name. One defined with `()` is
+/// `Token::Opaque` already.
+fn defines_a_function_by_name(tokens: &[Token]) -> bool {
+    tokens
+        .split(|token| matches!(token, Token::Break | Token::Pipe))
+        .any(|command| {
+            command
+                .iter()
+                .filter_map(Token::said)
+                .find(|&(word, _)| !RESERVED.contains(&word))
+                .is_some_and(|word| word == ("function", None))
+        })
+}
+
+/// Whether a variable gh or curl reads to choose the repository, the
+/// account or the program is set or cleared anywhere in these commands: an
+/// assignment of one, as a command's prefix or `export`'s argument, or its
+/// name alone as a word, as `unset`, `read` and `env -u` take it.
+fn sets_what_gh_reads(tokens: &[Token]) -> bool {
+    tokens.iter().filter_map(Token::said).any(|(word, _)| {
+        let name = assignment(word)
+            .map_or_else(|| word.strip_prefix("-u").unwrap_or(word), |(name, _)| name);
+        is_name(name) && chooses_what_gh_merges(name)
+    })
+}
+
+/// gh's own variables that change only how it prints or asks, not what it
+/// merges, as whom or where.
+const GH_HARMLESS: &[&str] = &[
+    "GH_PROMPT_DISABLED",
+    "GH_NO_UPDATE_NOTIFIER",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER",
+    "GH_SPINNER_DISABLED",
+    "GH_FORCE_TTY",
+    "GH_DEBUG",
+    "GH_MDWIDTH",
+    "GH_COLOR_LABELS",
+    "GIT_TERMINAL_PROMPT",
+];
+
+/// A variable gh, git or curl reads to choose the repository, the account,
+/// the host or the program itself: gh's own (`GH_REPO`, `GH_TOKEN`, ...)
+/// other than those that only change how it prints or name a program to
+/// open, git's, which decide the repository gh reads, and where each finds
+/// its config.
+fn chooses_what_gh_merges(name: &str) -> bool {
+    ((name.starts_with("GH_") || name.starts_with("GIT_"))
+        && !names_a_program(name)
+        && !GH_HARMLESS.contains(&name))
+        || name.starts_with("GITHUB_")
+        || matches!(name, "HOME" | "PATH" | "XDG_CONFIG_HOME" | "CURL_HOME")
+}
+
+/// A variable whose value names a program another one runs: an editor, a
+/// pager, a browser, a password helper or ssh for git, or a script bash
+/// reads first.
+fn names_a_program(name: &str) -> bool {
+    ["EDITOR", "PAGER", "BROWSER", "ASKPASS", "SSH_COMMAND"]
+        .iter()
+        .any(|end| name.ends_with(end))
+        || matches!(
+            name,
+            "GIT_SSH" | "GIT_EXTERNAL_DIFF" | "BASH_ENV" | "ENV" | "PROMPT_COMMAND" | "LESSOPEN"
+        )
+}
+
 /// Whether no command here can run what it is given or a file it is named:
-/// no process substitution or value read as a name, and every command one
-/// of a few that print, store or send what they read. That includes the
-/// commands an unquoted heredoc runs as it is read (ADR 0188).
+/// no value read as a name, and every command one of a few that print,
+/// store or send what they read. That includes the commands a substitution
+/// or a process substitution runs (ADR 0190), and those an unquoted heredoc
+/// runs as it is read (ADR 0188).
 fn runs_nothing_it_is_given(tokens: &[Token]) -> bool {
     let mut piped = false;
     !tokens.contains(&Token::Opaque)
@@ -1533,30 +1937,121 @@ fn git_command(arguments: &[(&str, Option<bool>)]) -> Option<usize> {
 enum Step {
     /// `cd`, with its target; `None` is `cd` alone, which goes home.
     ChangeFolder(Option<String>),
+    /// A move this does not follow: `popd`, `pushd` other than to one
+    /// folder, or `cd` to a folder bash computes.
+    LoseFolder,
     Merge(Merge),
     /// Text a shell runs as commands: `bash -c '...'`, `eval ...`.
     Nested(String),
     Other,
 }
 
-/// What one simple command does, from its words and what it reads on
-/// standard input; `None` is input the gate cannot see.
-fn step(words: &[String], input: Option<&[String]>) -> Step {
-    let words = program(words);
-    let Some(name) = words
-        .first()
-        .map(|first| first.rsplit('/').next().unwrap_or(first))
-    else {
+/// What the words around a command's program say about how it runs.
+#[derive(Default)]
+struct Around {
+    /// The folder a wrapper runs it in: `env -C`.
+    folder: Option<String>,
+    /// Why a merge it makes cannot be checked: it runs as another account,
+    /// through another program, or with what gh reads changed.
+    unreadable: Option<&'static str>,
+    /// It runs as a program of its own, so a `cd` in it moves nothing here.
+    apart: bool,
+    /// Text it runs as commands besides its program: `env -S`'s, or the
+    /// value of a variable that names a program another one runs.
+    runs: Vec<String>,
+    /// What runs, or what decides what it does, is a word bash computes or
+    /// a value it evaluates, which may be a merge (ADR 0190).
+    doubt: bool,
+}
+
+const THROUGH_ANOTHER_PROGRAM: &str =
+    "it runs gh or curl through another program, which may run it as another account or elsewhere";
+const ANOTHER_ENVIRONMENT: &str = "it runs gh with an environment Swarm cannot see";
+const UNTOLD_FOLDER: &str = "it runs gh in a folder Swarm cannot tell";
+
+/// What one simple command does, from its words, what bash computes in
+/// each, and what it reads on standard input; `None` is input the gate
+/// cannot see.
+fn step(
+    words: &[String],
+    printed: &[Option<Printing>],
+    input: Option<&[String]>,
+    scope: Scope,
+) -> (Step, Around) {
+    let (at, mut around) = program(words, printed);
+    let what = step_at(
+        &words[at..],
+        &printed[at..],
+        input,
+        scope,
+        &mut around,
+        true,
+    );
+    (what, around)
+}
+
+/// Programs that run the rest of their words as a command, as another
+/// account, elsewhere or later. A word bash computes among those may be
+/// the command they run.
+const RUNNERS: &[&str] = &[
+    "sudo", "doas", "runuser", "su", "watch", "flock", "ssh", "setsid", "chroot", "nsenter",
+    "unshare", "parallel",
+];
+
+/// What the command whose program is `words[0]` does. `through` reads a
+/// program this does not know as one that may run a command among its
+/// words, as `sudo` and `ssh` do.
+fn step_at(
+    words: &[String],
+    printed: &[Option<Printing>],
+    input: Option<&[String]>,
+    scope: Scope,
+    around: &mut Around,
+    through: bool,
+) -> Step {
+    let Some(first) = words.first() else {
         return Step::Other;
     };
+    // A program bash computes may be any program (ADR 0190).
+    if printed[0].is_some() {
+        around.doubt = true;
+        return Step::Other;
+    }
     let arguments = &words[1..];
+    let computed = &printed[1..];
+    let name = first.rsplit('/').next().unwrap_or(first);
+    // A variable that names a program another one runs.
+    if matches!(
+        name,
+        "export" | "declare" | "typeset" | "local" | "readonly"
+    ) {
+        around.runs.extend(arguments.iter().filter_map(|argument| {
+            assignment(argument)
+                .filter(|(name, _)| names_a_program(name))
+                .map(|(_, value)| value.to_owned())
+        }));
+    }
+    if let Some(evaluated) = evaluates_what_it_is_given(name, arguments) {
+        around.doubt |= evaluated;
+        return Step::Other;
+    }
     match name {
-        "cd" => Step::ChangeFolder(
-            arguments
+        "cd" => {
+            let target = arguments
                 .iter()
-                .find(|argument| !matches!(argument.as_str(), "-P" | "-L" | "-e" | "-@"))
-                .cloned(),
-        ),
+                .position(|argument| !matches!(argument.as_str(), "-P" | "-L" | "-e" | "-@"));
+            match target {
+                Some(at) if computed[at].is_some() => Step::LoseFolder,
+                target => Step::ChangeFolder(target.map(|at| arguments[at].clone())),
+            }
+        }
+        "pushd" => match (arguments, computed) {
+            ([target], [None]) if !target.starts_with(['-', '+']) => {
+                Step::ChangeFolder(Some(target.clone()))
+            }
+            _ => Step::LoseFolder,
+        },
+        "popd" => Step::LoseFolder,
         "bash" | "sh" | "zsh" | "dash" => arguments
             .iter()
             .position(|argument| {
@@ -1565,13 +2060,25 @@ fn step(words: &[String], input: Option<&[String]>) -> Step {
             .and_then(|flag| arguments.get(flag + 1))
             .map_or(Step::Other, |text| Step::Nested(text.clone())),
         "eval" => Step::Nested(arguments.join(" ")),
+        // `trap` runs its first word as commands when its signal comes.
+        "trap" => arguments
+            .iter()
+            .find(|argument| !matches!(argument.as_str(), "-p" | "-l" | "--"))
+            .map_or(Step::Other, |text| Step::Nested(text.clone())),
         "xargs" => {
-            let rest = arguments
+            let start = arguments
                 .iter()
                 .position(|argument| !argument.starts_with('-'))
-                .map_or(&[][..], |start| &arguments[start..]);
+                .unwrap_or(arguments.len());
             // xargs reads standard input itself, for its command's words.
-            match step(rest, Some(&[])) {
+            match step_at(
+                &arguments[start..],
+                &computed[start..],
+                Some(&[]),
+                scope,
+                around,
+                true,
+            ) {
                 Step::Merge(mut merge) => {
                     merge.unreadable = Some("its number arrives on standard input");
                     Step::Merge(merge)
@@ -1579,10 +2086,99 @@ fn step(words: &[String], input: Option<&[String]>) -> Step {
                 _ => Step::Other,
             }
         }
-        "gh" => gh(arguments, input).map_or(Step::Other, Step::Merge),
-        "curl" => curl(arguments, input).map_or(Step::Other, Step::Merge),
-        _ => Step::Other,
+        "gh" => {
+            around.doubt |= gh_doubts(arguments, computed);
+            gh_alias(arguments).map_or_else(
+                || gh(arguments, input).map_or(Step::Other, Step::Merge),
+                Step::Nested,
+            )
+        }
+        "curl" => {
+            around.doubt |= curl_doubts(arguments, computed);
+            curl(arguments, input, scope.curl_configured).map_or(Step::Other, Step::Merge)
+        }
+        "git" => git_runs(arguments).map_or(Step::Other, Step::Nested),
+        // An alias runs its value as commands in place of its name.
+        "alias" => Step::Nested(
+            arguments
+                .iter()
+                .filter_map(|argument| argument.split_once('=').map(|(_, value)| value))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        _ if !through || INERT.contains(&name) || name == "export" => Step::Other,
+        _ => run_through(name, arguments, computed, scope, around),
     }
+}
+
+/// For a command that reads a value it is given as arithmetic or as a
+/// name, where a subscript runs commands: whether it may (ADR 0190).
+/// `None` for any other command.
+fn evaluates_what_it_is_given(name: &str, arguments: &[String]) -> Option<bool> {
+    let bracketed = || arguments.iter().any(|argument| argument.contains('['));
+    match name {
+        // `-i` reads every value given as arithmetic.
+        "declare" | "typeset" | "local" | "readonly" => Some(
+            bracketed()
+                || arguments
+                    .iter()
+                    .any(|argument| argument.starts_with('-') && argument.contains('i')),
+        ),
+        "let" => Some(true),
+        "[[" => Some(arguments.iter().any(|argument| {
+            matches!(
+                argument.as_str(),
+                "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge" | "-v"
+            )
+        })),
+        // A name with a subscript, which runs commands as it is read.
+        // printf reads one only as the name `-v` sets: bash 5.2 takes its
+        // other words as text or numbers.
+        "printf" => Some(
+            arguments
+                .first()
+                .is_some_and(|first| first.starts_with("-v"))
+                && bracketed(),
+        ),
+        "read" | "unset" | "mapfile" | "readarray" | "getopts" | "wait" | "test" | "[" => {
+            Some(bracketed())
+        }
+        _ => None,
+    }
+}
+
+/// A program this does not know, which may run a command among its words,
+/// as `sudo -u w gh ...`, `ssh host gh ...` and `find . -exec gh ...` do:
+/// the first such command, which runs apart and cannot be checked.
+fn run_through(
+    name: &str,
+    arguments: &[String],
+    computed: &[Option<Printing>],
+    scope: Scope,
+    around: &mut Around,
+) -> Step {
+    around.unreadable.get_or_insert(THROUGH_ANOTHER_PROGRAM);
+    around.apart = true;
+    let runner = RUNNERS.contains(&name);
+    for start in 0..arguments.len() {
+        if runner && computed[start].is_some() {
+            around.doubt = true;
+        }
+        let mut inner = Around::default();
+        let found = step_at(
+            &arguments[start..],
+            &computed[start..],
+            None,
+            scope,
+            &mut inner,
+            false,
+        );
+        if matches!(found, Step::Merge(_) | Step::Nested(_)) {
+            around.doubt |= inner.doubt;
+            return found;
+        }
+    }
+    Step::Other
 }
 
 /// `-` or `/dev/stdin`, as a file a request body is read from.
@@ -1590,33 +2186,171 @@ fn is_standard_input(file: &str) -> bool {
     matches!(file, "-" | "/dev/stdin")
 }
 
-/// The words from the program on: assignments and wrappers that run the rest
-/// as a command are passed over.
-fn program(words: &[String]) -> &[String] {
-    let mut rest = words;
-    loop {
-        match rest.first().map(String::as_str) {
-            Some(word) if is_assignment(word) => rest = &rest[1..],
-            Some("env" | "command" | "builtin" | "exec" | "nohup" | "time" | "sudo" | "nice") => {
-                rest = &rest[1..];
-                while rest.first().is_some_and(|word| word.starts_with('-')) {
-                    rest = &rest[1..];
-                }
+/// Where a command's program is among its words, past its assignments, the
+/// reserved words before it, and the wrappers that run the rest as a
+/// command, with what those say about how it runs. A word bash computes
+/// is matched as written, so it is one of these only where bash runs it as
+/// written, as `$'env'`.
+fn program(words: &[String], printed: &[Option<Printing>]) -> (usize, Around) {
+    let mut around = Around::default();
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        if let Some((name, value)) = assignment(word) {
+            if names_a_program(name) {
+                around.runs.push(value.to_owned());
             }
-            _ => return rest,
+            at += 1;
+            continue;
         }
+        // `a[i]=x` reads its subscript as arithmetic, which runs commands.
+        if word
+            .split_once('=')
+            .and_then(|(name, _)| name.split_once('['))
+            .is_some_and(|(name, _)| is_name(name))
+        {
+            around.doubt = true;
+            at += 1;
+            continue;
+        }
+        let rest = &words[at + 1..];
+        let after = &printed[at + 1..];
+        at += 1 + match word.as_str() {
+            // Bash reads a command after each of these.
+            "!" | "{" | "then" | "do" | "else" | "elif" | "if" | "while" | "until" => 0,
+            "time" => usize::from(rest.first().is_some_and(|next| next == "-p")),
+            "function" => 1,
+            "coproc" => usize::from(rest.get(1).is_some_and(|next| next == "{")),
+            _ => match system_name(word) {
+                Some("command" | "builtin") => options(rest, &[]),
+                Some("exec") => options(rest, &["-a"]),
+                Some("nohup") => {
+                    around.apart = true;
+                    usize::from(rest.first().is_some_and(|next| next == "--"))
+                }
+                Some("nice") => {
+                    around.apart = true;
+                    options(rest, &["-n", "--adjustment"])
+                }
+                Some("stdbuf") => {
+                    around.apart = true;
+                    options(rest, &["-i", "-o", "-e", "--input", "--output", "--error"])
+                }
+                Some("timeout") => {
+                    around.apart = true;
+                    let flags = options(rest, &["-s", "-k", "--signal", "--kill-after"]);
+                    // Then its duration.
+                    flags + usize::from(rest.len() > flags)
+                }
+                Some("env") => {
+                    around.apart = true;
+                    env_options(rest, after, &mut around)
+                }
+                _ => break,
+            },
+        };
     }
+    (at.min(words.len()), around)
 }
 
-fn is_assignment(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        name.chars()
-            .next()
-            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-            && name
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '_')
-    })
+/// How many of `rest` are a wrapper's options: words that start with `-`,
+/// with the next word too after one of `with_value`, through a `--`.
+fn options(rest: &[String], with_value: &[&str]) -> usize {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        if word == "--" {
+            return at + 1;
+        }
+        if !word.starts_with('-') || word == "-" {
+            break;
+        }
+        at += 1 + usize::from(with_value.contains(&word.as_str()));
+    }
+    at
+}
+
+/// How many of `rest` are `env`'s options, noting the folder, the split
+/// string or the environment they give the command.
+fn env_options(rest: &[String], printed: &[Option<Printing>], around: &mut Around) -> usize {
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        let value = || rest.get(at + 1).map(String::as_str);
+        let (flag, attached) = match word.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+            _ => match word.get(..2) {
+                Some(flag @ ("-u" | "-C" | "-S")) if word.len() > 2 => (flag, Some(&word[2..])),
+                _ => (word.as_str(), None),
+            },
+        };
+        let separate = attached.is_none();
+        let given = attached.or_else(value);
+        match flag {
+            "--" => return at + 1,
+            "-i" | "--ignore-environment" | "-" => {
+                around.unreadable.get_or_insert(ANOTHER_ENVIRONMENT);
+            }
+            "-u" | "--unset" => {
+                if given.is_some_and(chooses_what_gh_merges) {
+                    around.unreadable.get_or_insert(SETS_WHAT_GH_READS);
+                }
+            }
+            "-C" | "--chdir" => {
+                let computed = printed
+                    .get(at + usize::from(separate))
+                    .is_some_and(Option::is_some);
+                match given {
+                    Some(folder) if !computed => around.folder = Some(folder.to_owned()),
+                    _ => {
+                        around.unreadable.get_or_insert(UNTOLD_FOLDER);
+                    }
+                }
+            }
+            // The string is split into the command and its first words.
+            "-S" | "--split-string" => {
+                let after = at + 1 + usize::from(separate);
+                let mut text = given.unwrap_or_default().to_owned();
+                for word in rest.get(after..).unwrap_or_default() {
+                    text.push(' ');
+                    text.push_str(&quoted(word));
+                }
+                around.runs.push(text);
+                return rest.len();
+            }
+            "-0" | "--null" | "-v" | "--debug" | "--list-signal-handling" => {}
+            flag if flag.starts_with("--")
+                && ["--ignore-signal", "--default-signal", "--block-signal"]
+                    .iter()
+                    .any(|signal| flag.starts_with(signal)) => {}
+            flag if flag.starts_with('-') => {
+                around.unreadable.get_or_insert(ANOTHER_ENVIRONMENT);
+            }
+            _ => return at,
+        }
+        at += 1 + usize::from(separate && matches!(flag, "-u" | "--unset" | "-C" | "--chdir"));
+    }
+    at
+}
+
+/// A word as bash reads it again: in single quotes.
+fn quoted(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// A word bash reads as an assignment, `NAME=value` or `NAME+=value`: its
+/// name and value.
+fn assignment(word: &str) -> Option<(&str, &str)> {
+    let (name, value) = word.split_once('=')?;
+    let name = name.strip_suffix('+').unwrap_or(name);
+    is_name(name).then_some((name, value))
+}
+
+/// A variable's name.
+fn is_name(word: &str) -> bool {
+    word.chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && word
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn moved(folder: Option<PathBuf>, target: Option<&str>) -> Option<PathBuf> {
@@ -1845,77 +2579,356 @@ fn gh(arguments: &[String], input: Option<&[String]>) -> Option<Merge> {
     }
 }
 
-/// `input` is what the command reads on standard input, which curl sends as
-/// data given as `@-`. `None` is input the gate cannot see.
-fn curl(arguments: &[String], input: Option<&[String]>) -> Option<Merge> {
-    let mut method = None;
-    let mut data = Vec::new();
-    let mut urls = Vec::new();
-    // Data read from a file, or from input the gate cannot see.
-    let mut unseen = false;
-    // A config file, which can hold the URL and the data.
-    let mut configured = false;
+/// Where gh's command words are among its arguments: the words `gh_line`
+/// reads as positionals, as their places.
+fn gh_positionals(arguments: &[String]) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(word) = arguments.get(at) {
+        let takes_next = if word.starts_with("--") {
+            !word.contains('=') && GH_VALUE_FLAGS.contains(&word.as_str())
+        } else if let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) {
+            matches!(one_letter_value(letters), Some((_, None)))
+        } else {
+            found.push(at);
+            false
+        };
+        at += 1 + usize::from(takes_next);
+    }
+    found
+}
+
+/// Whether a word bash computes may decide what a gh command does: one
+/// before its command is named, or in `pr merge` or `api` any but one word
+/// that is a text flag's value (ADR 0190).
+fn gh_doubts(arguments: &[String], computed: &[Option<Printing>]) -> bool {
+    let positions = gh_positionals(arguments);
+    let named = positions.get(1).map_or(arguments.len(), |&at| at + 1);
+    if computed[..named].iter().any(Option::is_some) {
+        return true;
+    }
+    let word = |index: usize| positions.get(index).map(|&at| arguments[at].as_str());
+    matches!(
+        (word(0), word(1)),
+        (Some("pr"), Some("merge")) | (Some("api"), _)
+    ) && computed
+        .iter()
+        .flatten()
+        .any(|printed| printed.splits || !printed.as_text)
+}
+
+/// `gh alias set NAME EXPANSION`: what its name then runs, which is gh's
+/// own words unless the expansion is a shell's, with `--shell` or a `!`
+/// first.
+fn gh_alias(arguments: &[String]) -> Option<String> {
+    let line = gh_line(arguments);
+    let positionals: Vec<&str> = line.positionals.iter().map(String::as_str).collect();
+    let ["alias", "set", _, expansion, ..] = positionals.as_slice() else {
+        return None;
+    };
+    let shell = arguments
+        .iter()
+        .any(|argument| argument == "--shell" || argument == "-s");
+    Some(match expansion.strip_prefix('!') {
+        Some(commands) => commands.to_owned(),
+        None if shell => (*expansion).to_owned(),
+        None => format!("gh {expansion}"),
+    })
+}
+
+/// What git runs that its own words name: a `-c` setting's value, which may
+/// be an alias (`!` first) or a program for git to run, and a value `git
+/// config` sets, which a later git runs.
+fn git_runs(arguments: &[String]) -> Option<String> {
+    let mut runs = Vec::new();
     let mut words = arguments.iter();
     while let Some(word) = words.next() {
         match word.as_str() {
-            "-X" | "--request" => method = words.next().cloned(),
-            "-d" | "--data" | "--data-raw" | "--data-binary" | "--json" => {
-                if let Some(value) = words.next() {
-                    // `--data-raw` sends an `@` as it is.
-                    match value.strip_prefix('@').filter(|_| word != "--data-raw") {
-                        Some(file) if is_standard_input(file) => match input {
-                            Some(input) => data.extend_from_slice(input),
-                            None => unseen = true,
-                        },
-                        Some(_) => unseen = true,
-                        None => data.push(value.clone()),
-                    }
-                }
-            }
-            "-K" | "--config" => {
+            "-c" => runs.extend(
+                words
+                    .next()
+                    .and_then(|setting| setting.split_once('='))
+                    .map(|(_, value)| value),
+            ),
+            "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
                 words.next();
-                configured = true;
             }
-            attached if attached.starts_with("-X") && attached.len() > 2 => {
-                method = Some(attached[2..].to_owned());
+            "config" => {
+                let values: Vec<&String> = words
+                    .by_ref()
+                    .filter(|word| !word.starts_with('-'))
+                    .collect();
+                if let [_, value, ..] = values.as_slice() {
+                    runs.push(value.as_str());
+                }
+                break;
             }
-            other if !other.starts_with('-') => urls.push(other.to_owned()),
+            flag if flag.starts_with('-') => {}
+            _ => break,
+        }
+    }
+    let commands: Vec<&str> = runs
+        .iter()
+        .map(|value| value.strip_prefix('!').unwrap_or(value))
+        .collect();
+    (!commands.is_empty()).then(|| commands.join("\n"))
+}
+
+/// curl's flags whose value, as one word bash computes, decides nothing
+/// about what it sends where: a header, an account, a user agent, an
+/// output file and what it prints.
+const CURL_QUIET_FLAGS: &[&str] = &[
+    "-H",
+    "--header",
+    "-u",
+    "--user",
+    "-A",
+    "--user-agent",
+    "-o",
+    "--output",
+    "-w",
+    "--write-out",
+];
+
+/// Whether a word bash computes may decide what curl sends where: any but
+/// one word that is the value of a flag in `CURL_QUIET_FLAGS` (ADR 0190).
+fn curl_doubts(arguments: &[String], computed: &[Option<Printing>]) -> bool {
+    computed.iter().enumerate().any(|(at, printed)| {
+        let Some(printed) = printed else {
+            return false;
+        };
+        let quiet = at
+            .checked_sub(1)
+            .is_some_and(|before| CURL_QUIET_FLAGS.contains(&arguments[before].as_str()))
+            || CURL_QUIET_FLAGS.iter().any(|flag| {
+                flag.len() == 2 && arguments[at].len() > 2 && arguments[at].starts_with(flag)
+            });
+        printed.splits || !quiet
+    })
+}
+
+/// curl's one-letter flags that take a value, from curl 8.5's manual. Every
+/// other letter takes none, so a group of letters ends at one of these,
+/// which takes the rest of the word or the next word.
+const CURL_VALUE_LETTERS: &str = "AbcCdDeEFHKmoPQrtTuUwxXyYz";
+
+/// curl's long flags that take the next word as their value, among those
+/// this reads or whose value may look like an address.
+const CURL_LONG_VALUE_FLAGS: &[&str] = &[
+    "--request",
+    "--data",
+    "--data-ascii",
+    "--data-binary",
+    "--data-raw",
+    "--data-urlencode",
+    "--json",
+    "--form",
+    "--form-string",
+    "--upload-file",
+    "--config",
+    "--variable",
+    "--url",
+    "--header",
+    "--user",
+    "--user-agent",
+    "--output",
+    "--write-out",
+    "--cookie",
+    "--cookie-jar",
+    "--referer",
+    "--proxy",
+    "--cacert",
+    "--cert",
+    "--key",
+    "--max-time",
+    "--connect-timeout",
+    "--retry",
+    "--oauth2-bearer",
+];
+
+/// What a curl command line says it sends, and where.
+#[derive(Default)]
+struct CurlRequest {
+    method: Option<String>,
+    data: Vec<String>,
+    urls: Vec<String>,
+    /// Data read from a file, or from input the gate cannot see.
+    unseen: bool,
+    /// A config file, which can hold the address and the data, or a value
+    /// curl fills in from a variable (`--expand-*`).
+    filled: bool,
+    /// curl reads `{...}` and `[...]` in an address as a pattern, unless
+    /// told not to with `-g`.
+    globbed: bool,
+}
+
+impl CurlRequest {
+    /// One flag's value.
+    fn read(&mut self, flag: &str, value: &str, input: Option<&[String]>) {
+        match flag {
+            "-X" | "--request" => self.method = Some(value.to_owned()),
+            "-d" | "--data" | "--data-ascii" | "--data-binary" | "--json" => {
+                self.from(value.strip_prefix('@'), value, input);
+            }
+            "-F" | "--form" if value.contains("=@") || value.contains("=<") => self.unseen = true,
+            "--data-raw" | "--form-string" | "-F" | "--form" => self.data.push(value.to_owned()),
+            // `@file` or `name@file` reads a file; an `=` first is content.
+            "--data-urlencode" => {
+                let file = match (value.find('='), value.find('@')) {
+                    (Some(equals), Some(at)) if at < equals => Some(&value[at + 1..]),
+                    (None, Some(at)) => Some(&value[at + 1..]),
+                    _ => None,
+                };
+                self.from(file, value, input);
+            }
+            "-T" | "--upload-file" => self.from(Some(value), value, input),
+            "-K" | "--config" => self.filled = true,
+            "--url" => self.urls.push(value.to_owned()),
             _ => {}
         }
     }
-    if data.iter().any(|body| names_a_merge_mutation(body)) {
-        return Some(graphql_merge(
-            data.iter().any(|body| body.contains("expectedHeadOid")),
-        ));
+
+    /// Data given as it is, or read from `file`: standard input, seen or
+    /// not, or a file the gate does not read.
+    fn from(&mut self, file: Option<&str>, value: &str, input: Option<&[String]>) {
+        match (file, input) {
+            (Some(file), Some(input)) if is_standard_input(file) => {
+                self.data.extend_from_slice(input);
+            }
+            (Some(_), _) => self.unseen = true,
+            (None, _) => self.data.push(value.to_owned()),
+        }
     }
-    if configured || (unseen && urls.iter().any(|url| graphql_endpoint(url))) {
-        return Some(unseen_request());
+
+    /// Whether curl reads an address as a pattern it expands.
+    fn pattern(&self, url: &str) -> bool {
+        self.globbed && url.contains(['{', '['])
     }
-    let (repo, number) = urls.iter().find_map(|url| merge_endpoint(url))?;
-    method
-        .as_deref()
-        .is_some_and(|method| method.eq_ignore_ascii_case("PUT"))
-        .then(|| Merge {
-            folder: None,
-            repo,
-            pull_request: Some(number),
-            head: if data.iter().any(|body| body.contains("\"sha\"")) {
-                Head::Hidden
-            } else {
-                Head::Unnamed
-            },
-            unreadable: None,
-        })
+
+    /// The merge the request makes, if it may make one. `reads_config`
+    /// says curl reads a config of its own the command writes or names.
+    fn merge(&self, reads_config: bool) -> Option<Merge> {
+        if self.data.iter().any(|body| names_a_merge_mutation(body)) {
+            return Some(graphql_merge(
+                self.data
+                    .iter()
+                    .any(|body| body.contains("expectedHeadOid")),
+            ));
+        }
+        let may_be_graphql = |url: &String| graphql_endpoint(url) || self.pattern(url);
+        if self.filled
+            || reads_config
+            || (self.unseen && (self.urls.is_empty() || self.urls.iter().any(may_be_graphql)))
+        {
+            return Some(unseen_request());
+        }
+        if !self
+            .method
+            .as_deref()
+            .is_some_and(|method| method.eq_ignore_ascii_case("PUT"))
+        {
+            return None;
+        }
+        if let Some((repo, number)) = self.urls.iter().find_map(|url| merge_endpoint(url)) {
+            return Some(Merge {
+                folder: None,
+                repo,
+                pull_request: Some(number),
+                head: if self.data.iter().any(|body| body.contains("\"sha\"")) {
+                    Head::Hidden
+                } else {
+                    Head::Unnamed
+                },
+                unreadable: None,
+            });
+        }
+        self.urls
+            .iter()
+            .any(|url| self.pattern(url))
+            .then_some(Merge {
+                folder: None,
+                repo: None,
+                pull_request: None,
+                head: Head::Unnamed,
+                unreadable: Some("its address is a pattern curl expands, which may name any merge"),
+            })
+    }
 }
 
+/// `input` is what the command reads on standard input, which curl sends as
+/// data given as `@-`. `None` is input the gate cannot see.
+/// `configured_here` says the command writes or names curl's own config,
+/// which a `curl` not told to skip it (`-q` first) reads.
+fn curl(arguments: &[String], input: Option<&[String]>, configured_here: bool) -> Option<Merge> {
+    let mut request = CurlRequest {
+        globbed: true,
+        ..CurlRequest::default()
+    };
+    // `-q` first: curl reads no config of its own.
+    let mut skips_config = false;
+    let mut words = arguments.iter();
+    let mut first = true;
+    while let Some(word) = words.next() {
+        let starts = std::mem::take(&mut first);
+        if word == "--" {
+            request.urls.extend(words.by_ref().cloned());
+            break;
+        }
+        if word.starts_with("--") {
+            match word.as_str() {
+                "--globoff" => request.globbed = false,
+                "--disable" if starts => skips_config = true,
+                flag if flag.starts_with("--expand-") => {
+                    words.next();
+                    request.filled = true;
+                }
+                flag if CURL_LONG_VALUE_FLAGS.contains(&flag) => {
+                    if let Some(value) = words.next() {
+                        request.read(flag, value, input);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let Some(letters) = word.strip_prefix('-').filter(|letters| !letters.is_empty()) else {
+            request.urls.push(word.clone());
+            continue;
+        };
+        for (at, letter) in letters.char_indices() {
+            if CURL_VALUE_LETTERS.contains(letter) {
+                let rest = &letters[at + letter.len_utf8()..];
+                let value = if rest.is_empty() {
+                    words.next().cloned()
+                } else {
+                    Some(rest.to_owned())
+                };
+                if let Some(value) = value {
+                    request.read(&format!("-{letter}"), &value, input);
+                }
+                break;
+            }
+            match letter {
+                'g' => request.globbed = false,
+                'q' if starts && at == 0 => skips_config = true,
+                _ => {}
+            }
+        }
+    }
+    request.merge(configured_here && !skips_config)
+}
+
+/// Whether text names a GraphQL mutation that merges, as written or with
+/// its JSON escapes read: GitHub reads `g` in a request body as `g`.
 fn names_a_merge_mutation(text: &str) -> bool {
+    let read = unescaped(text);
     [
         "mergePullRequest",
         "enablePullRequestAutoMerge",
         "enqueuePullRequest",
     ]
     .iter()
-    .any(|mutation| text.contains(mutation))
+    .any(|mutation| text.contains(mutation) || read.contains(mutation))
 }
 
 /// A GraphQL request the gate cannot read, which may be any merge (ADR 0188).
@@ -3345,6 +4358,520 @@ mod tests {
             "curl -d @q.json https://api.github.com/GraphQL",
         ] {
             assert!(only_merge(held, "/srv").unreadable.is_some(), "{held}");
+        }
+    }
+
+    const MUTATION: &str = r#"{"query":"mutation { mergePullRequest(input:{pullRequestId:\"x\"}) { clientMutationId } }"}"#;
+    const INNOCENT: &str = r#"{"query":"query { viewer { login } }"}"#;
+
+    fn unclear(command: &str) -> bool {
+        merges_in(command, Some(Path::new("/srv")), 0) == Parsed::Unclear
+    }
+
+    /// The program is read past the reserved words bash reads a command
+    /// after, and past wrappers that run the rest as it is (ADR 0190).
+    #[test]
+    fn a_merge_after_a_reserved_word_or_a_wrapper_is_read() {
+        for command in [
+            "{ gh pr merge 5; }",
+            "if true; then gh pr merge 5; fi",
+            "! gh pr merge 5",
+            "while true; do gh pr merge 5; break; done",
+            "if false; then :; else gh pr merge 5; fi",
+            "if false; then :; elif true; then gh pr merge 5; fi",
+            "until false; do gh pr merge 5; done",
+            "time -p gh pr merge 5",
+            "timeout 60 gh pr merge 5",
+            "timeout -s KILL -k 5 60 gh pr merge 5",
+            "/usr/bin/timeout --signal=KILL 60 gh pr merge 5",
+            "nice -n 5 gh pr merge 5",
+            "exec -a x gh pr merge 5",
+            "stdbuf -oL gh pr merge 5",
+            "stdbuf -o L gh pr merge 5",
+            "command gh pr merge 5",
+            "/usr/bin/env gh pr merge 5",
+            "nohup gh pr merge 5",
+            // An empty array, which is not a function.
+            "args=(); gh pr merge 5",
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert_eq!(merge.pull_request.as_deref(), Some("5"), "{command}");
+            assert_eq!(
+                merge.folder.as_deref(),
+                Some(Path::new("/srv")),
+                "{command}"
+            );
+            assert_eq!(merge.unreadable, None, "{command}");
+        }
+        // env runs its command in the folder it names, or splits its string
+        // into the command and its first words.
+        for (command, folder) in [
+            ("env -C /tmp gh pr merge 5", "/tmp"),
+            ("env --chdir=/tmp gh pr merge 5", "/tmp"),
+            ("env -S 'gh pr merge 5'", "/srv"),
+            ("env -S 'gh pr' merge 5", "/srv"),
+            // A wrapper's `cd` moves nothing here; `command`'s does.
+            ("env -C /tmp cd /x; gh pr merge 5", "/srv"),
+            ("command cd /x; gh pr merge 5", "/x"),
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert_eq!(merge.pull_request.as_deref(), Some("5"), "{command}");
+            assert_eq!(
+                merge.folder.as_deref(),
+                Some(Path::new(folder)),
+                "{command}"
+            );
+        }
+        for command in [
+            "timeout 60 cargo test merge_gate",
+            "nice -n 5 cargo build",
+            "for f in a b; do echo $f; done",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// A program the gate does not know may run gh among its words, as
+    /// another account or elsewhere: the merge is read, and is not one
+    /// Swarm can ask gh about (ADR 0190).
+    #[test]
+    fn a_merge_another_program_runs_is_read_and_cannot_be_checked() {
+        for command in [
+            "sudo -u w gh pr merge 5",
+            "sudo gh pr merge 5",
+            "watch gh pr merge 5",
+            "flock /tmp/l gh pr merge 5",
+            "ssh host gh pr merge 5",
+            "find . -name x -exec gh pr merge 5 \\;",
+            "sudo -u w bash -c 'gh pr merge 5'",
+            "ssh host <<'EOF'\ngh pr merge 5\nEOF",
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert_eq!(merge.pull_request.as_deref(), Some("5"), "{command}");
+            assert_eq!(merge.unreadable, Some(THROUGH_ANOTHER_PROGRAM), "{command}");
+        }
+        // A command bash computes for a program that runs one may be the
+        // merge.
+        assert!(unclear("c='gh pr merge 5'; sudo $c"));
+    }
+
+    /// A variable gh reads to choose the repository, the account or the
+    /// host, set or cleared in the command, is not one the gate's own gh
+    /// sees, so the merge is not one it can check (ADR 0190).
+    #[test]
+    fn a_variable_gh_reads_to_choose_what_it_merges_leaves_the_merge_unchecked() {
+        for command in [
+            "GH_REPO=o/r gh pr merge 5",
+            "GH_TOKEN=x gh pr merge 5",
+            "GH_HOST=example.com gh pr merge 5",
+            "export GH_REPO=o/r; gh pr merge 5",
+            "export GH_REPO=$R; gh pr merge 5",
+            "env GH_REPO=o/r gh pr merge 5",
+            "env -u GH_TOKEN gh pr merge 5",
+            "env --unset=GH_TOKEN gh pr merge 5",
+            "unset GH_TOKEN; gh pr merge 5",
+            "HOME=/tmp/h gh pr merge 5",
+            "GIT_DIR=/tmp/g gh pr merge 5",
+            "env -i gh pr merge 5",
+        ] {
+            assert!(
+                only_merge(command, "/srv").unreadable.is_some(),
+                "{command}"
+            );
+        }
+        for command in [
+            "GH_PROMPT_DISABLED=1 gh pr merge 5",
+            "GH_PAGER=cat gh pr merge 5",
+            "NO_COLOR=1 gh pr merge 5",
+        ] {
+            assert_eq!(only_merge(command, "/srv").unreadable, None, "{command}");
+        }
+    }
+
+    /// `<(...)` and `>(...)` run their commands wherever they stand, as a
+    /// word or as a redirection's file (ADR 0190).
+    #[test]
+    fn a_process_substitution_runs_its_commands() {
+        for command in [
+            "cat <(gh pr merge 5)",
+            "cat < <(gh pr merge 5)",
+            "tee >(gh pr merge 5)",
+            "diff <(gh pr view 5) <(gh pr merge 5)",
+            "echo 2>(gh pr merge 5) x",
+            "echo a<(gh pr merge 5)",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{command}"
+            );
+        }
+        // Its commands are read with the command's, so a body given to
+        // one that runs it is not data.
+        assert!(words("cat <(sh) x").contains(&"sh".to_owned()));
+        assert!(unclear("cat <<'EOF' > >(sh)\nit's a merge\nEOF"));
+        assert!(!refused("diff <(git show HEAD:a) a"));
+    }
+
+    /// In `$(case ...)`, a pattern's `)` ends the pattern, not the
+    /// substitution, until `esac` (ADR 0190).
+    #[test]
+    fn a_case_pattern_inside_a_substitution_does_not_end_it() {
+        for command in [
+            "echo \"$(case x in x) gh pr merge 5;; esac)\"",
+            "echo $(case x in x) gh pr merge 5;; esac)",
+            "echo $(case x in (x) gh pr merge 5;; esac)",
+            "echo $(case x in y) :;; x) gh pr merge 5;; esac)",
+            "echo $(case x in x) echo hi;; esac) && gh pr merge 5",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{command}"
+            );
+        }
+        assert!(!refused("echo \"$(case x in x) echo hi;; esac)\""));
+    }
+
+    /// Every redirection bash reads, with its file, is left out of the
+    /// command's words (ADR 0190).
+    #[test]
+    fn every_redirection_bash_reads_leaves_the_command_s_own_words() {
+        for command in [
+            "gh pr &>/dev/null merge 5",
+            "gh pr &>>/dev/null merge 5",
+            "gh pr >| /dev/null merge 5",
+            "gh pr 1>|/dev/null merge 5",
+            "gh pr >&/dev/null merge 5",
+            "gh pr >& /dev/null merge 5",
+            "gh pr 2>&1 merge 5",
+            "gh pr >&2 merge 5",
+        ] {
+            assert_eq!(words(command), ["gh", "pr", "merge", "5"], "{command}");
+        }
+    }
+
+    /// In a command that mentions a merge, a program bash computes may be
+    /// that merge (ADR 0190).
+    #[test]
+    fn a_program_bash_computes_in_a_command_that_mentions_a_merge_is_not_read() {
+        for command in [
+            "c='gh pr merge 5'; $c",
+            "c='gh pr merge 5'; eval \"$c\"",
+            "c='gh pr merge 5'; bash -c \"$c\"",
+            "$(which gh) pr merge 5",
+            "`which gh` pr merge 5",
+            "\"$GH\" pr merge 5",
+            // An unquoted body's substitutions run as it is read, data or
+            // not.
+            "cat <<EOF > notes.md\n$(c='gh pr merge 5'; $c)\nEOF",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        // Without a merge in the text, nothing here is the gate's to read.
+        for command in ["$EDITOR notes.md", "\"$HOME/.cargo/bin/cargo\" build"] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// A word bash computes may be any word gh or curl reads: a command, a
+    /// flag, a method or an address (ADR 0190).
+    #[test]
+    fn a_word_bash_computes_that_may_decide_what_gh_or_curl_merges_leaves_it_unread() {
+        for command in [
+            "gh $(echo pr merge 5)",
+            "gh pr $(echo merge) 5",
+            "gh {pr,merge} 5",
+            "gh pr {merge,} 5",
+            "gh pr $'merge' 5",
+            "gh pr $'\\x6derge' 5",
+            "V=merge; gh pr ${V} 5",
+            "V=merge; gh pr \"${V}\" 5",
+            "for i in 5; do gh pr merge $i; done",
+            "N=5; gh api -X PUT repos/o/r/pulls/$N/merge",
+            "M=PUT; gh api -X $M repos/o/r/pulls/5/merge",
+            "M='-X PUT'; gh api repos/o/r/pulls/5/merge $M",
+            "Q='mutation { mergePullRequest(input:{}) { x } }'; gh api graphql -f query=\"$Q\"",
+            "curl -X PUT -H x https://api.github.com/repos/o/r/pulls/$N/merge",
+            "curl -X $M https://api.github.com/repos/o/r/pulls/5/merge",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        // A pull request gh only views, and a header's value.
+        for command in [
+            "gh pr view $N --json mergeable,mergeStateStatus",
+            "curl -H \"Authorization: Bearer $T\" https://api.github.com/repos/o/r/pulls/5 | jq .mergeable",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// A value bash reads as arithmetic or as a name may hold a subscript
+    /// that runs commands, and a function runs in place of a program: in a
+    /// command that mentions a merge, neither is read (ADR 0190).
+    #[test]
+    fn a_value_bash_evaluates_in_a_command_that_mentions_a_merge_is_not_read() {
+        for command in [
+            "x='a[$(gh pr merge 5)]'; echo $((x))",
+            "x='a[$(gh pr merge 5)]'; (( x ))",
+            "x='a[$(gh pr merge 5)]'; echo ${a[x]}",
+            "x='a[$(gh pr merge 5)]'; echo ${!x}",
+            "x='a[$(gh pr merge 5)]'; echo ${s:x}",
+            "x='a[$(gh pr merge 5)]'; [[ $x -eq 1 ]]",
+            "x='a[$(gh pr merge 5)]'; let x",
+            "x='a[$(gh pr merge 5)]'; declare -i y=x",
+            "x='a[$(gh pr merge 5)]'; a[x]=1",
+            "x='a[$(gh pr merge 5)]'; printf -v 'a[x]' 1",
+            "x='a[$(gh pr merge 5)]'; cat <<B\n$((x))\nB",
+            // What an unquoted body runs as it is read: here git's config
+            // runs a function.
+            "cat <<B\n$(git -c core.fsmonitor='f() { gh pr \"$@\"; }; f merge 5' status)\nB",
+            "f() { gh pr \"$@\"; }; f merge 5",
+            "function f { gh pr \"$@\"; }; f merge 5",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        // A value read as it is: a name, a length, a default, a pattern.
+        for command in [
+            "ls ${HOME} && gh pr view 5 --json mergeable",
+            "echo ${#} ${#x} ${x:-y} ${x%.md} ${x^^} && gh pr view 5 --json mergeable",
+            "echo $((1+2)) && gh pr view 5 --json mergeable",
+            "f() { echo hi; }; f",
+            // printf evaluates a subscript only in the name `-v` sets.
+            "printf '%s %d\\n' 'a[1]' 'b[2]' && gh pr view 5 --json mergeable",
+            // A quoted body is printed as written.
+            "cat <<'B'\n$((x)) merge\nB",
+            "cat <<'B'\n$(git -c core.fsmonitor='f() { gh pr \"$@\"; }; f merge 5' status)\nB",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+    }
+
+    /// The mod sends the gate a command whose merge or gh is spelled with
+    /// quotes or escapes, and the gate counts it as mentioning a merge
+    /// (ADR 0190).
+    #[test]
+    fn a_merge_spelled_with_quotes_or_escapes_is_mentioned() {
+        for command in [
+            "gh pr mer''ge 5 && echo $((",
+            "gh pr mer\\\nge 5 && echo $((",
+            "gh pr mer\\ge 5 && echo $((",
+            "gh pr $'mer\\x67e' 5 && echo $((",
+            "gh api graphql -f query='mutation { enqueuePullRequest(input:{}) { x } }' && echo $((",
+        ] {
+            assert!(unclear(command), "{command}");
+        }
+        assert!(!refused("gh pr view 5 && echo $(("));
+    }
+
+    /// Where a name may run something other than its program, no command
+    /// is known to pass on the input it reads (ADR 0190).
+    #[test]
+    fn a_name_that_may_run_another_program_passes_on_no_input_the_gate_sees() {
+        for before in [
+            "PATH=/tmp/x:$PATH cat",
+            "export PATH=/tmp/x:$PATH; cat",
+            "hash -p /tmp/x cat; cat",
+            "alias cat=/tmp/x; cat",
+            ". /tmp/x; cat",
+            "source /tmp/x; cat",
+            "enable -n echo; cat",
+        ] {
+            let command = format!("{before} <<'C' | gh api graphql --input -\n{INNOCENT}\nC");
+            assert!(
+                only_merge(&command, "/srv").unreadable.is_some(),
+                "{command}"
+            );
+        }
+        for (definition, name) in [
+            ("cat() { printf '%s' 'M'; }", "cat"),
+            ("function cat { printf '%s' 'M'; }", "cat"),
+            ("tee() { printf '%s' 'M'; }", "tee"),
+        ] {
+            let definition = definition.replace('M', MUTATION);
+            let command =
+                format!("{definition}; {name} <<'C' | gh api graphql --input -\n{INNOCENT}\nC");
+            assert!(unclear(&command), "{command}");
+        }
+        // Without one, what cat passes on is seen.
+        assert!(!refused(&format!(
+            "cat <<'C' | gh api graphql --input -\n{INNOCENT}\nC"
+        )));
+    }
+
+    /// curl's one-letter flags group, take their values attached or as the
+    /// next word, and the data flags have other names (ADR 0190).
+    #[test]
+    fn curl_reads_its_flags_as_curl_does() {
+        for command in [
+            "curl -sX PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "curl -XPUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "curl -sSfX PUT -H 'Accept: x' https://api.github.com/repos/o/r/pulls/5/merge",
+            "curl -dq=1 -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "curl --request PUT https://api.github.com/repos/o/r/pulls/5/merge",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{command}"
+            );
+        }
+        for command in [
+            format!("curl -d'{MUTATION}' https://api.github.com/graphql"),
+            format!("curl -sd '{MUTATION}' https://api.github.com/graphql"),
+            format!("curl -sSd'{MUTATION}' https://api.github.com/graphql"),
+            format!("curl --data-ascii '{MUTATION}' https://api.github.com/graphql"),
+            format!("curl --data-urlencode '{MUTATION}' https://api.github.com/graphql"),
+        ] {
+            assert_eq!(
+                only_merge(&command, "/srv").unreadable,
+                Some("it names the pull request by a GraphQL id"),
+                "{command}"
+            );
+        }
+        // A flag's value is not an address.
+        assert!(!refused(
+            "curl -sS -w '%{http_code}' -o out.json https://api.github.com/repos/o/r/pulls/5/merge"
+        ));
+    }
+
+    /// A body curl reads from a file, a variable or its own config, or an
+    /// address it expands as a pattern, may be any merge (ADR 0190).
+    #[test]
+    fn a_curl_request_the_gate_cannot_see_is_held() {
+        let unseen = unseen_request().unreadable;
+        for command in [
+            "curl -Kq.cfg",
+            "curl -d@q.json https://api.github.com/graphql",
+            "curl -sd @q.json https://api.github.com/graphql",
+            "curl --data-ascii @q.json https://api.github.com/graphql",
+            "curl --data-urlencode @q.json https://api.github.com/graphql",
+            "curl --data-urlencode query@q.graphql https://api.github.com/graphql",
+            "curl -T q.json -X POST https://api.github.com/graphql",
+            "curl -F 'query=<q.graphql' https://api.github.com/graphql",
+            "curl --variable %Q@q.json --expand-data '{{Q}}' https://api.github.com/graphql",
+            "curl -d @q.json",
+            "curl -d @q.json 'https://api.github.com/{graphql}'",
+            "curl -d @q.json 'https://api.github.com/graph[p-q]l'",
+            "printf 'url = x' > ~/.curlrc; curl -d @q.json",
+            "printf 'url = x' > ~/.curlrc; curl",
+        ] {
+            assert_eq!(only_merge(command, "/srv").unreadable, unseen, "{command}");
+        }
+        assert!(
+            only_merge(
+                "curl -X PUT 'https://api.github.com/repos/o/r/pulls/{5}/merge'",
+                "/srv"
+            )
+            .unreadable
+            .is_some()
+        );
+        // -g reads an address as written, and -q first skips curl's config.
+        for command in [
+            "curl -g -d @q.json 'https://api.github.com/{graphql}'",
+            "curl -g -X PUT 'https://api.github.com/repos/o/r/pulls/{5}/merge'",
+            "printf 'url = x' > ~/.curlrc; curl -q -s https://api.github.com/repos/o/r/pulls/5",
+        ] {
+            assert!(!refused(command), "{command}");
+        }
+        // A variable alone changes nothing curl sends.
+        assert!(!refused(&format!(
+            "curl --variable %Q@q.json -d '{INNOCENT}' https://api.github.com/graphql"
+        )));
+    }
+
+    /// GitHub reads a JSON escape in a request body as its letter (ADR
+    /// 0190).
+    #[test]
+    fn a_mutation_spelled_with_a_json_escape_is_read() {
+        let escaped = MUTATION.replace("mergePullRequest", "mer\\u0067ePullRequest");
+        for command in [
+            format!("curl -d '{escaped}' https://api.github.com/graphql"),
+            format!("gh api graphql --input - <<'B'\n{escaped}\nB"),
+        ] {
+            assert_eq!(
+                only_merge(&command, "/srv").unreadable,
+                Some("it names the pull request by a GraphQL id"),
+                "{command}"
+            );
+        }
+    }
+
+    /// A command set up to run in place of another, or later, is read where
+    /// it is set: a git or gh alias, an editor, a shell alias, a trap
+    /// (ADR 0190).
+    #[test]
+    fn a_command_set_up_to_run_in_place_of_another_is_read() {
+        for command in [
+            "git -c alias.m='!gh pr merge 5' m",
+            "git -c core.editor='gh pr merge 5;:' commit --allow-empty",
+            "git config alias.m '!gh pr merge 5'",
+            "GIT_EDITOR='gh pr merge 5;:' git commit --allow-empty",
+            "export GIT_EDITOR='gh pr merge 5;:'; git commit --allow-empty",
+            "gh alias set m 'pr merge 5' && gh m",
+            "gh alias set --shell m 'gh pr merge 5'; gh m",
+            "gh alias set m '!gh pr merge 5'",
+            "alias m='gh pr merge 5'; m",
+            "trap 'gh pr merge 5' EXIT",
+        ] {
+            assert_eq!(
+                only_merge(command, "/srv").pull_request.as_deref(),
+                Some("5"),
+                "{command}"
+            );
+        }
+    }
+
+    /// `pushd` to one folder moves there; any other move the gate does not
+    /// follow leaves the folder untold (ADR 0190).
+    #[test]
+    fn a_folder_change_the_gate_does_not_follow_leaves_the_folder_untold() {
+        assert_eq!(
+            only_merge("pushd /tmp && gh pr merge 5", "/srv")
+                .folder
+                .as_deref(),
+            Some(Path::new("/tmp"))
+        );
+        for command in [
+            "popd && gh pr merge 5",
+            "pushd && gh pr merge 5",
+            "pushd +1 && gh pr merge 5",
+            "cd \"$D\" && gh pr merge 5",
+            "env -C \"$D\" gh pr merge 5",
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert!(
+                merge.folder.is_none() || merge.unreadable.is_some(),
+                "{command}"
+            );
+        }
+    }
+
+    /// What bash makes of an unquoted heredoc holding `$`, a backquote or
+    /// a backslash is not its text, so a request read from it is held as
+    /// one the gate cannot see (ADR 0190).
+    #[test]
+    fn a_request_read_from_a_heredoc_bash_changes_is_held() {
+        for command in [
+            "cat <<B | gh api graphql --input -\n{\"query\": \"mutation { merge${x}PullRequest(input: {}) { x } }\"}\nB",
+            "gh api graphql --input - <<B\n{\"query\": \"mutation { merge`printf ''`PullRequest(input: {}) { x } }\"}\nB",
+            "curl -d @- https://api.github.com/graphql <<B\n{\"query\": \"mutation { merge\\\nPullRequest(input: {}) { x } }\"}\nB",
+            // Bash makes `\\` one backslash, which JSON then reads with
+            // the `u0067` after it as a `g`.
+            "gh api graphql --input - <<B\n{\"query\": \"mutation { mer\\\\u0067ePullRequest(input: {}) { x } }\"}\nB",
+        ] {
+            let merge = only_merge(command, "/srv");
+            assert_eq!(merge.head, Head::Unnamed, "{command}");
+            assert!(merge.unreadable.is_some(), "{command}");
+        }
+        // Without them, or quoted, the body is what gh reads.
+        for command in [
+            format!("cat <<B | gh api graphql --input -\n{INNOCENT}\nB"),
+            format!("gh api graphql --input - <<'B'\n{INNOCENT}\nB"),
+            "gh api graphql --input - <<'B'\n{\"query\": \"query($n: Int!) { viewer { login } }\", \"variables\": {\"n\": 1}}\nB".to_owned(),
+            "gh api graphql --input - <<'B'\n{\"query\": \"query { viewer { login } } # a\\\\b\"}\nB".to_owned(),
+        ] {
+            assert!(!refused(&command), "{command}");
         }
     }
 
