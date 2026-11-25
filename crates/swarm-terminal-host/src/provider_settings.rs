@@ -517,12 +517,18 @@ console.log(JSON.stringify(results))
     /// required, and CI installs it.
     #[test]
     fn the_grant_mod_looks_for_a_merge_as_bash_may_spell_it() {
+        // Past 32 places a `$'...'` string may begin, a command is sent.
+        let strings = |count: usize| format!("{}gh pr view 5", "echo $'x'; ".repeat(count));
+        let (most, past) = (strings(32), strings(33));
         let sent = [
             "gh pr merge 5",
             "gh pr mer''ge 5",
             "g''h pr merge 5",
             "gh pr mer\\\nge 5",
             "gh pr mer$'g'e 5",
+            // `$"..."` is its text, as bash reads it outside a locale.
+            "gh pr mer$\"g\"e 5",
+            "c$\"u\"rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
             "gh pr $'\\x6derge' 5",
             "gh pr $'mer\\u0067e' 5",
             "gh pr $'mer\\U00000067e' 5",
@@ -540,6 +546,35 @@ console.log(JSON.stringify(results))
             "make -f - <<< $'all:\\n\\tgh pr merge 5'",
             "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6derge",
             "gh api -X PUT repos/o/r/pulls/5/%6Derge",
+            // Outside `$'...'` a backslash and a letter are that letter.
+            "gh pr $'\\x6d'\\erge 5",
+            "gh pr mer$'\\x67'\\e 5",
+            "gh pr $'\\x6d'e\\rge 5",
+            "gh api -X PUT repos/o/r/pulls/5/$'\\x6d'\\erge",
+            "$'\\x63'u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "bash -c $'\\t'cu\\rl\\ -X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
+            // Inside it, an octal escape keeps its low byte, and `\cX` is
+            // a control letter.
+            "gh pr mer$'\\547'e 5",
+            "gh pr $'\\555'erge 5",
+            "bash -c $'\\cIgh pr merge 5'",
+            "eval $'\\cjgh pr merge 5'",
+            // printf reads escapes in its text, an octal one to its low byte.
+            "printf '\\tgh pr merge 5' | bash",
+            "printf 'gh pr mer\\547e 5' | bash",
+            // One for each spelling, which only that spelling finds.
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6Derg\\e",
+            "gh pr me${x}rg\\e 5",
+            "printf 'curl -X PUT https://api.github.com/repos/o/r/pulls/5/%%6D\\x65rge' | bash",
+            "printf '\\tg${x}h pr merge 5' | bash",
+            // A `$'` that begins no string, inside quotes or after a
+            // backslash, throws nothing after it off.
+            "grep -c 'x$' notes.md; gh pr $'\\x6d'\\erge 5",
+            "echo \"$'\"; gh pr mer$'\\x67'\\e 5",
+            "echo \\$'; $'\\x63'u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "grep -c 'x$' notes.md; eval $'\\cjgh pr merge 5'",
+            "grep -c 'x$' notes.md; bash -c $'\\t'cu\\rl\\ -X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
+            past.as_str(),
         ];
         let not_sent = [
             "cargo test merge_gate",
@@ -548,6 +583,7 @@ console.log(JSON.stringify(results))
             "echo merge && gh_view 5",
             // An escape past the last letter is not read as one.
             "echo '\\UFFFFFFFF'",
+            most.as_str(),
         ];
         let directory = tempfile::tempdir().unwrap();
         let folder = grant_mod(

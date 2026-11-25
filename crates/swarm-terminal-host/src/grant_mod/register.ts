@@ -33,11 +33,15 @@ const withoutQuotes = (text: string): string =>
 // and a digit or one of bash's own parameters.
 const EXPANSION = /\$\{[^}]*\}|\$\([^()]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]/g
 const withoutExpansions = (text: string): string => text.replace(EXPANSION, '')
-// Each escape bash's `$'...'`, printf or JSON reads as a letter, read as it:
-// `\xHH`, `\NNN` in octal, `\uHHHH`, `\UHHHHHHHH`, and the one-letter
-// escapes, as `\t` and `\n`.
-const ESCAPE =
-  /\\(?:x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3})|([abeEfnrtv]))/g
+// An escape that names a letter by its number, read as that letter: `\xHH`,
+// `\NNN` in octal, which keeps its low byte as bash and printf do, `\uHHHH`
+// and `\UHHHHHHHH`. One that makes no letter is kept as written.
+const NUMBERED = String.raw`x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3})`
+const numbered = (escape: string, x?: string, u?: string, wide?: string, octal?: string): string => {
+  const code = octal === undefined ? parseInt(x ?? u ?? wide ?? '', 16) : parseInt(octal, 8) & 0xff
+  return code <= 0x10ffff ? String.fromCodePoint(code) : escape
+}
+// The one-letter escapes bash's `$'...'`, printf and JSON read.
 const LETTERS: Record<string, string> = {
   a: '\x07',
   b: '\b',
@@ -49,15 +53,60 @@ const LETTERS: Record<string, string> = {
   t: '\t',
   v: '\v',
 }
+// Every escape read as its letter wherever it stands, as printf and JSON read
+// them.
+const ESCAPE = new RegExp(String.raw`\\(?:${NUMBERED}|([abeEfnrtv]))`, 'g')
 const unescaped = (text: string): string =>
   text.replace(
     ESCAPE,
-    (escape: string, x?: string, u?: string, wide?: string, octal?: string, letter?: string) => {
-      if (letter !== undefined) return LETTERS[letter] ?? escape
-      const code = octal === undefined ? parseInt(x ?? u ?? wide ?? '', 16) : parseInt(octal, 8)
-      return code <= 0x10ffff ? String.fromCodePoint(code) : escape
+    (escape: string, x?: string, u?: string, wide?: string, octal?: string, letter?: string) =>
+      letter === undefined ? numbered(escape, x, u, wide, octal) : (LETTERS[letter] ?? escape),
+  )
+// The text bash makes of a `$'...'` string's body, each escape read as a
+// letter: a one-letter escape, an escape that names a letter by its number,
+// and `\cX`, the control letter of X. An escape bash does not name is kept as
+// written. Bash ends the text at a `\0` and reads `\c` before a backslash or
+// a letter past ASCII apart; this does neither, so it may send the gate more,
+// never fewer.
+const ANSI_C_ESCAPE = new RegExp(String.raw`\\(?:${NUMBERED}|c([\s\S])|([\s\S]))`, 'g')
+const ansiCText = (body: string): string =>
+  body.replace(
+    ANSI_C_ESCAPE,
+    (
+      escape: string,
+      x?: string,
+      u?: string,
+      wide?: string,
+      octal?: string,
+      control?: string,
+      named?: string,
+    ) => {
+      if (control !== undefined) return String.fromCharCode(control.charCodeAt(0) & 0x1f)
+      if (named !== undefined) return LETTERS[named] ?? escape
+      return numbered(escape, x, u, wide, octal)
     },
   )
+// The text with each `$'...'` string read as the text bash makes of it, its
+// end found with a backslash and the character after it read as a pair, and
+// the rest as written. Outside one, a backslash and a letter is that letter
+// once its backslash is taken out, as bash reads it, so `\e` is `e`.
+const ANSI_C = /\$'((?:[^'\\]|\\[\s\S])*)'/g
+const readAsBash = (text: string): string =>
+  text.replace(ANSI_C, (_string: string, body: string) => ansiCText(body))
+// The text read as bash reads its escapes, once from each place a `$'...'`
+// string may begin, with the text before it as written. A `$'` inside
+// quotes, after a backslash or in a comment, as in `grep 'x$'`, begins none,
+// and the text alone does not tell it from one that does. Read from the
+// first of bash's own strings, each after it is found where bash finds it.
+// Past MOST_STARTS of them there is no reading, and the command is sent.
+const MOST_STARTS = 32
+const bashReadings = (text: string): string[] | undefined => {
+  const starts: number[] = []
+  for (let at = text.indexOf("$'"); at !== -1; at = text.indexOf("$'", at + 2)) starts.push(at)
+  if (starts.length > MOST_STARTS) return undefined
+  if (starts.length === 0) return [text]
+  return starts.map(at => text.slice(0, at) + readAsBash(text.slice(at)))
+}
 // With each run of `%HH` escapes read as the text its bytes make, as a server
 // may read an address's path. A run that makes no UTF-8 is kept as written.
 const PERCENT = /(?:%[0-9a-fA-F]{2})+/g
@@ -71,12 +120,18 @@ const percentDecoded = (text: string): string =>
   })
 const mayMerge = (command: unknown): command is string => {
   if (typeof command !== 'string') return false
-  const read = unescaped(command)
+  const readings = bashReadings(command)
+  if (readings === undefined) return true
+  const all = unescaped(command)
   const spellings = [
     command,
     withoutQuotes(command),
-    withoutQuotes(percentDecoded(read)),
-    withoutQuotes(withoutExpansions(read)),
+    ...readings.flatMap(read => [
+      withoutQuotes(percentDecoded(read)),
+      withoutQuotes(withoutExpansions(read)),
+    ]),
+    withoutQuotes(percentDecoded(all)),
+    withoutQuotes(withoutExpansions(all)),
   ]
   return (
     spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => RUNS_GITHUB.test(text))

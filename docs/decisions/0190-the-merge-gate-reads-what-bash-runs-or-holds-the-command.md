@@ -99,28 +99,72 @@ miss:
   that shell inherits, and which they check against the first folder's
   `own`.
 
+A review of the third draft, at `d27e7a74`, found three more regressions:
+two in the gate, where `main` refuses or checks against the right folder,
+and one in the grant mod, against the second draft's:
+- after `time --`, `time -p --` or `coproc NAME`, that draft read no
+  command position, so a `[[` there opened nothing. In
+  `time -- [[ x && case == in ]]; gh pr merge 5; case y in y) :;; esac` the
+  `case` inside the `[[` opened one, the merge was dropped as a pattern,
+  and the last `esac` closed it. The same held for gh api's `PUT`, curl's,
+  a GraphQL merge and `--repo`;
+- after `time --`, an `if` or `while` opened nothing, so a `cd` in one not
+  taken, as `time -- if false; then cd own; fi; gh pr merge 5`, was carried
+  to the merge;
+- the grant mod read an escape outside `$'...'`, as the `\e` in
+  `gh pr $'\x6d'\erge 5`, as the letter bash reads only inside one, so it
+  sent none of `gh pr $'\x6d'\erge 5`, `mer$'\x67'\e`, `$'\x6d'e\rge`, the
+  same in gh api's path, or `$'\x63'u\rl -X PUT ...` to the gate.
+
+That review found more that `main` also passes:
+- a closer inside an array, as `if false; then a=(fi); cd own; fi`, which
+  closed the compound, so the `cd` after it was carried to the merge;
+- in the grant mod, an octal escape past `\377`, as `$'\547'`, which bash
+  reads as its low byte, `g`, and `\cX`, as `$'\cIgh pr merge 5'`;
+- `echo merge 5 | busybox xargs gh pr`, where busybox runs xargs.
+
 ## Decision
 
 - **A merge is looked for as bash may spell it.** The grant mod and the gate
   each look for "merge" or `enqueuePullRequest`, and for `gh` or `curl`, in
-  four spellings of the command:
-  - as written;
-  - without its quotes and backslashes, a `$` before a quote, and a
-    backslash and newline;
-  - the same, after reading each `\xHH`, `\NNN`, `\uHHHH` and `\UHHHHHHHH`,
-    and each one-letter escape such as `\t` and `\n`, as the letter it
-    names, as `$'...'`, printf and JSON do, and each run of `%HH` escapes as
-    the text it makes, as a server may read an address. So the tab in
-    `$'\tgh pr merge 5'` stands before `gh`, and `.../pulls/5/%6derge` is
-    found;
-  - with its escapes read, but not its `%HH` escapes, and without its
-    quotes, without each expansion bash may make empty: `${...}`, a `$(...)`
-    with no parenthesis inside, a backquoted command, `$` and a name, and
-    `$` and a digit or one of bash's own parameters. So `gh pr mer${z}ge 5`
-    and ``mer` `ge`` are found.
+  these spellings of the command, each but the first without its quotes and
+  backslashes, a `$` before a quote, and a backslash and newline:
+  - as written, and without those;
+  - with its escapes read as bash reads them: each `$'...'` string as the
+    text bash makes of it, and the rest as written, so a backslash and a
+    letter outside one is that letter once its backslash is taken out. So
+    `gh pr $'\x6d'\erge 5`, which bash runs as `gh pr merge 5`, is found,
+    and the tab in `$'\tgh pr merge 5'` stands before `gh`. A `$'` inside
+    quotes, after a backslash or in a comment begins no string, as in
+    `grep -c 'x$' notes.md`, and the text alone does not tell it from one
+    that does. So the command is read this way once from each place a
+    `$'...'` string may begin, with the text before it as written, and a
+    merge after such a `$'` is found from the next. Past 32 such places,
+    the command is read as mentioning a merge, gh and curl's config, and
+    the grant mod sends it to the gate;
+  - with every escape read as the letter it names, wherever it stands, as
+    printf and JSON read them: each `\xHH`, `\NNN`, which keeps its low
+    byte, so `\547` is `g`, `\uHHHH` and `\UHHHHHHHH`, and each one-letter
+    escape, such as `\t` and `\n`. So `printf '\tgh pr merge 5' | bash` is
+    found.
 
-  A test runs the grant mod's own module under node, so each of these is
-  checked as the mod runs it, not as text the module holds.
+  Each reading of the last two is looked at twice: with each run of `%HH`
+  escapes read as the text it makes, as a server may read an address, so
+  `.../pulls/5/%6derge` is found; and without each expansion bash may make
+  empty: `${...}`, a `$(...)` with no parenthesis inside, a backquoted
+  command, `$` and a name, and `$` and a digit or one of bash's own
+  parameters, so `gh pr mer${z}ge 5` and ``mer` `ge`` are found. For each
+  of these four, a test holds a command that only it finds, as
+  `gh pr me${x}rg\e 5` for bash's reading without expansions.
+
+  The gate reads a `$'...'` string as bash does, as below. The grant mod
+  reads each escape in one that may make a letter as bash does: a one-letter
+  escape, one that names a letter by its number, an octal one to its low
+  byte, and `\cX`. It does not end the text at a `\0`, nor read `\c` before
+  a backslash or a letter past ASCII as bash does, so it may send the gate
+  more than bash's text would, never fewer. A test runs the grant mod's own
+  module under node, so each of these is checked as the mod runs it, not as
+  text the module holds.
 - **A command whose runs cannot be told from its text is not read.** Where
   the command mentions a merge, it is refused as unreadable, and never
   grantable, when it holds:
@@ -130,7 +174,9 @@ miss:
     `read`, `unset`, `mapfile`, `readarray`, `getopts`, `wait`, `test`, `[`
     or `printf -v`. `${x}`, `${#x}`, `${x:-y}`, `${x%.md}` and `${x^^}` are
     read as they are, and so is arithmetic that names no variable;
-  - a function defined, as `f() {` or `function f {`. `a=()` is an array;
+  - a function defined, as `f() {` or `function f {`. `a=()` is an array,
+    and any other word before `()` names a function, as bash reads `=()`
+    and `"a"=()`;
   - a program word bash computes;
   - a shell reading a script the gate cannot see: a script named by a word
     bash computes, as `bash <(...)`, `source <(...)` and `. <(...)` are, or
@@ -196,20 +242,25 @@ miss:
   In a heredoc body that is only printed (ADR 0188), none of these runs, so
   the body does not count.
 - **Reserved words and wrappers are read through.** `{`, `!`, `if`, `then`,
-  `elif`, `else`, `while`, `until`, `do`, `time` and `time -p`,
-  `coproc NAME {`, `command`, `builtin`, `exec` and `exec -a`, `nohup`,
-  `nice`, `stdbuf`, `timeout` and `env` each come before the program. A
+  `elif`, `else`, `while`, `until`, `do`, `time` with `-p`, `--`, both or
+  neither, `coproc NAME {`, `command`, `builtin`, `exec` and `exec -a`,
+  `nohup`, `nice`, `stdbuf`, `timeout` and `env` each come before the
+  program, and so do `busybox` and `toybox`, which run the applet named
+  after them: `busybox xargs` is xargs, and `busybox sh -c` a shell. A
   folder that `env -C` or `env --chdir` names is the merge's folder, and
   `cd` under a wrapper moves nothing after it. `env -S` runs its string,
   also at the end of a group of `env`'s letters, as `env -vS'...'`; a letter
   `env` does not know leaves the command held.
 - **A word is reserved only where bash reads a command.** That is the
   text's start, after a list's or a pipeline's end, after a reserved word
-  bash reads as one, after `time -p`, and after a compound's close, `fi`,
-  `done`, `}`, `esac` or `]]`. `do` is reserved after `for` or `select` and
-  its name, and after `coproc` and a name only a compound's opener is. A
-  reserved word given as an argument, as `echo if` or `echo then fi`, is a
-  word, and opens or closes nothing. Inside `[[ ... ]]` no word is reserved.
+  bash reads as one, after `time`'s options, `-p`, `--` or `-p --`, and
+  after a compound's close, `fi`, `done`, `}`, `esac` or `]]`. A `-p` after
+  `time --` or `time -p` is a program's name, as bash runs it. `do` is
+  reserved after `for` or `select` and its name. After `coproc` and a name,
+  only a compound's opener is: `{`, `if`, `while`, `until`, `for`, `select`,
+  `case` or `[[`, and `((` is arithmetic wherever it stands. A reserved word
+  given as an argument, as `echo if` or `echo then fi`, is a word, and opens
+  or closes nothing. Inside `[[ ... ]]` no word is reserved.
 - **A runner given commands as one string is read.** The string after
   `su -c`, `runuser -c`, `flock -c`, `script -c` and `--command`, and the
   words after `ssh`'s host or `watch`'s flags, are read as commands of the
@@ -222,7 +273,21 @@ miss:
   only where bash reads it as a word of its own. So a `)` in a pattern,
   inside a substitution or not, as in `$(case x in x) ...;; esac)`,
   `$(case x in x|esac) ...;; esac)` or `$(time -p case ...)`, ends neither
-  the substitution nor the case.
+  the substitution nor the case. A pattern that names gh, curl or merge as a
+  word of its own may be a command read wrongly as a pattern, so a command
+  that mentions a merge and holds one is not read: `case x in merge)` there
+  is refused, and `MERGED)` or `merged)` is not such a word.
+- **An array's words are words.** `name=(...)`, `name+=(...)` and
+  `name[...]=(...)`, with the name as written, assign an array, and its
+  words up to the `)` that ends it are part of the assignment's word. None
+  is reserved, so `a=(fi)`, `a=(done)`, `a=(})` and `a=(esac)` close
+  nothing. A `#` after a space starts a comment to the line's end, a quoted
+  `)` ends nothing, and a substitution or a process substitution among them
+  runs and is read. A `(`, `;`, `|`, `&` or a redirection in one is a syntax
+  error, and the text is not read. Nor is a newline in one while a heredoc
+  waits for its body: bash 5.2.21 reads that body after the array, to the
+  text's end. A quoted name, as `"a"=(x)`, or one bash computes, assigns
+  nothing, and bash refuses its `(`.
 - **Text that ends inside a `case`, a compound command or `[[` is not
   read.** Bash refuses it as a syntax error, after running the lines before
   the one left open. One that mentions a merge is refused as unreadable, as
@@ -234,7 +299,8 @@ miss:
   then reads its escapes. So `$'\c\\'` ends at its quote, and the command
   after it runs. A `\0` ends what it keeps, an escape bash does not name
   keeps its backslash, `\cX` is the control letter of X, and `\c\\` is one
-  control letter, the control letter of a backslash.
+  control letter, the control letter of a backslash. An octal escape past
+  `\377` keeps its low byte, so `$'\547'` is `g`.
 - **A here-string is a heredoc's body.** A here-string that bash computes no
   part of is what the command reads on standard input, and, as ADR 0188
   reads a heredoc's body, its text is read as commands too. So a merge in
@@ -322,7 +388,8 @@ miss:
   - in an `if`, `while`, `until`, `for`, `select`, `{ ... }` or `case`,
     the condition included, and in a coprocess's compound. A compound is
     one only where its words are reserved, as above, so `echo then fi`
-    inside an `if` neither opens nor closes one;
+    inside an `if` neither opens nor closes one, and nor does a word of an
+    array, as `a=(fi)`;
   - after `&&` or `||`, to the end of that list;
   - in parentheses, in a list run in the background, in a pipeline of more
     than one command, and in a substitution;
@@ -399,11 +466,19 @@ point, `swarm-terminal-host provider-merge`, on three builds:
 - `main` before this change, at `8c26cffd`, which holds ADR 0188;
 - this change.
 
-gh was not on PATH, so a merge the gate finds is refused as one it could not
-check, and no call reached GitHub. That is also why a merge the gate reads
-but holds, as with `GH_REPO` or `pushd`, refuses on all three: the unit
-tests show which reason each gives. Bash 5.2.21 was run on the forms the
-rule rests on, with harmless commands in place of a merge:
+An earlier draft of this record said gh was not on PATH for these runs.
+That held for some: others kept the session's `HOME`, where gh is in
+`/usr/bin` and logged in, so the gate's own gh calls, which only read who
+opened a pull request and whether a repository is public, may have reached
+GitHub, for `o/r`, the one repository the commands name. They ran from
+`/srv`, which holds no repository, and no answer turned on them: in the
+final runs for the third review, every probe ran with its environment
+replaced and `HOME` pointing nowhere, so each gh call stopped before sending
+anything, asking for `gh auth login`, and the 159 answered as before. A
+merge the gate finds is refused as one it could not check. That is also why
+a merge the gate reads but holds, as with `GH_REPO` or `pushd`, refuses on
+all three: the unit tests show which reason each gives. Bash 5.2.21 was run
+on the forms the rule rests on, with harmless commands in place of a merge:
 - reserved words, `$'...'`, process substitutions, a `case` in `$(...)`;
 - `&>`, `>|` and `>&file`, functions, `a=()`;
 - an unquoted body whose `$((x))` runs a subscript;
@@ -485,7 +560,8 @@ Seventy-three more commands ran the same way on four builds: 1.25.0,
 | Cost narrowed: `gh api "repos/$REPO/pulls/5" --jq .merged`, `gh api repos/o/r/pulls/"$N"`, `gh api "$URL" --jq .mergeable`, `curl -s "https://api.github.com/repos/o/r/pulls/$N" \| jq .mergeable`, or a `"${prs[@]}"` loop asking for `mergeable` | pass | pass | refuse | pass |
 | Cost: `gh api repos/$REPO/pulls/5 --jq .mergeable`, the same in a loop over `$pr`, `-F n=$N` beside a `mergeable` query, curl to `.../pulls/$N` unquoted, `[[ $n -gt 0 ]]` or a function and `trap` before `gh pr view 5 --json mergeable`, or `curl -s "$URL" \| jq .mergeable` | pass | pass | refuse | refuse |
 | Cost: `node -v` or `python3 -V` before `gh pr view 5 --json mergeable` | pass | pass | pass | refuse |
-| Twelve ordinary commands, among them `python3 --version` or `node --help` before `gh pr view 5 --json mergeable`, `echo 'gh pr view 5' \| bash`, `script -qc 'gh pr view 5' /dev/null`, `case x in merge) gh pr view 5;; esac` and `curl -X POST -T m.json .../pulls/5/merge` | pass | pass | pass | pass |
+| Eleven ordinary commands, among them `python3 --version` or `node --help` before `gh pr view 5 --json mergeable`, `echo 'gh pr view 5' \| bash`, `script -qc 'gh pr view 5' /dev/null` and `curl -X POST -T m.json .../pulls/5/merge` | pass | pass | pass | pass |
+| Cost of the third review: `case x in merge) gh pr view 5;; esac`, held by its pattern rule | pass | pass | pass | refuse |
 | Limits: `wget --method=PUT`, GraphQL `mergeBranch`, `gh api -X POST repos/o/r/merges`, Python joining `'mer' + 'ge'`, `mer${z:-g}e` and `mer$(printf g)e` | pass | pass | pass | pass |
 | `curl -X PUT .../pulls/5/mer{ge,}`, which no grant mod sends | pass | pass | refuse | refuse |
 
@@ -556,7 +632,8 @@ Eighty-three more commands ran the same way on four builds: 1.25.0,
 | Cost: `gh pr comment 5 --body-file - <<< '...gh pr merge 5...'` | pass | pass | pass | refuse |
 | The same from a heredoc | pass | pass | refuse | refuse |
 | Cost: `sed -n '/gh pr merge/p' notes.md`, `rg 'gh pr merge' docs`, `git merge -m 'after gh pr merge 5' x`, a comment whose body spells a merge beside `\| jq .state`, and xargs's BSD `-J`, which GNU xargs does not have | pass | pass | pass | refuse |
-| Sixteen ordinary commands, among them `gh pr view "$N" --json mergeable \| jq -r .mergeable`, `grep -rn 'gh pr merge' docs`, `git log --grep='gh pr merge'`, `git commit -m '...gh pr merge 5...'`, `gh pr comment 5 --body '...'`, `echo 'gh pr merge 5' >> notes.md`, `printf merge \| xargs -I{} echo {}`, `gh pr list ... \| xargs -n1 gh pr view --json mergeable`, `cd -- own && gh pr view 5 --json mergeable` and `if true; then echo then fi; fi; gh pr view 5 --json mergeable` | pass | pass | pass | pass |
+| Cost of the third review: `echo if; case x in merge) gh pr view 5;; esac`, held by its pattern rule | pass | pass | pass | refuse |
+| Fifteen ordinary commands, among them `gh pr view "$N" --json mergeable \| jq -r .mergeable`, `grep -rn 'gh pr merge' docs`, `git log --grep='gh pr merge'`, `git commit -m '...gh pr merge 5...'`, `gh pr comment 5 --body '...'`, `echo 'gh pr merge 5' >> notes.md`, `printf merge \| xargs -I{} echo {}`, `gh pr list ... \| xargs -n1 gh pr view --json mergeable`, `cd -- own && gh pr view 5 --json mergeable` and `if true; then echo then fi; fi; gh pr view 5 --json mergeable` | pass | pass | pass | pass |
 
 A gh that only logs its folder stood first on PATH again, for sixteen
 folder forms, and each also ran in bash 5.2.21 with that gh, to show where
@@ -629,10 +706,104 @@ quoted text and passed, where `main` and the second draft refuse it and
 bash runs the merge. It now finds the end as bash does, and the test
 reads both forms.
 
+### The review of the third draft
+
+Sixty-three more commands ran the same way on four builds: 1.25.0, `main`,
+the third draft at `d27e7a74`, and this change.
+
+| Command | 1.25.0 | main | Third draft | This change |
+| --- | --- | --- | --- | --- |
+| `time -- [[ x && case == in ]]; gh pr merge 5; case y in y) :;; esac`, the same after `time -p --` or `coproc n`, and after `time --` with gh api's `PUT`, curl's, a GraphQL merge or `--repo me/pub` in place of the merge | refuse | refuse | pass | refuse |
+| `time -- gh pr merge 5`, `time -p -- gh pr merge 5`, `coproc n time -p case x in; gh pr merge 5`, and the review's controls: the first form without `time --`, or after `time` or `time -p` | refuse | refuse | refuse | refuse |
+| `case x in gh\ pr\ merge\ 5) :;; esac`, or `case $t in gh\|curl) ...` or `merge) ...` beside `gh pr view 5 --json ...` | pass | pass | pass | refuse |
+| `gh pr $'\x6d'\erge 5`, `mer$'\x67'\e`, `$'\x6d'e\rge`, gh api's `PUT` to `.../$'\x6d'\erge`, `$'\x63'u\rl -X PUT .../merge`, or `printf '\tgh pr merge 5' \| bash` | pass | pass | refuse | refuse |
+| `gh pr mer$'\547'e 5`, `$'\555'erge`, `bash -c $'\cIgh pr merge 5'` or `eval $'\cjgh pr merge 5'` | pass | pass | refuse | refuse |
+| After a `$'` that begins no string, as `grep -c 'x$' /dev/null;`, `echo '$';` or `echo "$'";`: `gh pr $'\x6d'\erge 5`, `mer$'\x67'\e`, `eval $'\cjgh pr merge 5'`, `bash -c $'\t'cu\rl\ -X\ PUT\ .../merge` or `$'\x63'u\rl -X PUT .../merge` | pass | pass | refuse | refuse |
+| `x=$'\x6d'\erge; gh pr $x 5`, alone or after `grep -c 'x$' /dev/null;` | pass | pass | pass | refuse |
+| `echo merge 5 \| busybox xargs gh pr`, or `toybox xargs` | pass | pass | pass | refuse |
+| `busybox sh -c 'gh pr merge 5'` or `busybox timeout 5 gh pr merge 5` | pass | pass | refuse | refuse |
+| `a=(<(gh pr merge 5))` | pass | pass | refuse | refuse |
+| `gh pr mer$"g"e 5` or `c$"u"rl -X PUT .../merge`, held as text a locale may translate | pass | pass | refuse | refuse |
+| `a=($(gh pr merge 5))`, or `if false; then a=(fi); fi; gh pr merge 5` | refuse | refuse | refuse | refuse |
+| Costs kept: `sed -n '/gh pr merge/p' notes.md`, `rg 'gh pr merge' docs` and `N=5; bash -c "gh pr view $N --json mergeable"` | pass | pass | refuse | refuse |
+| Sixteen ordinary commands, among them `time -- cargo test merge_gate`, `time -p -- gh pr view 5 --json mergeable`, `coproc n [[ -n x ]]; gh pr view 5 --json mergeable`, `case $(gh pr view 5 --json state -q .state) in MERGED) ...`, `busybox --list`, `echo 5 \| busybox xargs gh pr view --json mergeable` `a=(fi done esac); gh pr view 5 --json mergeable` and `a=() && gh pr view 5 --json mergeable` | pass | pass | pass | pass |
+
+The escape forms are the grant mod's regression: the third draft's gate
+refuses each when given it, but its module sends none of the first row's,
+and neither `main`'s nor the third draft's sends the second row's. This
+change's module sends each.
+
+The forms after a `$'` that begins no string were found while checking
+this change before it was sent. A draft of it read bash's escapes from the
+first `$'` only, so such a `$'` before a merge's put each string after it
+out of step: its module sent none of those forms, and its gate passed
+`grep -c 'x$' /dev/null; x=$'\x6d'\erge; gh pr $x 5`, which it refused
+alone. Each now reads from each place a string may begin. The third
+draft's and `main`'s modules send none of those forms either.
+
+A gh that only logs its folder stood first on PATH again, for seventeen
+folder forms, and each also ran in bash 5.2.21 with that gh:
+- After `time -- if false; then cd other; fi`, `time -p --` with the same,
+  and `time -- while false; do cd other; done`, bash stays where it was.
+  1.25.0's and `main`'s gates asked gh there; the third draft asked about
+  `other`, the regression the review found. This change leaves the folder
+  untold, as every build does after `time if false; ...`.
+- After `a=(fi)`, `a=(done)`, `a=(})`, `a=(esac)`, `a+=(fi)`, a newline in
+  an array and a comment in one, each inside an `if`, `while` or `case` not
+  taken, bash stays where it was. `main` and the third draft asked about
+  `other`; this change leaves the folder untold.
+- After `=() { cd other; }`, `"a"=() { cd other; }` and
+  `a$z=() { cd other; }`, bash defines a function, or refuses its name,
+  and never runs the body. 1.25.0 and `main` asked gh in the first folder,
+  where bash runs it; the third draft read `()` there as a subshell and
+  left the folder untold. This change reads a function there, as bash
+  does, and holds the command.
+- `time cd other` and `a=(fi done); cd other` are followed to `other`,
+  where bash goes.
+
+Bash 5.2.21 was run on each form the review named and on the forms these
+rules rest on, with a harmless command, or a gh and a curl that only print
+their words, in place of a merge:
+- `time --`, `time -p --` and `coproc n` before `[[ x && case == in ]]` run
+  the command after it; after `time --` or `time -p`, a `-p` is run as a
+  program and an `if` after it is its word;
+- each array form closes nothing, a `#` inside a word is the word's, a
+  newline is a space between words, `$(...)`, `<(...)` and backquotes run,
+  and `a=(x;y)`, `a=( (x) )`, `a=(x|y)`, `a=(x&y)`, `a=(x>y)`,
+  `"a"=(fi)` and `a$x=(fi)` are syntax errors;
+- with a heredoc waiting, a newline in an array leaves its body to be read
+  after the array, and bash read every later line as that body, its
+  delimiter lost, so the merge after it did not run;
+- `$'\547'` is `g`, `$'\555'` is `m`, `$'\cI'` a tab and `$'\cj'` a
+  newline, `\e\r` outside quotes is `er`, and printf reads `\547` as `g`;
+- a `$'` inside single or double quotes begins no string, and a `$'...'`
+  after it is still one, so each form after such a `$'` and
+  `x=$'\x6d'\erge; gh pr $x 5` reach gh or curl as a merge;
+- `gh pr me${x}rg\e 5`, `curl ... %6Derg\e`,
+  `printf '\tg${x}h pr merge 5' | bash` and
+  `printf '.../%%6D\x65rge' | bash` reach gh or curl as a merge, each
+  found by one spelling only;
+- busybox 1.36.1 runs its applet for `xargs`, `sh -c`, `env` and
+  `timeout`. toybox is not installed here, so for it the rule rests on its
+  manual;
+- `=() {...}` defines a function named `=`; `"a"=() {...}`, `a$z=() {...}`
+  and `a${z}=() {...}` are read as functions whose name bash refuses when
+  it runs, and the command after them runs; `a=() {` and `a[1]=() {` are
+  syntax errors;
+- `c$"u"rl` runs curl, and `mer$"g"e` and `$"g"h` spell a merge and gh.
+
+The 159 commands, the 73, the 83, the second review's 12 held, 7
+neighbouring and 4 control forms, and the 41 folder forms before answer
+the same on this change as on the third draft, apart from
+`case x in merge) gh pr view 5;; esac` and
+`echo if; case x in merge) gh pr view 5;; esac`, which the pattern rule now
+refuses. Each of them, and the 54 before them, answered the same again
+once both readers read from each place a `$'...'` string may begin.
+
 ### Tests and ablations
 
-Thirty-eight tests are new, and each passes on this change: thirty-seven
-for the gate and the grant mod's. The seventeen for the gate from the first
+Forty-two tests are new, and each passes on this change: forty-one for the
+gate and the grant mod's. The seventeen for the gate from the first
 draft fail on `main`'s gate. The ten from the first review fail on
 `main`'s gate and on the first draft's. The ten from the second review fail
 on the second draft's gate. Nine of them fail on `main`'s too, each on an
@@ -641,12 +812,30 @@ tenth, `a_reserved_word_given_as_an_argument_opens_nothing`, passes on
 `main`, which never had the regression it tests. The grant mod's fails with
 `main`'s module and with the first draft's. The five forms it gained in the
 second review are sent by neither `main`'s module nor the second draft's.
+The four from the third review fail on the third draft's gate and on
+`main`'s, and so do the `$'...'` test's assertions from that review on the
+third draft's. The grant mod's fails with the third draft's module, first
+on `gh pr $'\x6d'\erge 5`, and with `main`'s.
 
-On the final source, 245 pieces of the change were removed one at a time,
-and a named test failed each time. These are the earlier drafts' 188,
-thirteen of them moved to where the second review left their code, and 57
-for the second review's pieces. The grant mod's are among them, since its
-test runs the module. The source was restored byte for byte after each.
+On the final source, 312 pieces of the change were removed one at a time,
+and a named test failed each time:
+- the earlier drafts' 188 but one, retired below, nine of them moved to
+  where the third review left their code;
+- the second review's 57, seven of them moved;
+- 68 for the third review's pieces, among them the two that the review
+  found failed no test, a named coprocess reading every word as a command's
+  start and an octal escape kept past its low byte, and fourteen for
+  reading from each place a `$'...'` string may begin and its bound: two
+  of them, reading from the first `$'` only, are the draft that passed the
+  forms after a `$'` that begins none.
+
+The grant mod's are among them, since its test runs the module. The source
+was restored byte for byte after each. A first full run on this source
+found four earlier pieces that failed no named test: three of the gate's
+spellings and the grant mod's `$` before a quote. The forms only those
+spellings find had moved into the `$'...'` test, and `$'...'` is now read
+whole, so `mer$'g'e` no longer needs its `$` taken out. Each now names the
+`$'...'` test, and the grant mod's test gained `mer$"g"e` and `c$"u"rl`.
 
 Pieces that no test could tell from their absence were deleted, not kept:
 - in the first draft, a mark that held a heredoc body as unreadable beside
@@ -671,7 +860,12 @@ Pieces that no test could tell from their absence were deleted, not kept:
   both covers it, since reading `%HH` only adds text. Removing it failed no
   test, and an earlier ablation, which stops the first drafts' spellings
   taking quotes out, failed none while the spelling that reads both was
-  left to do it.
+  left to do it;
+- after the third review, the guard that kept a word ending in `=` before
+  `()` from naming a function. An array's own reading takes `a=()` first,
+  and bash reads any other such word as a function's name, as `=()` and
+  `"a"=()`, which the guard had the gate read as a subshell. Its ablation is
+  the one retired, and putting it back now fails a test.
 
 ## Consequences
 
@@ -747,6 +941,16 @@ Pieces that no test could tell from their absence were deleted, not kept:
     after it leaves the folder untold.
 - `cd own x` and `cd -x own`, which bash refuses, now leave the folder
   untold, so a merge after them must name its repository.
+- The fixes of the third review refuse one more kind of ordinary command
+  once it mentions a merge: a `case` pattern that names gh, curl or merge
+  as a word of its own, as `case x in merge) gh pr view 5;; esac` or
+  `case $t in gh) ...;; esac; gh pr view 5 --json mergeable`, which `main`
+  and the third draft pass. `MERGED)` and `merged)` pass.
+- A command with more than 32 places a `$'...'` string may begin is read as
+  mentioning a merge and gh, and as configuring curl: the grant mod sends
+  it to the gate, which holds what bash computes in it and any request
+  curl sends from it. Fewer strings, or a script file, let the gate read
+  it.
 - The change is in `swarm-terminal-host` and the grant mod it writes. It
   reaches a worker only after the worker engine update, which stops running
   sessions.
