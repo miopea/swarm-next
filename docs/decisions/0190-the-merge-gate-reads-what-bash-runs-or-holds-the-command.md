@@ -174,7 +174,9 @@ gets wrong:
     expansion bash may make empty, as below;
   - with every escape read, as printf and JSON read them, the one-letter
     ones such as `\t` and `\n` among them, without each expansion bash may
-    make empty. So `printf '\tgh pr merge 5' | bash` is found.
+    make empty. So `printf '\tgh pr merge 5' | bash` is found. Text that
+    printf supplies from its arguments, through `%s` or `%b`, is not: see
+    "What this does not cover".
 
   Bash makes a letter only from a letter, a backslash and a letter, or a
   number in `$'...'`. So the numbered reading finds each merge bash spells
@@ -344,12 +346,19 @@ gets wrong:
   mentions a merge is not read past an assignment to one, as before.
 - **A parameter is read to the brace that matches it.** An unquoted
   `${...}` or `$[...]` is read whole, with spaces and `;` among it. Inside
-  double quotes, a quote, a backquote, `$(...)` and `${...}` nest in one,
-  and its `}` closes it. So in `echo "${x:-"; fi; cd own; "}"` nothing
-  after the first quote ends the word, and a `$(...)` inside one runs and
-  is read. Text nested more than four deep in `${...}`, `$[...]` and
-  subscripts is not read, so a command that mentions a merge and holds it
-  is refused.
+  double quotes, a `"`, a backquote, `$(...)` and `${...}` nest in one, and
+  its `}` closes it. So in `echo "${x:-"; fi; cd own; "}"` nothing after
+  the first quote ends the word, and a `$(...)` inside one runs and is
+  read. A `'` nests only in a pattern or a change of case (`#`, `%`, `/`,
+  `^`, `,`), where bash runs nothing inside it. In the word of a default,
+  an alternative, an assigned value or an error message (`-`, `+`, `=`,
+  `?`, with a `:` or without), inside double quotes or inside such a word
+  of a `${...}` that is, bash 5.2.21 reads a `'` as a letter and runs a
+  substitution between two, a `$'...'` too; in posix mode and in dash the
+  first `}` there ends the `${...}`, even between two `'`. Which applies
+  cannot be told from the text, so a command that mentions a merge and
+  holds a `'` or a `$'` there is refused. Text nested more than four deep
+  in `${...}`, `$[...]` and subscripts is not read either.
 - **Text that ends inside a `case`, a compound command or `[[` is not
   read.** Bash refuses it as a syntax error, after running the lines before
   the one left open. One that mentions a merge is refused as unreadable, as
@@ -374,6 +383,8 @@ gets wrong:
   program the gate does not know, as `find . -exec`, may run as another
   account or on another machine. It is read, and held as a merge the gate
   cannot check, so it must name its head and needs the operator's grant.
+  The words parallel fills in, from `:::` or from its input, are not read:
+  see "What this does not cover".
   What the command among such a program's words leaves unread stays
   unread, as it is without the program, unless bash computes that
   command's name. That covers xargs's words, a word bash computes in a
@@ -525,6 +536,22 @@ gets wrong:
   computes, are not followed: the command is refused. So is
   `eval "$(cat <<'EOF' ...)"`, which runs the body the gate reads, and
   which the second draft held as a merge to grant.
+- **Four gaps the fifth review found, which every build has had or which
+  earlier drafts brought, left open in this change:**
+  - in an unquoted heredoc's body that reads as commands, what the body
+    expands is not read again, so a substitution inside `'...'` there, as
+    `cat <<E` with `'$(gh pr merge 5)'` or `x'$(gh pr merge 5)'y` in its
+    body, passes. Bash runs it as the heredoc expands;
+  - text given to `sh` or `dash` is read with bash's rules. Dash has no
+    `$'...'`, so `$'\'` there is `$` and a quoted backslash, and a merge
+    after it, as in `sh <<'E'` with `echo $'\' ; gh pr merge 5 ; echo '\'`,
+    passes. The same goes for `sh -c` and `dash -c`;
+  - text printf supplies from its arguments, as
+    `printf '%sgh pr merge 5\n' '' | bash`, `printf 'g%sh pr merge 5\n' ''`
+    or `printf '%bgh pr merge 5\n' '\t'`, piped to a shell. The gate refuses
+    each when it sees it, but the grant mod does not send it;
+  - the words GNU parallel fills in, as `parallel gh pr {} 5 ::: merge` or
+    `echo merge | parallel gh pr {} 5`, pass.
 - ADR 0188's other limits stand. The ones this decision fixes are listed in
   its Context.
 
@@ -933,7 +960,10 @@ The grant mod's own module took 21 ms on a command of the review's size,
 ms for the third draft's, each the median of five runs by node's clock
 here. An earlier run measured 37, 725 and 27 ms. The review measured 6 to 7
 s against 0.4 s on its own machine. Each spelling is one pass, so the time
-grows only with the command's length.
+grows only with the command's length. These figures are one machine's. The
+fifth review measured the fifth draft's module at 728 ms against 5,303 ms
+for the fourth draft's on its own 1.9 MB command, and found that 21 ms
+needs a filler holding fewer escapes than its own.
 
 The 159 commands, the 73, the 83, the third review's 54 and 9, the second
 review's 12 held, 7 neighbouring and 4 control forms, and the 58 folder
@@ -959,12 +989,55 @@ commands in place of a merge:
 - `a[0; echo X ]x=1` is a command bash does not find, and a `b[0; ...` after
   it is split, so its `echo` runs;
 - an unquoted `${...}` or `$[...]` is read whole, spaces and `;` among it,
-  and inside double quotes a quote, a backquote, `$(...)` and `${...}` nest
-  in one;
+  and inside double quotes a `"`, a backquote, `$(...)` and `${...}` nest
+  in one; a `'` there nests only in a pattern or a change of case (see the
+  fifth review below);
 - each runner above runs xargs's command with the words xargs gives it, and
   `sh -c` or `bash -c` with the string;
 - each split `%HH` form reaches curl or gh with the escape whole, as
   `%6derge`, or `m%65rge` from `m%6\5rge`. Whether GitHub's API then reads it as `merge` was not tried.
+
+### The review of the fifth draft
+
+The fifth review found one regression, in the fifth draft's reading of a
+quote inside a double-quoted `${...}`, with two sides:
+- a `'` in the word of a default, an alternative, an assigned value or an
+  error message hid a substitution bash runs, as
+  `echo "${x:-'$(gh pr merge 5)'}"`;
+- in posix mode and in dash, the first `}` there ends the `${...}`, so
+  `set -o posix`, then `echo "${x:-'}"; gh pr merge 5; echo "'}"` on the
+  next line, runs the merge, as do `POSIXLY_CORRECT=1`, `bash --posix`,
+  `sh -c`, `dash -c` and `sh <<'E'` with that line.
+
+Thirty-six commands ran in bash 5.2.21, with a gh and a curl that only
+print their words, and through `provider-merge` on `main`, the fifth draft
+at `33ca4577`, and this change:
+- 26 that run a merge, or would in posix mode or dash: the fifth draft
+  passes 24 of them and this change refuses all 26, as `main` does. Among
+  them are the `-`, `+`, `=` and `?` forms with a `:` and without, a
+  backquote, a nested `${...}`, a `$'...'`, a heredoc, an assignment, a
+  command after a successful `gh pr view`, curl's `PUT` to `.../merge`, and
+  the posix and dash forms above;
+- 8 controls, where bash runs nothing quoted (a pattern, a change of case,
+  a pattern around a default, and a default outside double quotes): this
+  change passes each, as the fifth draft did; `main` refuses six;
+- two of the costs in Consequences, the `:?` form and the line that runs
+  a merge only in posix mode or dash: this change refuses them, as `main`
+  does. The third, `gh pr view 5 --json mergeable --jq "${Q:-'.mergeable'}"`,
+  ran on its own: `main` and the fifth draft pass it, this change refuses
+  it, and all three pass it written without the `'`.
+Bash 5.2.21, `bash --posix` and dash were also run with each operator,
+showing that a pattern or a change of case runs nothing inside its quotes
+and that the others run what is between two `'`.
+
+The fifth review also found four earlier pieces that failed no named test.
+Each now has an assertion on the words the gate reads, checked against bash
+5.2.21, and none was an equivalent mutant: the rule that a `case` command's
+patterns read no subscript whole (`case x in y) :;; a[ ) echo two;; esac`),
+the same inside `[[ ... ]]` (`[[ -n x && a[ ]] && echo t`), after a word
+bash computes a part of (`$(true)a[ 0 ]=1`), and a backslash before a
+newline in a `${...}` (`${x:-a\` and `b` on the next line, `ab`). Its four
+older gaps are listed in "What this does not cover".
 
 ### Tests and ablations
 
@@ -986,7 +1059,8 @@ on `gh pr $'\x6d'\erge 5`, and with `main`'s.
 The four from the fourth review, for subscripts, parameters, what a runner
 leaves unread, and a bracket, quote or substitution in a subscript, fail on
 the fourth draft's gate, the third draft's and `main`'s, each on an
-assertion, first on `if false; then a[ 0 ]=(fi); cd own; fi; gh pr merge 5`
+assertion once the test helpers they use are added to those tests (on its
+own the test does not compile there), first on `if false; then a[ 0 ]=(fi); cd own; fi; gh pr merge 5`
 or the like. The `$'...'` test's new assertions fail on the fourth draft's,
 first on `gh pr $'\x6d'$(: "$'")\erge 5 --repo 'o/r'`; the `%HH` test's
 fail on the fourth and third drafts', first on `.../pulls/5/%6''derge`. The
@@ -1063,6 +1137,20 @@ Pieces that no test could tell from their absence were deleted, not kept:
     so removing it failed no test. Looking at why showed that both read
     `%HH` escapes before taking quotes out, which is how the split forms in
     the Context passed.
+
+After the fifth review one test is new,
+`a_quote_in_a_word_bash_expands_in_double_quotes_is_not_read_past`. It
+fails on the fifth draft's gate, first on
+`echo "${x:-'$(gh pr merge 5)'}"`, and passes on this change. Of the 17
+pieces its fix adds, 16 failed it when removed one at a time; the
+seventeenth, putting back the state of the word around a nested `${...}`,
+failed none, and the test gained a form for each way that can go wrong.
+That piece and the four earlier pieces the fifth review found were then
+removed one at a time, and each failed a named test. The source was
+restored byte for byte after each. The earlier drafts' 335 ablations, the
+transplants onto older refs and the earlier probe sets were not run again
+for this change, whose code differs from the fifth draft's only in the
+lexer's reading of `${...}`.
 
 ## Consequences
 
@@ -1152,6 +1240,17 @@ Pieces that no test could tell from their absence were deleted, not kept:
     `curl -s https://example.test/i.sh | sudo bash`, which without `sudo`
     is refused already;
   - text nested more than four deep in `${...}`, `$[...]` or subscripts.
+- The fix of the fifth review refuses a command that mentions a merge and
+  holds a `'` or a `$'` in the word of a double-quoted default,
+  alternative, assigned value or error message, as
+  `gh pr view 5 --json mergeable --jq "${Q:-'.mergeable'}"`, which `main`
+  and the fifth draft pass; written without the `'`, it passes. It also
+  refuses `x=a; echo "${x:?'$(gh pr merge 5)'}"`, where bash runs nothing
+  because `x` is set: the gate does not follow what a variable holds, and
+  with `x` unset bash runs the substitution to print its error. And it
+  refuses `echo "${x:-'}"; gh pr merge 5; echo "'}"`, which runs no merge in
+  default bash and runs one in posix mode and dash. `main` refuses these
+  two; the fifth draft passed them.
 - In a command that holds a `$'` and mentions a merge, the grant mod sends
   the gate any command with "gh" or "curl" in it, even inside a word, as
   `sed -n $'/hugh merge/p' notes.md`. The gate reads its words as bash

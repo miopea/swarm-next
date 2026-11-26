@@ -528,6 +528,9 @@ struct Lexer {
     /// How deep the text being read is in `${...}`, `$[...]` and
     /// subscripts (`Lexer::matched`).
     nesting: usize,
+    /// How bash reads the text being read in a `${...}`
+    /// (`Lexer::expansion`).
+    word_text: WordText,
     /// What the next word is when it is not part of the command.
     target: Target,
     /// Heredocs on the current line, in order: their bodies start after the
@@ -553,6 +556,19 @@ struct Lexer {
     follows: Follows,
     /// Inside `[[ ... ]]`, whose words are no commands.
     conditional: bool,
+}
+
+/// How bash reads the text of a `${...}` (`Lexer::expansion`).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum WordText {
+    /// As it reads a word: a `'` is a quote.
+    #[default]
+    Word,
+    /// As double-quoted text, the word of a default, an alternative, an
+    /// assigned value or an error message in double quotes: a `'` is a
+    /// letter, or in posix mode and in dash one whose `}` ends the
+    /// `${...}`.
+    DoubleQuoted,
 }
 
 /// How far the word being read is an assignment bash reads.
@@ -981,7 +997,10 @@ impl Lexer {
     /// in a subscript or a `$[...]` nests. In any, a quote, a backslash, a
     /// `$(...)`, a backquoted command and a `${...}` or `$[...]` of its own
     /// are read as bash reads them, and a substitution among them runs.
-    /// Text nested deeper than `MAX_NESTING` is not read.
+    /// Text nested deeper than `MAX_NESTING` is not read, nor a `'` or a
+    /// `$'` in a word bash expands as double-quoted text (`WordText`):
+    /// bash runs a substitution between two `'` there, and in posix mode
+    /// and in dash the first `}` ends the `${...}` even between them.
     fn matched(&mut self, chars: &mut Chars<'_>, close: char) -> Option<()> {
         if self.nesting == MAX_NESTING {
             return None;
@@ -1000,6 +1019,10 @@ impl Lexer {
                         escaped => self.word.push(escaped),
                     }
                     continue;
+                }
+                '\'' if self.word_text == WordText::DoubleQuoted => return None,
+                '$' if self.word_text == WordText::DoubleQuoted && chars.peek() == Some(&'\'') => {
+                    return None;
                 }
                 '\'' => {
                     loop {
@@ -1033,13 +1056,22 @@ impl Lexer {
     /// The rest of a `${...}` or `$[...]`, whose `$` has been read and
     /// pushed: bash reads it whole, to the brace or bracket that matches
     /// its own (`matched`). In double quotes, `quoted`, nothing in it splits
-    /// the word.
+    /// the word, and its word is double-quoted text unless it is a pattern
+    /// or a change of case, as in a word of one around it that is.
     fn expansion(&mut self, chars: &mut Chars<'_>, quoted: bool) -> Option<()> {
         let open = chars.next()?;
         let close = if open == '[' { ']' } else { '}' };
         let printed = self.printed;
+        let word_text =
+            if (quoted || self.word_text == WordText::DoubleQuoted) && !keeps_its_quotes(chars) {
+                WordText::DoubleQuoted
+            } else {
+                WordText::Word
+            };
+        let around = std::mem::replace(&mut self.word_text, word_text);
         self.word.push(open);
         self.matched(chars, close)?;
+        self.word_text = around;
         self.word.push(close);
         if quoted {
             self.printed = printed;
@@ -1784,6 +1816,30 @@ fn evaluates_a_value(chars: &Chars<'_>) -> bool {
         }
         _ => false,
     }
+}
+
+/// After `${` or `$[`: whether what follows the parameter is a pattern or
+/// a change of case (`#`, `%`, `/`, `^`, `,`), whose quotes bash keeps in
+/// double quotes. There a default, an alternative, an assigned value and
+/// an error message (`-`, `+`, `=`, `?`, with a `:` or without) are
+/// double-quoted text, and so is any form not told apart here.
+fn keeps_its_quotes(chars: &Chars<'_>) -> bool {
+    let mut ahead = chars.clone();
+    // A special parameter is one character; a name or a number runs on.
+    if ahead
+        .next_if(|next| matches!(next, '@' | '*' | '#' | '?' | '-' | '$' | '!'))
+        .is_none()
+    {
+        while ahead
+            .next_if(|next| next.is_ascii_alphanumeric() || *next == '_')
+            .is_some()
+        {}
+    }
+    if ahead.next_if_eq(&'[').is_some() {
+        while ahead.next_if(|next| *next != ']').is_some() {}
+        ahead.next();
+    }
+    matches!(ahead.next(), Some('#' | '%' | '/' | '^' | ','))
 }
 
 /// After a `$` in double quotes: whether bash expands it to the positional
@@ -6853,7 +6909,7 @@ mod tests {
             "if false; then echo \"${x:+\"; fi; cd own; if :; then \"}\"; fi; gh pr merge 5",
             "if false; then echo \"${x#\"; fi; cd own; if :; then \"}\"; fi; gh pr merge 5",
             "x=1; if false; then echo \"${x/\"; fi; cd own; if :; then \"/y}\"; fi; gh pr merge 5",
-            "if false; then echo \"${x:-'; fi; cd own; if :; then '}\"; fi; gh pr merge 5",
+            "x=1; if false; then echo \"${x#'; fi; cd own; if :; then '}\"; fi; gh pr merge 5",
             "if false; then echo ${x:-; fi; cd own; if :; then }; fi; gh pr merge 5",
             "if false; then echo ${x:-'}'; fi; cd own; if :; then }; fi; gh pr merge 5",
         ] {
@@ -6903,9 +6959,77 @@ mod tests {
         );
         // In double quotes nothing in one splits the word.
         assert_eq!(words("echo \"${w:-$z}\""), ["echo", "<printed:${w:-$z}>"]);
+        // A backslash before a newline in one is taken out with it.
+        assert_eq!(words("echo ${x:-a\\\nb}"), ["echo", "<split:${x:-ab}>"]);
         // Text nested deeper than `MAX_NESTING` is not read.
         assert!(tokens("echo ${a:-${b:-${c:-${d:-x}}}} ${e} ${f} ${g} ${h} ${i}").is_some());
         assert_eq!(tokens("echo ${a:-${b:-${c:-${d:-${e:-x}}}}}"), None);
+    }
+
+    /// In double quotes, the word of `${x-...}`, `${x+...}`, `${x=...}` or
+    /// `${x?...}`, with a `:` or without, is double-quoted text: a `'` in
+    /// it is a letter, so a substitution between two still runs, and in
+    /// posix mode and in dash the first `}` ends the `${...}` even between
+    /// them. Where a quote ends cannot be told, so a command that mentions
+    /// a merge is not read past one. A pattern or a change of case keeps
+    /// its quotes, and outside double quotes a quote is a quote (ADR 0190).
+    #[test]
+    fn a_quote_in_a_word_bash_expands_in_double_quotes_is_not_read_past() {
+        for command in [
+            "echo \"${x:-'$(gh pr merge 5)'}\"",
+            "echo \"${x-'$(gh pr merge 5)'}\"",
+            "x=1; echo \"${x:+'$(gh pr merge 5)'}\"",
+            "x=1; echo \"${x+'$(gh pr merge 5)'}\"",
+            "echo \"${x='$(gh pr merge 5)'}\"",
+            "echo \"${x:='$(gh pr merge 5)'}\"",
+            "echo \"${x?'$(gh pr merge 5)'}\"",
+            "x=a; echo \"${x:?'$(gh pr merge 5)'}\"",
+            "echo \"${x:-'`gh pr merge 5`'}\"",
+            "echo \"${x:-'${y:-$(gh pr merge 5)}'}\"",
+            "echo \"${x:-${y:-'$(gh pr merge 5)'}}\"",
+            "echo \"${x:-$'$(gh pr merge 5)'}\"",
+            "y=x; echo \"${!y:-'$(gh pr merge 5)'}\"",
+            ": \"${x:-'$(gh pr merge 5)'}\"",
+            "y=\"${x:-'$(gh pr merge 5)'}\"",
+            "gh pr view 5 --json title -q \"${q:-'.title'}\" && echo \"${x:-'$(gh pr merge 5)'}\"",
+            "cat <<E\n\"${x:-'$(gh pr merge 5)'}\"\nE",
+            "echo \"${x:-'$(curl -X PUT https://api.github.com/repos/o/r/pulls/5/merge)'}\"",
+            "echo \"${x:-'x' $(gh pr merge 5)}\"",
+            "echo \"${x:-${y#a}'$(gh pr merge 5)'}\"",
+            // Posix mode and dash end the `${...}` at the first `}`.
+            "set -o posix\necho \"${x:-'}\"; gh pr merge 5; echo \"'}\"",
+            "POSIXLY_CORRECT=1\necho \"${x:-'}\"; gh pr merge 5; echo \"'}\"",
+            "x=a; set -o posix\necho \"${x?'}\"; gh pr merge 5; echo \"'}\"",
+            "bash --posix <<'E'\necho \"${x:-'}\"; gh pr merge 5; echo \"'}\"\nE",
+            "sh <<'E'\necho \"${x:-'}\"; gh pr merge 5; echo \"'}\"\nE",
+            r#"dash -c "echo \"\${x:-'}\"; gh pr merge 5; echo \"'}\"""#,
+            r#"sh -c "echo \"\${x:-'}\"; gh pr merge 5; echo \"'}\"""#,
+        ] {
+            assert!(refused(command), "{command}");
+        }
+        // Bash runs nothing quoted in a pattern or a change of case, nor
+        // anything quoted outside double quotes.
+        for command in [
+            "x=a; echo \"${x#'$(gh pr merge 5)'}\"",
+            "x=a; echo \"${x%'$(gh pr merge 5)'}\"",
+            "x=a; echo \"${x/'$(gh pr merge 5)'/b}\"",
+            "x=a; echo \"${x^'$(gh pr merge 5)'}\"",
+            "x=a; echo \"${x,'$(gh pr merge 5)'}\"",
+            "x=(a); echo \"${x[0]#'$(gh pr merge 5)'}\"",
+            "echo \"${1%'$(gh pr merge 5)'}\"",
+            "echo \"${$%'$(gh pr merge 5)'}\"",
+            "x=a; echo \"${x:-${y#'$(gh pr merge 5)'}}\"",
+            "x=a; echo \"${x#${y:-'$(gh pr merge 5)'}}\"",
+            "echo ${x:-'$(gh pr merge 5)'}",
+            "echo \"${x:-a}\" ${y:-'$(gh pr merge 5)'}",
+            "cat <<'E'\n\"${x:-'$(gh pr merge 5)'}\"\nE",
+        ] {
+            assert_eq!(
+                merges_in(command, Some(Path::new("/srv")), 0),
+                Parsed::Merges(Vec::new()),
+                "{command}"
+            );
+        }
     }
 
     /// Where bash reads an assignment, it reads a subscript after a name as
@@ -6999,6 +7123,26 @@ mod tests {
                 ],
             ),
             (">a[ 0 ] b", vec!["0", "]", "b"]),
+            // After a word bash computes a part of, in a case pattern, and
+            // inside `[[ ... ]]` after `&&`: bash 5.2.21 runs `a[`, matches
+            // `a[` and tests `a[` there.
+            (
+                "$(true)a[ 0 ]=1",
+                vec!["<split:a[>", "0", "]=1", "<break>", "true", "<break>"],
+            ),
+            (
+                "case x in y) :;; a[ ) echo two;; esac",
+                vec![
+                    "case", "x", "in", "<break>", ":", "<break>", "<break>", "echo", "two",
+                    "<break>", "esac",
+                ],
+            ),
+            (
+                "[[ -n x && a[ ]] && echo t",
+                vec![
+                    "[[", "-n", "x", "<break>", "a[", "]]", "<break>", "echo", "t",
+                ],
+            ),
         ] {
             assert_eq!(words(command), split, "{command}");
         }
