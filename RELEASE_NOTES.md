@@ -12,6 +12,19 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.26.0
+
+One database update (235): one new column, nothing rewritten. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting, or from Settings with Apply worker engine update, which restarts loaded workers. The merge check changes below live in the worker engine, so they take effect once that update is applied. A worker or Queen session that was running before the update sees Swarm's changed tool description once it restarts. Engine protocol 19, unchanged: install with `swarm-package update`.
+
+### New features
+- A provider update now names the workers it is waiting on. The Updates card, the restart confirmation and the rail say which workers need a stop, which ones Swarm moves itself with a restart, and which ones Claude refused to restart, as "Restarts Aster, Bramble, Clover and 2 more". Before, they only counted them.
+
+### Fixes
+- Worker merges are no longer all refused with "gh's answer was not JSON". The merge check ran gh in the worker's terminal, which forces colour, so gh coloured the JSON the check reads. That refused even your own pull request in a private repository. (after the worker engine update)
+- A pull request whose body says "merge" no longer gets its `gh pr create` refused. The merge check now reads a heredoc as its command's input, and still finds a merge written inside one. (after the worker engine update)
+- The merge check now catches one-line merges it used to let through: after `if`, `{`, `!` and other reserved words; behind `timeout`, `sudo -u`, `nice -n` and `env -C`; inside `<(...)`; and spelled with `$'...'`, backslashes or `%HH` escapes. A command that mentions a merge and that the check cannot read is refused rather than passed. Some ordinary commands that mention a merge are now refused too, such as `gh pr view 5 --json mergeable --jq "${Q:-'.mergeable'}"`. Written without the `'` it passes, and ADR 0190 lists the others. (after the worker engine update)
+- A documentation-only task no longer closes while its pull request is still unmerged. Swarm now records whether each commit is on the repository's default branch, and settles documentation only once all of them are. Queen's list shows the rest as Docs unmerged. A docs task already in Review when you install this waits until its worker records its commits again.
+
 ## 1.25.0
 
 One database update (234): two new columns, nothing rewritten. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have, and there is no new worker engine. Queen sees her changed tools once her session restarts. Engine protocol 19, unchanged: install with `swarm-package update`.
