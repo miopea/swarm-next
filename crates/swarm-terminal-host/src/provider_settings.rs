@@ -472,6 +472,188 @@ mod tests {
         }
     }
 
+    /// Runs the grant mod's `tool.check` hook under node with a stand-in for
+    /// Claude's engine, which allows each command. Arguments: the module's
+    /// path, then the commands as a JSON array. Prints, for each, whether
+    /// the hook sent it to `provider-merge` and whether the hook threw.
+    const GRANT_MOD_HARNESS: &str = r"
+import { pathToFileURL } from 'node:url'
+const [modulePath, commandsJson] = process.argv.slice(-2)
+const { register } = await import(pathToFileURL(modulePath).href)
+const hooks = new Map()
+register((event, _matcher, hook) => {
+  hooks.set(event, hook)
+  return { catch() {} }
+})
+const check = hooks.get('tool.check')
+const results = []
+for (const command of JSON.parse(commandsJson)) {
+  let sent = false
+  const $ = {
+    session: { cwd: async () => '/srv' },
+    process: {
+      run: async argv => {
+        sent ||= argv[1] === 'provider-merge'
+        return { exitCode: 0, stdout: 'pass\n' }
+      },
+    },
+  }
+  let threw = false
+  try {
+    await check($, { input: { command } }, async () => ({ decision: 'allow' }))
+  } catch {
+    threw = true
+  }
+  results.push({ sent, threw })
+}
+console.log(JSON.stringify(results))
+";
+
+    /// ADR 0190: the grant mod sends the gate a command that spells a merge
+    /// and gh or curl as bash may spell them: with quotes, a backslash and
+    /// newline, a `$` before a quote, escapes, or an expansion that may be
+    /// empty taken out. It sends no other. This runs the module Swarm
+    /// writes, so each of those pieces is held to what it does; node is
+    /// required, and CI installs it.
+    #[test]
+    fn the_grant_mod_looks_for_a_merge_as_bash_may_spell_it() {
+        let sent = [
+            "gh pr merge 5",
+            "gh pr mer''ge 5",
+            "g''h pr merge 5",
+            "gh pr mer\\\nge 5",
+            "gh pr mer$'g'e 5",
+            // `$"..."` is its text, as bash reads it outside a locale.
+            "gh pr mer$\"g\"e 5",
+            "c$\"u\"rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "gh pr $'\\x6derge' 5",
+            "gh pr $'mer\\u0067e' 5",
+            "gh pr $'mer\\U00000067e' 5",
+            "gh pr $'mer\\147e' 5",
+            "gh pr mer${z}ge 5",
+            "gh pr mer$(true)ge 5",
+            "gh pr mer`true`ge 5",
+            "gh pr mer$z\"ge\" 5",
+            "gh pr mer$1ge 5",
+            "g${z}h pr merge 5",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "gh api graphql -f query='mutation { enqueuePullRequest(input: {}) { x } }'",
+            "bash -c $'\\tgh pr merge 5'",
+            "eval $'\\ngh pr merge 5'",
+            "make -f - <<< $'all:\\n\\tgh pr merge 5'",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6derge",
+            "gh api -X PUT repos/o/r/pulls/5/%6Derge",
+            // Bash takes out a quote or a backslash inside a `%HH` escape
+            // before the server reads it.
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6''derge",
+            "curl -X PUT 'https://api.github.com/repos/o/r/pulls/5/%6'\"d\"erge",
+            "gh api -X PUT repos/o/r/pulls/5/%6\\Derge",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/m%6\\5rge",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%$'\\x36'derge",
+            // Outside `$'...'` a backslash and a letter are that letter.
+            "gh pr $'\\x6d'\\erge 5",
+            "gh pr mer$'\\x67'\\e 5",
+            "gh pr $'\\x6d'e\\rge 5",
+            "gh api -X PUT repos/o/r/pulls/5/$'\\x6d'\\erge",
+            "$'\\x63'u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "bash -c $'\\t'cu\\rl\\ -X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
+            // Inside it, an octal escape keeps its low byte, and `\cX` is
+            // a control letter.
+            "gh pr mer$'\\547'e 5",
+            "gh pr $'\\555'erge 5",
+            "bash -c $'\\cIgh pr merge 5'",
+            "eval $'\\cjgh pr merge 5'",
+            // printf reads escapes in its text, an octal one to its low byte.
+            "printf '\\tgh pr merge 5' | bash",
+            "printf 'gh pr mer\\547e 5' | bash",
+            // One for each spelling, which only that spelling finds.
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/5/%6Derg\\e",
+            "gh pr me${x}rg\\e 5",
+            "printf 'curl -X PUT https://api.github.com/repos/o/r/pulls/5/%%6D\\x65rge' | bash",
+            "printf '\\tg${x}h pr merge 5' | bash",
+            // A `$'` that begins no string, inside quotes or after a
+            // backslash, throws nothing after it off.
+            "grep -c 'x$' notes.md; gh pr $'\\x6d'\\erge 5",
+            "echo \"$'\"; gh pr mer$'\\x67'\\e 5",
+            "echo \\$'; $'\\x63'u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge",
+            "grep -c 'x$' notes.md; eval $'\\cjgh pr merge 5'",
+            "grep -c 'x$' notes.md; bash -c $'\\t'cu\\rl\\ -X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
+            // And one inside the merge's own word: a number's escapes read
+            // and a letter's kept find it.
+            "gh pr $'\\x6d'$(: \"$'\")\\erge 5 --repo 'o/r'",
+            "gh pr $'\\x6d'$(: \"$'\")e\\rge 5 --repo 'o/r'",
+            "gh pr mer$'\\x67'${z:+\"$'\"}\\e 5 --repo 'o/r'",
+            "gh pr $'\\x6d'`: \"$'\"`\\erge 5 --repo 'o/r'",
+            "gh api -X PUT repos/o/r/pulls/5/$'\\x6d'$(: \"$'\")\\erge -f 'a=b'",
+            "$'\\x63'$(: \"$'\")u\\rl -X PUT https://api.github.com/repos/o/r/pulls/5/merge -H 'a: b'",
+            "gh pr $(: \"$'\")$'\\x6d'$(: \"$'\")\\erge 5 --repo 'o/r'",
+            "gh pr $'\\x6d'$(: '$')\\erge 5 --repo 'o/r'",
+            // A `$'...'` string may make the tab or newline before gh or
+            // curl, so in a command with one, either standing anywhere is
+            // enough.
+            "eval $'\\cj'cu$(: \"$'\")\\rl' -X PUT https://api.github.com/repos/o/r/pulls/5/merge'",
+            "bash -c $'\\t'cu$(: \"$'\")\\rl$'\\cI'-X\\ PUT\\ https://api.github.com/repos/o/r/pulls/5/merge",
+            "eval $'\\cj'g${z:+\"$'\"}h' pr m'\\erge' 5'",
+            "printf $'\\n'; git log --grep=merge --author=hugh",
+        ];
+        let not_sent = [
+            "cargo test merge_gate",
+            "git merge origin/main",
+            "gh pr view 5",
+            "echo merge && gh_view 5",
+            // An escape past the last letter is not read as one.
+            "echo '\\UFFFFFFFF'",
+            // Without one, gh and curl count only as words of their own.
+            "git log --grep=merge --author=hugh",
+        ];
+        let commands: Vec<&str> = sent.iter().chain(&not_sent).copied().collect();
+        for (command, was_sent) in commands.iter().zip(sent_by_the_grant_mod(&commands)) {
+            assert_eq!(
+                was_sent,
+                sent.contains(command),
+                "sent to the gate: {command:?}"
+            );
+        }
+    }
+
+    /// Whether the grant mod Swarm writes sends each command to the gate,
+    /// run in node by `GRANT_MOD_HARNESS`, which CI installs.
+    fn sent_by_the_grant_mod(commands: &[&str]) -> Vec<bool> {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = grant_mod(
+            &directory.path().join("worker.json"),
+            &std::env::current_exe().unwrap(),
+        )
+        .unwrap();
+        let output = std::process::Command::new("node")
+            .args([
+                "--experimental-strip-types",
+                "--no-warnings",
+                "--input-type=module",
+                "-e",
+                GRANT_MOD_HARNESS,
+            ])
+            .arg(folder.join("hooks/register.ts"))
+            .arg(serde_json::to_string(&commands).unwrap())
+            .output()
+            .expect("node runs the grant mod, as CI installs it");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let results: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(results.len(), commands.len());
+        commands
+            .iter()
+            .zip(&results)
+            .map(|(command, result)| {
+                assert_eq!(result["threw"], false, "the hook threw on {command:?}");
+                result["sent"].as_bool().expect("sent is true or false")
+            })
+            .collect()
+    }
+
     /// ADR 0129: the grant mod names this release's helper and this worker's
     /// MCP config, as quoted literals, and nothing else is left to fill in.
     #[test]

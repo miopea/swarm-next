@@ -1,5 +1,21 @@
 # Open product questions
 
+## The grant mod sends only commands that spell a merge — November 25, 2026
+
+ADR 0190 has the grant mod look for "merge" as bash may spell it, with
+quotes and escapes taken out, before it sends a gh or curl command to the
+merge gate. A merge spelled only through an expansion whose text never
+spells it, such as a brace list, a glob or a curl URL pattern
+(`.../pulls/5/mer{ge,}`), is never sent, so it passes. So does a GraphQL
+request read from a file that a separate command wrote.
+
+Open: should the mod send every gh or curl command to the gate? That closes
+both. The cost is that every gh and curl command waits on the gate, and the
+gate refuses a GraphQL request read from a file or from standard input it
+cannot see, even when nothing mentions a merge, as
+`gh api graphql -F query=@q.graphql`. Not chosen silently, because it
+changes which everyday commands a worker can run.
+
 ## A command card whose script holds a secret — November 22, 2026
 
 ADR 0187 keeps the text of a command card's script for whoever answers it,

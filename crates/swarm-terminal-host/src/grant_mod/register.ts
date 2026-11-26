@@ -17,11 +17,90 @@ const notes = new Map<string, string>()
 
 // A command that may merge a pull request (ADR 0179). It only picks which
 // commands Swarm reads closely; Swarm decides which of them merge, and this
-// may name more than it needs to, never fewer.
+// may name more than it needs to, never fewer. Each word is looked for as
+// written and as bash may spell it, as Swarm does too (ADR 0190).
 const MAY_MERGE = /merge|enqueuepullrequest/i
 const RUNS_GITHUB = /\b(gh|curl)\b/
-const mayMerge = (command: unknown): command is string =>
-  typeof command === 'string' && MAY_MERGE.test(command) && RUNS_GITHUB.test(command)
+const NAMES_GITHUB = /gh|curl/
+// Without a backslash and newline, a `$` before a quote, and every quote and
+// backslash.
+const withoutQuotes = (text: string): string =>
+  text
+    .replace(/\\\n/g, '')
+    .replace(/\$(?=['"])/g, '')
+    .replace(/['"\\]/g, '')
+// Without what bash expands in a word, which may be empty: `${...}`, a `$(...)`
+// with no parenthesis inside, a backquoted command, `$` and a name, and `$`
+// and a digit or one of bash's own parameters.
+const EXPANSION = /\$\{[^}]*\}|\$\([^()]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]/g
+const withoutExpansions = (text: string): string => text.replace(EXPANSION, '')
+// An escape that names a letter by its number, read as that letter: `\xHH`,
+// `\NNN` in octal, which keeps its low byte as bash and printf do, `\uHHHH`
+// and `\UHHHHHHHH`. One that makes no letter is kept as written.
+const NUMBERED = String.raw`x([0-9a-fA-F]{1,2})|u([0-9a-fA-F]{1,4})|U([0-9a-fA-F]{1,8})|([0-7]{1,3})`
+const numbered = (escape: string, x?: string, u?: string, wide?: string, octal?: string): string => {
+  const code = octal === undefined ? parseInt(x ?? u ?? wide ?? '', 16) : parseInt(octal, 8) & 0xff
+  return code <= 0x10ffff ? String.fromCodePoint(code) : escape
+}
+// The one-letter escapes bash's `$'...'`, printf and JSON read.
+const LETTERS: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  e: '\x1b',
+  E: '\x1b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+}
+// Every escape read as its letter wherever it stands, as printf and JSON read
+// them.
+const ESCAPE = new RegExp(String.raw`\\(?:${NUMBERED}|([abeEfnrtv]))`, 'g')
+const unescaped = (text: string): string =>
+  text.replace(
+    ESCAPE,
+    (escape: string, x?: string, u?: string, wide?: string, octal?: string, letter?: string) =>
+      letter === undefined ? numbered(escape, x, u, wide, octal) : (LETTERS[letter] ?? escape),
+  )
+// Each escape that names a letter by its number read as that letter,
+// wherever it stands, and each other escape kept, so a backslash and a
+// letter is that letter once its backslash is taken out, as bash reads it
+// outside `$'...'`. Bash makes a letter only from a letter, a backslash and
+// a letter, or such a number in `$'...'`, so this finds each merge it
+// spells, wherever a `$'...'` string begins.
+const NUMBERED_ESCAPE = new RegExp(String.raw`\\(?:${NUMBERED})`, 'g')
+const byNumber = (text: string): string => text.replace(NUMBERED_ESCAPE, numbered)
+// With each run of `%HH` escapes read as the text its bytes make, as a server
+// may read an address's path once bash has taken its quotes out, so a quote
+// or a backslash inside one, as in `%6''d`, splits nothing. A run that makes
+// no UTF-8 is kept as written.
+const PERCENT = /(?:%[0-9a-fA-F]{2})+/g
+const percentDecoded = (text: string): string =>
+  text.replace(PERCENT, (run: string) => {
+    try {
+      return decodeURIComponent(run)
+    } catch {
+      return run
+    }
+  })
+const mayMerge = (command: unknown): command is string => {
+  if (typeof command !== 'string') return false
+  const bare = withoutQuotes(command)
+  const read = byNumber(command)
+  const spellings = [
+    command,
+    bare,
+    percentDecoded(bare),
+    percentDecoded(withoutQuotes(read)),
+    withoutQuotes(withoutExpansions(read)),
+    withoutQuotes(withoutExpansions(unescaped(command))),
+  ]
+  // A `$'...'` string may make the tab or newline before gh or curl that
+  // bash splits a word at, so in a command with one, either counts anywhere.
+  const github = command.includes("$'") ? NAMES_GITHUB : RUNS_GITHUB
+  return spellings.some(text => MAY_MERGE.test(text)) && spellings.some(text => github.test(text))
+}
 const MERGE_UNCHECKED =
   'Swarm could not check this merge, so it is refused (ADR 0179). In the operator\'s own ' +
   'public repositories a merge of a pull request the account making it did not open needs ' +
