@@ -1244,7 +1244,12 @@ lexer's reading of `${...}`.
   holds a `'` or a `$'` in the word of a double-quoted default,
   alternative, assigned value or error message, as
   `gh pr view 5 --json mergeable --jq "${Q:-'.mergeable'}"`, which `main`
-  and the fifth draft pass; written without the `'`, it passes. It also
+  and the fifth draft pass; written without the `'`, it passes. The same
+  holds an owner's own merge, as
+  `gh pr merge 5 --squash --body "${BODY:-'none'}"`: the gate refuses it as
+  a command it cannot read, before it asks who opened the pull request.
+  Written without the `'`, or with `"none"` in place of `'none'`, it is
+  checked as any merge is. It also
   refuses `x=a; echo "${x:?'$(gh pr merge 5)'}"`, where bash runs nothing
   because `x` is set: the gate does not follow what a variable holds, and
   with `x` unset bash runs the substitution to print its error. And it
