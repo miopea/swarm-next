@@ -8026,20 +8026,83 @@ mod tests {
     }
 
     /// A gh that runs `body` after recording the call.
+    ///
+    /// ⚠️ NOT `fs::write` FOLLOWED BY `set_permissions`. Linux refuses to run a
+    /// file that anything holds open for writing ("Text file busy", ETXTBSY),
+    /// and a file this process holds open is copied into every child another
+    /// test thread starts, until that child runs its own program. So a gh
+    /// written in this process could be refused while a parallel test was
+    /// starting one. A shell this waits for writes it instead, so this process
+    /// never holds the file open at all.
     fn script_gh(directory: &Path, body: &str) -> GhCli {
-        use std::os::unix::fs::PermissionsExt;
+        use std::io::Write;
         let calls = directory.join("calls");
         let script = directory.join("gh");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\necho \"$PWD $*\" >> '{}'\n{body}",
-                calls.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut shell = std::process::Command::new("sh")
+            .args(["-c", "umask 077 && cat > \"$1\" && chmod 700 \"$1\"", "sh"])
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        shell
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                format!(
+                    "#!/bin/sh\necho \"$PWD $*\" >> '{}'\n{body}",
+                    calls.display()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        assert!(shell.wait().unwrap().success(), "could not write the gh");
         GhCli { program: script }
+    }
+
+    /// Other tests in this binary start processes while this one runs a
+    /// stand-in, so a stand-in has to be runnable while that happens. One
+    /// that was not made a check fail once with "Text file busy".
+    #[test]
+    fn a_stand_in_gh_runs_while_other_threads_start_processes() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        const ROUNDS: usize = 200;
+        let stop = Arc::new(AtomicBool::new(false));
+        let starters: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::process::Command::new("true").status().unwrap();
+                    }
+                })
+            })
+            .collect();
+        let directory = tempfile::tempdir().unwrap();
+        let refused: Vec<String> = (0..ROUNDS)
+            .filter_map(|round| {
+                let folder = directory.path().join(round.to_string());
+                std::fs::create_dir(&folder).unwrap();
+                let gh = script_gh(&folder, "exit 0\n");
+                match std::process::Command::new(&gh.program).status() {
+                    Ok(status) if status.success() => None,
+                    Ok(status) => Some(format!("round {round}: {status}")),
+                    Err(error) => Some(format!("round {round}: {error}")),
+                }
+            })
+            .collect();
+        stop.store(true, Ordering::Relaxed);
+        for starter in starters {
+            starter.join().unwrap();
+        }
+        assert!(
+            refused.is_empty(),
+            "{} of {ROUNDS} stand-ins could not be run: {refused:?}",
+            refused.len()
+        );
     }
 
     fn grant_config(directory: &Path, url: &str) -> PathBuf {
