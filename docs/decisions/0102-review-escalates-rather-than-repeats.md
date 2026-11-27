@@ -73,3 +73,32 @@ bound is refused; raising a decision from the task clears this refusal; the guar
 and the reporting surface use one constant; an exact replay is unaffected. Both
 tests ablate — removing the guard fails the boundary case, and ignoring primary
 membership fails the exit path.
+
+## Amendment: an answered question still counts as asked
+
+Only a pending decision counted as asked. When the operator answered, nothing
+was pending any more, so the task went back to Queen. Her next assessment was
+then refused as repetition, even the deferral citing that answer, which records
+the result of the escalation. An answer like "keep it parked to <date>" leaves
+the task where it is on purpose, so nothing could clear the refusal. On one Hive
+two tasks the operator had parked this way were re-reviewed 150 and 230 times,
+and every review run finished incomplete.
+
+A decision now also counts as asked when the operator resolved it after the task
+last changed state. It may be the task's own decision or a linked one.
+
+- **Until the task moves.** It counts until the task moves again, because a new
+  stillness needs its own question.
+- **Not in the same second as the move.** That answer is the one that moved
+  the task. Work it released and that then sits still has been asked about
+  nothing.
+- **Both places.** The guard and the stalled-work surface read the same
+  condition, and the refusal's text now says that an answer counts.
+
+Acceptance: the cases below are each pinned by a test.
+
+- An operator answer after the last move lets an external condition and a
+  deferral citing it be recorded past the bound.
+- An answer from before or in the same second as the last move is still refused.
+- A task answered about through a link leaves the stalled-work list, and returns
+  to it once it moves.
