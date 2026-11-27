@@ -91,6 +91,8 @@ mod terminal_control_socket;
 mod terminal_history_routes;
 mod terminal_host;
 mod terminal_socket;
+#[cfg(test)]
+mod test_executable;
 mod tool_reconnects;
 mod tunnel;
 mod unprompted_engine_updates;

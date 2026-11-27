@@ -197,17 +197,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn bounded_runner_accepts_a_fake_structured_cli_without_using_real_claude() {
-        use std::os::unix::fs::PermissionsExt;
-
         let scratch = tempfile::tempdir().unwrap();
         let executable = scratch.path().join("fake-claude");
-        tokio::fs::write(
+        crate::test_executable::write_executable(
             &executable,
             "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"structured_output\":{\"description\":\"Clover owns garden coordination.\"}}'\n",
-        )
-        .await
-        .unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mcp_config = scratch.path().join("mcp.json");
         tokio::fs::write(&mcp_config, r#"{"mcpServers":{}}"#)
             .await
