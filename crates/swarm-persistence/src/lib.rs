@@ -845,7 +845,7 @@ pub enum TaskStoreError {
     // NAMES EVERY WAY OUT, because a refusal with no exit is a trap rather than a
     // control, and all three are already in the caller's hands.
     #[error(
-        "this work has not moved in days and nobody has been asked about it, so another assessment cannot be recorded. Raise the question with swarm_request_decision, move the task, or abandon it -- re-reading it again is the one thing that changes nothing"
+        "this work has not moved in days and nobody has been asked about it, so another assessment cannot be recorded. Raise the question with swarm_request_decision, move the task, or abandon it -- re-reading it again is the one thing that changes nothing. A decision the operator has answered since the task last moved counts as asked, whether it is the task's own or linked to it"
     )]
     ReviewNeedsEscalationNotRepetition,
     // ⚠️ SEPARATE FROM THE VARIANT ABOVE ON PURPOSE. That one is about work that

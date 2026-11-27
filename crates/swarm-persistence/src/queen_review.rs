@@ -249,6 +249,11 @@ fn evidence_rechecked_without_asking(
 /// disagree about what a stall is. A decision counts whether it is the task's
 /// OWN — primary membership, which `swarm_request_decision` writes as
 /// `decision_requests.task_id` with no link row — or an additional link.
+///
+/// ⚠️ AN ANSWERED QUESTION IS STILL ASKED (ADR 0102, amendment). One the
+/// operator resolved after the task last moved counts until it moves again.
+/// Counting only a pending one refused the deferral that records the answer,
+/// because "keep it parked" leaves the task where it is.
 fn stalled_with_nobody_asked(
     transaction: &rusqlite::Transaction<'_>,
     task_id: &str,
@@ -264,7 +269,15 @@ fn stalled_with_nobody_asked(
                              WHERE d.task_id = ?1 AND d.state = 'pending')
             AND NOT EXISTS (SELECT 1 FROM task_decision_links l
                               JOIN decision_requests d ON d.id = l.decision_id
-                             WHERE l.task_id = ?1 AND d.state = 'pending')",
+                             WHERE l.task_id = ?1 AND d.state = 'pending')
+            AND NOT EXISTS (SELECT 1 FROM task_decision_membership m
+                              JOIN decision_requests d ON d.id = m.decision_id
+                             WHERE m.task_id = ?1 AND d.state = 'resolved'
+                               AND d.resolved_by_operator_id IS NOT NULL
+                               AND d.resolved_at > COALESCE(
+                                   (SELECT MAX(occurred_at) FROM task_activity
+                                     WHERE task_id = ?1 AND kind = 'state_changed'),
+                                   (SELECT created_at FROM tasks WHERE id = ?1)))",
         params![task_id, now, MAX_UNASKED_STILL_SECONDS],
         |row| row.get(0),
     )?)
@@ -511,7 +524,8 @@ impl TaskStore {
             // link. Reading only the link table would call a task unasked while
             // an operator question about it sits pending — the same
             // primary-versus-link blindness that made a guard refuse blocks it
-            // should have allowed.
+            // should have allowed. One the operator ANSWERED after the task last
+            // moved counts too, exactly as in `stalled_with_nobody_asked`.
             "SELECT t.id, t.title, t.state, t.workspace, t.assigned_worker_id,
                     COALESCE(moved.at, t.created_at)
              FROM tasks t
@@ -527,6 +541,11 @@ impl TaskStore {
                AND NOT EXISTS (SELECT 1 FROM task_decision_links l
                                  JOIN decision_requests d ON d.id = l.decision_id
                                 WHERE l.task_id = t.id AND d.state = 'pending')
+               AND NOT EXISTS (SELECT 1 FROM task_decision_membership m
+                                 JOIN decision_requests d ON d.id = m.decision_id
+                                WHERE m.task_id = t.id AND d.state = 'resolved'
+                                  AND d.resolved_by_operator_id IS NOT NULL
+                                  AND d.resolved_at > COALESCE(moved.at, t.created_at))
              ORDER BY COALESCE(moved.at, t.created_at) LIMIT 64",
         )?;
         let rows = statement.query_map(params![now, still_for_seconds], |row| {
@@ -1532,6 +1551,197 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "a task with a question pending has been raised, and must stop being reported"
+        );
+    }
+
+    /// When this task last changed state, the moment its stillness is counted from.
+    fn last_moved(store: &TaskStore, task_id: TaskId) -> i64 {
+        store
+            .list_task_activity(task_id, 50)
+            .unwrap()
+            .events
+            .iter()
+            .filter(|entry| entry.kind == swarm_domain::TaskActivityKind::StateChanged)
+            .map(|entry| entry.occurred_at)
+            .next_back()
+            .expect("it moved at least once")
+    }
+
+    /// A question raised from `task_id` and answered by the operator at `answered_at`.
+    fn answered_decision(
+        store: &TaskStore,
+        task_id: TaskId,
+        answered_at: i64,
+    ) -> swarm_domain::DecisionRequestId {
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let actions = vec!["Keep it parked".to_owned(), "Start it now".to_owned()];
+        let decision = store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: Some(task_id),
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "This has not moved in days -- keep it parked?",
+                summary: "Fixture.",
+                reason: "Fixture.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Keep it parked",
+                allowed_actions: &actions,
+                operator_actions: &[],
+                questions: &[],
+                deadline: None,
+                requested_command: None,
+                requested_script: None,
+            })
+            .unwrap()
+            .id;
+        store
+            .resolve_decision_request(decision, "Keep it parked", "Fixture ruling", "inbox")
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET resolved_at = ?2 WHERE id = ?1",
+                rusqlite::params![decision.to_string(), answered_at],
+            )
+            .unwrap();
+        decision
+    }
+
+    /// ⚠️ THE OPERATOR'S ANSWER IS THE ASKING, NOT ITS ABSENCE.
+    ///
+    /// A pending question took the task out of Queen's loop, but the operator's
+    /// answer put it straight back, because only a PENDING decision counted as
+    /// asked. "Keep it parked to 2027-01-23" leaves the task where it is by
+    /// design, so the very next assessment, the deferral citing that answer,
+    /// was refused as "nobody has been asked". Measured on a live Hive: two
+    /// tasks the operator had parked by decision were re-reviewed 150 and 230
+    /// times, and every review run finished incomplete.
+    #[test]
+    fn an_answer_given_since_the_task_last_moved_lets_the_review_record_it() {
+        let store = TaskStore::in_memory().unwrap();
+        let mut input = external_wait(&store);
+        let moved = last_moved(&store, input.task_id);
+        let decision = answered_decision(&store, input.task_id, moved + 1);
+        assert_eq!(
+            store.get_task(input.task_id).unwrap().state,
+            TaskState::Blocked,
+            "precondition: answering must not have moved the task"
+        );
+        let past_bound = moved + MAX_UNASKED_STILL_SECONDS + 24 * 60 * 60;
+
+        input.condition = "Dated hold the operator kept".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), past_bound)
+            .expect("the operator has been asked and has answered, so an external condition is not repetition");
+
+        input.kind = QueenReviewDispositionKind::OperatorDeferral;
+        input.operator_decision_id = Some(decision);
+        input.condition = "Operator deferral: keep it parked".into();
+        input.expected_revision = store
+            .queen_task_review_evidence(input.task_id)
+            .unwrap()
+            .evidence_revision;
+        let deferral = store
+            .record_queen_review_disposition(&input, &TaskActivityActor::operator(), past_bound)
+            .expect("a deferral citing the operator's answer is the escalation's result");
+        assert!(deferral.covers_wait, "and it covers the wait");
+    }
+
+    /// ⚠️ AND ONLY AN ANSWER ABOUT THIS STILLNESS COUNTS. An answer given before
+    /// the task last moved was about the state it has since left, and an answer
+    /// in the same second as the move is the one that moved it: work unblocked by
+    /// the operator's answer and then left sitting has been asked about nothing.
+    #[test]
+    fn an_answer_from_before_the_task_last_moved_does_not_count_as_asked() {
+        for (answered, when) in [(-1, "before"), (0, "in the same second as")] {
+            let store = TaskStore::in_memory().unwrap();
+            let mut input = external_wait(&store);
+            let moved = last_moved(&store, input.task_id);
+            answered_decision(&store, input.task_id, moved + answered);
+            input.condition = "Still waiting".into();
+            input.expected_revision = store
+                .queen_task_review_evidence(input.task_id)
+                .unwrap()
+                .evidence_revision;
+            let refused = store.record_queen_review_disposition(
+                &input,
+                &TaskActivityActor::operator(),
+                moved + MAX_UNASKED_STILL_SECONDS,
+            );
+            assert!(
+                matches!(
+                    refused,
+                    Err(TaskStoreError::ReviewNeedsEscalationNotRepetition)
+                ),
+                "an answer given {when} the last move must not count: {refused:?}"
+            );
+        }
+    }
+
+    /// ⚠️ THE BOARD SAYS THE SAME, so the surface and the guard cannot disagree.
+    /// A task the operator answered about is not "work nobody raised", until it
+    /// moves and stands still again. The answer reaches this task through a link,
+    /// the other form of membership, so neither form is read alone.
+    #[test]
+    fn an_answered_question_takes_stalled_work_off_the_list_until_it_moves() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("The operator answered about this", "/workspace/demo")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let moved = last_moved(&store, task.id);
+        let ruling = store.create_task("Ruling", "/workspace/demo").unwrap();
+        let decision = answered_decision(&store, ruling.id, moved + 1);
+        let revision = store
+            .queen_task_review_evidence(task.id)
+            .unwrap()
+            .evidence_revision;
+        store
+            .add_task_decision_link(
+                task.id,
+                decision,
+                "The same ruling covers this task",
+                &revision,
+                &TaskActivityActor::operator(),
+                moved + 1,
+            )
+            .unwrap();
+        let three_days = MAX_UNASKED_STILL_SECONDS;
+        let far_future = i64::MAX / 4;
+
+        assert!(
+            store
+                .unasked_stalled_work(far_future, three_days)
+                .unwrap()
+                .iter()
+                .all(|stalled| stalled.task_id != task.id.to_string()),
+            "a task whose question the operator answered has been raised"
+        );
+
+        store.transition_task(task.id, TaskState::Blocked).unwrap();
+        let moved_again = last_moved(&store, task.id);
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET resolved_at = ?2 WHERE id = ?1",
+                rusqlite::params![decision.to_string(), moved_again],
+            )
+            .unwrap();
+        assert!(
+            store
+                .unasked_stalled_work(far_future, three_days)
+                .unwrap()
+                .iter()
+                .any(|stalled| stalled.task_id == task.id.to_string()),
+            "once it moves, an answer from that same second or earlier no longer covers the new stillness"
         );
     }
     /// ⚠️ OWNERLESS READY IS INVISIBLE TO THE DETECTOR THAT WATCHES READY WORK.
