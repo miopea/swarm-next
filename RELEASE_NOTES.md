@@ -12,6 +12,13 @@ Format: `## <version>`, then `### New features` and `### Fixes`, then `- ` bulle
 End a bullet with `(after the worker engine update)` when it is installed but
 not in effect until the worker engine swaps.
 
+## 1.26.1
+
+No database update. Installing it keeps your workers running: the app restarts and drives the engine you have, and there is no new worker engine. Engine protocol 19, unchanged: install with `swarm-package update`.
+
+### Fixes
+- Queen can record your answer on work you told her to keep parked. When you answered a question about a task that had stopped moving, such as "keep it parked until a date", Swarm still counted the task as one nobody had asked you about. Every review that cited your answer was refused, so the task stayed on Queen's list and each of her review runs ended incomplete. A question you have answered since the task last moved now counts, until the task moves again.
+
 ## 1.26.0
 
 One database update (235): one new column, nothing rewritten. Your Hive backs up its database by itself before applying it. Installing it keeps your workers running: the app restarts and drives the engine you have. It brings a new worker engine build, which applies by itself the next time every worker is resting, or from Settings with Apply worker engine update, which restarts loaded workers. The merge check changes below live in the worker engine, so they take effect once that update is applied. A worker or Queen session that was running before the update sees Swarm's changed tool description once it restarts. Engine protocol 19, unchanged: install with `swarm-package update`.
